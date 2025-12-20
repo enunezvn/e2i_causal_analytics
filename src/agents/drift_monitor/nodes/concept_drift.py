@@ -17,7 +17,7 @@ Contract: .claude/contracts/tier3-contracts.md lines 349-562
 """
 
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 from src.agents.drift_monitor.state import DriftMonitorState, DriftResult, ErrorDetails
 
@@ -83,7 +83,7 @@ class ConceptDriftNode:
             error: ErrorDetails = {
                 "node": "concept_drift",
                 "error": str(e),
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat()
             }
             state["errors"] = state.get("errors", []) + [error]
             state["status"] = "failed"

@@ -9,7 +9,7 @@ from __future__ import annotations
 import functools
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Type, TypeVar
 
 from pydantic import BaseModel
@@ -56,7 +56,7 @@ class ToolSchema:
     
     # Metadata
     version: str = "1.0.0"
-    registered_at: datetime = field(default_factory=datetime.utcnow)
+    registered_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization"""

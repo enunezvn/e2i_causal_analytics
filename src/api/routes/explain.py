@@ -19,7 +19,7 @@ from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 import uuid
 import logging
@@ -309,7 +309,7 @@ class RealTimeSHAPService:
         #     "input_features": features,
         #     "shap_values": shap_values,
         #     "prediction_context": {"patient_id": patient_id, **prediction},
-        #     "created_at": datetime.utcnow()
+        #     "created_at": datetime.now(timezone.utc)
         # })
         logger.info(f"Stored audit record for explanation {explanation_id}")
         return True
@@ -355,7 +355,7 @@ async def explain_prediction(
     import time
     start_time = time.time()
     
-    explanation_id = f"EXPL-{datetime.utcnow().strftime('%Y%m%d')}-{uuid.uuid4().hex[:8]}"
+    explanation_id = f"EXPL-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{uuid.uuid4().hex[:8]}"
     
     try:
         # 1. Get features (from request or Feast)
@@ -406,7 +406,7 @@ async def explain_prediction(
         
         return ExplainResponse(
             explanation_id=explanation_id,
-            request_timestamp=datetime.utcnow(),
+            request_timestamp=datetime.now(timezone.utc),
             patient_id=request.patient_id,
             model_type=request.model_type,
             model_version_id=prediction["model_version_id"],
@@ -443,7 +443,7 @@ async def explain_batch(
     import asyncio
     
     start_time = time.time()
-    batch_id = f"BATCH-{datetime.utcnow().strftime('%Y%m%d')}-{uuid.uuid4().hex[:8]}"
+    batch_id = f"BATCH-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{uuid.uuid4().hex[:8]}"
     
     explanations = []
     errors = []
@@ -560,7 +560,7 @@ async def health_check() -> Dict[str, Any]:
         "status": "healthy",
         "service": "real-time-shap-api",
         "version": "4.1.0",
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "dependencies": {
             "bentoml": "connected",
             "feast": "connected",

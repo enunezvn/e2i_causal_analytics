@@ -194,7 +194,7 @@ def demo_hcp_features(fs: FeatureStoreClient):
                     "feature_name": feature_name,
                     "entity_values": {"hcp_id": hcp_id},
                     "value": value,
-                    "event_timestamp": datetime.utcnow(),
+                    "event_timestamp": datetime.now(timezone.utc),
                     "feature_group": "hcp_demographics",
                 }
             )
@@ -321,7 +321,7 @@ def demo_brand_features(fs: FeatureStoreClient):
                     "feature_name": key,
                     "entity_values": entity_values,
                     "value": value,
-                    "event_timestamp": datetime.utcnow(),
+                    "event_timestamp": datetime.now(timezone.utc),
                     "feature_group": "brand_performance",
                 }
             )
@@ -349,8 +349,8 @@ def demo_historical_features(fs: FeatureStoreClient):
     historical = fs.get_historical_features(
         entity_values={"hcp_id": "HCP001"},
         feature_names=["specialty", "years_in_practice"],
-        start_time=datetime.utcnow() - timedelta(days=30),
-        end_time=datetime.utcnow(),
+        start_time=datetime.now(timezone.utc) - timedelta(days=30),
+        end_time=datetime.now(timezone.utc),
     )
 
     if historical:

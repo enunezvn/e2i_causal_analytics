@@ -7,7 +7,7 @@ for testing the 4-phase composition pipeline.
 
 import asyncio
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock, Mock
 
@@ -343,7 +343,7 @@ def sample_decomposition(sample_sub_questions):
         original_query="Compare causal impact of rep visits by region",
         sub_questions=sample_sub_questions,
         decomposition_reasoning="Decomposed into causal + regional analysis",
-        timestamp=datetime.utcnow()
+        timestamp=datetime.now(timezone.utc)
     )
 
 
@@ -403,7 +403,7 @@ def sample_execution_plan(sample_decomposition, sample_execution_steps, sample_t
         estimated_duration_ms=1300,
         parallel_groups=[["step_1"], ["step_2"]],
         planning_reasoning="Sequential execution with dependency",
-        timestamp=datetime.utcnow()
+        timestamp=datetime.now(timezone.utc)
     )
 
 
@@ -426,8 +426,8 @@ def sample_step_result():
             execution_time_ms=450
         ),
         status=ExecutionStatus.COMPLETED,
-        started_at=datetime.utcnow(),
-        completed_at=datetime.utcnow(),
+        started_at=datetime.now(timezone.utc),
+        completed_at=datetime.now(timezone.utc),
         duration_ms=450
     )
 
@@ -437,10 +437,10 @@ def sample_execution_trace(sample_step_result):
     """Sample execution trace"""
     trace = ExecutionTrace(
         plan_id="plan_test123",
-        started_at=datetime.utcnow()
+        started_at=datetime.now(timezone.utc)
     )
     trace.add_result(sample_step_result)
-    trace.completed_at = datetime.utcnow()
+    trace.completed_at = datetime.now(timezone.utc)
     return trace
 
 

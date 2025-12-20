@@ -7,7 +7,7 @@ into coherent natural language responses.
 
 import json
 import pytest
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.agents.tool_composer.synthesizer import (
@@ -136,8 +136,8 @@ class TestMixedResults:
                     result={"effect": 0.15}
                 ),
                 status=ExecutionStatus.COMPLETED,
-                started_at=datetime.utcnow(),
-                completed_at=datetime.utcnow()
+                started_at=datetime.now(timezone.utc),
+                completed_at=datetime.now(timezone.utc)
             ),
             StepResult(
                 step_id="step_2",
@@ -150,8 +150,8 @@ class TestMixedResults:
                     error="Model training failed"
                 ),
                 status=ExecutionStatus.FAILED,
-                started_at=datetime.utcnow(),
-                completed_at=datetime.utcnow()
+                started_at=datetime.now(timezone.utc),
+                completed_at=datetime.now(timezone.utc)
             )
         ]
 
@@ -210,8 +210,8 @@ class TestResultFormatting:
                 error="Tool execution failed"
             ),
             status=ExecutionStatus.FAILED,
-            started_at=datetime.utcnow(),
-            completed_at=datetime.utcnow()
+            started_at=datetime.now(timezone.utc),
+            completed_at=datetime.now(timezone.utc)
         )
 
         trace = ExecutionTrace(plan_id="plan_123")
@@ -245,8 +245,8 @@ class TestResultFormatting:
                 result=long_result
             ),
             status=ExecutionStatus.COMPLETED,
-            started_at=datetime.utcnow(),
-            completed_at=datetime.utcnow()
+            started_at=datetime.now(timezone.utc),
+            completed_at=datetime.now(timezone.utc)
         )
 
         trace = ExecutionTrace(plan_id="plan_123")
@@ -369,8 +369,8 @@ class TestFallbackResponse:
                 error="Failed"
             ),
             status=ExecutionStatus.FAILED,
-            started_at=datetime.utcnow(),
-            completed_at=datetime.utcnow()
+            started_at=datetime.now(timezone.utc),
+            completed_at=datetime.now(timezone.utc)
         )
 
         trace = ExecutionTrace(plan_id="plan_123")
@@ -517,10 +517,10 @@ class TestTimestampHandling:
         self, mock_llm_client, sample_synthesis_input
     ):
         """Test that timestamp is recent"""
-        before = datetime.utcnow()
+        before = datetime.now(timezone.utc)
         synthesizer = ResponseSynthesizer(llm_client=mock_llm_client)
         response = await synthesizer.synthesize(sample_synthesis_input)
-        after = datetime.utcnow()
+        after = datetime.now(timezone.utc)
 
         assert before <= response.timestamp <= after
 
@@ -578,8 +578,8 @@ class TestEdgeCases:
                 result={"text": "Special chars: <>&\"'{}[]$#@!"}
             ),
             status=ExecutionStatus.COMPLETED,
-            started_at=datetime.utcnow(),
-            completed_at=datetime.utcnow()
+            started_at=datetime.now(timezone.utc),
+            completed_at=datetime.now(timezone.utc)
         )
 
         trace = ExecutionTrace(plan_id="plan_123")

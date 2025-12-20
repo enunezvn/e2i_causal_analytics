@@ -5,7 +5,7 @@ Validates data models for all 4 phases of the composition pipeline.
 """
 
 import pytest
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID
 
 from src.agents.tool_composer.models.composition_models import (
@@ -320,8 +320,8 @@ class TestExecutionTrace:
             input=ToolInput(tool_name="test", parameters={}),
             output=ToolOutput(tool_name="test", success=False, error="Failed"),
             status=ExecutionStatus.FAILED,
-            started_at=datetime.utcnow(),
-            completed_at=datetime.utcnow()
+            started_at=datetime.now(timezone.utc),
+            completed_at=datetime.now(timezone.utc)
         )
         trace.add_result(failed_result)
         assert trace.tools_executed == 1

@@ -167,7 +167,7 @@ class MockPipelineStore:
             return self.statuses[pipeline_name]
 
         # Default healthy status
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         return {
             "last_run": now.isoformat(),
             "last_success": now.isoformat(),
@@ -192,7 +192,7 @@ def stale_pipeline_store():
     store = MockPipelineStore(
         pipelines=["healthy_pipeline", "stale_pipeline", "failed_pipeline"]
     )
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     store.set_pipeline_status(
         "healthy_pipeline",
@@ -255,7 +255,7 @@ class MockAgentRegistry:
             "available": True,
             "avg_latency_ms": 500,
             "success_rate": 0.95,
-            "last_invocation": datetime.utcnow().isoformat(),
+            "last_invocation": datetime.now(timezone.utc).isoformat(),
         }
 
     def set_agent_metrics(self, agent_name: str, metrics: Dict[str, Any]) -> None:
@@ -285,7 +285,7 @@ def unavailable_agent_registry():
             "available": True,
             "avg_latency_ms": 200,
             "success_rate": 0.98,
-            "last_invocation": datetime.utcnow().isoformat(),
+            "last_invocation": datetime.now(timezone.utc).isoformat(),
         },
     )
     registry.set_agent_metrics(
@@ -303,7 +303,7 @@ def unavailable_agent_registry():
             "available": True,
             "avg_latency_ms": 1500,
             "success_rate": 0.7,  # Below threshold
-            "last_invocation": datetime.utcnow().isoformat(),
+            "last_invocation": datetime.now(timezone.utc).isoformat(),
         },
     )
     return registry
@@ -334,7 +334,7 @@ def initial_state():
         "warnings": None,
         "health_summary": None,
         "check_latency_ms": 0,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "errors": [],
         "status": "pending",
     }
@@ -360,7 +360,7 @@ def quick_check_state():
         "warnings": None,
         "health_summary": None,
         "check_latency_ms": 0,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "errors": [],
         "status": "pending",
     }

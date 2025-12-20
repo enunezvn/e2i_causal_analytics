@@ -16,7 +16,7 @@ Pipeline:
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from .decomposer import QueryDecomposer, DecompositionError
@@ -128,7 +128,7 @@ class ToolComposer:
         Returns:
             CompositionResult with the synthesized response and full trace
         """
-        started_at = datetime.utcnow()
+        started_at = datetime.now(timezone.utc)
         phase_durations: Dict[str, int] = {}
         context = context or {}
         
@@ -138,7 +138,7 @@ class ToolComposer:
             # ================================================================
             # PHASE 1: DECOMPOSE
             # ================================================================
-            phase_start = datetime.utcnow()
+            phase_start = datetime.now(timezone.utc)
             logger.info("Phase 1: Decomposing query...")
             
             decomposition = await self.decomposer.decompose(query)
@@ -152,7 +152,7 @@ class ToolComposer:
             # ================================================================
             # PHASE 2: PLAN
             # ================================================================
-            phase_start = datetime.utcnow()
+            phase_start = datetime.now(timezone.utc)
             logger.info("Phase 2: Creating execution plan...")
             
             plan = await self.planner.plan(decomposition)
@@ -166,7 +166,7 @@ class ToolComposer:
             # ================================================================
             # PHASE 3: EXECUTE
             # ================================================================
-            phase_start = datetime.utcnow()
+            phase_start = datetime.now(timezone.utc)
             logger.info("Phase 3: Executing tool chain...")
             
             execution_trace = await self.executor.execute(plan, context)
@@ -181,7 +181,7 @@ class ToolComposer:
             # ================================================================
             # PHASE 4: SYNTHESIZE
             # ================================================================
-            phase_start = datetime.utcnow()
+            phase_start = datetime.now(timezone.utc)
             logger.info("Phase 4: Synthesizing response...")
             
             synthesis_input = SynthesisInput(
@@ -201,7 +201,7 @@ class ToolComposer:
             # ================================================================
             # BUILD RESULT
             # ================================================================
-            completed_at = datetime.utcnow()
+            completed_at = datetime.now(timezone.utc)
             total_duration = int((completed_at - started_at).total_seconds() * 1000)
             
             result = CompositionResult(
@@ -247,7 +247,7 @@ class ToolComposer:
     
     def _elapsed_ms(self, start: datetime) -> int:
         """Calculate elapsed milliseconds since start"""
-        return int((datetime.utcnow() - start).total_seconds() * 1000)
+        return int((datetime.now(timezone.utc) - start).total_seconds() * 1000)
     
     def _create_error_result(
         self,
@@ -288,7 +288,7 @@ class ToolComposer:
             failed_components=[failed_phase.value if failed_phase else "unknown"]
         )
         
-        completed_at = datetime.utcnow()
+        completed_at = datetime.now(timezone.utc)
         
         return CompositionResult(
             query=query,

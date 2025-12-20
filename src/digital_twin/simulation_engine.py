@@ -16,7 +16,7 @@ The simulation follows these steps:
 
 import logging
 from typing import Optional, Dict, List, Any, Tuple
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID
 import time
 
@@ -228,7 +228,7 @@ class SimulationEngine:
             model_fidelity_score=self.model_fidelity_score,
             status=SimulationStatus.COMPLETED,
             execution_time_ms=execution_time_ms,
-            completed_at=datetime.utcnow(),
+            completed_at=datetime.now(timezone.utc),
         )
         
         logger.info(

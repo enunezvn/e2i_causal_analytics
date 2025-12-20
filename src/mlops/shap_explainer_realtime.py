@@ -22,7 +22,7 @@ import shap
 import numpy as np
 import pandas as pd
 from typing import Dict, Any, Optional, List, Union, Tuple
-from datetime import datetime
+from datetime import datetime, timezone
 from functools import lru_cache
 import asyncio
 import logging
@@ -133,7 +133,7 @@ class RealTimeSHAPExplainer:
         # Check cache
         if cache_key in self._explainer_cache:
             explainer, created_at, config = self._explainer_cache[cache_key]
-            cache_age = (datetime.utcnow() - created_at).total_seconds()
+            cache_age = (datetime.now(timezone.utc) - created_at).total_seconds()
             if cache_age < config.cache_ttl_seconds:
                 logger.debug(f"Using cached explainer for {cache_key}")
                 return explainer, config
@@ -161,7 +161,7 @@ class RealTimeSHAPExplainer:
         )
         
         # Cache it
-        self._explainer_cache[cache_key] = (explainer, datetime.utcnow(), config)
+        self._explainer_cache[cache_key] = (explainer, datetime.now(timezone.utc), config)
         
         return explainer, config
     

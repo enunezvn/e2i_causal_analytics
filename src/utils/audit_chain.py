@@ -12,7 +12,7 @@ Date: December 2025
 
 import hashlib
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List, Tuple
 from uuid import UUID, uuid4
 from dataclasses import dataclass, field
@@ -136,7 +136,7 @@ class ChainVerificationResult:
     entries_checked: int
     first_invalid_entry: Optional[UUID] = None
     error_message: Optional[str] = None
-    verified_at: datetime = field(default_factory=datetime.utcnow)
+    verified_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class AuditChainService:
@@ -257,7 +257,7 @@ class AuditChainService:
             agent_name=agent_name,
             agent_tier=agent_tier.value,
             action_type=action_type,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
             input_hash=self.hash_payload(input_data) if input_data else None,
             previous_entry_id=None,  # Genesis has no previous
             previous_hash=None,      # Genesis has no previous hash
@@ -327,7 +327,7 @@ class AuditChainService:
             agent_name=agent_name,
             agent_tier=agent_tier.value,
             action_type=action_type,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
             duration_ms=duration_ms,
             input_hash=self.hash_payload(input_data) if input_data else None,
             output_hash=self.hash_payload(output_data) if output_data else None,

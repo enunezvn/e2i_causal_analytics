@@ -10,7 +10,7 @@ import asyncio
 import logging
 import time
 from abc import ABC, abstractmethod
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Protocol
 
 from ..state import ComponentStatus, HealthScoreState
@@ -97,7 +97,7 @@ class ComponentHealthNode:
                             component_name=comp["name"],
                             status="unknown",
                             latency_ms=None,
-                            last_check=datetime.utcnow().isoformat(),
+                            last_check=datetime.now(timezone.utc).isoformat(),
                             error_message=str(status),
                         )
                     )
@@ -167,7 +167,7 @@ class ComponentHealthNode:
                 component_name=component["name"],
                 status=status,
                 latency_ms=latency,
-                last_check=datetime.utcnow().isoformat(),
+                last_check=datetime.now(timezone.utc).isoformat(),
                 error_message=result.get("error"),
             )
 
@@ -176,7 +176,7 @@ class ComponentHealthNode:
                 component_name=component["name"],
                 status="unhealthy",
                 latency_ms=self.timeout_ms,
-                last_check=datetime.utcnow().isoformat(),
+                last_check=datetime.now(timezone.utc).isoformat(),
                 error_message="Health check timed out",
             )
 
@@ -185,7 +185,7 @@ class ComponentHealthNode:
                 component_name=component["name"],
                 status="unknown",
                 latency_ms=int((time.time() - start) * 1000),
-                last_check=datetime.utcnow().isoformat(),
+                last_check=datetime.now(timezone.utc).isoformat(),
                 error_message=str(e),
             )
 
@@ -195,6 +195,6 @@ class ComponentHealthNode:
             component_name=component["name"],
             status="healthy",
             latency_ms=10,
-            last_check=datetime.utcnow().isoformat(),
+            last_check=datetime.now(timezone.utc).isoformat(),
             error_message=None,
         )

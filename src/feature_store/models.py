@@ -4,7 +4,7 @@ Feature Store Data Models
 Pydantic models for feature store entities.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import UUID
@@ -122,7 +122,7 @@ class EntityFeatures(BaseModel):
         default_factory=dict,
         description="Feature name -> metadata (timestamp, freshness, etc.)",
     )
-    retrieved_at: datetime = Field(default_factory=datetime.utcnow)
+    retrieved_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to flat dictionary (entity + features)."""
@@ -143,4 +143,4 @@ class FeatureStatistics(BaseModel):
     percentiles: Dict[str, float] = Field(default_factory=dict)
     null_count: int = 0
     unique_count: Optional[int] = None
-    computed_at: datetime = Field(default_factory=datetime.utcnow)
+    computed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

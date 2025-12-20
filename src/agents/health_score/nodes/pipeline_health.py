@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Protocol
 
 from ..state import HealthScoreState, PipelineStatus
@@ -130,7 +130,7 @@ class PipelineHealthNode:
                         last_success.replace("Z", "+00:00")
                     )
                     freshness_hours = (
-                        datetime.utcnow() - last_success_dt.replace(tzinfo=None)
+                        datetime.now(timezone.utc) - last_success_dt.replace(tzinfo=None)
                     ).total_seconds() / 3600
                 except (ValueError, AttributeError):
                     freshness_hours = float("inf")
