@@ -124,7 +124,7 @@ def get_default_evaluation_dataset() -> List[EvaluationSample]:
     """
     Get default evaluation dataset for E2I pharmaceutical commercial analytics.
 
-    Contains representative queries across brands and KPIs.
+    Contains representative queries across brands and KPIs with simulated answers.
     """
     return [
         # Kisqali (breast cancer) queries
@@ -135,12 +135,22 @@ def get_default_evaluation_dataset() -> List[EvaluationSample]:
                 "Kisqali Q4 TRx report: Total prescriptions reached 45,000 units, up 15% from Q3. Northeast region led with 22% growth.",
                 "HCP targeting data shows 850 new prescribers adopted Kisqali in Q4, driving market share expansion in HR+ breast cancer segment.",
             ],
+            answer="Kisqali TRx trends in Q4 show strong growth with a 15% increase in prescription volume, reaching 45,000 units. The Northeast region led with 22% growth, and 850 new HCPs adopted the drug, expanding market share in the HR+ breast cancer segment.",
+            retrieved_contexts=[
+                "Kisqali Q4 TRx report: Total prescriptions reached 45,000 units, up 15% from Q3. Northeast region led with 22% growth.",
+                "HCP targeting data shows 850 new prescribers adopted Kisqali in Q4, driving market share expansion in HR+ breast cancer segment.",
+            ],
             metadata={"brand": "Kisqali", "kpi": "TRx", "period": "Q4"},
         ),
         EvaluationSample(
             query="What is the market share for Kisqali compared to competitors?",
             ground_truth="Kisqali holds approximately 32% market share in the CDK4/6 inhibitor market for HR+/HER2- breast cancer, positioning it as the second-largest player behind Ibrance.",
             contexts=[
+                "CDK4/6 inhibitor market share Q4: Ibrance 45%, Kisqali 32%, Verzenio 23%.",
+                "Kisqali gained 3 percentage points share from Ibrance in key territories, driven by favorable efficacy data.",
+            ],
+            answer="Kisqali holds 32% market share in the CDK4/6 inhibitor market for HR+/HER2- breast cancer, making it the second-largest player. Ibrance leads at 45%, while Verzenio has 23%. Kisqali gained 3 percentage points from Ibrance in key territories.",
+            retrieved_contexts=[
                 "CDK4/6 inhibitor market share Q4: Ibrance 45%, Kisqali 32%, Verzenio 23%.",
                 "Kisqali gained 3 percentage points share from Ibrance in key territories, driven by favorable efficacy data.",
             ],
@@ -154,12 +164,22 @@ def get_default_evaluation_dataset() -> List[EvaluationSample]:
                 "Fabhalta NRx monthly report: 280 new starts recorded, up from 237 last month (18% growth).",
                 "PNH market new patient starts: Fabhalta capturing 35% of newly diagnosed patients.",
             ],
+            answer="Fabhalta achieved 280 new prescriptions (NRx) this month, representing 18% month-over-month growth from 237 last month. Fabhalta is capturing 35% of newly diagnosed PNH patients.",
+            retrieved_contexts=[
+                "Fabhalta NRx monthly report: 280 new starts recorded, up from 237 last month (18% growth).",
+                "PNH market new patient starts: Fabhalta capturing 35% of newly diagnosed patients.",
+            ],
             metadata={"brand": "Fabhalta", "kpi": "NRx", "period": "monthly"},
         ),
         EvaluationSample(
             query="What drives Fabhalta adoption among hematologists?",
             ground_truth="Key drivers of Fabhalta adoption include oral administration convenience, complement component 3 inhibition mechanism, and reduced transfusion dependency compared to C5 inhibitors.",
             contexts=[
+                "Hematologist survey: 78% cite oral route as primary driver for Fabhalta preference.",
+                "Clinical outcomes data: Fabhalta patients show 40% reduction in transfusion requirements vs. baseline.",
+            ],
+            answer="Key drivers of Fabhalta adoption among hematologists include oral administration convenience (cited by 78% as primary driver) and reduced transfusion dependency, with patients showing 40% reduction in transfusion requirements compared to baseline.",
+            retrieved_contexts=[
                 "Hematologist survey: 78% cite oral route as primary driver for Fabhalta preference.",
                 "Clinical outcomes data: Fabhalta patients show 40% reduction in transfusion requirements vs. baseline.",
             ],
@@ -173,12 +193,22 @@ def get_default_evaluation_dataset() -> List[EvaluationSample]:
                 "Remibrutinib conversion metrics: Overall conversion rate 45%. Allergist segment leads at 52%.",
                 "HCP specialty analysis: Dermatologists show 38% conversion, opportunity for targeted education.",
             ],
+            answer="Remibrutinib has a 45% overall conversion rate from trial to prescription. Allergists lead with 52% conversion, while dermatologists show 38% conversion, indicating opportunity for targeted education.",
+            retrieved_contexts=[
+                "Remibrutinib conversion metrics: Overall conversion rate 45%. Allergist segment leads at 52%.",
+                "HCP specialty analysis: Dermatologists show 38% conversion, opportunity for targeted education.",
+            ],
             metadata={"brand": "Remibrutinib", "kpi": "conversion_rate"},
         ),
         EvaluationSample(
             query="Which territories have the highest Remibrutinib sales?",
             ground_truth="Top territories for Remibrutinib are California (23% of sales), Texas (15%), and Florida (12%), accounting for 50% of total prescription volume.",
             contexts=[
+                "Territory performance Q4: California leads with 23% share, Texas 15%, Florida 12%.",
+                "Regional analysis: West Coast territories show 30% higher per-HCP prescribing vs. national average.",
+            ],
+            answer="Top territories for Remibrutinib sales are California (23%), Texas (15%), and Florida (12%), together accounting for 50% of total prescription volume. West Coast territories show 30% higher per-HCP prescribing than the national average.",
+            retrieved_contexts=[
                 "Territory performance Q4: California leads with 23% share, Texas 15%, Florida 12%.",
                 "Regional analysis: West Coast territories show 30% higher per-HCP prescribing vs. national average.",
             ],
@@ -192,12 +222,22 @@ def get_default_evaluation_dataset() -> List[EvaluationSample]:
                 "Causal analysis: HCP detailing shows 0.3 coefficient impact on NRx. Statistical significance p<0.01.",
                 "Multi-touch attribution: Peer education events contribute 0.25 lift, patient programs 0.22.",
             ],
+            answer="Key causal factors affecting NRx growth include HCP detailing frequency with a 0.3 coefficient impact (p<0.01), peer education events contributing 0.25 lift, and patient support program enrollment with 0.22 impact.",
+            retrieved_contexts=[
+                "Causal analysis: HCP detailing shows 0.3 coefficient impact on NRx. Statistical significance p<0.01.",
+                "Multi-touch attribution: Peer education events contribute 0.25 lift, patient programs 0.22.",
+            ],
             metadata={"kpi": "NRx", "analysis_type": "causal"},
         ),
         EvaluationSample(
             query="What gaps exist in our HCP targeting strategy?",
             ground_truth="Key gaps identified: 35% of high-value HCPs have not been contacted in 90 days, Northeast region is underrepresented in speaker programs, and digital engagement is below benchmark for dermatologists.",
             contexts=[
+                "HCP coverage analysis: 35% of decile 1-2 prescribers missing recent contact (>90 days).",
+                "Gap analysis: Northeast speaker program participation 40% below target. Digital engagement for dermatology 25% below benchmark.",
+            ],
+            answer="Key gaps in HCP targeting strategy: 35% of high-value decile 1-2 prescribers have not been contacted in 90+ days. Northeast speaker program participation is 40% below target, and digital engagement for dermatology is 25% below benchmark.",
+            retrieved_contexts=[
                 "HCP coverage analysis: 35% of decile 1-2 prescribers missing recent contact (>90 days).",
                 "Gap analysis: Northeast speaker program participation 40% below target. Digital engagement for dermatology 25% below benchmark.",
             ],
@@ -211,12 +251,22 @@ def get_default_evaluation_dataset() -> List[EvaluationSample]:
                 "Campaign ROI analysis: Digital campaigns 4.2x ROI, HCP events 3.1x, print materials 2.5x.",
                 "Budget allocation recommendation: Shift 15% from print to digital based on ROI differential.",
             ],
+            answer="Marketing campaign ROI ranges from 2.5x to 4.2x by channel. Digital campaigns lead with 4.2x ROI, followed by HCP events at 3.1x and print at 2.5x. Recommendation: shift 15% of budget from print to digital.",
+            retrieved_contexts=[
+                "Campaign ROI analysis: Digital campaigns 4.2x ROI, HCP events 3.1x, print materials 2.5x.",
+                "Budget allocation recommendation: Shift 15% from print to digital based on ROI differential.",
+            ],
             metadata={"kpi": "ROI", "analysis_type": "marketing"},
         ),
         EvaluationSample(
             query="How is drift detected in our prediction models?",
             ground_truth="Model drift is monitored via PSI (Population Stability Index) for feature distributions and concept drift detection for label shifts. Alerts trigger when PSI exceeds 0.2 or accuracy drops 5% from baseline.",
             contexts=[
+                "Drift monitoring config: PSI threshold 0.2, accuracy degradation threshold 5%, check frequency daily.",
+                "Drift detection methods: PSI for feature drift, KL divergence for prediction drift, accuracy monitoring for concept drift.",
+            ],
+            answer="Model drift is detected using PSI (Population Stability Index) for feature distributions with a 0.2 threshold, KL divergence for prediction drift, and accuracy monitoring for concept drift with a 5% degradation threshold. Checks run daily.",
+            retrieved_contexts=[
                 "Drift monitoring config: PSI threshold 0.2, accuracy degradation threshold 5%, check frequency daily.",
                 "Drift detection methods: PSI for feature drift, KL divergence for prediction drift, accuracy monitoring for concept drift.",
             ],
