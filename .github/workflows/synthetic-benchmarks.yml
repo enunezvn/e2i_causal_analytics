@@ -1,0 +1,90 @@
+name: Synthetic Benchmarks
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/causal_engine/**'
+      - 'tests/synthetic/**'
+      - '.github/workflows/synthetic-benchmarks.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/causal_engine/**'
+      - 'tests/synthetic/**'
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  synthetic-benchmarks:
+    name: Causal Validation Benchmarks
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        python-version: ['3.11']
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pytest-cov numpy pandas scikit-learn
+          # Install project in editable mode if pyproject.toml exists
+          if [ -f pyproject.toml ]; then
+            pip install -e ".[dev]" || pip install -e .
+          fi
+
+      - name: Run synthetic benchmarks
+        run: |
+          pytest tests/synthetic/ -v --tb=short \
+            --junitxml=test-results/synthetic-benchmarks.xml \
+            -o junit_family=xunit2
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: synthetic-benchmark-results
+          path: test-results/
+          retention-days: 30
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Synthetic Benchmark Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Scenario | Purpose |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|---------|" >> $GITHUB_STEP_SUMMARY
+          echo "| simple_linear | Baseline sanity check (True ATE = 0.50) |" >> $GITHUB_STEP_SUMMARY
+          echo "| confounded_moderate | Adjustment recovery (True ATE = 0.30) |" >> $GITHUB_STEP_SUMMARY
+          echo "| heterogeneous_cate | CATE estimation accuracy |" >> $GITHUB_STEP_SUMMARY
+
+  benchmark-regression:
+    name: Benchmark Regression Check
+    runs-on: ubuntu-latest
+    needs: synthetic-benchmarks
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - name: Download benchmark results
+        uses: actions/download-artifact@v4
+        with:
+          name: synthetic-benchmark-results
+          path: test-results/
+
+      - name: Check for regressions
+        run: |
+          echo "Checking for benchmark regressions..."
+          # Parse JUnit XML for failures
+          if grep -q 'failures="[1-9]' test-results/synthetic-benchmarks.xml 2>/dev/null; then
+            echo "::error::Synthetic benchmark regression detected!"
+            exit 1
+          fi
+          echo "::notice::All synthetic benchmarks passed"
