@@ -1,8 +1,16 @@
-"""Tests for ROI Calculator Node."""
+"""Tests for ROI Calculator Node.
+
+Updated to test the new ROICalculationService-integrated implementation.
+"""
 
 import pytest
 from src.agents.gap_analyzer.nodes.roi_calculator import ROICalculatorNode
 from src.agents.gap_analyzer.state import GapAnalyzerState, PerformanceGap
+from src.services.roi_calculation import (
+    ROICalculationService,
+    ValueDriverType,
+    AttributionLevel,
+)
 
 
 class TestROICalculatorNode:
@@ -58,7 +66,9 @@ class TestROICalculatorNode:
     @pytest.mark.asyncio
     async def test_calculate_roi_for_trx_gap(self):
         """Test ROI calculation for TRx gap."""
-        node = ROICalculatorNode()
+        # Use fewer simulations for faster tests
+        service = ROICalculationService(n_simulations=50, seed=42)
+        node = ROICalculatorNode(roi_service=service)
         gap = self._create_test_gap(metric="trx", gap_size=100.0)
         state = self._create_test_state(gaps=[gap])
 
@@ -75,52 +85,72 @@ class TestROICalculatorNode:
 
     @pytest.mark.asyncio
     async def test_roi_calculation_formula(self):
-        """Test ROI calculation formula."""
-        node = ROICalculatorNode()
+        """Test ROI calculation uses proper methodology.
+
+        New methodology uses:
+        - $850/TRx value driver (not $500)
+        - Attribution framework (full for vs_target = 100%)
+        - Risk adjustment
+        """
+        service = ROICalculationService(n_simulations=50, seed=42)
+        node = ROICalculatorNode(roi_service=service)
         gap = self._create_test_gap(metric="trx", gap_size=100.0)
 
         roi = node._calculate_roi(gap)
 
-        # Revenue = gap_size * metric_multiplier
-        expected_revenue = 100.0 * 500.0  # TRx multiplier is $500
-        assert abs(roi["estimated_revenue_impact"] - expected_revenue) < 0.01
+        # Revenue = 100 TRx × $850 × 100% attribution (full for vs_target) = $85,000
+        # After risk adjustment it may be different
+        assert roi["estimated_revenue_impact"] == 85000.0  # Full attribution
 
-        # Cost = gap_size * intervention_cost
-        expected_cost = 100.0 * 100.0  # TRx intervention is $100
-        assert abs(roi["estimated_cost_to_close"] - expected_cost) < 0.01
+        # Cost includes engineering + potentially change management
+        # 5 base days × 1.0 scale (gap 10-100) × $2,500 = $12,500 engineering
+        assert roi["estimated_cost_to_close"] > 0
 
-        # ROI = (revenue - cost) / cost
-        expected_roi = (expected_revenue - expected_cost) / expected_cost
-        assert abs(roi["expected_roi"] - expected_roi) < 0.01
-
-    @pytest.mark.asyncio
-    async def test_metric_multipliers(self):
-        """Test different metric multipliers."""
-        node = ROICalculatorNode()
-
-        metrics_to_test = ["trx", "nrx", "market_share", "conversion_rate"]
-
-        for metric in metrics_to_test:
-            multiplier = node._get_metric_multiplier(metric)
-            assert multiplier > 0
-            assert isinstance(multiplier, float)
+        # ROI should be positive for this gap
+        assert roi["expected_roi"] > 0
 
     @pytest.mark.asyncio
-    async def test_intervention_costs(self):
-        """Test different intervention costs."""
-        node = ROICalculatorNode()
+    async def test_value_driver_mapping(self):
+        """Test different metrics map to correct value drivers."""
+        service = ROICalculationService(n_simulations=50, seed=42)
+        node = ROICalculatorNode(roi_service=service)
 
-        metrics_to_test = ["trx", "nrx", "market_share", "conversion_rate"]
+        # TRx maps to TRX_LIFT
+        assert node._get_value_driver("trx") == ValueDriverType.TRX_LIFT
+        assert node._get_value_driver("nrx") == ValueDriverType.TRX_LIFT
 
-        for metric in metrics_to_test:
-            cost = node._get_intervention_cost(metric)
-            assert cost > 0
-            assert isinstance(cost, float)
+        # Patient identification
+        assert node._get_value_driver("patient_count") == ValueDriverType.PATIENT_IDENTIFICATION
+
+        # Action rate
+        assert node._get_value_driver("trigger_acceptance") == ValueDriverType.ACTION_RATE
+
+        # ITP
+        assert node._get_value_driver("hcp_engagement_score") == ValueDriverType.INTENT_TO_PRESCRIBE
+
+    @pytest.mark.asyncio
+    async def test_attribution_by_gap_type(self):
+        """Test attribution level based on gap type."""
+        service = ROICalculationService(n_simulations=50, seed=42)
+        node = ROICalculatorNode(roi_service=service)
+
+        # vs_target = FULL (100%)
+        assert node._determine_attribution("vs_target") == AttributionLevel.FULL
+
+        # vs_benchmark = PARTIAL (65%)
+        assert node._determine_attribution("vs_benchmark") == AttributionLevel.PARTIAL
+
+        # vs_potential = SHARED (35%)
+        assert node._determine_attribution("vs_potential") == AttributionLevel.SHARED
+
+        # temporal = MINIMAL (10%)
+        assert node._determine_attribution("temporal") == AttributionLevel.MINIMAL
 
     @pytest.mark.asyncio
     async def test_payback_period_calculation(self):
         """Test payback period calculation."""
-        node = ROICalculatorNode()
+        service = ROICalculationService(n_simulations=50, seed=42)
+        node = ROICalculatorNode(roi_service=service)
         gap = self._create_test_gap(metric="trx", gap_size=100.0)
 
         roi = node._calculate_roi(gap)
@@ -130,33 +160,63 @@ class TestROICalculatorNode:
         assert isinstance(roi["payback_period_months"], int)
 
     @pytest.mark.asyncio
-    async def test_confidence_calculation(self):
-        """Test confidence score calculation."""
-        node = ROICalculatorNode()
+    async def test_confidence_interval(self):
+        """Test confidence interval from bootstrap."""
+        service = ROICalculationService(n_simulations=100, seed=42)
+        node = ROICalculatorNode(roi_service=service)
+        gap = self._create_test_gap(metric="trx", gap_size=100.0)
+
+        roi = node._calculate_roi(gap)
+
+        assert "confidence_interval" in roi
+        ci = roi["confidence_interval"]
+        assert ci is not None
+
+        # CI structure
+        assert "lower_bound" in ci
+        assert "median" in ci
+        assert "upper_bound" in ci
+        assert "probability_positive" in ci
+        assert "probability_target" in ci
+
+        # Lower < median < upper
+        assert ci["lower_bound"] <= ci["median"] <= ci["upper_bound"]
+
+        # Probabilities in [0, 1]
+        assert 0.0 <= ci["probability_positive"] <= 1.0
+        assert 0.0 <= ci["probability_target"] <= 1.0
+
+    @pytest.mark.asyncio
+    async def test_legacy_confidence_calculation(self):
+        """Test legacy confidence score calculation."""
+        service = ROICalculationService(n_simulations=50, seed=42)
+        node = ROICalculatorNode(roi_service=service)
         gap = self._create_test_gap(metric="trx", gap_size=100.0, gap_percentage=20.0)
 
-        confidence = node._calculate_confidence(gap)
+        confidence = node._calculate_legacy_confidence(gap)
 
         assert 0.0 <= confidence <= 1.0
 
     @pytest.mark.asyncio
-    async def test_confidence_factors(self):
-        """Test confidence factors."""
-        node = ROICalculatorNode()
+    async def test_legacy_confidence_factors(self):
+        """Test legacy confidence factors."""
+        service = ROICalculationService(n_simulations=50, seed=42)
+        node = ROICalculatorNode(roi_service=service)
 
         # Large gap should have higher confidence
         large_gap = self._create_test_gap(gap_size=200.0, gap_percentage=30.0)
         small_gap = self._create_test_gap(gap_size=5.0, gap_percentage=5.0)
 
-        large_conf = node._calculate_confidence(large_gap)
-        small_conf = node._calculate_confidence(small_gap)
+        large_conf = node._calculate_legacy_confidence(large_gap)
+        small_conf = node._calculate_legacy_confidence(small_gap)
 
         assert large_conf >= small_conf
 
     @pytest.mark.asyncio
-    async def test_gap_type_confidence(self):
-        """Test confidence by gap type."""
-        node = ROICalculatorNode()
+    async def test_gap_type_legacy_confidence(self):
+        """Test legacy confidence by gap type."""
+        service = ROICalculationService(n_simulations=50, seed=42)
+        node = ROICalculatorNode(roi_service=service)
 
         gap_vs_target = self._create_test_gap(gap_size=100.0)
         gap_vs_target["gap_type"] = "vs_target"
@@ -164,8 +224,8 @@ class TestROICalculatorNode:
         gap_temporal = self._create_test_gap(gap_size=100.0)
         gap_temporal["gap_type"] = "temporal"
 
-        conf_target = node._calculate_confidence(gap_vs_target)
-        conf_temporal = node._calculate_confidence(gap_temporal)
+        conf_target = node._calculate_legacy_confidence(gap_vs_target)
+        conf_temporal = node._calculate_legacy_confidence(gap_temporal)
 
         # vs_target should have higher confidence than temporal
         assert conf_target > conf_temporal
@@ -173,7 +233,8 @@ class TestROICalculatorNode:
     @pytest.mark.asyncio
     async def test_assumptions_generation(self):
         """Test that assumptions are generated."""
-        node = ROICalculatorNode()
+        service = ROICalculationService(n_simulations=50, seed=42)
+        node = ROICalculatorNode(roi_service=service)
         gap = self._create_test_gap(metric="trx")
 
         roi = node._calculate_roi(gap)
@@ -184,22 +245,31 @@ class TestROICalculatorNode:
 
     @pytest.mark.asyncio
     async def test_assumptions_content(self):
-        """Test assumptions content."""
-        node = ROICalculatorNode()
+        """Test assumptions content includes methodology details."""
+        service = ROICalculationService(n_simulations=50, seed=42)
+        node = ROICalculatorNode(roi_service=service)
+        gap = self._create_test_gap(metric="trx")
 
-        assumptions = node._get_assumptions("trx")
+        roi = node._calculate_roi(gap)
+        assumptions = roi["assumptions"]
 
-        # Should have base assumptions
-        assert any("revenue per trx" in a.lower() for a in assumptions)
-        assert any("cost per hcp" in a.lower() for a in assumptions)
+        # Should mention value driver
+        assert any("value driver" in a.lower() for a in assumptions)
 
-        # Should have metric-specific assumptions
-        assert any("trx" in a.lower() for a in assumptions)
+        # Should mention unit value ($850/TRx for trx)
+        assert any("$850" in a for a in assumptions)
+
+        # Should mention attribution
+        assert any("attribution" in a.lower() for a in assumptions)
+
+        # Should mention bootstrap
+        assert any("bootstrap" in a.lower() for a in assumptions)
 
     @pytest.mark.asyncio
     async def test_total_addressable_value(self):
         """Test total addressable value calculation."""
-        node = ROICalculatorNode()
+        service = ROICalculationService(n_simulations=50, seed=42)
+        node = ROICalculatorNode(roi_service=service)
         gaps = [
             self._create_test_gap(metric="trx", gap_size=100.0),
             self._create_test_gap(metric="nrx", gap_size=50.0),
@@ -220,7 +290,8 @@ class TestROICalculatorNode:
     @pytest.mark.asyncio
     async def test_roi_latency_measurement(self):
         """Test ROI latency measurement."""
-        node = ROICalculatorNode()
+        service = ROICalculationService(n_simulations=50, seed=42)
+        node = ROICalculatorNode(roi_service=service)
         gap = self._create_test_gap()
         state = self._create_test_state(gaps=[gap])
 
@@ -232,7 +303,8 @@ class TestROICalculatorNode:
     @pytest.mark.asyncio
     async def test_status_update(self):
         """Test status update to prioritizing."""
-        node = ROICalculatorNode()
+        service = ROICalculationService(n_simulations=50, seed=42)
+        node = ROICalculatorNode(roi_service=service)
         gap = self._create_test_gap()
         state = self._create_test_state(gaps=[gap])
 
@@ -243,7 +315,8 @@ class TestROICalculatorNode:
     @pytest.mark.asyncio
     async def test_multiple_gaps(self):
         """Test ROI calculation for multiple gaps."""
-        node = ROICalculatorNode()
+        service = ROICalculationService(n_simulations=50, seed=42)
+        node = ROICalculatorNode(roi_service=service)
         gaps = [
             self._create_test_gap(metric="trx", gap_size=100.0),
             self._create_test_gap(metric="nrx", gap_size=50.0),
@@ -259,6 +332,34 @@ class TestROICalculatorNode:
         gap_ids = {g["gap_id"] for g in gaps}
         roi_gap_ids = {r["gap_id"] for r in result["roi_estimates"]}
         assert gap_ids == roi_gap_ids
+
+    @pytest.mark.asyncio
+    async def test_risk_adjusted_roi(self):
+        """Test risk-adjusted ROI is calculated."""
+        service = ROICalculationService(n_simulations=50, seed=42)
+        node = ROICalculatorNode(roi_service=service)
+        gap = self._create_test_gap(metric="trx", gap_size=100.0)
+
+        roi = node._calculate_roi(gap)
+
+        assert "risk_adjusted_roi" in roi
+        assert "total_risk_adjustment" in roi
+
+        # Risk-adjusted should be <= base ROI (risk reduces returns)
+        assert roi["risk_adjusted_roi"] <= roi["expected_roi"]
+
+    @pytest.mark.asyncio
+    async def test_value_by_driver(self):
+        """Test value breakdown by driver is included."""
+        service = ROICalculationService(n_simulations=50, seed=42)
+        node = ROICalculatorNode(roi_service=service)
+        gap = self._create_test_gap(metric="trx", gap_size=100.0)
+
+        roi = node._calculate_roi(gap)
+
+        assert "value_by_driver" in roi
+        assert roi["value_by_driver"] is not None
+        assert "trx_lift" in roi["value_by_driver"]
 
 
 class TestROICalculatorEdgeCases:
@@ -310,43 +411,51 @@ class TestROICalculatorEdgeCases:
         }
 
     @pytest.mark.asyncio
-    async def test_zero_cost_gap(self):
-        """Test gap with zero intervention cost."""
-        node = ROICalculatorNode()
+    async def test_zero_size_gap(self):
+        """Test gap with zero size still calculates (edge case)."""
+        service = ROICalculationService(n_simulations=50, seed=42)
+        node = ROICalculatorNode(roi_service=service)
         gap = self._create_test_gap(gap_size=0.0)
 
         roi = node._calculate_roi(gap)
 
-        # Zero cost should result in infinite ROI or very high ROI
-        assert roi["estimated_cost_to_close"] == 0.0
+        # Zero gap = zero revenue impact
+        assert roi["estimated_revenue_impact"] == 0.0
+        # But engineering cost still applies (minimum effort)
+        assert roi["estimated_cost_to_close"] > 0
 
     @pytest.mark.asyncio
     async def test_very_large_gap(self):
         """Test very large gap."""
-        node = ROICalculatorNode()
+        service = ROICalculationService(n_simulations=50, seed=42)
+        node = ROICalculatorNode(roi_service=service)
         gap = self._create_test_gap(gap_size=10000.0)
 
         roi = node._calculate_roi(gap)
 
         assert roi["estimated_revenue_impact"] > 0
         assert roi["estimated_cost_to_close"] > 0
+        # Large gap should have meaningful ROI
+        assert roi["expected_roi"] > 0
 
     @pytest.mark.asyncio
     async def test_unknown_metric(self):
-        """Test gap with unknown metric."""
-        node = ROICalculatorNode()
+        """Test gap with unknown metric uses default (TRX_LIFT)."""
+        service = ROICalculationService(n_simulations=50, seed=42)
+        node = ROICalculatorNode(roi_service=service)
         gap = self._create_test_gap(metric="unknown_metric", gap_size=100.0)
 
         roi = node._calculate_roi(gap)
 
-        # Should use default multiplier and cost
+        # Should use default TRX_LIFT driver
         assert roi["estimated_revenue_impact"] > 0
         assert roi["estimated_cost_to_close"] > 0
 
     @pytest.mark.asyncio
     async def test_no_gaps_detected(self):
         """Test ROI calculator with no gaps."""
-        node = ROICalculatorNode()
+        service = ROICalculationService(n_simulations=50, seed=42)
+        node = ROICalculatorNode(roi_service=service)
         state = self._create_test_state(gaps=[])
 
         result = await node.execute(state)
@@ -357,12 +466,13 @@ class TestROICalculatorEdgeCases:
 
     @pytest.mark.asyncio
     async def test_extreme_gap_percentage(self):
-        """Test gap with extreme percentage."""
-        node = ROICalculatorNode()
+        """Test gap with extreme percentage reduces legacy confidence."""
+        service = ROICalculationService(n_simulations=50, seed=42)
+        node = ROICalculatorNode(roi_service=service)
         gap = self._create_test_gap(gap_size=100.0)
         gap["gap_percentage"] = 200.0  # Extreme gap
 
-        confidence = node._calculate_confidence(gap)
+        confidence = node._calculate_legacy_confidence(gap)
 
         # Very large gap % should reduce confidence
         assert confidence < 0.8
@@ -370,7 +480,8 @@ class TestROICalculatorEdgeCases:
     @pytest.mark.asyncio
     async def test_payback_period_capped(self):
         """Test that payback period is capped at 24 months."""
-        node = ROICalculatorNode()
+        service = ROICalculationService(n_simulations=50, seed=42)
+        node = ROICalculatorNode(roi_service=service)
 
         # Create gap with very low revenue
         gap = self._create_test_gap(gap_size=1.0)
@@ -378,3 +489,107 @@ class TestROICalculatorEdgeCases:
         roi = node._calculate_roi(gap)
 
         assert roi["payback_period_months"] <= 24
+
+    @pytest.mark.asyncio
+    async def test_different_gap_types_affect_attribution(self):
+        """Test that different gap types get different attribution."""
+        service = ROICalculationService(n_simulations=50, seed=42)
+        node = ROICalculatorNode(roi_service=service)
+
+        # vs_target gets FULL (100%)
+        gap_target = self._create_test_gap(gap_size=100.0)
+        gap_target["gap_type"] = "vs_target"
+
+        # temporal gets MINIMAL (10%)
+        gap_temporal = self._create_test_gap(gap_size=100.0)
+        gap_temporal["gap_type"] = "temporal"
+
+        roi_target = node._calculate_roi(gap_target)
+        roi_temporal = node._calculate_roi(gap_temporal)
+
+        # Same gap size but different attribution
+        # Full attribution: 100% × $85,000 = $85,000
+        # Minimal attribution: 10% × $85,000 = $8,500
+        assert roi_target["estimated_revenue_impact"] > roi_temporal["estimated_revenue_impact"]
+        assert roi_target["attribution_rate"] > roi_temporal["attribution_rate"]
+
+
+class TestROICalculatorIntegration:
+    """Integration tests for ROI calculator with ROICalculationService."""
+
+    def _create_test_gap(self, metric: str = "trx", gap_size: float = 100.0) -> PerformanceGap:
+        """Create test gap."""
+        return {
+            "gap_id": f"region_Northeast_{metric}_vs_target",
+            "metric": metric,
+            "segment": "region",
+            "segment_value": "Northeast",
+            "current_value": 400.0,
+            "target_value": 500.0,
+            "gap_size": gap_size,
+            "gap_percentage": 20.0,
+            "gap_type": "vs_target",
+        }
+
+    @pytest.mark.asyncio
+    async def test_reproducible_with_seed(self):
+        """Test that results are reproducible with same seed."""
+        service1 = ROICalculationService(n_simulations=100, seed=42)
+        service2 = ROICalculationService(n_simulations=100, seed=42)
+
+        node1 = ROICalculatorNode(roi_service=service1)
+        node2 = ROICalculatorNode(roi_service=service2)
+
+        gap = self._create_test_gap(gap_size=100.0)
+
+        roi1 = node1._calculate_roi(gap)
+        roi2 = node2._calculate_roi(gap)
+
+        # With same seed, should get same results
+        assert roi1["expected_roi"] == roi2["expected_roi"]
+        assert roi1["risk_adjusted_roi"] == roi2["risk_adjusted_roi"]
+        if roi1["confidence_interval"] and roi2["confidence_interval"]:
+            assert roi1["confidence_interval"]["median"] == roi2["confidence_interval"]["median"]
+
+    @pytest.mark.asyncio
+    async def test_custom_simulations(self):
+        """Test custom number of simulations."""
+        # Fewer simulations for speed
+        service = ROICalculationService(n_simulations=10, seed=42)
+        node = ROICalculatorNode(roi_service=service)
+
+        gap = self._create_test_gap(gap_size=100.0)
+        roi = node._calculate_roi(gap)
+
+        # Should still produce valid results
+        assert roi["expected_roi"] > 0
+        assert roi["confidence_interval"] is not None
+
+    @pytest.mark.asyncio
+    async def test_roi_output_structure(self):
+        """Test complete ROI output structure."""
+        service = ROICalculationService(n_simulations=50, seed=42)
+        node = ROICalculatorNode(roi_service=service)
+
+        gap = self._create_test_gap(gap_size=100.0)
+        roi = node._calculate_roi(gap)
+
+        # Required fields
+        required_fields = [
+            "gap_id",
+            "estimated_revenue_impact",
+            "estimated_cost_to_close",
+            "expected_roi",
+            "risk_adjusted_roi",
+            "payback_period_months",
+            "confidence_interval",
+            "attribution_level",
+            "attribution_rate",
+            "total_risk_adjustment",
+            "value_by_driver",
+            "confidence",
+            "assumptions",
+        ]
+
+        for field in required_fields:
+            assert field in roi, f"Missing field: {field}"
