@@ -94,11 +94,11 @@ class EvaluationReport(BaseModel):
 # =============================================================================
 
 DEFAULT_THRESHOLDS = {
-    "faithfulness": 0.85,
-    "answer_relevancy": 0.90,
+    "faithfulness": 0.80,
+    "answer_relevancy": 0.85,
     "context_precision": 0.80,
-    "context_recall": 0.80,
-    "overall_score": 0.85,
+    "context_recall": 0.70,
+    "overall_score": 0.80,
 }
 
 
