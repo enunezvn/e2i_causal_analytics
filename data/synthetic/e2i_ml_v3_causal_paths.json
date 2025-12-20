@@ -1,0 +1,3040 @@
+[
+  {
+    "path_id": "CP_000000",
+    "discovery_date": "2025-04-16",
+    "causal_chain": {
+      "nodes": [
+        "HCP_Engagement",
+        "Treatment_Response",
+        "Cost_Reduction",
+        "Outcome_Improvement"
+      ],
+      "edges": [
+        {
+          "from": "HCP_Engagement",
+          "to": "Treatment_Response",
+          "effect": 0.186
+        },
+        {
+          "from": "Treatment_Response",
+          "to": "Cost_Reduction",
+          "effect": 0.372
+        },
+        {
+          "from": "Cost_Reduction",
+          "to": "Outcome_Improvement",
+          "effect": 0.411
+        }
+      ]
+    },
+    "start_node": "HCP_Engagement",
+    "end_node": "Outcome_Improvement",
+    "intermediate_nodes": [
+      "Treatment_Response",
+      "Cost_Reduction"
+    ],
+    "path_length": 4,
+    "causal_effect_size": 0.29,
+    "confidence_level": 0.858,
+    "method_used": "CausalML",
+    "confounders_controlled": [
+      "prior_treatment",
+      "region"
+    ],
+    "mediators_identified": [
+      "Treatment_Response",
+      "Cost_Reduction"
+    ],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": 0.087
+        }
+      ]
+    },
+    "time_lag_days": 26,
+    "validation_status": "needs_review",
+    "business_impact_estimate": 1359694.24,
+    "data_split": "train",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.501728"
+  },
+  {
+    "path_id": "CP_000001",
+    "discovery_date": "2025-07-14",
+    "causal_chain": {
+      "nodes": [
+        "Treatment_Response",
+        "HCP_Engagement",
+        "Cost_Reduction"
+      ],
+      "edges": [
+        {
+          "from": "Treatment_Response",
+          "to": "HCP_Engagement",
+          "effect": 0.392
+        },
+        {
+          "from": "HCP_Engagement",
+          "to": "Cost_Reduction",
+          "effect": 0.245
+        }
+      ]
+    },
+    "start_node": "Treatment_Response",
+    "end_node": "Cost_Reduction",
+    "intermediate_nodes": [
+      "HCP_Engagement"
+    ],
+    "path_length": 3,
+    "causal_effect_size": 0.055,
+    "confidence_level": 0.703,
+    "method_used": "Granger",
+    "confounders_controlled": [
+      "region",
+      "age",
+      "prior_treatment"
+    ],
+    "mediators_identified": [
+      "HCP_Engagement"
+    ],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": -0.033
+        }
+      ]
+    },
+    "time_lag_days": 89,
+    "validation_status": "needs_review",
+    "business_impact_estimate": 872003.68,
+    "data_split": "validation",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.501755"
+  },
+  {
+    "path_id": "CP_000002",
+    "discovery_date": "2025-09-17",
+    "causal_chain": {
+      "nodes": [
+        "Cost_Reduction",
+        "HCP_Engagement",
+        "Patient_Adherence"
+      ],
+      "edges": [
+        {
+          "from": "Cost_Reduction",
+          "to": "HCP_Engagement",
+          "effect": 0.261
+        },
+        {
+          "from": "HCP_Engagement",
+          "to": "Patient_Adherence",
+          "effect": 0.31
+        }
+      ]
+    },
+    "start_node": "Cost_Reduction",
+    "end_node": "Patient_Adherence",
+    "intermediate_nodes": [
+      "HCP_Engagement"
+    ],
+    "path_length": 3,
+    "causal_effect_size": 0.289,
+    "confidence_level": 0.882,
+    "method_used": "Granger",
+    "confounders_controlled": [
+      "prior_treatment",
+      "comorbidities",
+      "region"
+    ],
+    "mediators_identified": [
+      "HCP_Engagement"
+    ],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": 0.189
+        }
+      ]
+    },
+    "time_lag_days": 80,
+    "validation_status": "needs_review",
+    "business_impact_estimate": 293967.8,
+    "data_split": "test",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.501774"
+  },
+  {
+    "path_id": "CP_000003",
+    "discovery_date": "2025-09-24",
+    "causal_chain": {
+      "nodes": [
+        "Outcome_Improvement",
+        "Treatment_Response",
+        "Patient_Adherence",
+        "Market_Share",
+        "Cost_Reduction"
+      ],
+      "edges": [
+        {
+          "from": "Outcome_Improvement",
+          "to": "Treatment_Response",
+          "effect": 0.256
+        },
+        {
+          "from": "Treatment_Response",
+          "to": "Patient_Adherence",
+          "effect": 0.28
+        },
+        {
+          "from": "Patient_Adherence",
+          "to": "Market_Share",
+          "effect": 0.228
+        },
+        {
+          "from": "Market_Share",
+          "to": "Cost_Reduction",
+          "effect": 0.102
+        }
+      ]
+    },
+    "start_node": "Outcome_Improvement",
+    "end_node": "Cost_Reduction",
+    "intermediate_nodes": [
+      "Treatment_Response",
+      "Patient_Adherence",
+      "Market_Share"
+    ],
+    "path_length": 5,
+    "causal_effect_size": 0.154,
+    "confidence_level": 0.933,
+    "method_used": "DoWhy",
+    "confounders_controlled": [
+      "comorbidities",
+      "age",
+      "prior_treatment"
+    ],
+    "mediators_identified": [
+      "Treatment_Response",
+      "Patient_Adherence",
+      "Market_Share"
+    ],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": 0.116
+        }
+      ]
+    },
+    "time_lag_days": 30,
+    "validation_status": "pending",
+    "business_impact_estimate": 1022896.1,
+    "data_split": "test",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.501802"
+  },
+  {
+    "path_id": "CP_000004",
+    "discovery_date": "2025-05-25",
+    "causal_chain": {
+      "nodes": [
+        "Treatment_Response",
+        "Patient_Adherence",
+        "HCP_Engagement"
+      ],
+      "edges": [
+        {
+          "from": "Treatment_Response",
+          "to": "Patient_Adherence",
+          "effect": 0.176
+        },
+        {
+          "from": "Patient_Adherence",
+          "to": "HCP_Engagement",
+          "effect": 0.441
+        }
+      ]
+    },
+    "start_node": "Treatment_Response",
+    "end_node": "HCP_Engagement",
+    "intermediate_nodes": [
+      "Patient_Adherence"
+    ],
+    "path_length": 3,
+    "causal_effect_size": 0.076,
+    "confidence_level": 0.852,
+    "method_used": "CausalML",
+    "confounders_controlled": [
+      "region",
+      "comorbidities",
+      "prior_treatment"
+    ],
+    "mediators_identified": [
+      "Patient_Adherence"
+    ],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": 0.039
+        }
+      ]
+    },
+    "time_lag_days": 15,
+    "validation_status": "validated",
+    "business_impact_estimate": 1875895.17,
+    "data_split": "train",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.501818"
+  },
+  {
+    "path_id": "CP_000005",
+    "discovery_date": "2025-06-24",
+    "causal_chain": {
+      "nodes": [
+        "HCP_Engagement",
+        "Market_Share",
+        "Cost_Reduction",
+        "Patient_Adherence"
+      ],
+      "edges": [
+        {
+          "from": "HCP_Engagement",
+          "to": "Market_Share",
+          "effect": 0.494
+        },
+        {
+          "from": "Market_Share",
+          "to": "Cost_Reduction",
+          "effect": 0.23
+        },
+        {
+          "from": "Cost_Reduction",
+          "to": "Patient_Adherence",
+          "effect": 0.444
+        }
+      ]
+    },
+    "start_node": "HCP_Engagement",
+    "end_node": "Patient_Adherence",
+    "intermediate_nodes": [
+      "Market_Share",
+      "Cost_Reduction"
+    ],
+    "path_length": 4,
+    "causal_effect_size": 0.131,
+    "confidence_level": 0.886,
+    "method_used": "Granger",
+    "confounders_controlled": [
+      "age",
+      "comorbidities",
+      "region"
+    ],
+    "mediators_identified": [
+      "Market_Share",
+      "Cost_Reduction"
+    ],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": -0.056
+        }
+      ]
+    },
+    "time_lag_days": 56,
+    "validation_status": "validated",
+    "business_impact_estimate": 127360.82,
+    "data_split": "train",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.501836"
+  },
+  {
+    "path_id": "CP_000006",
+    "discovery_date": "2025-04-05",
+    "causal_chain": {
+      "nodes": [
+        "Patient_Adherence",
+        "Treatment_Response",
+        "Market_Share",
+        "Outcome_Improvement"
+      ],
+      "edges": [
+        {
+          "from": "Patient_Adherence",
+          "to": "Treatment_Response",
+          "effect": 0.352
+        },
+        {
+          "from": "Treatment_Response",
+          "to": "Market_Share",
+          "effect": 0.149
+        },
+        {
+          "from": "Market_Share",
+          "to": "Outcome_Improvement",
+          "effect": 0.312
+        }
+      ]
+    },
+    "start_node": "Patient_Adherence",
+    "end_node": "Outcome_Improvement",
+    "intermediate_nodes": [
+      "Treatment_Response",
+      "Market_Share"
+    ],
+    "path_length": 4,
+    "causal_effect_size": 0.096,
+    "confidence_level": 0.828,
+    "method_used": "Granger",
+    "confounders_controlled": [
+      "age",
+      "prior_treatment"
+    ],
+    "mediators_identified": [
+      "Treatment_Response",
+      "Market_Share"
+    ],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": 0.173
+        }
+      ]
+    },
+    "time_lag_days": 76,
+    "validation_status": "validated",
+    "business_impact_estimate": 1788851.34,
+    "data_split": "train",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.501851"
+  },
+  {
+    "path_id": "CP_000007",
+    "discovery_date": "2025-08-18",
+    "causal_chain": {
+      "nodes": [
+        "Market_Share",
+        "HCP_Engagement",
+        "Cost_Reduction",
+        "Patient_Adherence",
+        "Treatment_Response"
+      ],
+      "edges": [
+        {
+          "from": "Market_Share",
+          "to": "HCP_Engagement",
+          "effect": 0.263
+        },
+        {
+          "from": "HCP_Engagement",
+          "to": "Cost_Reduction",
+          "effect": 0.275
+        },
+        {
+          "from": "Cost_Reduction",
+          "to": "Patient_Adherence",
+          "effect": 0.421
+        },
+        {
+          "from": "Patient_Adherence",
+          "to": "Treatment_Response",
+          "effect": 0.213
+        }
+      ]
+    },
+    "start_node": "Market_Share",
+    "end_node": "Treatment_Response",
+    "intermediate_nodes": [
+      "HCP_Engagement",
+      "Cost_Reduction",
+      "Patient_Adherence"
+    ],
+    "path_length": 5,
+    "causal_effect_size": 0.235,
+    "confidence_level": 0.858,
+    "method_used": "Granger",
+    "confounders_controlled": [
+      "region"
+    ],
+    "mediators_identified": [
+      "HCP_Engagement",
+      "Cost_Reduction",
+      "Patient_Adherence"
+    ],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": 0.016
+        }
+      ]
+    },
+    "time_lag_days": 29,
+    "validation_status": "needs_review",
+    "business_impact_estimate": 1799792.08,
+    "data_split": "validation",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.501869"
+  },
+  {
+    "path_id": "CP_000008",
+    "discovery_date": "2025-06-09",
+    "causal_chain": {
+      "nodes": [
+        "Market_Share",
+        "Cost_Reduction",
+        "HCP_Engagement",
+        "Patient_Adherence"
+      ],
+      "edges": [
+        {
+          "from": "Market_Share",
+          "to": "Cost_Reduction",
+          "effect": 0.347
+        },
+        {
+          "from": "Cost_Reduction",
+          "to": "HCP_Engagement",
+          "effect": 0.178
+        },
+        {
+          "from": "HCP_Engagement",
+          "to": "Patient_Adherence",
+          "effect": 0.23
+        }
+      ]
+    },
+    "start_node": "Market_Share",
+    "end_node": "Patient_Adherence",
+    "intermediate_nodes": [
+      "Cost_Reduction",
+      "HCP_Engagement"
+    ],
+    "path_length": 4,
+    "causal_effect_size": 0.245,
+    "confidence_level": 0.756,
+    "method_used": "EconML",
+    "confounders_controlled": [
+      "region",
+      "age",
+      "comorbidities"
+    ],
+    "mediators_identified": [
+      "Cost_Reduction",
+      "HCP_Engagement"
+    ],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": 0.183
+        }
+      ]
+    },
+    "time_lag_days": 54,
+    "validation_status": "pending",
+    "business_impact_estimate": 1326275.67,
+    "data_split": "train",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.501886"
+  },
+  {
+    "path_id": "CP_000009",
+    "discovery_date": "2025-01-27",
+    "causal_chain": {
+      "nodes": [
+        "Cost_Reduction",
+        "Patient_Adherence",
+        "HCP_Engagement"
+      ],
+      "edges": [
+        {
+          "from": "Cost_Reduction",
+          "to": "Patient_Adherence",
+          "effect": 0.216
+        },
+        {
+          "from": "Patient_Adherence",
+          "to": "HCP_Engagement",
+          "effect": 0.371
+        }
+      ]
+    },
+    "start_node": "Cost_Reduction",
+    "end_node": "HCP_Engagement",
+    "intermediate_nodes": [
+      "Patient_Adherence"
+    ],
+    "path_length": 3,
+    "causal_effect_size": 0.313,
+    "confidence_level": 0.85,
+    "method_used": "CausalML",
+    "confounders_controlled": [
+      "prior_treatment",
+      "region"
+    ],
+    "mediators_identified": [
+      "Patient_Adherence"
+    ],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": -0.084
+        }
+      ]
+    },
+    "time_lag_days": 86,
+    "validation_status": "pending",
+    "business_impact_estimate": 303568.68,
+    "data_split": "train",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.501906"
+  },
+  {
+    "path_id": "CP_000010",
+    "discovery_date": "2025-01-03",
+    "causal_chain": {
+      "nodes": [
+        "Treatment_Response",
+        "HCP_Engagement",
+        "Patient_Adherence"
+      ],
+      "edges": [
+        {
+          "from": "Treatment_Response",
+          "to": "HCP_Engagement",
+          "effect": 0.222
+        },
+        {
+          "from": "HCP_Engagement",
+          "to": "Patient_Adherence",
+          "effect": 0.278
+        }
+      ]
+    },
+    "start_node": "Treatment_Response",
+    "end_node": "Patient_Adherence",
+    "intermediate_nodes": [
+      "HCP_Engagement"
+    ],
+    "path_length": 3,
+    "causal_effect_size": 0.355,
+    "confidence_level": 0.704,
+    "method_used": "EconML",
+    "confounders_controlled": [
+      "region",
+      "age",
+      "prior_treatment"
+    ],
+    "mediators_identified": [
+      "HCP_Engagement"
+    ],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": 0.131
+        }
+      ]
+    },
+    "time_lag_days": 12,
+    "validation_status": "validated",
+    "business_impact_estimate": 795347.74,
+    "data_split": "train",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.501920"
+  },
+  {
+    "path_id": "CP_000011",
+    "discovery_date": "2025-01-29",
+    "causal_chain": {
+      "nodes": [
+        "Market_Share",
+        "Patient_Adherence"
+      ],
+      "edges": [
+        {
+          "from": "Market_Share",
+          "to": "Patient_Adherence",
+          "effect": 0.18
+        }
+      ]
+    },
+    "start_node": "Market_Share",
+    "end_node": "Patient_Adherence",
+    "intermediate_nodes": [],
+    "path_length": 2,
+    "causal_effect_size": 0.126,
+    "confidence_level": 0.755,
+    "method_used": "Granger",
+    "confounders_controlled": [
+      "age",
+      "prior_treatment",
+      "region"
+    ],
+    "mediators_identified": [],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": 0.162
+        }
+      ]
+    },
+    "time_lag_days": 27,
+    "validation_status": "needs_review",
+    "business_impact_estimate": 1583172.72,
+    "data_split": "train",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.501943"
+  },
+  {
+    "path_id": "CP_000012",
+    "discovery_date": "2025-02-18",
+    "causal_chain": {
+      "nodes": [
+        "Market_Share",
+        "HCP_Engagement",
+        "Outcome_Improvement"
+      ],
+      "edges": [
+        {
+          "from": "Market_Share",
+          "to": "HCP_Engagement",
+          "effect": 0.197
+        },
+        {
+          "from": "HCP_Engagement",
+          "to": "Outcome_Improvement",
+          "effect": 0.125
+        }
+      ]
+    },
+    "start_node": "Market_Share",
+    "end_node": "Outcome_Improvement",
+    "intermediate_nodes": [
+      "HCP_Engagement"
+    ],
+    "path_length": 3,
+    "causal_effect_size": 0.149,
+    "confidence_level": 0.77,
+    "method_used": "NetworkX",
+    "confounders_controlled": [
+      "age",
+      "region"
+    ],
+    "mediators_identified": [
+      "HCP_Engagement"
+    ],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": 0.19
+        }
+      ]
+    },
+    "time_lag_days": 56,
+    "validation_status": "needs_review",
+    "business_impact_estimate": 720019.52,
+    "data_split": "train",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.501957"
+  },
+  {
+    "path_id": "CP_000013",
+    "discovery_date": "2025-04-20",
+    "causal_chain": {
+      "nodes": [
+        "Cost_Reduction",
+        "Patient_Adherence",
+        "Market_Share",
+        "Treatment_Response"
+      ],
+      "edges": [
+        {
+          "from": "Cost_Reduction",
+          "to": "Patient_Adherence",
+          "effect": 0.383
+        },
+        {
+          "from": "Patient_Adherence",
+          "to": "Market_Share",
+          "effect": 0.31
+        },
+        {
+          "from": "Market_Share",
+          "to": "Treatment_Response",
+          "effect": 0.156
+        }
+      ]
+    },
+    "start_node": "Cost_Reduction",
+    "end_node": "Treatment_Response",
+    "intermediate_nodes": [
+      "Patient_Adherence",
+      "Market_Share"
+    ],
+    "path_length": 4,
+    "causal_effect_size": 0.374,
+    "confidence_level": 0.71,
+    "method_used": "NetworkX",
+    "confounders_controlled": [
+      "prior_treatment",
+      "region"
+    ],
+    "mediators_identified": [
+      "Patient_Adherence",
+      "Market_Share"
+    ],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": 0.077
+        }
+      ]
+    },
+    "time_lag_days": 55,
+    "validation_status": "needs_review",
+    "business_impact_estimate": 1478090.89,
+    "data_split": "train",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.501971"
+  },
+  {
+    "path_id": "CP_000014",
+    "discovery_date": "2025-05-10",
+    "causal_chain": {
+      "nodes": [
+        "Market_Share",
+        "Patient_Adherence",
+        "Treatment_Response",
+        "Outcome_Improvement"
+      ],
+      "edges": [
+        {
+          "from": "Market_Share",
+          "to": "Patient_Adherence",
+          "effect": 0.262
+        },
+        {
+          "from": "Patient_Adherence",
+          "to": "Treatment_Response",
+          "effect": 0.173
+        },
+        {
+          "from": "Treatment_Response",
+          "to": "Outcome_Improvement",
+          "effect": 0.44
+        }
+      ]
+    },
+    "start_node": "Market_Share",
+    "end_node": "Outcome_Improvement",
+    "intermediate_nodes": [
+      "Patient_Adherence",
+      "Treatment_Response"
+    ],
+    "path_length": 4,
+    "causal_effect_size": 0.255,
+    "confidence_level": 0.808,
+    "method_used": "DoWhy",
+    "confounders_controlled": [
+      "age"
+    ],
+    "mediators_identified": [
+      "Patient_Adherence",
+      "Treatment_Response"
+    ],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": 0.14
+        }
+      ]
+    },
+    "time_lag_days": 34,
+    "validation_status": "pending",
+    "business_impact_estimate": 702824.77,
+    "data_split": "train",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.501988"
+  },
+  {
+    "path_id": "CP_000015",
+    "discovery_date": "2025-09-25",
+    "causal_chain": {
+      "nodes": [
+        "HCP_Engagement",
+        "Market_Share",
+        "Outcome_Improvement"
+      ],
+      "edges": [
+        {
+          "from": "HCP_Engagement",
+          "to": "Market_Share",
+          "effect": 0.176
+        },
+        {
+          "from": "Market_Share",
+          "to": "Outcome_Improvement",
+          "effect": 0.352
+        }
+      ]
+    },
+    "start_node": "HCP_Engagement",
+    "end_node": "Outcome_Improvement",
+    "intermediate_nodes": [
+      "Market_Share"
+    ],
+    "path_length": 3,
+    "causal_effect_size": 0.234,
+    "confidence_level": 0.757,
+    "method_used": "NetworkX",
+    "confounders_controlled": [
+      "age"
+    ],
+    "mediators_identified": [
+      "Market_Share"
+    ],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": 0.191
+        }
+      ]
+    },
+    "time_lag_days": 81,
+    "validation_status": "needs_review",
+    "business_impact_estimate": 295307.93,
+    "data_split": "test",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.502002"
+  },
+  {
+    "path_id": "CP_000016",
+    "discovery_date": "2025-03-11",
+    "causal_chain": {
+      "nodes": [
+        "Treatment_Response",
+        "Outcome_Improvement",
+        "Cost_Reduction",
+        "Patient_Adherence"
+      ],
+      "edges": [
+        {
+          "from": "Treatment_Response",
+          "to": "Outcome_Improvement",
+          "effect": 0.157
+        },
+        {
+          "from": "Outcome_Improvement",
+          "to": "Cost_Reduction",
+          "effect": 0.221
+        },
+        {
+          "from": "Cost_Reduction",
+          "to": "Patient_Adherence",
+          "effect": 0.49
+        }
+      ]
+    },
+    "start_node": "Treatment_Response",
+    "end_node": "Patient_Adherence",
+    "intermediate_nodes": [
+      "Outcome_Improvement",
+      "Cost_Reduction"
+    ],
+    "path_length": 4,
+    "causal_effect_size": 0.21,
+    "confidence_level": 0.928,
+    "method_used": "Granger",
+    "confounders_controlled": [
+      "prior_treatment"
+    ],
+    "mediators_identified": [
+      "Outcome_Improvement",
+      "Cost_Reduction"
+    ],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": 0.006
+        }
+      ]
+    },
+    "time_lag_days": 83,
+    "validation_status": "needs_review",
+    "business_impact_estimate": 1716274.38,
+    "data_split": "train",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.502019"
+  },
+  {
+    "path_id": "CP_000017",
+    "discovery_date": "2025-02-11",
+    "causal_chain": {
+      "nodes": [
+        "Patient_Adherence",
+        "Market_Share",
+        "HCP_Engagement",
+        "Treatment_Response"
+      ],
+      "edges": [
+        {
+          "from": "Patient_Adherence",
+          "to": "Market_Share",
+          "effect": 0.101
+        },
+        {
+          "from": "Market_Share",
+          "to": "HCP_Engagement",
+          "effect": 0.462
+        },
+        {
+          "from": "HCP_Engagement",
+          "to": "Treatment_Response",
+          "effect": 0.372
+        }
+      ]
+    },
+    "start_node": "Patient_Adherence",
+    "end_node": "Treatment_Response",
+    "intermediate_nodes": [
+      "Market_Share",
+      "HCP_Engagement"
+    ],
+    "path_length": 4,
+    "causal_effect_size": 0.384,
+    "confidence_level": 0.865,
+    "method_used": "Granger",
+    "confounders_controlled": [
+      "prior_treatment"
+    ],
+    "mediators_identified": [
+      "Market_Share",
+      "HCP_Engagement"
+    ],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": -0.031
+        }
+      ]
+    },
+    "time_lag_days": 10,
+    "validation_status": "pending",
+    "business_impact_estimate": 621641.22,
+    "data_split": "train",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.502034"
+  },
+  {
+    "path_id": "CP_000018",
+    "discovery_date": "2025-04-23",
+    "causal_chain": {
+      "nodes": [
+        "HCP_Engagement",
+        "Cost_Reduction",
+        "Market_Share",
+        "Treatment_Response"
+      ],
+      "edges": [
+        {
+          "from": "HCP_Engagement",
+          "to": "Cost_Reduction",
+          "effect": 0.445
+        },
+        {
+          "from": "Cost_Reduction",
+          "to": "Market_Share",
+          "effect": 0.352
+        },
+        {
+          "from": "Market_Share",
+          "to": "Treatment_Response",
+          "effect": 0.216
+        }
+      ]
+    },
+    "start_node": "HCP_Engagement",
+    "end_node": "Treatment_Response",
+    "intermediate_nodes": [
+      "Cost_Reduction",
+      "Market_Share"
+    ],
+    "path_length": 4,
+    "causal_effect_size": 0.071,
+    "confidence_level": 0.779,
+    "method_used": "EconML",
+    "confounders_controlled": [
+      "comorbidities",
+      "region",
+      "prior_treatment"
+    ],
+    "mediators_identified": [
+      "Cost_Reduction",
+      "Market_Share"
+    ],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": 0.019
+        }
+      ]
+    },
+    "time_lag_days": 34,
+    "validation_status": "needs_review",
+    "business_impact_estimate": 1246011.82,
+    "data_split": "train",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.502053"
+  },
+  {
+    "path_id": "CP_000019",
+    "discovery_date": "2025-06-30",
+    "causal_chain": {
+      "nodes": [
+        "Patient_Adherence",
+        "Cost_Reduction",
+        "Treatment_Response",
+        "HCP_Engagement",
+        "Market_Share"
+      ],
+      "edges": [
+        {
+          "from": "Patient_Adherence",
+          "to": "Cost_Reduction",
+          "effect": 0.347
+        },
+        {
+          "from": "Cost_Reduction",
+          "to": "Treatment_Response",
+          "effect": 0.101
+        },
+        {
+          "from": "Treatment_Response",
+          "to": "HCP_Engagement",
+          "effect": 0.443
+        },
+        {
+          "from": "HCP_Engagement",
+          "to": "Market_Share",
+          "effect": 0.256
+        }
+      ]
+    },
+    "start_node": "Patient_Adherence",
+    "end_node": "Market_Share",
+    "intermediate_nodes": [
+      "Cost_Reduction",
+      "Treatment_Response",
+      "HCP_Engagement"
+    ],
+    "path_length": 5,
+    "causal_effect_size": 0.177,
+    "confidence_level": 0.723,
+    "method_used": "NetworkX",
+    "confounders_controlled": [
+      "comorbidities",
+      "prior_treatment",
+      "age"
+    ],
+    "mediators_identified": [
+      "Cost_Reduction",
+      "Treatment_Response",
+      "HCP_Engagement"
+    ],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": 0.014
+        }
+      ]
+    },
+    "time_lag_days": 34,
+    "validation_status": "validated",
+    "business_impact_estimate": 1248213.76,
+    "data_split": "train",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.502071"
+  },
+  {
+    "path_id": "CP_000020",
+    "discovery_date": "2025-02-22",
+    "causal_chain": {
+      "nodes": [
+        "HCP_Engagement",
+        "Patient_Adherence"
+      ],
+      "edges": [
+        {
+          "from": "HCP_Engagement",
+          "to": "Patient_Adherence",
+          "effect": 0.298
+        }
+      ]
+    },
+    "start_node": "HCP_Engagement",
+    "end_node": "Patient_Adherence",
+    "intermediate_nodes": [],
+    "path_length": 2,
+    "causal_effect_size": 0.309,
+    "confidence_level": 0.903,
+    "method_used": "NetworkX",
+    "confounders_controlled": [
+      "comorbidities",
+      "region",
+      "prior_treatment"
+    ],
+    "mediators_identified": [],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": 0.158
+        }
+      ]
+    },
+    "time_lag_days": 40,
+    "validation_status": "validated",
+    "business_impact_estimate": 1175772.79,
+    "data_split": "train",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.502087"
+  },
+  {
+    "path_id": "CP_000021",
+    "discovery_date": "2025-08-05",
+    "causal_chain": {
+      "nodes": [
+        "Market_Share",
+        "Cost_Reduction"
+      ],
+      "edges": [
+        {
+          "from": "Market_Share",
+          "to": "Cost_Reduction",
+          "effect": 0.117
+        }
+      ]
+    },
+    "start_node": "Market_Share",
+    "end_node": "Cost_Reduction",
+    "intermediate_nodes": [],
+    "path_length": 2,
+    "causal_effect_size": 0.332,
+    "confidence_level": 0.882,
+    "method_used": "NetworkX",
+    "confounders_controlled": [
+      "region"
+    ],
+    "mediators_identified": [],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": -0.02
+        }
+      ]
+    },
+    "time_lag_days": 63,
+    "validation_status": "needs_review",
+    "business_impact_estimate": 791257.66,
+    "data_split": "validation",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.502100"
+  },
+  {
+    "path_id": "CP_000022",
+    "discovery_date": "2025-05-03",
+    "causal_chain": {
+      "nodes": [
+        "Cost_Reduction",
+        "HCP_Engagement",
+        "Outcome_Improvement",
+        "Patient_Adherence",
+        "Market_Share"
+      ],
+      "edges": [
+        {
+          "from": "Cost_Reduction",
+          "to": "HCP_Engagement",
+          "effect": 0.282
+        },
+        {
+          "from": "HCP_Engagement",
+          "to": "Outcome_Improvement",
+          "effect": 0.214
+        },
+        {
+          "from": "Outcome_Improvement",
+          "to": "Patient_Adherence",
+          "effect": 0.382
+        },
+        {
+          "from": "Patient_Adherence",
+          "to": "Market_Share",
+          "effect": 0.282
+        }
+      ]
+    },
+    "start_node": "Cost_Reduction",
+    "end_node": "Market_Share",
+    "intermediate_nodes": [
+      "HCP_Engagement",
+      "Outcome_Improvement",
+      "Patient_Adherence"
+    ],
+    "path_length": 5,
+    "causal_effect_size": 0.395,
+    "confidence_level": 0.722,
+    "method_used": "CausalML",
+    "confounders_controlled": [
+      "comorbidities"
+    ],
+    "mediators_identified": [
+      "HCP_Engagement",
+      "Outcome_Improvement",
+      "Patient_Adherence"
+    ],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": -0.029
+        }
+      ]
+    },
+    "time_lag_days": 34,
+    "validation_status": "needs_review",
+    "business_impact_estimate": 1235832.09,
+    "data_split": "train",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.502116"
+  },
+  {
+    "path_id": "CP_000023",
+    "discovery_date": "2025-08-11",
+    "causal_chain": {
+      "nodes": [
+        "Patient_Adherence",
+        "Cost_Reduction",
+        "Treatment_Response",
+        "Outcome_Improvement"
+      ],
+      "edges": [
+        {
+          "from": "Patient_Adherence",
+          "to": "Cost_Reduction",
+          "effect": 0.372
+        },
+        {
+          "from": "Cost_Reduction",
+          "to": "Treatment_Response",
+          "effect": 0.276
+        },
+        {
+          "from": "Treatment_Response",
+          "to": "Outcome_Improvement",
+          "effect": 0.265
+        }
+      ]
+    },
+    "start_node": "Patient_Adherence",
+    "end_node": "Outcome_Improvement",
+    "intermediate_nodes": [
+      "Cost_Reduction",
+      "Treatment_Response"
+    ],
+    "path_length": 4,
+    "causal_effect_size": 0.35,
+    "confidence_level": 0.946,
+    "method_used": "DoWhy",
+    "confounders_controlled": [
+      "prior_treatment",
+      "age",
+      "region"
+    ],
+    "mediators_identified": [
+      "Cost_Reduction",
+      "Treatment_Response"
+    ],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": 0.053
+        }
+      ]
+    },
+    "time_lag_days": 39,
+    "validation_status": "validated",
+    "business_impact_estimate": 279940.39,
+    "data_split": "validation",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.502130"
+  },
+  {
+    "path_id": "CP_000024",
+    "discovery_date": "2025-04-02",
+    "causal_chain": {
+      "nodes": [
+        "Market_Share",
+        "Treatment_Response",
+        "Patient_Adherence",
+        "Outcome_Improvement"
+      ],
+      "edges": [
+        {
+          "from": "Market_Share",
+          "to": "Treatment_Response",
+          "effect": 0.324
+        },
+        {
+          "from": "Treatment_Response",
+          "to": "Patient_Adherence",
+          "effect": 0.341
+        },
+        {
+          "from": "Patient_Adherence",
+          "to": "Outcome_Improvement",
+          "effect": 0.256
+        }
+      ]
+    },
+    "start_node": "Market_Share",
+    "end_node": "Outcome_Improvement",
+    "intermediate_nodes": [
+      "Treatment_Response",
+      "Patient_Adherence"
+    ],
+    "path_length": 4,
+    "causal_effect_size": 0.391,
+    "confidence_level": 0.904,
+    "method_used": "DoWhy",
+    "confounders_controlled": [
+      "comorbidities"
+    ],
+    "mediators_identified": [
+      "Treatment_Response",
+      "Patient_Adherence"
+    ],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": 0.032
+        }
+      ]
+    },
+    "time_lag_days": 90,
+    "validation_status": "pending",
+    "business_impact_estimate": 917776.81,
+    "data_split": "train",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.502149"
+  },
+  {
+    "path_id": "CP_000025",
+    "discovery_date": "2025-03-16",
+    "causal_chain": {
+      "nodes": [
+        "Market_Share",
+        "Outcome_Improvement"
+      ],
+      "edges": [
+        {
+          "from": "Market_Share",
+          "to": "Outcome_Improvement",
+          "effect": 0.315
+        }
+      ]
+    },
+    "start_node": "Market_Share",
+    "end_node": "Outcome_Improvement",
+    "intermediate_nodes": [],
+    "path_length": 2,
+    "causal_effect_size": 0.195,
+    "confidence_level": 0.784,
+    "method_used": "DoWhy",
+    "confounders_controlled": [
+      "region"
+    ],
+    "mediators_identified": [],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": 0.087
+        }
+      ]
+    },
+    "time_lag_days": 59,
+    "validation_status": "pending",
+    "business_impact_estimate": 678852.36,
+    "data_split": "train",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.502161"
+  },
+  {
+    "path_id": "CP_000026",
+    "discovery_date": "2025-01-05",
+    "causal_chain": {
+      "nodes": [
+        "Cost_Reduction",
+        "Treatment_Response"
+      ],
+      "edges": [
+        {
+          "from": "Cost_Reduction",
+          "to": "Treatment_Response",
+          "effect": 0.263
+        }
+      ]
+    },
+    "start_node": "Cost_Reduction",
+    "end_node": "Treatment_Response",
+    "intermediate_nodes": [],
+    "path_length": 2,
+    "causal_effect_size": 0.199,
+    "confidence_level": 0.945,
+    "method_used": "DoWhy",
+    "confounders_controlled": [
+      "prior_treatment",
+      "age"
+    ],
+    "mediators_identified": [],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": -0.043
+        }
+      ]
+    },
+    "time_lag_days": 67,
+    "validation_status": "pending",
+    "business_impact_estimate": 1602538.13,
+    "data_split": "train",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.502177"
+  },
+  {
+    "path_id": "CP_000027",
+    "discovery_date": "2025-07-07",
+    "causal_chain": {
+      "nodes": [
+        "HCP_Engagement",
+        "Treatment_Response",
+        "Outcome_Improvement",
+        "Cost_Reduction"
+      ],
+      "edges": [
+        {
+          "from": "HCP_Engagement",
+          "to": "Treatment_Response",
+          "effect": 0.301
+        },
+        {
+          "from": "Treatment_Response",
+          "to": "Outcome_Improvement",
+          "effect": 0.259
+        },
+        {
+          "from": "Outcome_Improvement",
+          "to": "Cost_Reduction",
+          "effect": 0.427
+        }
+      ]
+    },
+    "start_node": "HCP_Engagement",
+    "end_node": "Cost_Reduction",
+    "intermediate_nodes": [
+      "Treatment_Response",
+      "Outcome_Improvement"
+    ],
+    "path_length": 4,
+    "causal_effect_size": 0.219,
+    "confidence_level": 0.82,
+    "method_used": "EconML",
+    "confounders_controlled": [
+      "comorbidities",
+      "prior_treatment"
+    ],
+    "mediators_identified": [
+      "Treatment_Response",
+      "Outcome_Improvement"
+    ],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": 0.122
+        }
+      ]
+    },
+    "time_lag_days": 31,
+    "validation_status": "pending",
+    "business_impact_estimate": 1109904.96,
+    "data_split": "validation",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.502192"
+  },
+  {
+    "path_id": "CP_000028",
+    "discovery_date": "2025-07-24",
+    "causal_chain": {
+      "nodes": [
+        "Cost_Reduction",
+        "HCP_Engagement",
+        "Market_Share",
+        "Outcome_Improvement"
+      ],
+      "edges": [
+        {
+          "from": "Cost_Reduction",
+          "to": "HCP_Engagement",
+          "effect": 0.38
+        },
+        {
+          "from": "HCP_Engagement",
+          "to": "Market_Share",
+          "effect": 0.127
+        },
+        {
+          "from": "Market_Share",
+          "to": "Outcome_Improvement",
+          "effect": 0.108
+        }
+      ]
+    },
+    "start_node": "Cost_Reduction",
+    "end_node": "Outcome_Improvement",
+    "intermediate_nodes": [
+      "HCP_Engagement",
+      "Market_Share"
+    ],
+    "path_length": 4,
+    "causal_effect_size": 0.174,
+    "confidence_level": 0.856,
+    "method_used": "DoWhy",
+    "confounders_controlled": [
+      "prior_treatment",
+      "region",
+      "age"
+    ],
+    "mediators_identified": [
+      "HCP_Engagement",
+      "Market_Share"
+    ],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": 0.146
+        }
+      ]
+    },
+    "time_lag_days": 32,
+    "validation_status": "needs_review",
+    "business_impact_estimate": 316163.29,
+    "data_split": "validation",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.502211"
+  },
+  {
+    "path_id": "CP_000029",
+    "discovery_date": "2025-02-07",
+    "causal_chain": {
+      "nodes": [
+        "Patient_Adherence",
+        "HCP_Engagement",
+        "Treatment_Response",
+        "Market_Share",
+        "Cost_Reduction"
+      ],
+      "edges": [
+        {
+          "from": "Patient_Adherence",
+          "to": "HCP_Engagement",
+          "effect": 0.431
+        },
+        {
+          "from": "HCP_Engagement",
+          "to": "Treatment_Response",
+          "effect": 0.196
+        },
+        {
+          "from": "Treatment_Response",
+          "to": "Market_Share",
+          "effect": 0.423
+        },
+        {
+          "from": "Market_Share",
+          "to": "Cost_Reduction",
+          "effect": 0.299
+        }
+      ]
+    },
+    "start_node": "Patient_Adherence",
+    "end_node": "Cost_Reduction",
+    "intermediate_nodes": [
+      "HCP_Engagement",
+      "Treatment_Response",
+      "Market_Share"
+    ],
+    "path_length": 5,
+    "causal_effect_size": 0.184,
+    "confidence_level": 0.739,
+    "method_used": "Granger",
+    "confounders_controlled": [
+      "age"
+    ],
+    "mediators_identified": [
+      "HCP_Engagement",
+      "Treatment_Response",
+      "Market_Share"
+    ],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": 0.077
+        }
+      ]
+    },
+    "time_lag_days": 38,
+    "validation_status": "pending",
+    "business_impact_estimate": 89648.09,
+    "data_split": "train",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.502227"
+  },
+  {
+    "path_id": "CP_000030",
+    "discovery_date": "2025-05-18",
+    "causal_chain": {
+      "nodes": [
+        "Patient_Adherence",
+        "Cost_Reduction",
+        "Market_Share",
+        "Outcome_Improvement",
+        "Treatment_Response"
+      ],
+      "edges": [
+        {
+          "from": "Patient_Adherence",
+          "to": "Cost_Reduction",
+          "effect": 0.23
+        },
+        {
+          "from": "Cost_Reduction",
+          "to": "Market_Share",
+          "effect": 0.498
+        },
+        {
+          "from": "Market_Share",
+          "to": "Outcome_Improvement",
+          "effect": 0.367
+        },
+        {
+          "from": "Outcome_Improvement",
+          "to": "Treatment_Response",
+          "effect": 0.456
+        }
+      ]
+    },
+    "start_node": "Patient_Adherence",
+    "end_node": "Treatment_Response",
+    "intermediate_nodes": [
+      "Cost_Reduction",
+      "Market_Share",
+      "Outcome_Improvement"
+    ],
+    "path_length": 5,
+    "causal_effect_size": 0.368,
+    "confidence_level": 0.839,
+    "method_used": "Granger",
+    "confounders_controlled": [
+      "prior_treatment",
+      "age"
+    ],
+    "mediators_identified": [
+      "Cost_Reduction",
+      "Market_Share",
+      "Outcome_Improvement"
+    ],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": 0.177
+        }
+      ]
+    },
+    "time_lag_days": 63,
+    "validation_status": "needs_review",
+    "business_impact_estimate": 322854.65,
+    "data_split": "train",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.502242"
+  },
+  {
+    "path_id": "CP_000031",
+    "discovery_date": "2025-04-26",
+    "causal_chain": {
+      "nodes": [
+        "Treatment_Response",
+        "Patient_Adherence",
+        "Outcome_Improvement"
+      ],
+      "edges": [
+        {
+          "from": "Treatment_Response",
+          "to": "Patient_Adherence",
+          "effect": 0.251
+        },
+        {
+          "from": "Patient_Adherence",
+          "to": "Outcome_Improvement",
+          "effect": 0.327
+        }
+      ]
+    },
+    "start_node": "Treatment_Response",
+    "end_node": "Outcome_Improvement",
+    "intermediate_nodes": [
+      "Patient_Adherence"
+    ],
+    "path_length": 3,
+    "causal_effect_size": 0.052,
+    "confidence_level": 0.882,
+    "method_used": "EconML",
+    "confounders_controlled": [
+      "comorbidities",
+      "age"
+    ],
+    "mediators_identified": [
+      "Patient_Adherence"
+    ],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": 0.143
+        }
+      ]
+    },
+    "time_lag_days": 30,
+    "validation_status": "needs_review",
+    "business_impact_estimate": 1118326.29,
+    "data_split": "train",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.502273"
+  },
+  {
+    "path_id": "CP_000032",
+    "discovery_date": "2025-04-10",
+    "causal_chain": {
+      "nodes": [
+        "HCP_Engagement",
+        "Treatment_Response",
+        "Patient_Adherence",
+        "Market_Share"
+      ],
+      "edges": [
+        {
+          "from": "HCP_Engagement",
+          "to": "Treatment_Response",
+          "effect": 0.15
+        },
+        {
+          "from": "Treatment_Response",
+          "to": "Patient_Adherence",
+          "effect": 0.155
+        },
+        {
+          "from": "Patient_Adherence",
+          "to": "Market_Share",
+          "effect": 0.419
+        }
+      ]
+    },
+    "start_node": "HCP_Engagement",
+    "end_node": "Market_Share",
+    "intermediate_nodes": [
+      "Treatment_Response",
+      "Patient_Adherence"
+    ],
+    "path_length": 4,
+    "causal_effect_size": 0.051,
+    "confidence_level": 0.859,
+    "method_used": "NetworkX",
+    "confounders_controlled": [
+      "prior_treatment",
+      "region"
+    ],
+    "mediators_identified": [
+      "Treatment_Response",
+      "Patient_Adherence"
+    ],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": 0.015
+        }
+      ]
+    },
+    "time_lag_days": 62,
+    "validation_status": "needs_review",
+    "business_impact_estimate": 928243.35,
+    "data_split": "train",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.502302"
+  },
+  {
+    "path_id": "CP_000033",
+    "discovery_date": "2025-06-20",
+    "causal_chain": {
+      "nodes": [
+        "Market_Share",
+        "Treatment_Response",
+        "HCP_Engagement",
+        "Outcome_Improvement",
+        "Patient_Adherence"
+      ],
+      "edges": [
+        {
+          "from": "Market_Share",
+          "to": "Treatment_Response",
+          "effect": 0.201
+        },
+        {
+          "from": "Treatment_Response",
+          "to": "HCP_Engagement",
+          "effect": 0.349
+        },
+        {
+          "from": "HCP_Engagement",
+          "to": "Outcome_Improvement",
+          "effect": 0.245
+        },
+        {
+          "from": "Outcome_Improvement",
+          "to": "Patient_Adherence",
+          "effect": 0.292
+        }
+      ]
+    },
+    "start_node": "Market_Share",
+    "end_node": "Patient_Adherence",
+    "intermediate_nodes": [
+      "Treatment_Response",
+      "HCP_Engagement",
+      "Outcome_Improvement"
+    ],
+    "path_length": 5,
+    "causal_effect_size": 0.126,
+    "confidence_level": 0.7,
+    "method_used": "Granger",
+    "confounders_controlled": [
+      "age",
+      "region"
+    ],
+    "mediators_identified": [
+      "Treatment_Response",
+      "HCP_Engagement",
+      "Outcome_Improvement"
+    ],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": -0.045
+        }
+      ]
+    },
+    "time_lag_days": 90,
+    "validation_status": "pending",
+    "business_impact_estimate": 1930855.01,
+    "data_split": "train",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.502319"
+  },
+  {
+    "path_id": "CP_000034",
+    "discovery_date": "2025-03-03",
+    "causal_chain": {
+      "nodes": [
+        "Cost_Reduction",
+        "Patient_Adherence",
+        "Treatment_Response"
+      ],
+      "edges": [
+        {
+          "from": "Cost_Reduction",
+          "to": "Patient_Adherence",
+          "effect": 0.136
+        },
+        {
+          "from": "Patient_Adherence",
+          "to": "Treatment_Response",
+          "effect": 0.269
+        }
+      ]
+    },
+    "start_node": "Cost_Reduction",
+    "end_node": "Treatment_Response",
+    "intermediate_nodes": [
+      "Patient_Adherence"
+    ],
+    "path_length": 3,
+    "causal_effect_size": 0.37,
+    "confidence_level": 0.91,
+    "method_used": "NetworkX",
+    "confounders_controlled": [
+      "comorbidities"
+    ],
+    "mediators_identified": [
+      "Patient_Adherence"
+    ],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": 0.162
+        }
+      ]
+    },
+    "time_lag_days": 12,
+    "validation_status": "pending",
+    "business_impact_estimate": 1923532.55,
+    "data_split": "train",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.502332"
+  },
+  {
+    "path_id": "CP_000035",
+    "discovery_date": "2025-03-24",
+    "causal_chain": {
+      "nodes": [
+        "Outcome_Improvement",
+        "Treatment_Response",
+        "Patient_Adherence"
+      ],
+      "edges": [
+        {
+          "from": "Outcome_Improvement",
+          "to": "Treatment_Response",
+          "effect": 0.283
+        },
+        {
+          "from": "Treatment_Response",
+          "to": "Patient_Adherence",
+          "effect": 0.46
+        }
+      ]
+    },
+    "start_node": "Outcome_Improvement",
+    "end_node": "Patient_Adherence",
+    "intermediate_nodes": [
+      "Treatment_Response"
+    ],
+    "path_length": 3,
+    "causal_effect_size": 0.102,
+    "confidence_level": 0.772,
+    "method_used": "CausalML",
+    "confounders_controlled": [
+      "prior_treatment",
+      "region"
+    ],
+    "mediators_identified": [
+      "Treatment_Response"
+    ],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": 0.059
+        }
+      ]
+    },
+    "time_lag_days": 48,
+    "validation_status": "pending",
+    "business_impact_estimate": 207367.02,
+    "data_split": "train",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.502346"
+  },
+  {
+    "path_id": "CP_000036",
+    "discovery_date": "2025-06-27",
+    "causal_chain": {
+      "nodes": [
+        "HCP_Engagement",
+        "Treatment_Response",
+        "Patient_Adherence"
+      ],
+      "edges": [
+        {
+          "from": "HCP_Engagement",
+          "to": "Treatment_Response",
+          "effect": 0.22
+        },
+        {
+          "from": "Treatment_Response",
+          "to": "Patient_Adherence",
+          "effect": 0.375
+        }
+      ]
+    },
+    "start_node": "HCP_Engagement",
+    "end_node": "Patient_Adherence",
+    "intermediate_nodes": [
+      "Treatment_Response"
+    ],
+    "path_length": 3,
+    "causal_effect_size": 0.375,
+    "confidence_level": 0.898,
+    "method_used": "Granger",
+    "confounders_controlled": [
+      "age"
+    ],
+    "mediators_identified": [
+      "Treatment_Response"
+    ],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": 0.135
+        }
+      ]
+    },
+    "time_lag_days": 64,
+    "validation_status": "needs_review",
+    "business_impact_estimate": 756039.4,
+    "data_split": "train",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.502362"
+  },
+  {
+    "path_id": "CP_000037",
+    "discovery_date": "2025-05-02",
+    "causal_chain": {
+      "nodes": [
+        "Treatment_Response",
+        "Cost_Reduction",
+        "Market_Share",
+        "HCP_Engagement"
+      ],
+      "edges": [
+        {
+          "from": "Treatment_Response",
+          "to": "Cost_Reduction",
+          "effect": 0.245
+        },
+        {
+          "from": "Cost_Reduction",
+          "to": "Market_Share",
+          "effect": 0.48
+        },
+        {
+          "from": "Market_Share",
+          "to": "HCP_Engagement",
+          "effect": 0.391
+        }
+      ]
+    },
+    "start_node": "Treatment_Response",
+    "end_node": "HCP_Engagement",
+    "intermediate_nodes": [
+      "Cost_Reduction",
+      "Market_Share"
+    ],
+    "path_length": 4,
+    "causal_effect_size": 0.084,
+    "confidence_level": 0.93,
+    "method_used": "CausalML",
+    "confounders_controlled": [
+      "comorbidities",
+      "prior_treatment"
+    ],
+    "mediators_identified": [
+      "Cost_Reduction",
+      "Market_Share"
+    ],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": 0.038
+        }
+      ]
+    },
+    "time_lag_days": 37,
+    "validation_status": "pending",
+    "business_impact_estimate": 1739114.8,
+    "data_split": "train",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.502379"
+  },
+  {
+    "path_id": "CP_000038",
+    "discovery_date": "2025-06-05",
+    "causal_chain": {
+      "nodes": [
+        "Market_Share",
+        "Cost_Reduction",
+        "Patient_Adherence",
+        "HCP_Engagement",
+        "Treatment_Response"
+      ],
+      "edges": [
+        {
+          "from": "Market_Share",
+          "to": "Cost_Reduction",
+          "effect": 0.37
+        },
+        {
+          "from": "Cost_Reduction",
+          "to": "Patient_Adherence",
+          "effect": 0.312
+        },
+        {
+          "from": "Patient_Adherence",
+          "to": "HCP_Engagement",
+          "effect": 0.493
+        },
+        {
+          "from": "HCP_Engagement",
+          "to": "Treatment_Response",
+          "effect": 0.259
+        }
+      ]
+    },
+    "start_node": "Market_Share",
+    "end_node": "Treatment_Response",
+    "intermediate_nodes": [
+      "Cost_Reduction",
+      "Patient_Adherence",
+      "HCP_Engagement"
+    ],
+    "path_length": 5,
+    "causal_effect_size": 0.304,
+    "confidence_level": 0.785,
+    "method_used": "DoWhy",
+    "confounders_controlled": [
+      "region",
+      "comorbidities"
+    ],
+    "mediators_identified": [
+      "Cost_Reduction",
+      "Patient_Adherence",
+      "HCP_Engagement"
+    ],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": 0.149
+        }
+      ]
+    },
+    "time_lag_days": 22,
+    "validation_status": "pending",
+    "business_impact_estimate": 953628.8,
+    "data_split": "train",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.502397"
+  },
+  {
+    "path_id": "CP_000039",
+    "discovery_date": "2025-08-22",
+    "causal_chain": {
+      "nodes": [
+        "Market_Share",
+        "Outcome_Improvement",
+        "Patient_Adherence",
+        "HCP_Engagement"
+      ],
+      "edges": [
+        {
+          "from": "Market_Share",
+          "to": "Outcome_Improvement",
+          "effect": 0.159
+        },
+        {
+          "from": "Outcome_Improvement",
+          "to": "Patient_Adherence",
+          "effect": 0.193
+        },
+        {
+          "from": "Patient_Adherence",
+          "to": "HCP_Engagement",
+          "effect": 0.308
+        }
+      ]
+    },
+    "start_node": "Market_Share",
+    "end_node": "HCP_Engagement",
+    "intermediate_nodes": [
+      "Outcome_Improvement",
+      "Patient_Adherence"
+    ],
+    "path_length": 4,
+    "causal_effect_size": 0.332,
+    "confidence_level": 0.714,
+    "method_used": "CausalML",
+    "confounders_controlled": [
+      "age",
+      "prior_treatment"
+    ],
+    "mediators_identified": [
+      "Outcome_Improvement",
+      "Patient_Adherence"
+    ],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": 0.052
+        }
+      ]
+    },
+    "time_lag_days": 30,
+    "validation_status": "needs_review",
+    "business_impact_estimate": 1097767.46,
+    "data_split": "validation",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.502414"
+  },
+  {
+    "path_id": "CP_000040",
+    "discovery_date": "2025-08-14",
+    "causal_chain": {
+      "nodes": [
+        "Outcome_Improvement",
+        "HCP_Engagement",
+        "Patient_Adherence"
+      ],
+      "edges": [
+        {
+          "from": "Outcome_Improvement",
+          "to": "HCP_Engagement",
+          "effect": 0.347
+        },
+        {
+          "from": "HCP_Engagement",
+          "to": "Patient_Adherence",
+          "effect": 0.204
+        }
+      ]
+    },
+    "start_node": "Outcome_Improvement",
+    "end_node": "Patient_Adherence",
+    "intermediate_nodes": [
+      "HCP_Engagement"
+    ],
+    "path_length": 3,
+    "causal_effect_size": 0.251,
+    "confidence_level": 0.704,
+    "method_used": "DoWhy",
+    "confounders_controlled": [
+      "region",
+      "comorbidities",
+      "prior_treatment"
+    ],
+    "mediators_identified": [
+      "HCP_Engagement"
+    ],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": 0.149
+        }
+      ]
+    },
+    "time_lag_days": 22,
+    "validation_status": "validated",
+    "business_impact_estimate": 1647583.75,
+    "data_split": "validation",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.502430"
+  },
+  {
+    "path_id": "CP_000041",
+    "discovery_date": "2025-01-21",
+    "causal_chain": {
+      "nodes": [
+        "Patient_Adherence",
+        "Treatment_Response",
+        "Outcome_Improvement",
+        "HCP_Engagement"
+      ],
+      "edges": [
+        {
+          "from": "Patient_Adherence",
+          "to": "Treatment_Response",
+          "effect": 0.152
+        },
+        {
+          "from": "Treatment_Response",
+          "to": "Outcome_Improvement",
+          "effect": 0.224
+        },
+        {
+          "from": "Outcome_Improvement",
+          "to": "HCP_Engagement",
+          "effect": 0.401
+        }
+      ]
+    },
+    "start_node": "Patient_Adherence",
+    "end_node": "HCP_Engagement",
+    "intermediate_nodes": [
+      "Treatment_Response",
+      "Outcome_Improvement"
+    ],
+    "path_length": 4,
+    "causal_effect_size": 0.324,
+    "confidence_level": 0.825,
+    "method_used": "EconML",
+    "confounders_controlled": [
+      "age",
+      "region"
+    ],
+    "mediators_identified": [
+      "Treatment_Response",
+      "Outcome_Improvement"
+    ],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": 0.005
+        }
+      ]
+    },
+    "time_lag_days": 44,
+    "validation_status": "needs_review",
+    "business_impact_estimate": 313201.29,
+    "data_split": "train",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.502445"
+  },
+  {
+    "path_id": "CP_000042",
+    "discovery_date": "2025-05-07",
+    "causal_chain": {
+      "nodes": [
+        "Market_Share",
+        "Treatment_Response"
+      ],
+      "edges": [
+        {
+          "from": "Market_Share",
+          "to": "Treatment_Response",
+          "effect": 0.178
+        }
+      ]
+    },
+    "start_node": "Market_Share",
+    "end_node": "Treatment_Response",
+    "intermediate_nodes": [],
+    "path_length": 2,
+    "causal_effect_size": 0.344,
+    "confidence_level": 0.749,
+    "method_used": "EconML",
+    "confounders_controlled": [
+      "age",
+      "prior_treatment"
+    ],
+    "mediators_identified": [],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": 0.178
+        }
+      ]
+    },
+    "time_lag_days": 88,
+    "validation_status": "validated",
+    "business_impact_estimate": 352658.33,
+    "data_split": "train",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.502458"
+  },
+  {
+    "path_id": "CP_000043",
+    "discovery_date": "2025-10-01",
+    "causal_chain": {
+      "nodes": [
+        "Patient_Adherence",
+        "Cost_Reduction"
+      ],
+      "edges": [
+        {
+          "from": "Patient_Adherence",
+          "to": "Cost_Reduction",
+          "effect": 0.489
+        }
+      ]
+    },
+    "start_node": "Patient_Adherence",
+    "end_node": "Cost_Reduction",
+    "intermediate_nodes": [],
+    "path_length": 2,
+    "causal_effect_size": 0.068,
+    "confidence_level": 0.823,
+    "method_used": "CausalML",
+    "confounders_controlled": [
+      "age"
+    ],
+    "mediators_identified": [],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": 0.008
+        }
+      ]
+    },
+    "time_lag_days": 52,
+    "validation_status": "pending",
+    "business_impact_estimate": 1353995.08,
+    "data_split": "holdout",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.502473"
+  },
+  {
+    "path_id": "CP_000044",
+    "discovery_date": "2025-01-30",
+    "causal_chain": {
+      "nodes": [
+        "HCP_Engagement",
+        "Outcome_Improvement",
+        "Treatment_Response",
+        "Patient_Adherence"
+      ],
+      "edges": [
+        {
+          "from": "HCP_Engagement",
+          "to": "Outcome_Improvement",
+          "effect": 0.139
+        },
+        {
+          "from": "Outcome_Improvement",
+          "to": "Treatment_Response",
+          "effect": 0.45
+        },
+        {
+          "from": "Treatment_Response",
+          "to": "Patient_Adherence",
+          "effect": 0.398
+        }
+      ]
+    },
+    "start_node": "HCP_Engagement",
+    "end_node": "Patient_Adherence",
+    "intermediate_nodes": [
+      "Outcome_Improvement",
+      "Treatment_Response"
+    ],
+    "path_length": 4,
+    "causal_effect_size": 0.323,
+    "confidence_level": 0.758,
+    "method_used": "EconML",
+    "confounders_controlled": [
+      "region"
+    ],
+    "mediators_identified": [
+      "Outcome_Improvement",
+      "Treatment_Response"
+    ],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": -0.069
+        }
+      ]
+    },
+    "time_lag_days": 50,
+    "validation_status": "needs_review",
+    "business_impact_estimate": 1660149.56,
+    "data_split": "train",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.502490"
+  },
+  {
+    "path_id": "CP_000045",
+    "discovery_date": "2025-05-31",
+    "causal_chain": {
+      "nodes": [
+        "Patient_Adherence",
+        "Outcome_Improvement",
+        "Treatment_Response"
+      ],
+      "edges": [
+        {
+          "from": "Patient_Adherence",
+          "to": "Outcome_Improvement",
+          "effect": 0.334
+        },
+        {
+          "from": "Outcome_Improvement",
+          "to": "Treatment_Response",
+          "effect": 0.458
+        }
+      ]
+    },
+    "start_node": "Patient_Adherence",
+    "end_node": "Treatment_Response",
+    "intermediate_nodes": [
+      "Outcome_Improvement"
+    ],
+    "path_length": 3,
+    "causal_effect_size": 0.282,
+    "confidence_level": 0.747,
+    "method_used": "DoWhy",
+    "confounders_controlled": [
+      "prior_treatment"
+    ],
+    "mediators_identified": [
+      "Outcome_Improvement"
+    ],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": -0.078
+        }
+      ]
+    },
+    "time_lag_days": 54,
+    "validation_status": "pending",
+    "business_impact_estimate": 1896882.2,
+    "data_split": "train",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.502503"
+  },
+  {
+    "path_id": "CP_000046",
+    "discovery_date": "2025-08-27",
+    "causal_chain": {
+      "nodes": [
+        "Market_Share",
+        "Treatment_Response",
+        "Cost_Reduction",
+        "Patient_Adherence",
+        "HCP_Engagement"
+      ],
+      "edges": [
+        {
+          "from": "Market_Share",
+          "to": "Treatment_Response",
+          "effect": 0.248
+        },
+        {
+          "from": "Treatment_Response",
+          "to": "Cost_Reduction",
+          "effect": 0.257
+        },
+        {
+          "from": "Cost_Reduction",
+          "to": "Patient_Adherence",
+          "effect": 0.297
+        },
+        {
+          "from": "Patient_Adherence",
+          "to": "HCP_Engagement",
+          "effect": 0.322
+        }
+      ]
+    },
+    "start_node": "Market_Share",
+    "end_node": "HCP_Engagement",
+    "intermediate_nodes": [
+      "Treatment_Response",
+      "Cost_Reduction",
+      "Patient_Adherence"
+    ],
+    "path_length": 5,
+    "causal_effect_size": 0.14,
+    "confidence_level": 0.842,
+    "method_used": "EconML",
+    "confounders_controlled": [
+      "region",
+      "prior_treatment"
+    ],
+    "mediators_identified": [
+      "Treatment_Response",
+      "Cost_Reduction",
+      "Patient_Adherence"
+    ],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": 0.042
+        }
+      ]
+    },
+    "time_lag_days": 63,
+    "validation_status": "validated",
+    "business_impact_estimate": 1771645.99,
+    "data_split": "validation",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.502542"
+  },
+  {
+    "path_id": "CP_000047",
+    "discovery_date": "2025-04-18",
+    "causal_chain": {
+      "nodes": [
+        "Treatment_Response",
+        "Patient_Adherence",
+        "HCP_Engagement",
+        "Market_Share",
+        "Outcome_Improvement"
+      ],
+      "edges": [
+        {
+          "from": "Treatment_Response",
+          "to": "Patient_Adherence",
+          "effect": 0.149
+        },
+        {
+          "from": "Patient_Adherence",
+          "to": "HCP_Engagement",
+          "effect": 0.468
+        },
+        {
+          "from": "HCP_Engagement",
+          "to": "Market_Share",
+          "effect": 0.384
+        },
+        {
+          "from": "Market_Share",
+          "to": "Outcome_Improvement",
+          "effect": 0.275
+        }
+      ]
+    },
+    "start_node": "Treatment_Response",
+    "end_node": "Outcome_Improvement",
+    "intermediate_nodes": [
+      "Patient_Adherence",
+      "HCP_Engagement",
+      "Market_Share"
+    ],
+    "path_length": 5,
+    "causal_effect_size": 0.227,
+    "confidence_level": 0.731,
+    "method_used": "EconML",
+    "confounders_controlled": [
+      "comorbidities"
+    ],
+    "mediators_identified": [
+      "Patient_Adherence",
+      "HCP_Engagement",
+      "Market_Share"
+    ],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": 0.025
+        }
+      ]
+    },
+    "time_lag_days": 63,
+    "validation_status": "pending",
+    "business_impact_estimate": 1449121.34,
+    "data_split": "train",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.502558"
+  },
+  {
+    "path_id": "CP_000048",
+    "discovery_date": "2025-02-10",
+    "causal_chain": {
+      "nodes": [
+        "HCP_Engagement",
+        "Patient_Adherence",
+        "Market_Share",
+        "Outcome_Improvement",
+        "Cost_Reduction"
+      ],
+      "edges": [
+        {
+          "from": "HCP_Engagement",
+          "to": "Patient_Adherence",
+          "effect": 0.399
+        },
+        {
+          "from": "Patient_Adherence",
+          "to": "Market_Share",
+          "effect": 0.44
+        },
+        {
+          "from": "Market_Share",
+          "to": "Outcome_Improvement",
+          "effect": 0.226
+        },
+        {
+          "from": "Outcome_Improvement",
+          "to": "Cost_Reduction",
+          "effect": 0.182
+        }
+      ]
+    },
+    "start_node": "HCP_Engagement",
+    "end_node": "Cost_Reduction",
+    "intermediate_nodes": [
+      "Patient_Adherence",
+      "Market_Share",
+      "Outcome_Improvement"
+    ],
+    "path_length": 5,
+    "causal_effect_size": 0.384,
+    "confidence_level": 0.892,
+    "method_used": "Granger",
+    "confounders_controlled": [
+      "age",
+      "prior_treatment"
+    ],
+    "mediators_identified": [
+      "Patient_Adherence",
+      "Market_Share",
+      "Outcome_Improvement"
+    ],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": 0.088
+        }
+      ]
+    },
+    "time_lag_days": 14,
+    "validation_status": "pending",
+    "business_impact_estimate": 309627.36,
+    "data_split": "train",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.502580"
+  },
+  {
+    "path_id": "CP_000049",
+    "discovery_date": "2025-01-13",
+    "causal_chain": {
+      "nodes": [
+        "HCP_Engagement",
+        "Outcome_Improvement"
+      ],
+      "edges": [
+        {
+          "from": "HCP_Engagement",
+          "to": "Outcome_Improvement",
+          "effect": 0.357
+        }
+      ]
+    },
+    "start_node": "HCP_Engagement",
+    "end_node": "Outcome_Improvement",
+    "intermediate_nodes": [],
+    "path_length": 2,
+    "causal_effect_size": 0.086,
+    "confidence_level": 0.808,
+    "method_used": "CausalML",
+    "confounders_controlled": [
+      "region",
+      "comorbidities"
+    ],
+    "mediators_identified": [],
+    "interaction_effects": {
+      "interactions": [
+        {
+          "vars": [
+            "A",
+            "B"
+          ],
+          "effect": 0.099
+        }
+      ]
+    },
+    "time_lag_days": 81,
+    "validation_status": "validated",
+    "business_impact_estimate": 773252.48,
+    "data_split": "train",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "created_at": "2025-11-28T15:39:47.502593"
+  }
+]

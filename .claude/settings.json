@@ -1,0 +1,68 @@
+{
+  "enabledPlugins": {
+    "ai-ml-toolkit@claude-code-templates": true,
+    "documentation-generator@claude-code-templates": true,
+    "testing-suite@claude-code-templates": true
+  },
+  "permissions": {
+    "allow": [
+      "mcp__github__get_file_contents",
+      "mcp__github__get_me",
+      "Bash(git clone:*)",
+      "Bash(git :*)",
+      "Bash(tree:*)",
+      "Bash(ls:*)",
+      "Bash(grep:*)",
+      "Bash(done)",
+      "Bash(npm:*)",
+      "Bash(yarn:*)",
+      "Bash(node:*)",
+      "Bash(git:*)",
+      "Bash(docker:*)",
+      "Bash(python:*)",
+      "Bash(pip:*)",
+      "Read(**/*.json)",
+      "Read(**/*.js)",
+      "Read(**/*.ts)",
+      "Read(**/*.py)",
+      "Edit(**/*.js)",
+      "Edit(**/*.ts)",
+      "Edit(**/*.py)",
+      "Edit(**/*.json)",
+      "Write(**/*.js)",
+      "Write(**/*.ts)",
+      "Write(**/*.py)",
+      "Bash(git status)",
+      "Bash(git diff:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(git pull:*)",
+      "Bash(git log:*)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(du:*)",
+      "Bash(mkdir:*)",
+      "Bash(npx claude-code-templates@latest:*)",
+      "Bash(npm run lint)",
+      "Bash(npm run test:*)",
+      "Bash(npm run build)",
+      "Bash(npm start)",
+      "Bash(chmod:*)",
+      "mcp__sequential-thinking__sequentialthinking",
+      "mcp__github__search_code",
+      "Read(//.claude/**)"
+    ],
+    "deny": [
+      "Read(./.env*)",
+      "Read(./secrets/**)",
+      "Bash(rm -rf:*)",
+      "Bash(sudo:*)"
+    ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "python3 .claude/scripts/context-monitor.py"
+  },
+  "description": "E2I Causal Analytics - Claude Code Framework settings. Base permissions for ML/MLOps development. User-specific overrides in settings.local.json"
+}

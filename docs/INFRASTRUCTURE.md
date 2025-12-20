@@ -1,0 +1,189 @@
+# Infrastructure Reference
+
+## DigitalOcean Droplets
+
+### Primary Droplet - E2I Causal Analytics
+
+**Created**: 2025-12-18
+
+**Droplet Details:**
+- **Name**: ubuntu-s-2vcpu-4gb-120gb-intel-nyc3-01
+- **Droplet ID**: 538064298
+- **Public IPv4**: 159.89.180.27
+- **Private IPv4**: 10.108.0.2
+- **Region**: NYC3 (New York)
+- **Image**: Ubuntu 24.04 LTS x64
+- **Size**: s-2vcpu-4gb-120gb-intel
+  - 2 vCPUs
+  - 4GB RAM
+  - 120GB SSD
+- **VPC UUID**: acd58f3d-4e52-4e14-bce4-e5e002521914
+- **Status**: Active
+- **Features**: droplet_agent, private_networking
+
+### SSH Access
+
+```bash
+ssh root@159.89.180.27
+```
+
+### Useful doctl Commands
+
+#### Authentication
+```bash
+# Authenticate doctl (token stored in .env as DIGITALOCEAN_TOKEN)
+source .env && doctl auth init --access-token "$DIGITALOCEAN_TOKEN"
+```
+
+#### Droplet Management
+```bash
+# List all droplets
+doctl compute droplet list
+
+# Get specific droplet info
+doctl compute droplet get 538064298
+
+# Get droplet by name
+doctl compute droplet get ubuntu-s-2vcpu-4gb-120gb-intel-nyc3-01
+
+# Delete droplet (CAREFUL!)
+doctl compute droplet delete 538064298
+
+# Create droplet snapshot
+doctl compute droplet-action snapshot 538064298 --snapshot-name "backup-$(date +%Y%m%d)"
+
+# Reboot droplet
+doctl compute droplet-action reboot 538064298
+
+# Power off droplet
+doctl compute droplet-action power-off 538064298
+
+# Power on droplet
+doctl compute droplet-action power-on 538064298
+```
+
+#### SSH Key Management
+```bash
+# List SSH keys
+doctl compute ssh-key list
+
+# Add SSH key to account
+doctl compute ssh-key create "my-key-name" --public-key "$(cat ~/.ssh/id_rsa.pub)"
+
+# Create droplet with SSH key
+doctl compute droplet create my-droplet \
+    --image ubuntu-24-04-x64 \
+    --size s-2vcpu-4gb-120gb-intel \
+    --region nyc3 \
+    --ssh-keys <key-id>
+```
+
+#### Monitoring
+```bash
+# Get droplet actions
+doctl compute droplet-action list 538064298
+
+# Get droplet neighbors (VMs on same hypervisor)
+doctl compute droplet neighbors 538064298
+```
+
+### Environment Variables
+
+Location: `.env`
+
+```bash
+DIGITALOCEAN_TOKEN=dop_v1_56687eccc31d38426562949cd41e61f5a381784922c456070bb8d9e8e493fea7
+```
+
+### Creation Command Reference
+
+```bash
+doctl compute droplet create ubuntu-s-2vcpu-4gb-120gb-intel-nyc3-01 \
+    --image ubuntu-24-04-x64 \
+    --size s-2vcpu-4gb-120gb-intel \
+    --region nyc3 \
+    --wait
+```
+
+### Available Regions
+
+```bash
+# List all regions
+doctl compute region list
+```
+
+Common regions:
+- `nyc1`, `nyc3` - New York
+- `sfo3` - San Francisco
+- `ams3` - Amsterdam
+- `sgp1` - Singapore
+- `lon1` - London
+- `fra1` - Frankfurt
+- `tor1` - Toronto
+- `blr1` - Bangalore
+
+### Available Sizes
+
+```bash
+# List all droplet sizes
+doctl compute size list
+```
+
+Current size specs:
+- `s-2vcpu-4gb-120gb-intel`: 2 vCPU, 4GB RAM, 120GB SSD (Intel)
+
+### Firewall & Security
+
+```bash
+# List firewalls
+doctl compute firewall list
+
+# Create firewall
+doctl compute firewall create \
+    --name "web-firewall" \
+    --inbound-rules "protocol:tcp,ports:22,sources:addresses:0.0.0.0/0,sources:addresses:::/0 protocol:tcp,ports:80,sources:addresses:0.0.0.0/0,sources:addresses:::/0 protocol:tcp,ports:443,sources:addresses:0.0.0.0/0,sources:addresses:::/0" \
+    --droplet-ids 538064298
+```
+
+### Cost Information
+
+- **Current Plan**: s-2vcpu-4gb-120gb-intel
+- **Estimated Cost**: ~$24/month (verify current pricing on DigitalOcean)
+
+### SSH Keys
+
+**Registered Keys in DigitalOcean:**
+- **Name**: replit-key
+- **ID**: 52751421
+- **Fingerprint**: 72:91:c9:d1:2e:e5:09:bd:f4:68:4d:7c:d5:5c:1a:b0
+- **Public Key**: `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIF7j9C0aZuxZ4YUXOW+IrosLczi/dTR1wBc38dgbWsyB enunez@PHUSEH-L88724`
+- **Private Key Location**: `~/.ssh/replit`
+
+**SSH Access:**
+```bash
+# Passwordless SSH with replit key
+ssh -i ~/.ssh/replit root@159.89.180.27
+
+# Or simply (if using default SSH config)
+ssh root@159.89.180.27
+```
+
+**Status**: ✅ SSH key successfully configured on droplet
+
+### Notes
+
+- Droplet is running in a VPC for private networking
+- Droplet agent is enabled for enhanced monitoring
+- Default user is `root` - consider creating a sudo user for security
+- SSH key `replit-key` (ID: 52751421) registered in DigitalOcean account
+- ✅ SSH key configured for passwordless authentication
+
+### Next Steps / TODO
+
+- [x] Add SSH key for passwordless authentication (Completed: 2025-12-18)
+- [ ] Create non-root sudo user
+- [ ] Set up firewall rules
+- [ ] Configure automatic backups (if needed)
+- [ ] Install required software for E2I Causal Analytics
+- [ ] Set up monitoring/alerting
+- [ ] Configure domain/DNS (if applicable)

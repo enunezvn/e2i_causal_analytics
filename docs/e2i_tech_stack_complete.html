@@ -1,0 +1,1412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>E2I Complete Tech Stack + AWS Mapping</title>
+    <style>
+        :root {
+            --aws-orange: #ff9900;
+            --aws-dark: #232f3e;
+            --local: #22c55e;
+            --aws: #f97316;
+            --gap: #ef4444;
+            --optional: #8b5cf6;
+        }
+        
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        
+        body {
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            color: #e2e8f0;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container { max-width: 1800px; margin: 0 auto; }
+        
+        .header {
+            text-align: center;
+            padding: 30px;
+            background: rgba(30, 41, 59, 0.8);
+            border-radius: 16px;
+            margin-bottom: 30px;
+            border: 1px solid rgba(148, 163, 184, 0.1);
+        }
+        
+        .header h1 {
+            font-size: 2.2em;
+            background: linear-gradient(135deg, #ff9900, #f97316, #22c55e);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 10px;
+        }
+        
+        .header .subtitle { color: #94a3b8; font-size: 1.1em; }
+        
+        .legend {
+            display: flex;
+            justify-content: center;
+            gap: 30px;
+            margin-top: 20px;
+            flex-wrap: wrap;
+        }
+        
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.9em;
+        }
+        
+        .legend-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+        
+        .legend-dot.have { background: var(--local); }
+        .legend-dot.aws { background: var(--aws); }
+        .legend-dot.gap { background: var(--gap); }
+        .legend-dot.optional { background: var(--optional); }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+        
+        .stat-card {
+            background: rgba(30, 41, 59, 0.6);
+            padding: 15px;
+            border-radius: 10px;
+            text-align: center;
+            border: 1px solid rgba(148, 163, 184, 0.1);
+        }
+        
+        .stat-card .value {
+            font-size: 2em;
+            font-weight: bold;
+        }
+        
+        .stat-card .label { color: #94a3b8; font-size: 0.85em; margin-top: 5px; }
+        
+        .stat-card.have .value { color: var(--local); }
+        .stat-card.aws .value { color: var(--aws); }
+        .stat-card.gap .value { color: var(--gap); }
+        
+        .section {
+            background: rgba(30, 41, 59, 0.6);
+            border-radius: 16px;
+            margin-bottom: 25px;
+            overflow: hidden;
+            border: 1px solid rgba(148, 163, 184, 0.1);
+        }
+        
+        .section-header {
+            padding: 20px;
+            background: rgba(15, 23, 42, 0.6);
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+        }
+        
+        .section-icon {
+            font-size: 1.5em;
+        }
+        
+        .section-title {
+            font-size: 1.2em;
+            font-weight: 600;
+        }
+        
+        .section-subtitle {
+            color: #94a3b8;
+            font-size: 0.85em;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9em;
+        }
+        
+        th {
+            background: rgba(15, 23, 42, 0.8);
+            padding: 12px 15px;
+            text-align: left;
+            font-weight: 600;
+            border-bottom: 2px solid rgba(148, 163, 184, 0.2);
+            position: sticky;
+            top: 0;
+        }
+        
+        td {
+            padding: 12px 15px;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+            vertical-align: top;
+        }
+        
+        tr:hover { background: rgba(59, 130, 246, 0.05); }
+        
+        .status-badge {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 0.75em;
+            font-weight: 600;
+        }
+        
+        .status-have { background: rgba(34, 197, 94, 0.2); color: #4ade80; }
+        .status-aws { background: rgba(249, 115, 22, 0.2); color: #fb923c; }
+        .status-gap { background: rgba(239, 68, 68, 0.2); color: #f87171; }
+        .status-optional { background: rgba(139, 92, 246, 0.2); color: #a78bfa; }
+        
+        .tech-name {
+            font-weight: 600;
+            color: #f1f5f9;
+        }
+        
+        .tech-name.gap { color: #f87171; }
+        
+        .aws-service {
+            color: #fb923c;
+            font-weight: 500;
+        }
+        
+        .notes {
+            color: #94a3b8;
+            font-size: 0.9em;
+        }
+        
+        .gap-row {
+            background: rgba(239, 68, 68, 0.05);
+        }
+        
+        .priority-high {
+            border-left: 3px solid #ef4444;
+        }
+        
+        .priority-medium {
+            border-left: 3px solid #f59e0b;
+        }
+        
+        .priority-low {
+            border-left: 3px solid #6b7280;
+        }
+        
+        .code {
+            font-family: 'Fira Code', monospace;
+            background: rgba(0, 0, 0, 0.3);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.85em;
+        }
+        
+        .gap-summary {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .gap-summary h3 {
+            color: #f87171;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .gap-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 15px;
+        }
+        
+        .gap-item {
+            background: rgba(0, 0, 0, 0.2);
+            padding: 12px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .gap-item .priority {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+        
+        .gap-item .priority.high { background: #ef4444; }
+        .gap-item .priority.medium { background: #f59e0b; }
+        .gap-item .priority.low { background: #6b7280; }
+        
+        .footer {
+            text-align: center;
+            padding: 30px;
+            color: #64748b;
+            border-top: 1px solid rgba(148, 163, 184, 0.1);
+            margin-top: 30px;
+        }
+        
+        @media (max-width: 1200px) {
+            table { font-size: 0.8em; }
+            td, th { padding: 8px 10px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🛠️ E2I Complete Tech Stack</h1>
+            <div class="subtitle">Local Development ↔ AWS Production Mapping</div>
+            
+            <div class="legend">
+                <div class="legend-item">
+                    <div class="legend-dot have"></div>
+                    <span>Have (In Plan)</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-dot aws"></div>
+                    <span>AWS Equivalent</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-dot gap"></div>
+                    <span>Gap (Missing)</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-dot optional"></div>
+                    <span>Optional/Later</span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="stats-grid">
+            <div class="stat-card have">
+                <div class="value">47</div>
+                <div class="label">Components Planned</div>
+            </div>
+            <div class="stat-card aws">
+                <div class="value">28</div>
+                <div class="label">AWS Services</div>
+            </div>
+            <div class="stat-card gap">
+                <div class="value">12</div>
+                <div class="label">Gaps Identified</div>
+            </div>
+            <div class="stat-card">
+                <div class="value" style="color: #60a5fa;">18</div>
+                <div class="label">Categories</div>
+            </div>
+        </div>
+        
+        <!-- Gap Summary -->
+        <div class="gap-summary">
+            <h3>⚠️ Critical Gaps to Address</h3>
+            <div class="gap-list">
+                <div class="gap-item">
+                    <div class="priority high"></div>
+                    <div><strong>CI/CD Pipeline</strong> - No deployment automation</div>
+                </div>
+                <div class="gap-item">
+                    <div class="priority high"></div>
+                    <div><strong>Infrastructure as Code</strong> - Manual AWS setup</div>
+                </div>
+                <div class="gap-item">
+                    <div class="priority high"></div>
+                    <div><strong>Secrets Management</strong> - Credentials handling</div>
+                </div>
+                <div class="gap-item">
+                    <div class="priority high"></div>
+                    <div><strong>API Gateway</strong> - No routing/throttling</div>
+                </div>
+                <div class="gap-item">
+                    <div class="priority medium"></div>
+                    <div><strong>Container Registry</strong> - Docker image storage</div>
+                </div>
+                <div class="gap-item">
+                    <div class="priority medium"></div>
+                    <div><strong>Auth/Identity</strong> - User management</div>
+                </div>
+                <div class="gap-item">
+                    <div class="priority medium"></div>
+                    <div><strong>Frontend</strong> - Dashboard UI</div>
+                </div>
+                <div class="gap-item">
+                    <div class="priority medium"></div>
+                    <div><strong>Async Task Queue</strong> - Background jobs</div>
+                </div>
+                <div class="gap-item">
+                    <div class="priority low"></div>
+                    <div><strong>Cost Monitoring</strong> - Budget alerts</div>
+                </div>
+                <div class="gap-item">
+                    <div class="priority low"></div>
+                    <div><strong>Code Quality</strong> - Linting/formatting</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 1. Backend & API -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon">⚙️</div>
+                <div>
+                    <div class="section-title">Backend & API</div>
+                    <div class="section-subtitle">Core application layer</div>
+                </div>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width: 20%;">Component</th>
+                        <th style="width: 15%;">Local/Dev</th>
+                        <th style="width: 20%;">AWS Equivalent</th>
+                        <th style="width: 10%;">Status</th>
+                        <th>Notes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><span class="tech-name">Language</span></td>
+                        <td>Python 3.11+</td>
+                        <td class="aws-service">Lambda, ECS, EC2</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">Use 3.11+ for performance improvements</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Web Framework</span></td>
+                        <td>FastAPI</td>
+                        <td class="aws-service">API Gateway + Lambda/ECS</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">Async support, OpenAPI docs built-in</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Data Validation</span></td>
+                        <td>Pydantic v2</td>
+                        <td class="aws-service">—</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">Pydantic AI for structured LLM outputs</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Async HTTP Client</span></td>
+                        <td>httpx / aiohttp</td>
+                        <td class="aws-service">—</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">For ModelInferenceTool endpoint calls</td>
+                    </tr>
+                    <tr class="gap-row priority-high">
+                        <td><span class="tech-name gap">API Gateway</span></td>
+                        <td>—</td>
+                        <td class="aws-service">API Gateway</td>
+                        <td><span class="status-badge status-gap">Gap</span></td>
+                        <td class="notes">Rate limiting, auth, routing, caching. <strong>Essential for production.</strong></td>
+                    </tr>
+                    <tr class="gap-row priority-medium">
+                        <td><span class="tech-name gap">Load Balancer</span></td>
+                        <td>—</td>
+                        <td class="aws-service">ALB / NLB</td>
+                        <td><span class="status-badge status-gap">Gap</span></td>
+                        <td class="notes">Application Load Balancer for ECS/EKS services</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- 2. Agent Orchestration -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon">🤖</div>
+                <div>
+                    <div class="section-title">Agent Orchestration</div>
+                    <div class="section-subtitle">Multi-agent workflow management</div>
+                </div>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width: 20%;">Component</th>
+                        <th style="width: 15%;">Local/Dev</th>
+                        <th style="width: 20%;">AWS Equivalent</th>
+                        <th style="width: 10%;">Status</th>
+                        <th>Notes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><span class="tech-name">Agent Framework</span></td>
+                        <td>LangGraph</td>
+                        <td class="aws-service">Bedrock Agents (alternative)</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">LangGraph preferred for fine-grained control. 4 agent types defined.</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">LLM Provider</span></td>
+                        <td>Anthropic API (dev)</td>
+                        <td class="aws-service">Bedrock (Claude)</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">Claude Sonnet 3.5/Haiku via Bedrock. DRA-compliant.</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Agent State</span></td>
+                        <td>LangGraph MemorySaver</td>
+                        <td class="aws-service">DynamoDB / ElastiCache</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">Checkpointing for long-running workflows</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Prompt Management</span></td>
+                        <td>YAML/Python templates</td>
+                        <td class="aws-service">Bedrock Prompt Flows</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">Versioned prompts per agent</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- 3. Memory Architecture -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon">🧠</div>
+                <div>
+                    <div class="section-title">Memory Architecture (Tri-Memory + Working)</div>
+                    <div class="section-subtitle">Episodic, Procedural, Semantic, Working</div>
+                </div>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width: 20%;">Memory Type</th>
+                        <th style="width: 15%;">Local/Dev</th>
+                        <th style="width: 20%;">AWS Equivalent</th>
+                        <th style="width: 10%;">Status</th>
+                        <th>Notes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><span class="tech-name">Episodic Memory</span></td>
+                        <td>Supabase + pgvector</td>
+                        <td class="aws-service">Aurora PostgreSQL + pgvector</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">What happened: user interactions, event logs</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Procedural Memory</span></td>
+                        <td>Supabase + pgvector</td>
+                        <td class="aws-service">Aurora PostgreSQL + pgvector</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">How to do things: tool sequences, code snippets</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Semantic Memory</span></td>
+                        <td>FalkorDB (Graph)</td>
+                        <td class="aws-service">Neptune / Neptune Analytics</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">Facts & relationships: entities, ontology</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Working Memory</span></td>
+                        <td>Redis</td>
+                        <td class="aws-service">ElastiCache (Redis)</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">Active context, evidence board, current reasoning</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Vector Search</span></td>
+                        <td>pgvector</td>
+                        <td class="aws-service">OpenSearch Serverless / Bedrock KB</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">RAG retrieval, similarity search</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- 4. Database & Storage -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon">🗄️</div>
+                <div>
+                    <div class="section-title">Database & Storage</div>
+                    <div class="section-subtitle">Persistent data layer</div>
+                </div>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width: 20%;">Component</th>
+                        <th style="width: 15%;">Local/Dev</th>
+                        <th style="width: 20%;">AWS Equivalent</th>
+                        <th style="width: 10%;">Status</th>
+                        <th>Notes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><span class="tech-name">Primary Database</span></td>
+                        <td>Supabase (PostgreSQL)</td>
+                        <td class="aws-service">Aurora PostgreSQL Serverless v2</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">26 tables (18 core + 8 MLOps). ML split tracking.</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Key-Value Store</span></td>
+                        <td>Redis</td>
+                        <td class="aws-service">DynamoDB / ElastiCache</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">Session state, feature caching, rate limiting</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Object Storage</span></td>
+                        <td>Local filesystem / MinIO</td>
+                        <td class="aws-service">S3</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">Model artifacts, SHAP outputs, data exports</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Graph Database</span></td>
+                        <td>FalkorDB</td>
+                        <td class="aws-service">Neptune</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">Causal graphs, entity relationships, knowledge graph</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- 5. ML Operations -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon">📊</div>
+                <div>
+                    <div class="section-title">ML Operations</div>
+                    <div class="section-subtitle">Experiment tracking, registry, optimization</div>
+                </div>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width: 20%;">Component</th>
+                        <th style="width: 15%;">Local/Dev</th>
+                        <th style="width: 20%;">AWS Equivalent</th>
+                        <th style="width: 10%;">Status</th>
+                        <th>Notes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><span class="tech-name">Experiment Tracking</span></td>
+                        <td>MLflow</td>
+                        <td class="aws-service">SageMaker Experiments / MLflow on EC2</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">Metrics, parameters, artifacts per run</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Model Registry</span></td>
+                        <td>MLflow Model Registry</td>
+                        <td class="aws-service">SageMaker Model Registry</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">Version control, staging → production transitions</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Hyperparameter Tuning</span></td>
+                        <td>Optuna</td>
+                        <td class="aws-service">SageMaker HPO / Optuna on SageMaker</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">Bayesian optimization, pruning, parallel trials</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Explainability</span></td>
+                        <td>shap</td>
+                        <td class="aws-service">SageMaker Clarify / shap</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">SHAP values via BentoML service (decoupled)</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Bias/Fairness</span></td>
+                        <td>—</td>
+                        <td class="aws-service">SageMaker Clarify</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">Pre-training & post-training bias detection</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- 6. Data Quality -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon">✅</div>
+                <div>
+                    <div class="section-title">Data Quality</div>
+                    <div class="section-subtitle">Validation, profiling, feature management</div>
+                </div>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width: 20%;">Component</th>
+                        <th style="width: 15%;">Local/Dev</th>
+                        <th style="width: 20%;">AWS Equivalent</th>
+                        <th style="width: 10%;">Status</th>
+                        <th>Notes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><span class="tech-name">Data Validation</span></td>
+                        <td>Great Expectations</td>
+                        <td class="aws-service">Deequ / GE on EMR</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">Expectation suites for each table, data docs</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Schema Validation</span></td>
+                        <td>Pandera</td>
+                        <td class="aws-service">—</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">DataFrame schema enforcement at runtime</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Feature Store</span></td>
+                        <td>Feast</td>
+                        <td class="aws-service">SageMaker Feature Store / Feast</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">Point-in-time joins, online/offline serving</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Data Profiling</span></td>
+                        <td>ydata-profiling / pandas-profiling</td>
+                        <td class="aws-service">SageMaker Data Wrangler</td>
+                        <td><span class="status-badge status-optional">Optional</span></td>
+                        <td class="notes">EDA reports, distribution analysis</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- 7. Model Serving -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon">🚀</div>
+                <div>
+                    <div class="section-title">Model Serving (Decoupled)</div>
+                    <div class="section-subtitle">Agents call endpoints, never load models in-process</div>
+                </div>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width: 20%;">Component</th>
+                        <th style="width: 15%;">Local/Dev</th>
+                        <th style="width: 20%;">AWS Equivalent</th>
+                        <th style="width: 10%;">Status</th>
+                        <th>Notes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><span class="tech-name">Production Inference</span></td>
+                        <td>BentoML</td>
+                        <td class="aws-service">SageMaker Endpoints</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">Real-time inference, auto-scaling, A/B testing</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Local Dev Serving</span></td>
+                        <td>BentoML / FastAPI</td>
+                        <td class="aws-service">—</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">Docker compose for local model endpoints</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">SHAP Service</span></td>
+                        <td>BentoML</td>
+                        <td class="aws-service">SageMaker / Lambda</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">CPU-intensive, benefits from batching</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Agent Tools</span></td>
+                        <td>ModelInferenceTool (httpx)</td>
+                        <td class="aws-service">—</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">Async HTTP calls to model endpoints</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Batch Inference</span></td>
+                        <td>—</td>
+                        <td class="aws-service">SageMaker Batch Transform</td>
+                        <td><span class="status-badge status-optional">Optional</span></td>
+                        <td class="notes">Bulk scoring for 1.47M patient records</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- 8. Causal Inference -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon">🔬</div>
+                <div>
+                    <div class="section-title">Causal Inference</div>
+                    <div class="section-subtitle">E2I core differentiator</div>
+                </div>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width: 20%;">Component</th>
+                        <th style="width: 15%;">Library</th>
+                        <th style="width: 20%;">AWS Equivalent</th>
+                        <th style="width: 10%;">Status</th>
+                        <th>Notes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><span class="tech-name">Causal Graphs</span></td>
+                        <td>DoWhy + NetworkX</td>
+                        <td class="aws-service">—</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">DAG construction, assumption validation, refutation</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Effect Estimation</span></td>
+                        <td>EconML</td>
+                        <td class="aws-service">—</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">Double ML, CATE, policy evaluation</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Uplift Modeling</span></td>
+                        <td>CausalML</td>
+                        <td class="aws-service">—</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">Meta-learners, treatment targeting</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Graph Visualization</span></td>
+                        <td>NetworkX + Plotly</td>
+                        <td class="aws-service">—</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">Interactive causal path visualization</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- 9. Observability -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon">👁️</div>
+                <div>
+                    <div class="section-title">Observability</div>
+                    <div class="section-subtitle">Monitoring, logging, tracing</div>
+                </div>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width: 20%;">Component</th>
+                        <th style="width: 15%;">Local/Dev</th>
+                        <th style="width: 20%;">AWS Equivalent</th>
+                        <th style="width: 10%;">Status</th>
+                        <th>Notes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><span class="tech-name">LLM/Agent Tracing</span></td>
+                        <td>Opik</td>
+                        <td class="aws-service">Opik / LangSmith</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">Span tracking, latency, token usage, fallbacks</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">ML Experiment Tracking</span></td>
+                        <td>MLflow</td>
+                        <td class="aws-service">SageMaker Experiments</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">Training runs, metrics, artifacts</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Infrastructure Metrics</span></td>
+                        <td>—</td>
+                        <td class="aws-service">CloudWatch</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">CPU, memory, network, custom metrics</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Application Logging</span></td>
+                        <td>structlog / loguru</td>
+                        <td class="aws-service">CloudWatch Logs</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">Structured JSON logging, log levels</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Log Analytics</span></td>
+                        <td>—</td>
+                        <td class="aws-service">OpenSearch / CloudWatch Insights</td>
+                        <td><span class="status-badge status-optional">Optional</span></td>
+                        <td class="notes">Search, dashboards, anomaly detection</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Distributed Tracing</span></td>
+                        <td>OpenTelemetry</td>
+                        <td class="aws-service">X-Ray</td>
+                        <td><span class="status-badge status-optional">Optional</span></td>
+                        <td class="notes">Service maps, latency analysis</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Alerting</span></td>
+                        <td>—</td>
+                        <td class="aws-service">CloudWatch Alarms / SNS</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">Threshold alerts, PagerDuty integration</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- 10. Testing & Quality -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon">🧪</div>
+                <div>
+                    <div class="section-title">Testing & Quality</div>
+                    <div class="section-subtitle">Unit tests, integration tests, RAG evaluation</div>
+                </div>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width: 20%;">Component</th>
+                        <th style="width: 15%;">Local/Dev</th>
+                        <th style="width: 20%;">AWS Equivalent</th>
+                        <th style="width: 10%;">Status</th>
+                        <th>Notes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><span class="tech-name">Unit Testing</span></td>
+                        <td>pytest</td>
+                        <td class="aws-service">CodeBuild</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">pytest-asyncio for async tests</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">RAG Evaluation</span></td>
+                        <td>RAGAS</td>
+                        <td class="aws-service">—</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">Faithfulness, relevance, context precision</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">LLM Evaluation</span></td>
+                        <td>DeepEval / custom</td>
+                        <td class="aws-service">Bedrock Model Evaluation</td>
+                        <td><span class="status-badge status-optional">Optional</span></td>
+                        <td class="notes">LLM-as-judge, answer quality metrics</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">API Testing</span></td>
+                        <td>pytest + httpx</td>
+                        <td class="aws-service">—</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">FastAPI TestClient, integration tests</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Load Testing</span></td>
+                        <td>locust</td>
+                        <td class="aws-service">—</td>
+                        <td><span class="status-badge status-optional">Optional</span></td>
+                        <td class="notes">Concurrent user simulation</td>
+                    </tr>
+                    <tr class="gap-row priority-low">
+                        <td><span class="tech-name gap">Code Formatting</span></td>
+                        <td>Ruff / Black</td>
+                        <td class="aws-service">—</td>
+                        <td><span class="status-badge status-gap">Gap</span></td>
+                        <td class="notes">Add <span class="code">ruff</span> for linting + formatting</td>
+                    </tr>
+                    <tr class="gap-row priority-low">
+                        <td><span class="tech-name gap">Type Checking</span></td>
+                        <td>mypy / pyright</td>
+                        <td class="aws-service">—</td>
+                        <td><span class="status-badge status-gap">Gap</span></td>
+                        <td class="notes">Static type analysis for Pydantic models</td>
+                    </tr>
+                    <tr class="gap-row priority-low">
+                        <td><span class="tech-name gap">Pre-commit Hooks</span></td>
+                        <td>pre-commit</td>
+                        <td class="aws-service">—</td>
+                        <td><span class="status-badge status-gap">Gap</span></td>
+                        <td class="notes">Automated checks before commit</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- 11. CI/CD & DevOps -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon">🔄</div>
+                <div>
+                    <div class="section-title">CI/CD & DevOps</div>
+                    <div class="section-subtitle">Build, deploy, automate</div>
+                </div>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width: 20%;">Component</th>
+                        <th style="width: 15%;">Local/Dev</th>
+                        <th style="width: 20%;">AWS Equivalent</th>
+                        <th style="width: 10%;">Status</th>
+                        <th>Notes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr class="gap-row priority-high">
+                        <td><span class="tech-name gap">CI/CD Pipeline</span></td>
+                        <td>GitHub Actions</td>
+                        <td class="aws-service">CodePipeline + CodeBuild</td>
+                        <td><span class="status-badge status-gap">Gap</span></td>
+                        <td class="notes"><strong>Critical!</strong> Automated testing, building, deployment</td>
+                    </tr>
+                    <tr class="gap-row priority-high">
+                        <td><span class="tech-name gap">Infrastructure as Code</span></td>
+                        <td>Terraform / CDK</td>
+                        <td class="aws-service">CloudFormation / CDK</td>
+                        <td><span class="status-badge status-gap">Gap</span></td>
+                        <td class="notes"><strong>Critical!</strong> Version-controlled infrastructure</td>
+                    </tr>
+                    <tr class="gap-row priority-medium">
+                        <td><span class="tech-name gap">Container Registry</span></td>
+                        <td>Docker Hub</td>
+                        <td class="aws-service">ECR</td>
+                        <td><span class="status-badge status-gap">Gap</span></td>
+                        <td class="notes">Private Docker image storage</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Containerization</span></td>
+                        <td>Docker / Docker Compose</td>
+                        <td class="aws-service">ECS / EKS / Fargate</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">DRA-compliant base images required</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Container Orchestration</span></td>
+                        <td>Docker Compose</td>
+                        <td class="aws-service">ECS / EKS</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">ECS simpler, EKS for Kubernetes</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- 12. Security & Auth -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon">🔒</div>
+                <div>
+                    <div class="section-title">Security & Authentication</div>
+                    <div class="section-subtitle">Identity, secrets, compliance</div>
+                </div>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width: 20%;">Component</th>
+                        <th style="width: 15%;">Local/Dev</th>
+                        <th style="width: 20%;">AWS Equivalent</th>
+                        <th style="width: 10%;">Status</th>
+                        <th>Notes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr class="gap-row priority-high">
+                        <td><span class="tech-name gap">Secrets Management</span></td>
+                        <td>.env files</td>
+                        <td class="aws-service">Secrets Manager / Parameter Store</td>
+                        <td><span class="status-badge status-gap">Gap</span></td>
+                        <td class="notes"><strong>Critical!</strong> API keys, DB credentials, never in code</td>
+                    </tr>
+                    <tr class="gap-row priority-medium">
+                        <td><span class="tech-name gap">User Authentication</span></td>
+                        <td>—</td>
+                        <td class="aws-service">Cognito</td>
+                        <td><span class="status-badge status-gap">Gap</span></td>
+                        <td class="notes">User pools, MFA, SSO integration</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Service Auth</span></td>
+                        <td>API Keys / JWT</td>
+                        <td class="aws-service">IAM Roles / Service Accounts</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">Service-to-service authentication</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Data Encryption</span></td>
+                        <td>—</td>
+                        <td class="aws-service">KMS</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">At-rest (AES-256), in-transit (TLS 1.3)</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Network Security</span></td>
+                        <td>—</td>
+                        <td class="aws-service">VPC / Security Groups</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">Private subnets for DB, public for ALB</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Audit Logging</span></td>
+                        <td>—</td>
+                        <td class="aws-service">CloudTrail</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">API calls, user actions, compliance</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- 13. Event Processing -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon">📨</div>
+                <div>
+                    <div class="section-title">Event Processing & Messaging</div>
+                    <div class="section-subtitle">Async communication, streaming</div>
+                </div>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width: 20%;">Component</th>
+                        <th style="width: 15%;">Local/Dev</th>
+                        <th style="width: 20%;">AWS Equivalent</th>
+                        <th style="width: 10%;">Status</th>
+                        <th>Notes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><span class="tech-name">Stream Processing</span></td>
+                        <td>—</td>
+                        <td class="aws-service">Kinesis Data Streams</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">Real-time event ingestion</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Message Queue</span></td>
+                        <td>Redis / RabbitMQ</td>
+                        <td class="aws-service">SQS</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">Decoupled async processing</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Pub/Sub</span></td>
+                        <td>—</td>
+                        <td class="aws-service">SNS</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">Fan-out notifications, alerts</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Event Bus</span></td>
+                        <td>—</td>
+                        <td class="aws-service">EventBridge</td>
+                        <td><span class="status-badge status-optional">Optional</span></td>
+                        <td class="notes">Event-driven architecture, scheduling</td>
+                    </tr>
+                    <tr class="gap-row priority-medium">
+                        <td><span class="tech-name gap">Task Queue</span></td>
+                        <td>Celery</td>
+                        <td class="aws-service">SQS + Lambda / Step Functions</td>
+                        <td><span class="status-badge status-gap">Gap</span></td>
+                        <td class="notes">Background jobs: training, SHAP computation</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- 14. Frontend -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon">🖥️</div>
+                <div>
+                    <div class="section-title">Frontend</div>
+                    <div class="section-subtitle">Dashboard UI</div>
+                </div>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width: 20%;">Component</th>
+                        <th style="width: 15%;">Local/Dev</th>
+                        <th style="width: 20%;">AWS Equivalent</th>
+                        <th style="width: 10%;">Status</th>
+                        <th>Notes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr class="gap-row priority-medium">
+                        <td><span class="tech-name gap">UI Framework</span></td>
+                        <td>React + TypeScript</td>
+                        <td class="aws-service">Amplify Hosting / S3 + CloudFront</td>
+                        <td><span class="status-badge status-gap">Gap</span></td>
+                        <td class="notes">Defined in PRD but not detailed</td>
+                    </tr>
+                    <tr class="gap-row priority-medium">
+                        <td><span class="tech-name gap">Build Tool</span></td>
+                        <td>Vite</td>
+                        <td class="aws-service">—</td>
+                        <td><span class="status-badge status-gap">Gap</span></td>
+                        <td class="notes">Fast HMR, modern bundling</td>
+                    </tr>
+                    <tr class="gap-row priority-medium">
+                        <td><span class="tech-name gap">Visualization</span></td>
+                        <td>Plotly / D3.js / Chart.js</td>
+                        <td class="aws-service">QuickSight (alternative)</td>
+                        <td><span class="status-badge status-gap">Gap</span></td>
+                        <td class="notes">Causal graphs, KPI dashboards, SHAP plots</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">State Management</span></td>
+                        <td>Redux Toolkit / Zustand</td>
+                        <td class="aws-service">—</td>
+                        <td><span class="status-badge status-optional">Optional</span></td>
+                        <td class="notes">Client-side state for agent responses</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- 15. Configuration -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon">⚡</div>
+                <div>
+                    <div class="section-title">Configuration & Environment</div>
+                    <div class="section-subtitle">Settings, feature flags, environment management</div>
+                </div>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width: 20%;">Component</th>
+                        <th style="width: 15%;">Local/Dev</th>
+                        <th style="width: 20%;">AWS Equivalent</th>
+                        <th style="width: 10%;">Status</th>
+                        <th>Notes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><span class="tech-name">Environment Config</span></td>
+                        <td>python-dotenv / pydantic-settings</td>
+                        <td class="aws-service">Parameter Store / AppConfig</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">Typed settings with validation</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Domain Vocabulary</span></td>
+                        <td>domain_vocabulary.yaml</td>
+                        <td class="aws-service">S3 / AppConfig</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">Brands, regions, KPIs, intents</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Agent Config</span></td>
+                        <td>agent_config.yaml</td>
+                        <td class="aws-service">S3 / DynamoDB</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">Tier assignments, SLAs, routing rules</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Feature Flags</span></td>
+                        <td>—</td>
+                        <td class="aws-service">AppConfig / LaunchDarkly</td>
+                        <td><span class="status-badge status-optional">Optional</span></td>
+                        <td class="notes">Gradual rollout, A/B testing</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- 16. Cost & Governance -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon">💰</div>
+                <div>
+                    <div class="section-title">Cost & Governance</div>
+                    <div class="section-subtitle">Budget, compliance, documentation</div>
+                </div>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width: 20%;">Component</th>
+                        <th style="width: 15%;">Local/Dev</th>
+                        <th style="width: 20%;">AWS Equivalent</th>
+                        <th style="width: 10%;">Status</th>
+                        <th>Notes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr class="gap-row priority-low">
+                        <td><span class="tech-name gap">Cost Monitoring</span></td>
+                        <td>—</td>
+                        <td class="aws-service">Cost Explorer / Budgets</td>
+                        <td><span class="status-badge status-gap">Gap</span></td>
+                        <td class="notes">Budget alerts, cost allocation tags</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Compliance</span></td>
+                        <td>—</td>
+                        <td class="aws-service">Config / Security Hub</td>
+                        <td><span class="status-badge status-optional">Optional</span></td>
+                        <td class="notes">HIPAA compliance checks</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">API Documentation</span></td>
+                        <td>FastAPI OpenAPI (auto)</td>
+                        <td class="aws-service">—</td>
+                        <td><span class="status-badge status-have">Have</span></td>
+                        <td class="notes">Swagger UI built into FastAPI</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tech-name">Project Documentation</span></td>
+                        <td>MkDocs / Sphinx</td>
+                        <td class="aws-service">—</td>
+                        <td><span class="status-badge status-optional">Optional</span></td>
+                        <td class="notes">Architecture docs, runbooks</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Priority Implementation Order -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon">📋</div>
+                <div>
+                    <div class="section-title">Recommended Gap Resolution Order</div>
+                    <div class="section-subtitle">What to implement first</div>
+                </div>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width: 5%;">#</th>
+                        <th style="width: 15%;">Gap</th>
+                        <th style="width: 15%;">AWS Service</th>
+                        <th style="width: 10%;">Priority</th>
+                        <th style="width: 10%;">Effort</th>
+                        <th>Rationale</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr class="priority-high">
+                        <td>1</td>
+                        <td><strong>Secrets Manager</strong></td>
+                        <td class="aws-service">Secrets Manager</td>
+                        <td><span class="status-badge status-gap">High</span></td>
+                        <td>2h</td>
+                        <td>Security foundation. Never store creds in code.</td>
+                    </tr>
+                    <tr class="priority-high">
+                        <td>2</td>
+                        <td><strong>IaC Foundation</strong></td>
+                        <td class="aws-service">CDK / CloudFormation</td>
+                        <td><span class="status-badge status-gap">High</span></td>
+                        <td>8h</td>
+                        <td>VPC, subnets, security groups as code</td>
+                    </tr>
+                    <tr class="priority-high">
+                        <td>3</td>
+                        <td><strong>Container Registry</strong></td>
+                        <td class="aws-service">ECR</td>
+                        <td><span class="status-badge status-gap">High</span></td>
+                        <td>2h</td>
+                        <td>Store Docker images before ECS/EKS</td>
+                    </tr>
+                    <tr class="priority-high">
+                        <td>4</td>
+                        <td><strong>CI/CD Pipeline</strong></td>
+                        <td class="aws-service">GitHub Actions → ECR → ECS</td>
+                        <td><span class="status-badge status-gap">High</span></td>
+                        <td>8h</td>
+                        <td>Automated testing and deployment</td>
+                    </tr>
+                    <tr class="priority-high">
+                        <td>5</td>
+                        <td><strong>API Gateway</strong></td>
+                        <td class="aws-service">API Gateway</td>
+                        <td><span class="status-badge status-gap">High</span></td>
+                        <td>4h</td>
+                        <td>Rate limiting, auth, routing for FastAPI</td>
+                    </tr>
+                    <tr class="priority-medium">
+                        <td>6</td>
+                        <td><strong>Auth/Identity</strong></td>
+                        <td class="aws-service">Cognito</td>
+                        <td><span class="status-badge status-aws">Medium</span></td>
+                        <td>6h</td>
+                        <td>User management, SSO integration</td>
+                    </tr>
+                    <tr class="priority-medium">
+                        <td>7</td>
+                        <td><strong>Task Queue</strong></td>
+                        <td class="aws-service">SQS + Lambda</td>
+                        <td><span class="status-badge status-aws">Medium</span></td>
+                        <td>4h</td>
+                        <td>Background training, SHAP computation</td>
+                    </tr>
+                    <tr class="priority-medium">
+                        <td>8</td>
+                        <td><strong>Frontend Shell</strong></td>
+                        <td class="aws-service">S3 + CloudFront</td>
+                        <td><span class="status-badge status-aws">Medium</span></td>
+                        <td>8h</td>
+                        <td>React app deployment</td>
+                    </tr>
+                    <tr class="priority-low">
+                        <td>9</td>
+                        <td><strong>Code Quality</strong></td>
+                        <td class="aws-service">—</td>
+                        <td><span class="status-badge status-optional">Low</span></td>
+                        <td>2h</td>
+                        <td>Ruff, mypy, pre-commit hooks</td>
+                    </tr>
+                    <tr class="priority-low">
+                        <td>10</td>
+                        <td><strong>Cost Monitoring</strong></td>
+                        <td class="aws-service">Budgets + Cost Explorer</td>
+                        <td><span class="status-badge status-optional">Low</span></td>
+                        <td>1h</td>
+                        <td>Budget alerts to avoid surprises</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="footer">
+            <p><strong>E2I Causal Analytics</strong> | Complete Tech Stack Reference</p>
+            <p style="margin-top: 10px;">47 Components | 28 AWS Services | 12 Gaps Identified</p>
+            <p style="margin-top: 5px; font-size: 0.9em;">Created: December 4, 2025</p>
+        </div>
+    </div>
+</body>
+</html>

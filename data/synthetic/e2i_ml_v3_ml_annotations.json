@@ -1,0 +1,3468 @@
+[
+  {
+    "annotation_id": "7f4276ce-c46f-49c3-adea-ef9c17ed1044",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000000",
+    "annotation_type": "diagnosis_validation",
+    "annotator_id": "ANN_000",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.72,
+      "notes": "Annotation notes for diagnosis_validation"
+    },
+    "annotation_confidence": 0.76,
+    "annotation_timestamp": "2025-11-28T15:39:47.787346",
+    "annotation_duration_seconds": 147,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "d37a824b-c010-4716-9a7d-a1f8ab5fe3b8",
+    "created_at": "2025-11-28T15:39:47.787351"
+  },
+  {
+    "annotation_id": "f8e6c33b-8446-41c9-b530-6fdd54a69615",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000000",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_001",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.7,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.82,
+    "annotation_timestamp": "2025-11-28T15:39:47.787384",
+    "annotation_duration_seconds": 57,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "d37a824b-c010-4716-9a7d-a1f8ab5fe3b8",
+    "created_at": "2025-11-28T15:39:47.787387"
+  },
+  {
+    "annotation_id": "30d3a714-7d8c-4e70-81d3-8aacad2b26f2",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000000",
+    "annotation_type": "adverse_event",
+    "annotator_id": "ANN_002",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.98,
+      "notes": "Annotation notes for adverse_event"
+    },
+    "annotation_confidence": 0.93,
+    "annotation_timestamp": "2025-11-28T15:39:47.787546",
+    "annotation_duration_seconds": 93,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "d37a824b-c010-4716-9a7d-a1f8ab5fe3b8",
+    "created_at": "2025-11-28T15:39:47.787557"
+  },
+  {
+    "annotation_id": "c898fb6b-042f-4247-b5f0-9f528fed78dc",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000000",
+    "annotation_type": "diagnosis_validation",
+    "annotator_id": "ANN_003",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.95,
+      "notes": "Annotation notes for diagnosis_validation"
+    },
+    "annotation_confidence": 0.84,
+    "annotation_timestamp": "2025-11-28T15:39:47.787602",
+    "annotation_duration_seconds": 240,
+    "is_adjudicated": true,
+    "adjudication_result": {
+      "final_label": "negative"
+    },
+    "adjudicated_by": "ADJ_001",
+    "adjudicated_at": "2025-11-28T15:39:47.787624",
+    "iaa_group_id": "d37a824b-c010-4716-9a7d-a1f8ab5fe3b8",
+    "created_at": "2025-11-28T15:39:47.787626"
+  },
+  {
+    "annotation_id": "a7bf628a-b23f-45a5-b758-b73c9acaa1c5",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000001",
+    "annotation_type": "outcome_label",
+    "annotator_id": "ANN_000",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.74,
+      "notes": "Annotation notes for outcome_label"
+    },
+    "annotation_confidence": 0.77,
+    "annotation_timestamp": "2025-11-28T15:39:47.787663",
+    "annotation_duration_seconds": 132,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "1a9cabab-32e7-4e48-841d-810e093a6e94",
+    "created_at": "2025-11-28T15:39:47.787666"
+  },
+  {
+    "annotation_id": "83e1b2b9-998e-40b9-be94-ca886ec9002f",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000001",
+    "annotation_type": "diagnosis_validation",
+    "annotator_id": "ANN_001",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.89,
+      "notes": "Annotation notes for diagnosis_validation"
+    },
+    "annotation_confidence": 0.95,
+    "annotation_timestamp": "2025-11-28T15:39:47.787682",
+    "annotation_duration_seconds": 223,
+    "is_adjudicated": false,
+    "adjudication_result": {
+      "final_label": "positive"
+    },
+    "adjudicated_by": "ADJ_002",
+    "adjudicated_at": "2025-11-28T15:39:47.787688",
+    "iaa_group_id": "1a9cabab-32e7-4e48-841d-810e093a6e94",
+    "created_at": "2025-11-28T15:39:47.787690"
+  },
+  {
+    "annotation_id": "4af89739-a4ce-4707-95d5-0fe974416f3a",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000002",
+    "annotation_type": "diagnosis_validation",
+    "annotator_id": "ANN_000",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.76,
+      "notes": "Annotation notes for diagnosis_validation"
+    },
+    "annotation_confidence": 0.74,
+    "annotation_timestamp": "2025-11-28T15:39:47.787722",
+    "annotation_duration_seconds": 53,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "6bb0848a-8db2-4f92-94e2-51aefcd29d23",
+    "created_at": "2025-11-28T15:39:47.787725"
+  },
+  {
+    "annotation_id": "d15e9041-eb77-4a0e-b914-bfc38fec1e86",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000002",
+    "annotation_type": "outcome_label",
+    "annotator_id": "ANN_001",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.75,
+      "notes": "Annotation notes for outcome_label"
+    },
+    "annotation_confidence": 0.86,
+    "annotation_timestamp": "2025-11-28T15:39:47.787744",
+    "annotation_duration_seconds": 232,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "6bb0848a-8db2-4f92-94e2-51aefcd29d23",
+    "created_at": "2025-11-28T15:39:47.787747"
+  },
+  {
+    "annotation_id": "c30241a2-67a0-46ab-bda2-e27f9d1d4b1d",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000002",
+    "annotation_type": "adverse_event",
+    "annotator_id": "ANN_002",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.94,
+      "notes": "Annotation notes for adverse_event"
+    },
+    "annotation_confidence": 0.83,
+    "annotation_timestamp": "2025-11-28T15:39:47.787759",
+    "annotation_duration_seconds": 109,
+    "is_adjudicated": true,
+    "adjudication_result": {
+      "final_label": "positive"
+    },
+    "adjudicated_by": "ADJ_003",
+    "adjudicated_at": "2025-11-28T15:39:47.787763",
+    "iaa_group_id": "6bb0848a-8db2-4f92-94e2-51aefcd29d23",
+    "created_at": "2025-11-28T15:39:47.787764"
+  },
+  {
+    "annotation_id": "742b8f20-fced-4d56-8b1a-aeac66adf891",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000003",
+    "annotation_type": "diagnosis_validation",
+    "annotator_id": "ANN_000",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.99,
+      "notes": "Annotation notes for diagnosis_validation"
+    },
+    "annotation_confidence": 0.92,
+    "annotation_timestamp": "2025-11-28T15:39:47.787782",
+    "annotation_duration_seconds": 110,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "111513a0-d465-47e8-9c44-aace94ad1f97",
+    "created_at": "2025-11-28T15:39:47.787785"
+  },
+  {
+    "annotation_id": "47ea4867-b424-450d-aca0-c77dc87f406e",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000003",
+    "annotation_type": "adverse_event",
+    "annotator_id": "ANN_001",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.77,
+      "notes": "Annotation notes for adverse_event"
+    },
+    "annotation_confidence": 0.85,
+    "annotation_timestamp": "2025-11-28T15:39:47.787796",
+    "annotation_duration_seconds": 61,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "111513a0-d465-47e8-9c44-aace94ad1f97",
+    "created_at": "2025-11-28T15:39:47.787798"
+  },
+  {
+    "annotation_id": "f8da9bb6-c54a-4c8b-8065-6d620522de40",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000003",
+    "annotation_type": "adverse_event",
+    "annotator_id": "ANN_002",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.91,
+      "notes": "Annotation notes for adverse_event"
+    },
+    "annotation_confidence": 0.97,
+    "annotation_timestamp": "2025-11-28T15:39:47.787810",
+    "annotation_duration_seconds": 195,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "111513a0-d465-47e8-9c44-aace94ad1f97",
+    "created_at": "2025-11-28T15:39:47.787812"
+  },
+  {
+    "annotation_id": "3b771c67-ba2f-4734-a1c8-08595799d2a3",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000003",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_003",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.73,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.81,
+    "annotation_timestamp": "2025-11-28T15:39:47.787824",
+    "annotation_duration_seconds": 181,
+    "is_adjudicated": true,
+    "adjudication_result": {
+      "final_label": "positive"
+    },
+    "adjudicated_by": "ADJ_002",
+    "adjudicated_at": "2025-11-28T15:39:47.787827",
+    "iaa_group_id": "111513a0-d465-47e8-9c44-aace94ad1f97",
+    "created_at": "2025-11-28T15:39:47.787829"
+  },
+  {
+    "annotation_id": "ed92c448-e2f4-4112-8eb9-3d8c8e762727",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000004",
+    "annotation_type": "diagnosis_validation",
+    "annotator_id": "ANN_000",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.79,
+      "notes": "Annotation notes for diagnosis_validation"
+    },
+    "annotation_confidence": 0.84,
+    "annotation_timestamp": "2025-11-28T15:39:47.787847",
+    "annotation_duration_seconds": 113,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "bf329999-849e-40b9-aa47-2229974a9ff8",
+    "created_at": "2025-11-28T15:39:47.787855"
+  },
+  {
+    "annotation_id": "d0cab089-4108-4c63-ad54-7672e4432c9b",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000004",
+    "annotation_type": "adverse_event",
+    "annotator_id": "ANN_001",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.75,
+      "notes": "Annotation notes for adverse_event"
+    },
+    "annotation_confidence": 0.82,
+    "annotation_timestamp": "2025-11-28T15:39:47.787873",
+    "annotation_duration_seconds": 181,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "bf329999-849e-40b9-aa47-2229974a9ff8",
+    "created_at": "2025-11-28T15:39:47.787875"
+  },
+  {
+    "annotation_id": "6164e390-c58a-45d9-b1d1-b763703375b8",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000004",
+    "annotation_type": "adverse_event",
+    "annotator_id": "ANN_002",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.77,
+      "notes": "Annotation notes for adverse_event"
+    },
+    "annotation_confidence": 0.78,
+    "annotation_timestamp": "2025-11-28T15:39:47.787886",
+    "annotation_duration_seconds": 55,
+    "is_adjudicated": false,
+    "adjudication_result": {
+      "final_label": "positive"
+    },
+    "adjudicated_by": "ADJ_004",
+    "adjudicated_at": "2025-11-28T15:39:47.787889",
+    "iaa_group_id": "bf329999-849e-40b9-aa47-2229974a9ff8",
+    "created_at": "2025-11-28T15:39:47.787893"
+  },
+  {
+    "annotation_id": "aec66a05-7930-47b8-af91-dd8a5cea9786",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000005",
+    "annotation_type": "diagnosis_validation",
+    "annotator_id": "ANN_000",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.95,
+      "notes": "Annotation notes for diagnosis_validation"
+    },
+    "annotation_confidence": 0.88,
+    "annotation_timestamp": "2025-11-28T15:39:47.787914",
+    "annotation_duration_seconds": 185,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "93e00f8c-cf5b-4c60-b2f7-5836f2ea2804",
+    "created_at": "2025-11-28T15:39:47.787917"
+  },
+  {
+    "annotation_id": "ca2d50d5-3522-42a2-b56f-83499597faa4",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000005",
+    "annotation_type": "diagnosis_validation",
+    "annotator_id": "ANN_001",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.85,
+      "notes": "Annotation notes for diagnosis_validation"
+    },
+    "annotation_confidence": 0.86,
+    "annotation_timestamp": "2025-11-28T15:39:47.787928",
+    "annotation_duration_seconds": 298,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "93e00f8c-cf5b-4c60-b2f7-5836f2ea2804",
+    "created_at": "2025-11-28T15:39:47.787931"
+  },
+  {
+    "annotation_id": "60048eaf-cd1f-47bd-b7c6-334f3aa5ecfd",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000005",
+    "annotation_type": "outcome_label",
+    "annotator_id": "ANN_002",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.77,
+      "notes": "Annotation notes for outcome_label"
+    },
+    "annotation_confidence": 0.77,
+    "annotation_timestamp": "2025-11-28T15:39:47.787941",
+    "annotation_duration_seconds": 226,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "93e00f8c-cf5b-4c60-b2f7-5836f2ea2804",
+    "created_at": "2025-11-28T15:39:47.787944"
+  },
+  {
+    "annotation_id": "fbc829bd-415a-421b-aa0b-4f96e104d7e1",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000005",
+    "annotation_type": "outcome_label",
+    "annotator_id": "ANN_003",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.76,
+      "notes": "Annotation notes for outcome_label"
+    },
+    "annotation_confidence": 0.98,
+    "annotation_timestamp": "2025-11-28T15:39:47.787954",
+    "annotation_duration_seconds": 200,
+    "is_adjudicated": true,
+    "adjudication_result": {
+      "final_label": "positive"
+    },
+    "adjudicated_by": "ADJ_004",
+    "adjudicated_at": "2025-11-28T15:39:47.787958",
+    "iaa_group_id": "93e00f8c-cf5b-4c60-b2f7-5836f2ea2804",
+    "created_at": "2025-11-28T15:39:47.787959"
+  },
+  {
+    "annotation_id": "82fa4dd9-101a-4025-9d6e-fdff06fa0b8a",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000006",
+    "annotation_type": "outcome_label",
+    "annotator_id": "ANN_000",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.96,
+      "notes": "Annotation notes for outcome_label"
+    },
+    "annotation_confidence": 0.87,
+    "annotation_timestamp": "2025-11-28T15:39:47.787976",
+    "annotation_duration_seconds": 105,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "fa2c7ab6-e9d7-4ba7-85af-80f36bde4c48",
+    "created_at": "2025-11-28T15:39:47.787978"
+  },
+  {
+    "annotation_id": "ddde1bc1-78d7-4fb0-9b15-16eb72e85152",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000006",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_001",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.82,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.74,
+    "annotation_timestamp": "2025-11-28T15:39:47.787989",
+    "annotation_duration_seconds": 93,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "fa2c7ab6-e9d7-4ba7-85af-80f36bde4c48",
+    "created_at": "2025-11-28T15:39:47.787991"
+  },
+  {
+    "annotation_id": "49369147-6327-4342-9a42-c1b070fe0fd8",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000006",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_002",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.96,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.75,
+    "annotation_timestamp": "2025-11-28T15:39:47.788001",
+    "annotation_duration_seconds": 242,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "fa2c7ab6-e9d7-4ba7-85af-80f36bde4c48",
+    "created_at": "2025-11-28T15:39:47.788004"
+  },
+  {
+    "annotation_id": "1057d561-ffe6-48e9-be1e-9f907e879ead",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000006",
+    "annotation_type": "outcome_label",
+    "annotator_id": "ANN_003",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.8,
+      "notes": "Annotation notes for outcome_label"
+    },
+    "annotation_confidence": 0.9,
+    "annotation_timestamp": "2025-11-28T15:39:47.788016",
+    "annotation_duration_seconds": 62,
+    "is_adjudicated": false,
+    "adjudication_result": {
+      "final_label": "positive"
+    },
+    "adjudicated_by": "ADJ_005",
+    "adjudicated_at": "2025-11-28T15:39:47.788025",
+    "iaa_group_id": "fa2c7ab6-e9d7-4ba7-85af-80f36bde4c48",
+    "created_at": "2025-11-28T15:39:47.788027"
+  },
+  {
+    "annotation_id": "a42736b7-3130-482a-a1ae-f2ad82559b86",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000007",
+    "annotation_type": "outcome_label",
+    "annotator_id": "ANN_000",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.8,
+      "notes": "Annotation notes for outcome_label"
+    },
+    "annotation_confidence": 0.84,
+    "annotation_timestamp": "2025-11-28T15:39:47.788065",
+    "annotation_duration_seconds": 264,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "f3a5c156-4908-4ba9-b720-37572f8bf7ef",
+    "created_at": "2025-11-28T15:39:47.788068"
+  },
+  {
+    "annotation_id": "c5798f44-421f-4d36-9bcc-980b72d30921",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000007",
+    "annotation_type": "adverse_event",
+    "annotator_id": "ANN_001",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.85,
+      "notes": "Annotation notes for adverse_event"
+    },
+    "annotation_confidence": 0.75,
+    "annotation_timestamp": "2025-11-28T15:39:47.788089",
+    "annotation_duration_seconds": 62,
+    "is_adjudicated": true,
+    "adjudication_result": {
+      "final_label": "positive"
+    },
+    "adjudicated_by": "ADJ_005",
+    "adjudicated_at": "2025-11-28T15:39:47.788093",
+    "iaa_group_id": "f3a5c156-4908-4ba9-b720-37572f8bf7ef",
+    "created_at": "2025-11-28T15:39:47.788094"
+  },
+  {
+    "annotation_id": "6c608252-dd7c-4391-b637-e717ce6bfd12",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000008",
+    "annotation_type": "diagnosis_validation",
+    "annotator_id": "ANN_000",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.89,
+      "notes": "Annotation notes for diagnosis_validation"
+    },
+    "annotation_confidence": 0.82,
+    "annotation_timestamp": "2025-11-28T15:39:47.788118",
+    "annotation_duration_seconds": 247,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "8c740b4e-8040-4aee-ab9b-11f194680464",
+    "created_at": "2025-11-28T15:39:47.788120"
+  },
+  {
+    "annotation_id": "466422a1-baca-4b45-94dc-32f23102650e",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000008",
+    "annotation_type": "diagnosis_validation",
+    "annotator_id": "ANN_001",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.89,
+      "notes": "Annotation notes for diagnosis_validation"
+    },
+    "annotation_confidence": 0.72,
+    "annotation_timestamp": "2025-11-28T15:39:47.788131",
+    "annotation_duration_seconds": 171,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "8c740b4e-8040-4aee-ab9b-11f194680464",
+    "created_at": "2025-11-28T15:39:47.788136"
+  },
+  {
+    "annotation_id": "f32e42e8-1674-4d82-a909-e0f869ac7f68",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000008",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_002",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.84,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.98,
+    "annotation_timestamp": "2025-11-28T15:39:47.788147",
+    "annotation_duration_seconds": 107,
+    "is_adjudicated": true,
+    "adjudication_result": {
+      "final_label": "negative"
+    },
+    "adjudicated_by": "ADJ_001",
+    "adjudicated_at": "2025-11-28T15:39:47.788150",
+    "iaa_group_id": "8c740b4e-8040-4aee-ab9b-11f194680464",
+    "created_at": "2025-11-28T15:39:47.788152"
+  },
+  {
+    "annotation_id": "f7cb1ee8-519a-430b-9b07-ba8e6146a1fb",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000009",
+    "annotation_type": "outcome_label",
+    "annotator_id": "ANN_000",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.94,
+      "notes": "Annotation notes for outcome_label"
+    },
+    "annotation_confidence": 0.88,
+    "annotation_timestamp": "2025-11-28T15:39:47.788194",
+    "annotation_duration_seconds": 125,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "59415202-ba46-436d-aa08-0323b831a055",
+    "created_at": "2025-11-28T15:39:47.788197"
+  },
+  {
+    "annotation_id": "a472df3b-0058-4304-ab56-695acbd38f3e",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000009",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_001",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.81,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.72,
+    "annotation_timestamp": "2025-11-28T15:39:47.788213",
+    "annotation_duration_seconds": 200,
+    "is_adjudicated": false,
+    "adjudication_result": {
+      "final_label": "negative"
+    },
+    "adjudicated_by": "ADJ_005",
+    "adjudicated_at": "2025-11-28T15:39:47.788217",
+    "iaa_group_id": "59415202-ba46-436d-aa08-0323b831a055",
+    "created_at": "2025-11-28T15:39:47.788218"
+  },
+  {
+    "annotation_id": "824f4161-da3b-4ce7-9958-6ead78136fb5",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000010",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_000",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.82,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.94,
+    "annotation_timestamp": "2025-11-28T15:39:47.788236",
+    "annotation_duration_seconds": 38,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "cf5d5b83-4231-4bad-b19d-84ff4fecabdd",
+    "created_at": "2025-11-28T15:39:47.788238"
+  },
+  {
+    "annotation_id": "f7834143-44f9-4e38-94e8-644b9f9b5dff",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000010",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_001",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.81,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.94,
+    "annotation_timestamp": "2025-11-28T15:39:47.788248",
+    "annotation_duration_seconds": 142,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "cf5d5b83-4231-4bad-b19d-84ff4fecabdd",
+    "created_at": "2025-11-28T15:39:47.788261"
+  },
+  {
+    "annotation_id": "fd2228c8-b66e-4fab-81b2-d2c1df41a9ae",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000010",
+    "annotation_type": "adverse_event",
+    "annotator_id": "ANN_002",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.7,
+      "notes": "Annotation notes for adverse_event"
+    },
+    "annotation_confidence": 0.82,
+    "annotation_timestamp": "2025-11-28T15:39:47.788291",
+    "annotation_duration_seconds": 92,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "cf5d5b83-4231-4bad-b19d-84ff4fecabdd",
+    "created_at": "2025-11-28T15:39:47.788298"
+  },
+  {
+    "annotation_id": "2684f8a0-836b-4f89-b317-3e7d375b72f8",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000010",
+    "annotation_type": "diagnosis_validation",
+    "annotator_id": "ANN_003",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.98,
+      "notes": "Annotation notes for diagnosis_validation"
+    },
+    "annotation_confidence": 0.89,
+    "annotation_timestamp": "2025-11-28T15:39:47.788314",
+    "annotation_duration_seconds": 148,
+    "is_adjudicated": false,
+    "adjudication_result": {
+      "final_label": "positive"
+    },
+    "adjudicated_by": "ADJ_005",
+    "adjudicated_at": "2025-11-28T15:39:47.788318",
+    "iaa_group_id": "cf5d5b83-4231-4bad-b19d-84ff4fecabdd",
+    "created_at": "2025-11-28T15:39:47.788320"
+  },
+  {
+    "annotation_id": "cd4095b4-8296-4c31-9072-56fbb23c5789",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000011",
+    "annotation_type": "outcome_label",
+    "annotator_id": "ANN_000",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.86,
+      "notes": "Annotation notes for outcome_label"
+    },
+    "annotation_confidence": 0.89,
+    "annotation_timestamp": "2025-11-28T15:39:47.788340",
+    "annotation_duration_seconds": 215,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "01a1f51f-802e-42f9-bb35-47eacd48ee00",
+    "created_at": "2025-11-28T15:39:47.788343"
+  },
+  {
+    "annotation_id": "63406f8d-b33e-483c-82b4-15422ffd4924",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000011",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_001",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.79,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.72,
+    "annotation_timestamp": "2025-11-28T15:39:47.788353",
+    "annotation_duration_seconds": 300,
+    "is_adjudicated": true,
+    "adjudication_result": {
+      "final_label": "positive"
+    },
+    "adjudicated_by": "ADJ_002",
+    "adjudicated_at": "2025-11-28T15:39:47.788357",
+    "iaa_group_id": "01a1f51f-802e-42f9-bb35-47eacd48ee00",
+    "created_at": "2025-11-28T15:39:47.788358"
+  },
+  {
+    "annotation_id": "0032bb53-e8e2-4bed-9334-0b8f01804008",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000012",
+    "annotation_type": "diagnosis_validation",
+    "annotator_id": "ANN_000",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.78,
+      "notes": "Annotation notes for diagnosis_validation"
+    },
+    "annotation_confidence": 0.95,
+    "annotation_timestamp": "2025-11-28T15:39:47.788377",
+    "annotation_duration_seconds": 248,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "83183f17-4d86-4645-b67f-dab898e492f4",
+    "created_at": "2025-11-28T15:39:47.788379"
+  },
+  {
+    "annotation_id": "fa145166-2829-4efc-b57e-63b4550f8a6a",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000012",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_001",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.97,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.85,
+    "annotation_timestamp": "2025-11-28T15:39:47.788391",
+    "annotation_duration_seconds": 172,
+    "is_adjudicated": true,
+    "adjudication_result": {
+      "final_label": "negative"
+    },
+    "adjudicated_by": "ADJ_002",
+    "adjudicated_at": "2025-11-28T15:39:47.788395",
+    "iaa_group_id": "83183f17-4d86-4645-b67f-dab898e492f4",
+    "created_at": "2025-11-28T15:39:47.788396"
+  },
+  {
+    "annotation_id": "3c56c3a9-e0d5-4026-b3ef-6d27031024f7",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000013",
+    "annotation_type": "diagnosis_validation",
+    "annotator_id": "ANN_000",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.79,
+      "notes": "Annotation notes for diagnosis_validation"
+    },
+    "annotation_confidence": 0.98,
+    "annotation_timestamp": "2025-11-28T15:39:47.788437",
+    "annotation_duration_seconds": 150,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "db532b5d-ff6b-40d2-b6f7-2414f77c0221",
+    "created_at": "2025-11-28T15:39:47.788440"
+  },
+  {
+    "annotation_id": "fdafcba9-bda8-43c8-9d08-06c30eabc39f",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000013",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_001",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.71,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.78,
+    "annotation_timestamp": "2025-11-28T15:39:47.788450",
+    "annotation_duration_seconds": 219,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "db532b5d-ff6b-40d2-b6f7-2414f77c0221",
+    "created_at": "2025-11-28T15:39:47.788453"
+  },
+  {
+    "annotation_id": "4694e3f7-1a69-497b-8ea2-1028c6cfcbd1",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000013",
+    "annotation_type": "diagnosis_validation",
+    "annotator_id": "ANN_002",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.98,
+      "notes": "Annotation notes for diagnosis_validation"
+    },
+    "annotation_confidence": 0.83,
+    "annotation_timestamp": "2025-11-28T15:39:47.788464",
+    "annotation_duration_seconds": 122,
+    "is_adjudicated": true,
+    "adjudication_result": {
+      "final_label": "negative"
+    },
+    "adjudicated_by": "ADJ_005",
+    "adjudicated_at": "2025-11-28T15:39:47.788467",
+    "iaa_group_id": "db532b5d-ff6b-40d2-b6f7-2414f77c0221",
+    "created_at": "2025-11-28T15:39:47.788469"
+  },
+  {
+    "annotation_id": "3a3c2ddc-de18-4e75-a317-98165617976d",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000014",
+    "annotation_type": "adverse_event",
+    "annotator_id": "ANN_000",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.96,
+      "notes": "Annotation notes for adverse_event"
+    },
+    "annotation_confidence": 0.71,
+    "annotation_timestamp": "2025-11-28T15:39:47.788486",
+    "annotation_duration_seconds": 193,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "1a383cc0-746d-4758-83e9-e82728643876",
+    "created_at": "2025-11-28T15:39:47.788488"
+  },
+  {
+    "annotation_id": "14311c01-7ac1-425f-9553-ebfb9f839663",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000014",
+    "annotation_type": "diagnosis_validation",
+    "annotator_id": "ANN_001",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.82,
+      "notes": "Annotation notes for diagnosis_validation"
+    },
+    "annotation_confidence": 0.9,
+    "annotation_timestamp": "2025-11-28T15:39:47.788499",
+    "annotation_duration_seconds": 110,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "1a383cc0-746d-4758-83e9-e82728643876",
+    "created_at": "2025-11-28T15:39:47.788504"
+  },
+  {
+    "annotation_id": "332c40b0-0d08-4f32-b61c-ede492be345b",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000014",
+    "annotation_type": "outcome_label",
+    "annotator_id": "ANN_002",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.93,
+      "notes": "Annotation notes for outcome_label"
+    },
+    "annotation_confidence": 0.87,
+    "annotation_timestamp": "2025-11-28T15:39:47.788516",
+    "annotation_duration_seconds": 110,
+    "is_adjudicated": true,
+    "adjudication_result": {
+      "final_label": "negative"
+    },
+    "adjudicated_by": "ADJ_001",
+    "adjudicated_at": "2025-11-28T15:39:47.788519",
+    "iaa_group_id": "1a383cc0-746d-4758-83e9-e82728643876",
+    "created_at": "2025-11-28T15:39:47.788521"
+  },
+  {
+    "annotation_id": "0d246936-7a84-4068-bd3f-0fcdc17acdb4",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000015",
+    "annotation_type": "outcome_label",
+    "annotator_id": "ANN_000",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.86,
+      "notes": "Annotation notes for outcome_label"
+    },
+    "annotation_confidence": 0.73,
+    "annotation_timestamp": "2025-11-28T15:39:47.788543",
+    "annotation_duration_seconds": 118,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "dd378f7a-62c0-4e6d-ab36-7a04f44d4c7f",
+    "created_at": "2025-11-28T15:39:47.788545"
+  },
+  {
+    "annotation_id": "bda2d02c-b074-4fd4-a979-b54a64f0350e",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000015",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_001",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.93,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.92,
+    "annotation_timestamp": "2025-11-28T15:39:47.788555",
+    "annotation_duration_seconds": 181,
+    "is_adjudicated": true,
+    "adjudication_result": {
+      "final_label": "negative"
+    },
+    "adjudicated_by": "ADJ_005",
+    "adjudicated_at": "2025-11-28T15:39:47.788560",
+    "iaa_group_id": "dd378f7a-62c0-4e6d-ab36-7a04f44d4c7f",
+    "created_at": "2025-11-28T15:39:47.788562"
+  },
+  {
+    "annotation_id": "dec5ad5a-cb91-453c-8567-52136b551c68",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000016",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_000",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.81,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.95,
+    "annotation_timestamp": "2025-11-28T15:39:47.788581",
+    "annotation_duration_seconds": 53,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "d11de949-5a2f-40bc-a095-b2354ed9e644",
+    "created_at": "2025-11-28T15:39:47.788583"
+  },
+  {
+    "annotation_id": "a8cbdac5-2844-4333-ab68-bdbc14030344",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000016",
+    "annotation_type": "adverse_event",
+    "annotator_id": "ANN_001",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.93,
+      "notes": "Annotation notes for adverse_event"
+    },
+    "annotation_confidence": 0.94,
+    "annotation_timestamp": "2025-11-28T15:39:47.788594",
+    "annotation_duration_seconds": 271,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "d11de949-5a2f-40bc-a095-b2354ed9e644",
+    "created_at": "2025-11-28T15:39:47.788596"
+  },
+  {
+    "annotation_id": "921d34a0-5281-4ae4-addf-007adcaec92f",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000016",
+    "annotation_type": "diagnosis_validation",
+    "annotator_id": "ANN_002",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.94,
+      "notes": "Annotation notes for diagnosis_validation"
+    },
+    "annotation_confidence": 0.81,
+    "annotation_timestamp": "2025-11-28T15:39:47.788608",
+    "annotation_duration_seconds": 214,
+    "is_adjudicated": false,
+    "adjudication_result": {
+      "final_label": "negative"
+    },
+    "adjudicated_by": "ADJ_001",
+    "adjudicated_at": "2025-11-28T15:39:47.788612",
+    "iaa_group_id": "d11de949-5a2f-40bc-a095-b2354ed9e644",
+    "created_at": "2025-11-28T15:39:47.788613"
+  },
+  {
+    "annotation_id": "9dd39fd9-f5d2-4d7b-a9c8-932f05d0262c",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000017",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_000",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.93,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.96,
+    "annotation_timestamp": "2025-11-28T15:39:47.788633",
+    "annotation_duration_seconds": 153,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "f58fc642-5557-4c29-9213-d865ebcafd85",
+    "created_at": "2025-11-28T15:39:47.788635"
+  },
+  {
+    "annotation_id": "7518bc61-defc-4a8b-8bdd-42ea01509eb0",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000017",
+    "annotation_type": "diagnosis_validation",
+    "annotator_id": "ANN_001",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.85,
+      "notes": "Annotation notes for diagnosis_validation"
+    },
+    "annotation_confidence": 0.87,
+    "annotation_timestamp": "2025-11-28T15:39:47.788647",
+    "annotation_duration_seconds": 74,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "f58fc642-5557-4c29-9213-d865ebcafd85",
+    "created_at": "2025-11-28T15:39:47.788649"
+  },
+  {
+    "annotation_id": "8a8898a2-e103-4865-97d2-1d12ecffe36d",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000017",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_002",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.73,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.74,
+    "annotation_timestamp": "2025-11-28T15:39:47.788660",
+    "annotation_duration_seconds": 270,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "f58fc642-5557-4c29-9213-d865ebcafd85",
+    "created_at": "2025-11-28T15:39:47.788662"
+  },
+  {
+    "annotation_id": "5eb44898-c5a6-4fa5-878b-05fc339dc3fd",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000017",
+    "annotation_type": "diagnosis_validation",
+    "annotator_id": "ANN_003",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.92,
+      "notes": "Annotation notes for diagnosis_validation"
+    },
+    "annotation_confidence": 0.97,
+    "annotation_timestamp": "2025-11-28T15:39:47.788674",
+    "annotation_duration_seconds": 217,
+    "is_adjudicated": true,
+    "adjudication_result": {
+      "final_label": "negative"
+    },
+    "adjudicated_by": "ADJ_002",
+    "adjudicated_at": "2025-11-28T15:39:47.788679",
+    "iaa_group_id": "f58fc642-5557-4c29-9213-d865ebcafd85",
+    "created_at": "2025-11-28T15:39:47.788681"
+  },
+  {
+    "annotation_id": "927fdca7-c269-4cf0-b416-874ff54b9ef8",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000018",
+    "annotation_type": "outcome_label",
+    "annotator_id": "ANN_000",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.77,
+      "notes": "Annotation notes for outcome_label"
+    },
+    "annotation_confidence": 0.79,
+    "annotation_timestamp": "2025-11-28T15:39:47.788699",
+    "annotation_duration_seconds": 144,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "076089e1-6367-4371-8575-839d308bbe76",
+    "created_at": "2025-11-28T15:39:47.788701"
+  },
+  {
+    "annotation_id": "954b4da5-4d3b-4086-967c-312e4508944c",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000018",
+    "annotation_type": "diagnosis_validation",
+    "annotator_id": "ANN_001",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.86,
+      "notes": "Annotation notes for diagnosis_validation"
+    },
+    "annotation_confidence": 0.88,
+    "annotation_timestamp": "2025-11-28T15:39:47.788712",
+    "annotation_duration_seconds": 282,
+    "is_adjudicated": false,
+    "adjudication_result": {
+      "final_label": "positive"
+    },
+    "adjudicated_by": "ADJ_002",
+    "adjudicated_at": "2025-11-28T15:39:47.788715",
+    "iaa_group_id": "076089e1-6367-4371-8575-839d308bbe76",
+    "created_at": "2025-11-28T15:39:47.788717"
+  },
+  {
+    "annotation_id": "76307edd-9ef9-45aa-a86a-16db0ba1325a",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000019",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_000",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.78,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.84,
+    "annotation_timestamp": "2025-11-28T15:39:47.788734",
+    "annotation_duration_seconds": 73,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "2e56599c-9de7-48bc-9a4d-161e54ef2633",
+    "created_at": "2025-11-28T15:39:47.788736"
+  },
+  {
+    "annotation_id": "22aeb0b4-1729-47ad-b48a-2d9654b928bd",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000019",
+    "annotation_type": "outcome_label",
+    "annotator_id": "ANN_001",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.97,
+      "notes": "Annotation notes for outcome_label"
+    },
+    "annotation_confidence": 0.91,
+    "annotation_timestamp": "2025-11-28T15:39:47.788747",
+    "annotation_duration_seconds": 295,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "2e56599c-9de7-48bc-9a4d-161e54ef2633",
+    "created_at": "2025-11-28T15:39:47.788749"
+  },
+  {
+    "annotation_id": "b9533549-1910-4eae-bafc-76cf2101d211",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000019",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_002",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.81,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.98,
+    "annotation_timestamp": "2025-11-28T15:39:47.788759",
+    "annotation_duration_seconds": 178,
+    "is_adjudicated": true,
+    "adjudication_result": {
+      "final_label": "negative"
+    },
+    "adjudicated_by": "ADJ_005",
+    "adjudicated_at": "2025-11-28T15:39:47.788763",
+    "iaa_group_id": "2e56599c-9de7-48bc-9a4d-161e54ef2633",
+    "created_at": "2025-11-28T15:39:47.788764"
+  },
+  {
+    "annotation_id": "4e758217-2faa-4a7d-9441-0eb5afed323d",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000020",
+    "annotation_type": "outcome_label",
+    "annotator_id": "ANN_000",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.88,
+      "notes": "Annotation notes for outcome_label"
+    },
+    "annotation_confidence": 0.75,
+    "annotation_timestamp": "2025-11-28T15:39:47.788781",
+    "annotation_duration_seconds": 213,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "3e7cea96-2bf5-48b4-aa38-d61b6cc9ac74",
+    "created_at": "2025-11-28T15:39:47.788783"
+  },
+  {
+    "annotation_id": "73816e85-8a38-419b-8c7d-76cefdc7063c",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000020",
+    "annotation_type": "diagnosis_validation",
+    "annotator_id": "ANN_001",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.73,
+      "notes": "Annotation notes for diagnosis_validation"
+    },
+    "annotation_confidence": 0.9,
+    "annotation_timestamp": "2025-11-28T15:39:47.788796",
+    "annotation_duration_seconds": 64,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "3e7cea96-2bf5-48b4-aa38-d61b6cc9ac74",
+    "created_at": "2025-11-28T15:39:47.788798"
+  },
+  {
+    "annotation_id": "740b136d-c4d7-44a7-8de5-f863dea4f4e3",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000020",
+    "annotation_type": "adverse_event",
+    "annotator_id": "ANN_002",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.77,
+      "notes": "Annotation notes for adverse_event"
+    },
+    "annotation_confidence": 0.97,
+    "annotation_timestamp": "2025-11-28T15:39:47.788808",
+    "annotation_duration_seconds": 94,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "3e7cea96-2bf5-48b4-aa38-d61b6cc9ac74",
+    "created_at": "2025-11-28T15:39:47.788810"
+  },
+  {
+    "annotation_id": "8302f767-0e34-44d8-83ac-0d46d78cba06",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000020",
+    "annotation_type": "diagnosis_validation",
+    "annotator_id": "ANN_003",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.81,
+      "notes": "Annotation notes for diagnosis_validation"
+    },
+    "annotation_confidence": 0.94,
+    "annotation_timestamp": "2025-11-28T15:39:47.788821",
+    "annotation_duration_seconds": 95,
+    "is_adjudicated": true,
+    "adjudication_result": {
+      "final_label": "positive"
+    },
+    "adjudicated_by": "ADJ_005",
+    "adjudicated_at": "2025-11-28T15:39:47.788826",
+    "iaa_group_id": "3e7cea96-2bf5-48b4-aa38-d61b6cc9ac74",
+    "created_at": "2025-11-28T15:39:47.788827"
+  },
+  {
+    "annotation_id": "6de84e3f-065e-4d3d-8ed1-48a2e1c74588",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000021",
+    "annotation_type": "diagnosis_validation",
+    "annotator_id": "ANN_000",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.71,
+      "notes": "Annotation notes for diagnosis_validation"
+    },
+    "annotation_confidence": 0.85,
+    "annotation_timestamp": "2025-11-28T15:39:47.788847",
+    "annotation_duration_seconds": 185,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "4b780028-2dd0-4496-a0a8-0b135a1c89f1",
+    "created_at": "2025-11-28T15:39:47.788856"
+  },
+  {
+    "annotation_id": "9b75ebcc-9183-4d83-a8cf-898d5be00237",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000021",
+    "annotation_type": "diagnosis_validation",
+    "annotator_id": "ANN_001",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.95,
+      "notes": "Annotation notes for diagnosis_validation"
+    },
+    "annotation_confidence": 0.76,
+    "annotation_timestamp": "2025-11-28T15:39:47.788875",
+    "annotation_duration_seconds": 32,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "4b780028-2dd0-4496-a0a8-0b135a1c89f1",
+    "created_at": "2025-11-28T15:39:47.788879"
+  },
+  {
+    "annotation_id": "bd4af0c0-6c52-45af-8610-bb0ed9af9f12",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000021",
+    "annotation_type": "adverse_event",
+    "annotator_id": "ANN_002",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.91,
+      "notes": "Annotation notes for adverse_event"
+    },
+    "annotation_confidence": 0.94,
+    "annotation_timestamp": "2025-11-28T15:39:47.788891",
+    "annotation_duration_seconds": 73,
+    "is_adjudicated": false,
+    "adjudication_result": {
+      "final_label": "negative"
+    },
+    "adjudicated_by": "ADJ_004",
+    "adjudicated_at": "2025-11-28T15:39:47.788894",
+    "iaa_group_id": "4b780028-2dd0-4496-a0a8-0b135a1c89f1",
+    "created_at": "2025-11-28T15:39:47.788896"
+  },
+  {
+    "annotation_id": "4b9d1bee-92b9-4cc1-a6aa-1b51b8fffc1b",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000022",
+    "annotation_type": "outcome_label",
+    "annotator_id": "ANN_000",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.72,
+      "notes": "Annotation notes for outcome_label"
+    },
+    "annotation_confidence": 0.75,
+    "annotation_timestamp": "2025-11-28T15:39:47.788914",
+    "annotation_duration_seconds": 144,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "8be07fb1-548f-4d68-9c26-4752507148c6",
+    "created_at": "2025-11-28T15:39:47.788916"
+  },
+  {
+    "annotation_id": "2d26e8a6-7104-4f47-bb73-29196d5dc7bd",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000022",
+    "annotation_type": "adverse_event",
+    "annotator_id": "ANN_001",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.78,
+      "notes": "Annotation notes for adverse_event"
+    },
+    "annotation_confidence": 0.8,
+    "annotation_timestamp": "2025-11-28T15:39:47.788926",
+    "annotation_duration_seconds": 194,
+    "is_adjudicated": false,
+    "adjudication_result": {
+      "final_label": "positive"
+    },
+    "adjudicated_by": "ADJ_001",
+    "adjudicated_at": "2025-11-28T15:39:47.788930",
+    "iaa_group_id": "8be07fb1-548f-4d68-9c26-4752507148c6",
+    "created_at": "2025-11-28T15:39:47.788931"
+  },
+  {
+    "annotation_id": "c06c2c48-fea2-4875-ad37-cdd10d5cc3ff",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000023",
+    "annotation_type": "adverse_event",
+    "annotator_id": "ANN_000",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.77,
+      "notes": "Annotation notes for adverse_event"
+    },
+    "annotation_confidence": 0.96,
+    "annotation_timestamp": "2025-11-28T15:39:47.788949",
+    "annotation_duration_seconds": 300,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "896db82b-5e35-4053-b4f3-49849cb1bb5d",
+    "created_at": "2025-11-28T15:39:47.788951"
+  },
+  {
+    "annotation_id": "fa3d254c-54c1-418d-8a6e-8b58022d7e6c",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000023",
+    "annotation_type": "diagnosis_validation",
+    "annotator_id": "ANN_001",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.81,
+      "notes": "Annotation notes for diagnosis_validation"
+    },
+    "annotation_confidence": 0.86,
+    "annotation_timestamp": "2025-11-28T15:39:47.788962",
+    "annotation_duration_seconds": 113,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "896db82b-5e35-4053-b4f3-49849cb1bb5d",
+    "created_at": "2025-11-28T15:39:47.788964"
+  },
+  {
+    "annotation_id": "aeb79cb5-93f7-4766-b5d5-76f76de67c4e",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000023",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_002",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.79,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.86,
+    "annotation_timestamp": "2025-11-28T15:39:47.788974",
+    "annotation_duration_seconds": 128,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "896db82b-5e35-4053-b4f3-49849cb1bb5d",
+    "created_at": "2025-11-28T15:39:47.788976"
+  },
+  {
+    "annotation_id": "2cd01ff4-4cf8-4f7b-a5a8-f915bf47549d",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000023",
+    "annotation_type": "adverse_event",
+    "annotator_id": "ANN_003",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.96,
+      "notes": "Annotation notes for adverse_event"
+    },
+    "annotation_confidence": 0.8,
+    "annotation_timestamp": "2025-11-28T15:39:47.788987",
+    "annotation_duration_seconds": 154,
+    "is_adjudicated": true,
+    "adjudication_result": {
+      "final_label": "positive"
+    },
+    "adjudicated_by": "ADJ_001",
+    "adjudicated_at": "2025-11-28T15:39:47.788992",
+    "iaa_group_id": "896db82b-5e35-4053-b4f3-49849cb1bb5d",
+    "created_at": "2025-11-28T15:39:47.788993"
+  },
+  {
+    "annotation_id": "1f5e72db-e2b5-4b5e-8731-062ac95e7b66",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000024",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_000",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.73,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.74,
+    "annotation_timestamp": "2025-11-28T15:39:47.789011",
+    "annotation_duration_seconds": 147,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "bc81f5c6-56c0-47cf-8153-38254b476f79",
+    "created_at": "2025-11-28T15:39:47.789013"
+  },
+  {
+    "annotation_id": "34df5dc8-2dba-473b-913d-be1a4c99d729",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000024",
+    "annotation_type": "outcome_label",
+    "annotator_id": "ANN_001",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.92,
+      "notes": "Annotation notes for outcome_label"
+    },
+    "annotation_confidence": 0.76,
+    "annotation_timestamp": "2025-11-28T15:39:47.789023",
+    "annotation_duration_seconds": 146,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "bc81f5c6-56c0-47cf-8153-38254b476f79",
+    "created_at": "2025-11-28T15:39:47.789028"
+  },
+  {
+    "annotation_id": "09000f0d-3477-4032-85c2-1cc2fe210522",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000024",
+    "annotation_type": "outcome_label",
+    "annotator_id": "ANN_002",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.87,
+      "notes": "Annotation notes for outcome_label"
+    },
+    "annotation_confidence": 0.97,
+    "annotation_timestamp": "2025-11-28T15:39:47.789040",
+    "annotation_duration_seconds": 136,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "bc81f5c6-56c0-47cf-8153-38254b476f79",
+    "created_at": "2025-11-28T15:39:47.789043"
+  },
+  {
+    "annotation_id": "205499da-c3d9-40a2-ad21-dc77778c4d58",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000024",
+    "annotation_type": "adverse_event",
+    "annotator_id": "ANN_003",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.76,
+      "notes": "Annotation notes for adverse_event"
+    },
+    "annotation_confidence": 0.98,
+    "annotation_timestamp": "2025-11-28T15:39:47.789053",
+    "annotation_duration_seconds": 206,
+    "is_adjudicated": true,
+    "adjudication_result": {
+      "final_label": "negative"
+    },
+    "adjudicated_by": "ADJ_003",
+    "adjudicated_at": "2025-11-28T15:39:47.789056",
+    "iaa_group_id": "bc81f5c6-56c0-47cf-8153-38254b476f79",
+    "created_at": "2025-11-28T15:39:47.789058"
+  },
+  {
+    "annotation_id": "dcab4094-65cb-46b6-8c6c-4bb05271ff80",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000025",
+    "annotation_type": "outcome_label",
+    "annotator_id": "ANN_000",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.95,
+      "notes": "Annotation notes for outcome_label"
+    },
+    "annotation_confidence": 0.93,
+    "annotation_timestamp": "2025-11-28T15:39:47.789075",
+    "annotation_duration_seconds": 94,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "c17aeb75-48aa-4be4-ae7c-2c8c56365736",
+    "created_at": "2025-11-28T15:39:47.789077"
+  },
+  {
+    "annotation_id": "ee2084a8-5c39-4b70-a782-5bb463510731",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000025",
+    "annotation_type": "diagnosis_validation",
+    "annotator_id": "ANN_001",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.98,
+      "notes": "Annotation notes for diagnosis_validation"
+    },
+    "annotation_confidence": 0.86,
+    "annotation_timestamp": "2025-11-28T15:39:47.789089",
+    "annotation_duration_seconds": 159,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "c17aeb75-48aa-4be4-ae7c-2c8c56365736",
+    "created_at": "2025-11-28T15:39:47.789091"
+  },
+  {
+    "annotation_id": "259e0a8a-9f04-4f39-a7d7-8328b25bc2bc",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000025",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_002",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.91,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.93,
+    "annotation_timestamp": "2025-11-28T15:39:47.789101",
+    "annotation_duration_seconds": 92,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "c17aeb75-48aa-4be4-ae7c-2c8c56365736",
+    "created_at": "2025-11-28T15:39:47.789103"
+  },
+  {
+    "annotation_id": "c2168154-c171-4739-98ca-3052978a42fe",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000025",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_003",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.91,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.72,
+    "annotation_timestamp": "2025-11-28T15:39:47.789120",
+    "annotation_duration_seconds": 292,
+    "is_adjudicated": true,
+    "adjudication_result": {
+      "final_label": "negative"
+    },
+    "adjudicated_by": "ADJ_003",
+    "adjudicated_at": "2025-11-28T15:39:47.789126",
+    "iaa_group_id": "c17aeb75-48aa-4be4-ae7c-2c8c56365736",
+    "created_at": "2025-11-28T15:39:47.789128"
+  },
+  {
+    "annotation_id": "220e7949-54db-4a1c-97bc-3aa7b7b7af1f",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000026",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_000",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.77,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.88,
+    "annotation_timestamp": "2025-11-28T15:39:47.789158",
+    "annotation_duration_seconds": 63,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "d0ffa659-cff7-4422-8f64-5d3ffbd6858f",
+    "created_at": "2025-11-28T15:39:47.789160"
+  },
+  {
+    "annotation_id": "1fe80477-4491-4250-a8fa-5a5f74402ce6",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000026",
+    "annotation_type": "outcome_label",
+    "annotator_id": "ANN_001",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.82,
+      "notes": "Annotation notes for outcome_label"
+    },
+    "annotation_confidence": 0.97,
+    "annotation_timestamp": "2025-11-28T15:39:47.789171",
+    "annotation_duration_seconds": 119,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "d0ffa659-cff7-4422-8f64-5d3ffbd6858f",
+    "created_at": "2025-11-28T15:39:47.789173"
+  },
+  {
+    "annotation_id": "7d1e3017-c529-4052-a674-a7e9dbeb0634",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000026",
+    "annotation_type": "outcome_label",
+    "annotator_id": "ANN_002",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.97,
+      "notes": "Annotation notes for outcome_label"
+    },
+    "annotation_confidence": 0.93,
+    "annotation_timestamp": "2025-11-28T15:39:47.789184",
+    "annotation_duration_seconds": 261,
+    "is_adjudicated": true,
+    "adjudication_result": {
+      "final_label": "negative"
+    },
+    "adjudicated_by": "ADJ_003",
+    "adjudicated_at": "2025-11-28T15:39:47.789187",
+    "iaa_group_id": "d0ffa659-cff7-4422-8f64-5d3ffbd6858f",
+    "created_at": "2025-11-28T15:39:47.789189"
+  },
+  {
+    "annotation_id": "3a6dcb9f-4b5e-4ef7-b868-183c097700ab",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000027",
+    "annotation_type": "adverse_event",
+    "annotator_id": "ANN_000",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.74,
+      "notes": "Annotation notes for adverse_event"
+    },
+    "annotation_confidence": 0.71,
+    "annotation_timestamp": "2025-11-28T15:39:47.789207",
+    "annotation_duration_seconds": 280,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "4ddcc833-d396-470c-82a8-18069086cef5",
+    "created_at": "2025-11-28T15:39:47.789212"
+  },
+  {
+    "annotation_id": "ecaaaaca-16b5-4165-8a16-f5e8a7cdbfb1",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000027",
+    "annotation_type": "adverse_event",
+    "annotator_id": "ANN_001",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.75,
+      "notes": "Annotation notes for adverse_event"
+    },
+    "annotation_confidence": 0.71,
+    "annotation_timestamp": "2025-11-28T15:39:47.789223",
+    "annotation_duration_seconds": 239,
+    "is_adjudicated": true,
+    "adjudication_result": {
+      "final_label": "negative"
+    },
+    "adjudicated_by": "ADJ_001",
+    "adjudicated_at": "2025-11-28T15:39:47.789226",
+    "iaa_group_id": "4ddcc833-d396-470c-82a8-18069086cef5",
+    "created_at": "2025-11-28T15:39:47.789229"
+  },
+  {
+    "annotation_id": "8dcab803-0aac-44d4-9040-af137ddd4d03",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000028",
+    "annotation_type": "outcome_label",
+    "annotator_id": "ANN_000",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.74,
+      "notes": "Annotation notes for outcome_label"
+    },
+    "annotation_confidence": 0.87,
+    "annotation_timestamp": "2025-11-28T15:39:47.789284",
+    "annotation_duration_seconds": 37,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "0db1b10a-c8bb-4b7f-b2ab-f928cb3bfca2",
+    "created_at": "2025-11-28T15:39:47.789287"
+  },
+  {
+    "annotation_id": "eee2f2ed-5a5f-4039-92ce-cde54b915ed9",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000028",
+    "annotation_type": "diagnosis_validation",
+    "annotator_id": "ANN_001",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.9,
+      "notes": "Annotation notes for diagnosis_validation"
+    },
+    "annotation_confidence": 0.86,
+    "annotation_timestamp": "2025-11-28T15:39:47.789305",
+    "annotation_duration_seconds": 55,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "0db1b10a-c8bb-4b7f-b2ab-f928cb3bfca2",
+    "created_at": "2025-11-28T15:39:47.789307"
+  },
+  {
+    "annotation_id": "96978582-8188-4600-85c1-332762ec847d",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000028",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_002",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.71,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.84,
+    "annotation_timestamp": "2025-11-28T15:39:47.789318",
+    "annotation_duration_seconds": 110,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "0db1b10a-c8bb-4b7f-b2ab-f928cb3bfca2",
+    "created_at": "2025-11-28T15:39:47.789320"
+  },
+  {
+    "annotation_id": "f977b684-64d1-4fee-9860-d30015d9ea8b",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000028",
+    "annotation_type": "adverse_event",
+    "annotator_id": "ANN_003",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.81,
+      "notes": "Annotation notes for adverse_event"
+    },
+    "annotation_confidence": 0.84,
+    "annotation_timestamp": "2025-11-28T15:39:47.789335",
+    "annotation_duration_seconds": 177,
+    "is_adjudicated": false,
+    "adjudication_result": {
+      "final_label": "negative"
+    },
+    "adjudicated_by": "ADJ_005",
+    "adjudicated_at": "2025-11-28T15:39:47.789339",
+    "iaa_group_id": "0db1b10a-c8bb-4b7f-b2ab-f928cb3bfca2",
+    "created_at": "2025-11-28T15:39:47.789340"
+  },
+  {
+    "annotation_id": "209bfa84-3d54-4cfb-8f77-803fa703327f",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000029",
+    "annotation_type": "outcome_label",
+    "annotator_id": "ANN_000",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.86,
+      "notes": "Annotation notes for outcome_label"
+    },
+    "annotation_confidence": 0.85,
+    "annotation_timestamp": "2025-11-28T15:39:47.789365",
+    "annotation_duration_seconds": 79,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "87e20fae-24da-43b6-be96-ccf06adce163",
+    "created_at": "2025-11-28T15:39:47.789367"
+  },
+  {
+    "annotation_id": "496e6fed-4ddf-427d-b4da-74db3f112bc0",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000029",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_001",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.86,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.91,
+    "annotation_timestamp": "2025-11-28T15:39:47.789377",
+    "annotation_duration_seconds": 192,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "87e20fae-24da-43b6-be96-ccf06adce163",
+    "created_at": "2025-11-28T15:39:47.789379"
+  },
+  {
+    "annotation_id": "fc516fb7-97dd-4a80-9856-64858c96432d",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000029",
+    "annotation_type": "diagnosis_validation",
+    "annotator_id": "ANN_002",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.77,
+      "notes": "Annotation notes for diagnosis_validation"
+    },
+    "annotation_confidence": 0.99,
+    "annotation_timestamp": "2025-11-28T15:39:47.789390",
+    "annotation_duration_seconds": 95,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "87e20fae-24da-43b6-be96-ccf06adce163",
+    "created_at": "2025-11-28T15:39:47.789392"
+  },
+  {
+    "annotation_id": "11846f9a-5c3c-4c30-a2c5-9ee802b2781a",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000029",
+    "annotation_type": "diagnosis_validation",
+    "annotator_id": "ANN_003",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.84,
+      "notes": "Annotation notes for diagnosis_validation"
+    },
+    "annotation_confidence": 0.75,
+    "annotation_timestamp": "2025-11-28T15:39:47.789403",
+    "annotation_duration_seconds": 132,
+    "is_adjudicated": false,
+    "adjudication_result": {
+      "final_label": "negative"
+    },
+    "adjudicated_by": "ADJ_004",
+    "adjudicated_at": "2025-11-28T15:39:47.789406",
+    "iaa_group_id": "87e20fae-24da-43b6-be96-ccf06adce163",
+    "created_at": "2025-11-28T15:39:47.789408"
+  },
+  {
+    "annotation_id": "e1233683-2eb5-4f8f-aeb0-43e6869696a0",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000030",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_000",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.74,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.84,
+    "annotation_timestamp": "2025-11-28T15:39:47.789427",
+    "annotation_duration_seconds": 242,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "4bbdbe4a-c46a-422d-a1a4-36e4c828cc00",
+    "created_at": "2025-11-28T15:39:47.789431"
+  },
+  {
+    "annotation_id": "b436dee9-63d8-452b-9f56-4c6b6cebac39",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000030",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_001",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.75,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.77,
+    "annotation_timestamp": "2025-11-28T15:39:47.789442",
+    "annotation_duration_seconds": 252,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "4bbdbe4a-c46a-422d-a1a4-36e4c828cc00",
+    "created_at": "2025-11-28T15:39:47.789444"
+  },
+  {
+    "annotation_id": "ee28b4c1-d128-4074-b110-2c099890ed45",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000030",
+    "annotation_type": "diagnosis_validation",
+    "annotator_id": "ANN_002",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.8,
+      "notes": "Annotation notes for diagnosis_validation"
+    },
+    "annotation_confidence": 0.82,
+    "annotation_timestamp": "2025-11-28T15:39:47.789455",
+    "annotation_duration_seconds": 40,
+    "is_adjudicated": true,
+    "adjudication_result": {
+      "final_label": "negative"
+    },
+    "adjudicated_by": "ADJ_004",
+    "adjudicated_at": "2025-11-28T15:39:47.789458",
+    "iaa_group_id": "4bbdbe4a-c46a-422d-a1a4-36e4c828cc00",
+    "created_at": "2025-11-28T15:39:47.789459"
+  },
+  {
+    "annotation_id": "8c998ee0-5fa3-4035-abd7-6181dcb86156",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000031",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_000",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.89,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.97,
+    "annotation_timestamp": "2025-11-28T15:39:47.789479",
+    "annotation_duration_seconds": 31,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "b502e2ac-0a49-4634-b83b-8ba2ee161d32",
+    "created_at": "2025-11-28T15:39:47.789482"
+  },
+  {
+    "annotation_id": "b58dd62a-a52a-4ea4-b1fb-2dea0d21d21b",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000031",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_001",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.99,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.74,
+    "annotation_timestamp": "2025-11-28T15:39:47.789494",
+    "annotation_duration_seconds": 189,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "b502e2ac-0a49-4634-b83b-8ba2ee161d32",
+    "created_at": "2025-11-28T15:39:47.789496"
+  },
+  {
+    "annotation_id": "b5ebf7ea-5e42-4759-9f66-865456544bae",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000031",
+    "annotation_type": "outcome_label",
+    "annotator_id": "ANN_002",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.7,
+      "notes": "Annotation notes for outcome_label"
+    },
+    "annotation_confidence": 0.9,
+    "annotation_timestamp": "2025-11-28T15:39:47.789507",
+    "annotation_duration_seconds": 223,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "b502e2ac-0a49-4634-b83b-8ba2ee161d32",
+    "created_at": "2025-11-28T15:39:47.789509"
+  },
+  {
+    "annotation_id": "9001d0ba-18f2-4d9c-905f-acde6b499ba1",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000031",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_003",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.91,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.76,
+    "annotation_timestamp": "2025-11-28T15:39:47.789520",
+    "annotation_duration_seconds": 100,
+    "is_adjudicated": true,
+    "adjudication_result": {
+      "final_label": "negative"
+    },
+    "adjudicated_by": "ADJ_004",
+    "adjudicated_at": "2025-11-28T15:39:47.789523",
+    "iaa_group_id": "b502e2ac-0a49-4634-b83b-8ba2ee161d32",
+    "created_at": "2025-11-28T15:39:47.789524"
+  },
+  {
+    "annotation_id": "9ea07462-e3d0-48a1-90ce-7b83418e5971",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000032",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_000",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.92,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.96,
+    "annotation_timestamp": "2025-11-28T15:39:47.789542",
+    "annotation_duration_seconds": 249,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "4d4c427d-84ba-48ce-be8e-6b9b4256a83d",
+    "created_at": "2025-11-28T15:39:47.789544"
+  },
+  {
+    "annotation_id": "0dc234e8-7e3b-4db9-b689-969fd74932f5",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000032",
+    "annotation_type": "outcome_label",
+    "annotator_id": "ANN_001",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.77,
+      "notes": "Annotation notes for outcome_label"
+    },
+    "annotation_confidence": 0.82,
+    "annotation_timestamp": "2025-11-28T15:39:47.789554",
+    "annotation_duration_seconds": 217,
+    "is_adjudicated": true,
+    "adjudication_result": {
+      "final_label": "positive"
+    },
+    "adjudicated_by": "ADJ_004",
+    "adjudicated_at": "2025-11-28T15:39:47.789558",
+    "iaa_group_id": "4d4c427d-84ba-48ce-be8e-6b9b4256a83d",
+    "created_at": "2025-11-28T15:39:47.789559"
+  },
+  {
+    "annotation_id": "a24307ae-a613-4766-a850-eb8e975663aa",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000033",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_000",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.7,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.98,
+    "annotation_timestamp": "2025-11-28T15:39:47.789576",
+    "annotation_duration_seconds": 298,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "5829aeb1-034b-4ee6-bbdf-acfffe33bb29",
+    "created_at": "2025-11-28T15:39:47.789578"
+  },
+  {
+    "annotation_id": "9b2704ea-a923-425a-b37d-5b5585e9b6db",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000033",
+    "annotation_type": "outcome_label",
+    "annotator_id": "ANN_001",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.91,
+      "notes": "Annotation notes for outcome_label"
+    },
+    "annotation_confidence": 0.82,
+    "annotation_timestamp": "2025-11-28T15:39:47.789589",
+    "annotation_duration_seconds": 218,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "5829aeb1-034b-4ee6-bbdf-acfffe33bb29",
+    "created_at": "2025-11-28T15:39:47.789593"
+  },
+  {
+    "annotation_id": "ccae7f38-2039-404b-a823-423912923e15",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000033",
+    "annotation_type": "outcome_label",
+    "annotator_id": "ANN_002",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.97,
+      "notes": "Annotation notes for outcome_label"
+    },
+    "annotation_confidence": 0.97,
+    "annotation_timestamp": "2025-11-28T15:39:47.789606",
+    "annotation_duration_seconds": 168,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "5829aeb1-034b-4ee6-bbdf-acfffe33bb29",
+    "created_at": "2025-11-28T15:39:47.789608"
+  },
+  {
+    "annotation_id": "dee6be23-95e1-40b8-bd91-6609d338f32b",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000033",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_003",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.99,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.95,
+    "annotation_timestamp": "2025-11-28T15:39:47.789622",
+    "annotation_duration_seconds": 163,
+    "is_adjudicated": true,
+    "adjudication_result": {
+      "final_label": "positive"
+    },
+    "adjudicated_by": "ADJ_004",
+    "adjudicated_at": "2025-11-28T15:39:47.789625",
+    "iaa_group_id": "5829aeb1-034b-4ee6-bbdf-acfffe33bb29",
+    "created_at": "2025-11-28T15:39:47.789627"
+  },
+  {
+    "annotation_id": "71ded13c-c807-48d9-8dcb-5f3cfc1da914",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000034",
+    "annotation_type": "adverse_event",
+    "annotator_id": "ANN_000",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.77,
+      "notes": "Annotation notes for adverse_event"
+    },
+    "annotation_confidence": 0.72,
+    "annotation_timestamp": "2025-11-28T15:39:47.789650",
+    "annotation_duration_seconds": 285,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "9bdc2c67-f2b7-40da-861e-9b208b9e5366",
+    "created_at": "2025-11-28T15:39:47.789653"
+  },
+  {
+    "annotation_id": "f5f7494a-e871-4b09-bf40-2eaacdc84b2a",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000034",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_001",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.89,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.73,
+    "annotation_timestamp": "2025-11-28T15:39:47.789666",
+    "annotation_duration_seconds": 92,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "9bdc2c67-f2b7-40da-861e-9b208b9e5366",
+    "created_at": "2025-11-28T15:39:47.789669"
+  },
+  {
+    "annotation_id": "6f41a105-21c8-4893-af00-339e72b37595",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000034",
+    "annotation_type": "diagnosis_validation",
+    "annotator_id": "ANN_002",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.96,
+      "notes": "Annotation notes for diagnosis_validation"
+    },
+    "annotation_confidence": 0.87,
+    "annotation_timestamp": "2025-11-28T15:39:47.789679",
+    "annotation_duration_seconds": 199,
+    "is_adjudicated": false,
+    "adjudication_result": {
+      "final_label": "negative"
+    },
+    "adjudicated_by": "ADJ_005",
+    "adjudicated_at": "2025-11-28T15:39:47.789683",
+    "iaa_group_id": "9bdc2c67-f2b7-40da-861e-9b208b9e5366",
+    "created_at": "2025-11-28T15:39:47.789686"
+  },
+  {
+    "annotation_id": "58ecc45c-46f9-49af-b818-e7c275aeb6d0",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000035",
+    "annotation_type": "diagnosis_validation",
+    "annotator_id": "ANN_000",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.79,
+      "notes": "Annotation notes for diagnosis_validation"
+    },
+    "annotation_confidence": 0.76,
+    "annotation_timestamp": "2025-11-28T15:39:47.789705",
+    "annotation_duration_seconds": 47,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "940c320d-14de-4f28-990b-8e738303ec2d",
+    "created_at": "2025-11-28T15:39:47.789707"
+  },
+  {
+    "annotation_id": "0c1b8b47-0ddb-493c-8862-afc403d04ba5",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000035",
+    "annotation_type": "diagnosis_validation",
+    "annotator_id": "ANN_001",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.74,
+      "notes": "Annotation notes for diagnosis_validation"
+    },
+    "annotation_confidence": 0.85,
+    "annotation_timestamp": "2025-11-28T15:39:47.789718",
+    "annotation_duration_seconds": 81,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "940c320d-14de-4f28-990b-8e738303ec2d",
+    "created_at": "2025-11-28T15:39:47.789720"
+  },
+  {
+    "annotation_id": "954e14be-2b20-4a1f-938d-0ba186357d44",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000035",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_002",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.87,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.76,
+    "annotation_timestamp": "2025-11-28T15:39:47.789731",
+    "annotation_duration_seconds": 63,
+    "is_adjudicated": true,
+    "adjudication_result": {
+      "final_label": "positive"
+    },
+    "adjudicated_by": "ADJ_002",
+    "adjudicated_at": "2025-11-28T15:39:47.789734",
+    "iaa_group_id": "940c320d-14de-4f28-990b-8e738303ec2d",
+    "created_at": "2025-11-28T15:39:47.789735"
+  },
+  {
+    "annotation_id": "612ce258-db30-4e21-bb67-e81fdf49041e",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000036",
+    "annotation_type": "diagnosis_validation",
+    "annotator_id": "ANN_000",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.85,
+      "notes": "Annotation notes for diagnosis_validation"
+    },
+    "annotation_confidence": 0.97,
+    "annotation_timestamp": "2025-11-28T15:39:47.789752",
+    "annotation_duration_seconds": 102,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "afc39ab3-ae60-4f12-94c5-0026c99612a3",
+    "created_at": "2025-11-28T15:39:47.789754"
+  },
+  {
+    "annotation_id": "b65dcd43-1f65-4af9-a4b3-e1899e23e4a1",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000036",
+    "annotation_type": "diagnosis_validation",
+    "annotator_id": "ANN_001",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.84,
+      "notes": "Annotation notes for diagnosis_validation"
+    },
+    "annotation_confidence": 0.75,
+    "annotation_timestamp": "2025-11-28T15:39:47.789765",
+    "annotation_duration_seconds": 96,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "afc39ab3-ae60-4f12-94c5-0026c99612a3",
+    "created_at": "2025-11-28T15:39:47.789769"
+  },
+  {
+    "annotation_id": "0881ff2b-0e1f-4388-ba4c-0cd41f6f6ea8",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000036",
+    "annotation_type": "outcome_label",
+    "annotator_id": "ANN_002",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.81,
+      "notes": "Annotation notes for outcome_label"
+    },
+    "annotation_confidence": 0.98,
+    "annotation_timestamp": "2025-11-28T15:39:47.789780",
+    "annotation_duration_seconds": 49,
+    "is_adjudicated": false,
+    "adjudication_result": {
+      "final_label": "positive"
+    },
+    "adjudicated_by": "ADJ_001",
+    "adjudicated_at": "2025-11-28T15:39:47.789783",
+    "iaa_group_id": "afc39ab3-ae60-4f12-94c5-0026c99612a3",
+    "created_at": "2025-11-28T15:39:47.789785"
+  },
+  {
+    "annotation_id": "7eca9271-9edd-48ff-b0be-ab957e411c24",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000037",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_000",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.87,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.72,
+    "annotation_timestamp": "2025-11-28T15:39:47.789804",
+    "annotation_duration_seconds": 104,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "b391b265-9123-49d0-9e0e-172114749ebe",
+    "created_at": "2025-11-28T15:39:47.789807"
+  },
+  {
+    "annotation_id": "52b07c48-efe4-4de9-941d-6b049e9f59d5",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000037",
+    "annotation_type": "outcome_label",
+    "annotator_id": "ANN_001",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.8,
+      "notes": "Annotation notes for outcome_label"
+    },
+    "annotation_confidence": 0.71,
+    "annotation_timestamp": "2025-11-28T15:39:47.789817",
+    "annotation_duration_seconds": 38,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "b391b265-9123-49d0-9e0e-172114749ebe",
+    "created_at": "2025-11-28T15:39:47.789819"
+  },
+  {
+    "annotation_id": "55163aa3-e21b-4c24-9f39-1f0051f6d996",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000037",
+    "annotation_type": "adverse_event",
+    "annotator_id": "ANN_002",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.77,
+      "notes": "Annotation notes for adverse_event"
+    },
+    "annotation_confidence": 0.85,
+    "annotation_timestamp": "2025-11-28T15:39:47.789831",
+    "annotation_duration_seconds": 54,
+    "is_adjudicated": true,
+    "adjudication_result": {
+      "final_label": "negative"
+    },
+    "adjudicated_by": "ADJ_004",
+    "adjudicated_at": "2025-11-28T15:39:47.789834",
+    "iaa_group_id": "b391b265-9123-49d0-9e0e-172114749ebe",
+    "created_at": "2025-11-28T15:39:47.789836"
+  },
+  {
+    "annotation_id": "8819663d-2ad8-493e-b292-6947e014179e",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000038",
+    "annotation_type": "diagnosis_validation",
+    "annotator_id": "ANN_000",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.82,
+      "notes": "Annotation notes for diagnosis_validation"
+    },
+    "annotation_confidence": 0.98,
+    "annotation_timestamp": "2025-11-28T15:39:47.789857",
+    "annotation_duration_seconds": 167,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "3e85a3cf-13a4-4fd1-9aeb-735ccadb9456",
+    "created_at": "2025-11-28T15:39:47.789859"
+  },
+  {
+    "annotation_id": "6bfafed9-131b-4ee6-83cb-91b7be5d443c",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000038",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_001",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.81,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.93,
+    "annotation_timestamp": "2025-11-28T15:39:47.789870",
+    "annotation_duration_seconds": 270,
+    "is_adjudicated": true,
+    "adjudication_result": {
+      "final_label": "positive"
+    },
+    "adjudicated_by": "ADJ_003",
+    "adjudicated_at": "2025-11-28T15:39:47.789873",
+    "iaa_group_id": "3e85a3cf-13a4-4fd1-9aeb-735ccadb9456",
+    "created_at": "2025-11-28T15:39:47.789875"
+  },
+  {
+    "annotation_id": "1e814625-d6bd-4cd3-ac49-90ae222864c2",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000039",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_000",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.88,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.83,
+    "annotation_timestamp": "2025-11-28T15:39:47.789896",
+    "annotation_duration_seconds": 155,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "7ef7d0a6-f081-4fca-8271-127c3c3af03b",
+    "created_at": "2025-11-28T15:39:47.789898"
+  },
+  {
+    "annotation_id": "aba5c1da-3de9-40b9-9a57-0eaa2f1a898d",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000039",
+    "annotation_type": "adverse_event",
+    "annotator_id": "ANN_001",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.79,
+      "notes": "Annotation notes for adverse_event"
+    },
+    "annotation_confidence": 0.78,
+    "annotation_timestamp": "2025-11-28T15:39:47.789909",
+    "annotation_duration_seconds": 297,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "7ef7d0a6-f081-4fca-8271-127c3c3af03b",
+    "created_at": "2025-11-28T15:39:47.789911"
+  },
+  {
+    "annotation_id": "92a1c211-fc62-4b40-b857-d9adcc8cb946",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000039",
+    "annotation_type": "diagnosis_validation",
+    "annotator_id": "ANN_002",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.97,
+      "notes": "Annotation notes for diagnosis_validation"
+    },
+    "annotation_confidence": 0.78,
+    "annotation_timestamp": "2025-11-28T15:39:47.789922",
+    "annotation_duration_seconds": 285,
+    "is_adjudicated": true,
+    "adjudication_result": {
+      "final_label": "negative"
+    },
+    "adjudicated_by": "ADJ_002",
+    "adjudicated_at": "2025-11-28T15:39:47.789925",
+    "iaa_group_id": "7ef7d0a6-f081-4fca-8271-127c3c3af03b",
+    "created_at": "2025-11-28T15:39:47.789926"
+  },
+  {
+    "annotation_id": "f8dbf03d-8de2-4699-a873-c9f9c7314f64",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000040",
+    "annotation_type": "adverse_event",
+    "annotator_id": "ANN_000",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.98,
+      "notes": "Annotation notes for adverse_event"
+    },
+    "annotation_confidence": 0.83,
+    "annotation_timestamp": "2025-11-28T15:39:47.789944",
+    "annotation_duration_seconds": 133,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "556864a6-206a-49aa-8629-4002ca74c24e",
+    "created_at": "2025-11-28T15:39:47.789948"
+  },
+  {
+    "annotation_id": "b2f6d27f-71d9-4435-8949-213f74a1eb8c",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000040",
+    "annotation_type": "adverse_event",
+    "annotator_id": "ANN_001",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.72,
+      "notes": "Annotation notes for adverse_event"
+    },
+    "annotation_confidence": 0.98,
+    "annotation_timestamp": "2025-11-28T15:39:47.789959",
+    "annotation_duration_seconds": 265,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "556864a6-206a-49aa-8629-4002ca74c24e",
+    "created_at": "2025-11-28T15:39:47.789961"
+  },
+  {
+    "annotation_id": "bd3aa5cc-ad29-4cc3-ae89-f59d8f0a6abd",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000040",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_002",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.86,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.85,
+    "annotation_timestamp": "2025-11-28T15:39:47.789972",
+    "annotation_duration_seconds": 283,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "556864a6-206a-49aa-8629-4002ca74c24e",
+    "created_at": "2025-11-28T15:39:47.789974"
+  },
+  {
+    "annotation_id": "d1954c4a-a776-4ee7-b858-35f788b53ea8",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000040",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_003",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.93,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.75,
+    "annotation_timestamp": "2025-11-28T15:39:47.789986",
+    "annotation_duration_seconds": 145,
+    "is_adjudicated": true,
+    "adjudication_result": {
+      "final_label": "positive"
+    },
+    "adjudicated_by": "ADJ_002",
+    "adjudicated_at": "2025-11-28T15:39:47.789989",
+    "iaa_group_id": "556864a6-206a-49aa-8629-4002ca74c24e",
+    "created_at": "2025-11-28T15:39:47.789991"
+  },
+  {
+    "annotation_id": "a040299a-a3c3-4219-8d3a-ec2a3422581b",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000041",
+    "annotation_type": "diagnosis_validation",
+    "annotator_id": "ANN_000",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.91,
+      "notes": "Annotation notes for diagnosis_validation"
+    },
+    "annotation_confidence": 0.82,
+    "annotation_timestamp": "2025-11-28T15:39:47.790008",
+    "annotation_duration_seconds": 161,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "2ae571a7-69c6-4663-b6df-3c767e63c52f",
+    "created_at": "2025-11-28T15:39:47.790011"
+  },
+  {
+    "annotation_id": "a37eeef9-c7ba-4063-bc96-67ee4d1d5f09",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000041",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_001",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.91,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.83,
+    "annotation_timestamp": "2025-11-28T15:39:47.790021",
+    "annotation_duration_seconds": 268,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "2ae571a7-69c6-4663-b6df-3c767e63c52f",
+    "created_at": "2025-11-28T15:39:47.790023"
+  },
+  {
+    "annotation_id": "eb587048-5767-4847-bcf7-18bcbf823c7d",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000041",
+    "annotation_type": "adverse_event",
+    "annotator_id": "ANN_002",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.8,
+      "notes": "Annotation notes for adverse_event"
+    },
+    "annotation_confidence": 0.73,
+    "annotation_timestamp": "2025-11-28T15:39:47.790034",
+    "annotation_duration_seconds": 194,
+    "is_adjudicated": false,
+    "adjudication_result": {
+      "final_label": "negative"
+    },
+    "adjudicated_by": "ADJ_001",
+    "adjudicated_at": "2025-11-28T15:39:47.790037",
+    "iaa_group_id": "2ae571a7-69c6-4663-b6df-3c767e63c52f",
+    "created_at": "2025-11-28T15:39:47.790039"
+  },
+  {
+    "annotation_id": "bfdf498f-c925-4d39-b099-25b9bab8100a",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000042",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_000",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.84,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.73,
+    "annotation_timestamp": "2025-11-28T15:39:47.790056",
+    "annotation_duration_seconds": 122,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "c09fb1ca-4188-4097-a3e0-9063eab0f607",
+    "created_at": "2025-11-28T15:39:47.790058"
+  },
+  {
+    "annotation_id": "71990863-aa56-458b-8ee7-7806c2e53147",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000042",
+    "annotation_type": "outcome_label",
+    "annotator_id": "ANN_001",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.79,
+      "notes": "Annotation notes for outcome_label"
+    },
+    "annotation_confidence": 0.98,
+    "annotation_timestamp": "2025-11-28T15:39:47.790069",
+    "annotation_duration_seconds": 154,
+    "is_adjudicated": false,
+    "adjudication_result": {
+      "final_label": "negative"
+    },
+    "adjudicated_by": "ADJ_003",
+    "adjudicated_at": "2025-11-28T15:39:47.790072",
+    "iaa_group_id": "c09fb1ca-4188-4097-a3e0-9063eab0f607",
+    "created_at": "2025-11-28T15:39:47.790073"
+  },
+  {
+    "annotation_id": "4393999f-7d89-42d1-8088-a53f1d1a71c7",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000043",
+    "annotation_type": "outcome_label",
+    "annotator_id": "ANN_000",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.93,
+      "notes": "Annotation notes for outcome_label"
+    },
+    "annotation_confidence": 0.83,
+    "annotation_timestamp": "2025-11-28T15:39:47.790094",
+    "annotation_duration_seconds": 33,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "d0dffe23-2473-4bb3-b6f2-9e9dc600d866",
+    "created_at": "2025-11-28T15:39:47.790096"
+  },
+  {
+    "annotation_id": "38ea4bcf-58e8-400b-bb1e-4fa74aa64bcc",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000043",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_001",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.82,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.96,
+    "annotation_timestamp": "2025-11-28T15:39:47.790107",
+    "annotation_duration_seconds": 150,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "d0dffe23-2473-4bb3-b6f2-9e9dc600d866",
+    "created_at": "2025-11-28T15:39:47.790111"
+  },
+  {
+    "annotation_id": "a8d36317-b396-4307-b571-01535e25548f",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000043",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_002",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.96,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.93,
+    "annotation_timestamp": "2025-11-28T15:39:47.790121",
+    "annotation_duration_seconds": 275,
+    "is_adjudicated": true,
+    "adjudication_result": {
+      "final_label": "negative"
+    },
+    "adjudicated_by": "ADJ_001",
+    "adjudicated_at": "2025-11-28T15:39:47.790125",
+    "iaa_group_id": "d0dffe23-2473-4bb3-b6f2-9e9dc600d866",
+    "created_at": "2025-11-28T15:39:47.790126"
+  },
+  {
+    "annotation_id": "24e5d8b7-694d-4672-aaac-1c63b429dc37",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000044",
+    "annotation_type": "adverse_event",
+    "annotator_id": "ANN_000",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.83,
+      "notes": "Annotation notes for adverse_event"
+    },
+    "annotation_confidence": 0.78,
+    "annotation_timestamp": "2025-11-28T15:39:47.790144",
+    "annotation_duration_seconds": 127,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "0de9674e-2855-4b85-a2b0-08ffded46b59",
+    "created_at": "2025-11-28T15:39:47.790146"
+  },
+  {
+    "annotation_id": "88e8d801-91d3-4855-a9d0-c801a5acc1c4",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000044",
+    "annotation_type": "outcome_label",
+    "annotator_id": "ANN_001",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.81,
+      "notes": "Annotation notes for outcome_label"
+    },
+    "annotation_confidence": 0.74,
+    "annotation_timestamp": "2025-11-28T15:39:47.790156",
+    "annotation_duration_seconds": 124,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "0de9674e-2855-4b85-a2b0-08ffded46b59",
+    "created_at": "2025-11-28T15:39:47.790158"
+  },
+  {
+    "annotation_id": "df2b5221-c723-4498-8edd-240f97225027",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000044",
+    "annotation_type": "outcome_label",
+    "annotator_id": "ANN_002",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.7,
+      "notes": "Annotation notes for outcome_label"
+    },
+    "annotation_confidence": 0.78,
+    "annotation_timestamp": "2025-11-28T15:39:47.790168",
+    "annotation_duration_seconds": 196,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "0de9674e-2855-4b85-a2b0-08ffded46b59",
+    "created_at": "2025-11-28T15:39:47.790170"
+  },
+  {
+    "annotation_id": "7c742867-0d53-4e52-a172-8f0a67c17958",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000044",
+    "annotation_type": "diagnosis_validation",
+    "annotator_id": "ANN_003",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.85,
+      "notes": "Annotation notes for diagnosis_validation"
+    },
+    "annotation_confidence": 0.98,
+    "annotation_timestamp": "2025-11-28T15:39:47.790181",
+    "annotation_duration_seconds": 54,
+    "is_adjudicated": true,
+    "adjudication_result": {
+      "final_label": "positive"
+    },
+    "adjudicated_by": "ADJ_005",
+    "adjudicated_at": "2025-11-28T15:39:47.790185",
+    "iaa_group_id": "0de9674e-2855-4b85-a2b0-08ffded46b59",
+    "created_at": "2025-11-28T15:39:47.790187"
+  },
+  {
+    "annotation_id": "140f5da0-dad4-4823-8a49-357460fa4593",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000045",
+    "annotation_type": "outcome_label",
+    "annotator_id": "ANN_000",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.93,
+      "notes": "Annotation notes for outcome_label"
+    },
+    "annotation_confidence": 0.71,
+    "annotation_timestamp": "2025-11-28T15:39:47.790222",
+    "annotation_duration_seconds": 264,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "4688890f-e401-444d-bf23-56cb963c314c",
+    "created_at": "2025-11-28T15:39:47.790225"
+  },
+  {
+    "annotation_id": "4a8af2e7-a0eb-4e56-9c50-e969a85803c6",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000045",
+    "annotation_type": "outcome_label",
+    "annotator_id": "ANN_001",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.85,
+      "notes": "Annotation notes for outcome_label"
+    },
+    "annotation_confidence": 0.71,
+    "annotation_timestamp": "2025-11-28T15:39:47.790242",
+    "annotation_duration_seconds": 66,
+    "is_adjudicated": false,
+    "adjudication_result": {
+      "final_label": "negative"
+    },
+    "adjudicated_by": "ADJ_005",
+    "adjudicated_at": "2025-11-28T15:39:47.790246",
+    "iaa_group_id": "4688890f-e401-444d-bf23-56cb963c314c",
+    "created_at": "2025-11-28T15:39:47.790247"
+  },
+  {
+    "annotation_id": "2672dc74-4ecd-4f8a-b140-b2481c169e73",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000046",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_000",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.82,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.75,
+    "annotation_timestamp": "2025-11-28T15:39:47.790294",
+    "annotation_duration_seconds": 53,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "1ae93bc9-c9be-45a4-9f78-47f67fe1ac24",
+    "created_at": "2025-11-28T15:39:47.790298"
+  },
+  {
+    "annotation_id": "6d7f8e9f-aecd-4b2f-85c8-fe5ff3063244",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000046",
+    "annotation_type": "diagnosis_validation",
+    "annotator_id": "ANN_001",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.93,
+      "notes": "Annotation notes for diagnosis_validation"
+    },
+    "annotation_confidence": 0.76,
+    "annotation_timestamp": "2025-11-28T15:39:47.790326",
+    "annotation_duration_seconds": 249,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "1ae93bc9-c9be-45a4-9f78-47f67fe1ac24",
+    "created_at": "2025-11-28T15:39:47.790329"
+  },
+  {
+    "annotation_id": "f6d773ba-e7f5-4a60-be99-837a74c886db",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000046",
+    "annotation_type": "diagnosis_validation",
+    "annotator_id": "ANN_002",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.89,
+      "notes": "Annotation notes for diagnosis_validation"
+    },
+    "annotation_confidence": 0.78,
+    "annotation_timestamp": "2025-11-28T15:39:47.790345",
+    "annotation_duration_seconds": 78,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "1ae93bc9-c9be-45a4-9f78-47f67fe1ac24",
+    "created_at": "2025-11-28T15:39:47.790351"
+  },
+  {
+    "annotation_id": "bccf10f6-903b-4bb8-bae1-8c8e64a09f4d",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000046",
+    "annotation_type": "adverse_event",
+    "annotator_id": "ANN_003",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.71,
+      "notes": "Annotation notes for adverse_event"
+    },
+    "annotation_confidence": 0.79,
+    "annotation_timestamp": "2025-11-28T15:39:47.790367",
+    "annotation_duration_seconds": 227,
+    "is_adjudicated": false,
+    "adjudication_result": {
+      "final_label": "negative"
+    },
+    "adjudicated_by": "ADJ_002",
+    "adjudicated_at": "2025-11-28T15:39:47.790371",
+    "iaa_group_id": "1ae93bc9-c9be-45a4-9f78-47f67fe1ac24",
+    "created_at": "2025-11-28T15:39:47.790372"
+  },
+  {
+    "annotation_id": "5ce4b41d-c3e2-4946-8d61-b523777291e1",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000047",
+    "annotation_type": "outcome_label",
+    "annotator_id": "ANN_000",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.92,
+      "notes": "Annotation notes for outcome_label"
+    },
+    "annotation_confidence": 0.74,
+    "annotation_timestamp": "2025-11-28T15:39:47.790394",
+    "annotation_duration_seconds": 259,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "44712f4e-8755-4b59-bea8-680cccae868f",
+    "created_at": "2025-11-28T15:39:47.790396"
+  },
+  {
+    "annotation_id": "12a4c0c2-6be0-4d07-ad7a-9635549da9a3",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000047",
+    "annotation_type": "outcome_label",
+    "annotator_id": "ANN_001",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.86,
+      "notes": "Annotation notes for outcome_label"
+    },
+    "annotation_confidence": 0.8,
+    "annotation_timestamp": "2025-11-28T15:39:47.790407",
+    "annotation_duration_seconds": 58,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "44712f4e-8755-4b59-bea8-680cccae868f",
+    "created_at": "2025-11-28T15:39:47.790409"
+  },
+  {
+    "annotation_id": "442f3cd8-1c24-4b89-ada2-d4e90b32a11b",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000047",
+    "annotation_type": "treatment_response",
+    "annotator_id": "ANN_002",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.71,
+      "notes": "Annotation notes for treatment_response"
+    },
+    "annotation_confidence": 0.8,
+    "annotation_timestamp": "2025-11-28T15:39:47.790420",
+    "annotation_duration_seconds": 209,
+    "is_adjudicated": true,
+    "adjudication_result": {
+      "final_label": "positive"
+    },
+    "adjudicated_by": "ADJ_001",
+    "adjudicated_at": "2025-11-28T15:39:47.790424",
+    "iaa_group_id": "44712f4e-8755-4b59-bea8-680cccae868f",
+    "created_at": "2025-11-28T15:39:47.790425"
+  },
+  {
+    "annotation_id": "f5d222f2-51cb-4790-81e4-6fd2c7bb1060",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000048",
+    "annotation_type": "diagnosis_validation",
+    "annotator_id": "ANN_000",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.9,
+      "notes": "Annotation notes for diagnosis_validation"
+    },
+    "annotation_confidence": 0.96,
+    "annotation_timestamp": "2025-11-28T15:39:47.790443",
+    "annotation_duration_seconds": 67,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "7a78cb8b-6031-4ae2-92e6-ceeaf8bf7fbf",
+    "created_at": "2025-11-28T15:39:47.790446"
+  },
+  {
+    "annotation_id": "fd73ac90-da4c-4a04-a042-93e48a4e1e73",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000048",
+    "annotation_type": "adverse_event",
+    "annotator_id": "ANN_001",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.93,
+      "notes": "Annotation notes for adverse_event"
+    },
+    "annotation_confidence": 0.96,
+    "annotation_timestamp": "2025-11-28T15:39:47.790456",
+    "annotation_duration_seconds": 129,
+    "is_adjudicated": true,
+    "adjudication_result": {
+      "final_label": "negative"
+    },
+    "adjudicated_by": "ADJ_001",
+    "adjudicated_at": "2025-11-28T15:39:47.790460",
+    "iaa_group_id": "7a78cb8b-6031-4ae2-92e6-ceeaf8bf7fbf",
+    "created_at": "2025-11-28T15:39:47.790461"
+  },
+  {
+    "annotation_id": "2ddcfc9a-b108-4d31-aad9-0aac06cabe93",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000049",
+    "annotation_type": "diagnosis_validation",
+    "annotator_id": "ANN_000",
+    "annotator_role": "data_scientist",
+    "annotation_value": {
+      "label": "positive",
+      "confidence": 0.82,
+      "notes": "Annotation notes for diagnosis_validation"
+    },
+    "annotation_confidence": 0.85,
+    "annotation_timestamp": "2025-11-28T15:39:47.790481",
+    "annotation_duration_seconds": 194,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "48208374-9c10-4a1f-b7d7-c10ca188199d",
+    "created_at": "2025-11-28T15:39:47.790483"
+  },
+  {
+    "annotation_id": "ddba1aac-59f0-4872-9fe2-3e22e505880d",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000049",
+    "annotation_type": "adverse_event",
+    "annotator_id": "ANN_001",
+    "annotator_role": "physician",
+    "annotation_value": {
+      "label": "uncertain",
+      "confidence": 0.93,
+      "notes": "Annotation notes for adverse_event"
+    },
+    "annotation_confidence": 0.85,
+    "annotation_timestamp": "2025-11-28T15:39:47.790494",
+    "annotation_duration_seconds": 278,
+    "is_adjudicated": false,
+    "adjudication_result": null,
+    "adjudicated_by": null,
+    "adjudicated_at": null,
+    "iaa_group_id": "48208374-9c10-4a1f-b7d7-c10ca188199d",
+    "created_at": "2025-11-28T15:39:47.790496"
+  },
+  {
+    "annotation_id": "f5df2272-fbdd-42b7-9aad-7965f6f75328",
+    "entity_type": "patient_journey",
+    "entity_id": "PJ_000049",
+    "annotation_type": "diagnosis_validation",
+    "annotator_id": "ANN_002",
+    "annotator_role": "domain_expert",
+    "annotation_value": {
+      "label": "negative",
+      "confidence": 0.73,
+      "notes": "Annotation notes for diagnosis_validation"
+    },
+    "annotation_confidence": 0.9,
+    "annotation_timestamp": "2025-11-28T15:39:47.790506",
+    "annotation_duration_seconds": 177,
+    "is_adjudicated": false,
+    "adjudication_result": {
+      "final_label": "negative"
+    },
+    "adjudicated_by": "ADJ_002",
+    "adjudicated_at": "2025-11-28T15:39:47.790510",
+    "iaa_group_id": "48208374-9c10-4a1f-b7d7-c10ca188199d",
+    "created_at": "2025-11-28T15:39:47.790511"
+  }
+]
