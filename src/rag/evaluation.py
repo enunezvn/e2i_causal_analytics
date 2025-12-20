@@ -417,13 +417,20 @@ class RAGASEvaluator:
                 ],
             )
 
-            # Extract scores
+            # Extract scores and handle NaN values
+            import math
             scores = result.to_pandas().iloc[0].to_dict()
 
-            faith = scores.get("faithfulness", 0.0)
-            relevancy = scores.get("answer_relevancy", 0.0)
-            precision = scores.get("context_precision", 0.0)
-            recall = scores.get("context_recall", 0.0)
+            def safe_score(value: float, default: float = 0.0) -> float:
+                """Convert NaN/None to default value."""
+                if value is None or (isinstance(value, float) and math.isnan(value)):
+                    return default
+                return float(value)
+
+            faith = safe_score(scores.get("faithfulness"), 0.0)
+            relevancy = safe_score(scores.get("answer_relevancy"), 0.0)
+            precision = safe_score(scores.get("context_precision"), 0.0)
+            recall = safe_score(scores.get("context_recall"), 0.0)
 
             overall = (faith + relevancy + precision + recall) / 4
 
