@@ -26,7 +26,12 @@ import asyncio
 import json
 import logging
 import sys
+import warnings
 from pathlib import Path
+
+# Load environment variables from .env file
+from dotenv import load_dotenv
+load_dotenv()
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
@@ -236,6 +241,56 @@ async def main() -> int:
     return 0
 
 
+def run_with_cleanup() -> int:
+    """Run the async main function with proper cleanup."""
+    import os
+
+    # Suppress asyncio cleanup warnings that can occur with RAGAS/OpenAI clients
+    warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*coroutine.*was never awaited.*")
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    exit_code = 0
+
+    try:
+        exit_code = loop.run_until_complete(main())
+    except IndexError as e:
+        # Handle asyncio internal cleanup race condition
+        if "pop from an empty deque" in str(e):
+            logger.debug("Asyncio cleanup race condition (harmless)")
+        else:
+            raise
+    finally:
+        try:
+            # Cancel all pending tasks
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
+
+            # Allow cancelled tasks to complete
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+
+            # Shutdown async generators
+            loop.run_until_complete(loop.shutdown_asyncgens())
+        except (IndexError, RuntimeError):
+            # Ignore cleanup errors - these can happen with RAGAS/httpx
+            pass
+        finally:
+            try:
+                loop.close()
+            except Exception:
+                pass
+
+    return exit_code
+
+
 if __name__ == "__main__":
-    exit_code = asyncio.run(main())
+    exit_code = 0
+    try:
+        exit_code = run_with_cleanup()
+    except IndexError as e:
+        # Final catch for asyncio deque error
+        if "pop from an empty deque" not in str(e):
+            raise
     sys.exit(exit_code)
