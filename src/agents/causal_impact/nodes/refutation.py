@@ -5,6 +5,10 @@ Runs multiple refutation tests to validate causal effect.
 Version: 4.3
 Integration: Uses RefutationRunner from src.causal_engine for DoWhy-based validation
 Persistence: Uses CausalValidationRepository for database storage
+
+Phase 4 Integration:
+- Logs ValidationOutcome to Feedback Learner for learning from failures
+- Creates failure patterns for ExperimentKnowledgeStore queries
 """
 
 import time
@@ -20,6 +24,9 @@ from src.causal_engine import (
     RefutationSuite,
     GateDecision,
     DOWHY_AVAILABLE,
+    # Phase 4: ValidationOutcome for Feedback Learner integration
+    create_validation_outcome,
+    log_validation_outcome,
 )
 from src.repositories.causal_validation import CausalValidationRepository
 
@@ -131,6 +138,30 @@ class RefutationNode:
                         f"Failed to persist validation results: {persist_error}"
                     )
 
+            # Phase 4: Log ValidationOutcome for Feedback Learner integration
+            validation_outcome_id = None
+            try:
+                validation_outcome = create_validation_outcome(
+                    suite=suite,
+                    agent_context={
+                        "agent": "causal_impact",
+                        "node": "refutation",
+                        "query_id": query_id,
+                        "agent_activity_id": state.get("agent_activity_id"),
+                    },
+                    dag_hash=state.get("dag_hash"),
+                    sample_size=estimation_result.get("n_samples"),
+                )
+                validation_outcome_id = await log_validation_outcome(validation_outcome)
+                logger.info(
+                    f"Logged validation outcome {validation_outcome_id} for Feedback Learner: "
+                    f"{validation_outcome.outcome_type.value}"
+                )
+            except Exception as learner_error:
+                logger.warning(
+                    f"Failed to log validation outcome for Feedback Learner: {learner_error}"
+                )
+
             latency_ms = (time.time() - start_time) * 1000
 
             # Determine next phase based on gate decision
@@ -170,6 +201,8 @@ class RefutationNode:
                 "refutation_confidence": suite.confidence_score,
                 # Persistence tracking
                 "validation_ids": validation_ids,
+                # Phase 4: Feedback Learner tracking
+                "validation_outcome_id": validation_outcome_id,
             }
 
             if status == "failed":

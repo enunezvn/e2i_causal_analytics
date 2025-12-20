@@ -8,6 +8,8 @@ This module provides:
 - Gate decision logic (proceed/review/block)
 - Database-aligned ENUMs and dataclasses
 - DAG version hashing for expert review workflow
+- ValidationOutcome: Feedback Learner integration (Phase 4)
+- ExperimentKnowledgeStore: Past failure queries (Phase 4)
 """
 
 from .refutation_runner import (
@@ -42,6 +44,30 @@ from .expert_review_gate import (
     check_dag_approval,
 )
 
+from .validation_outcome import (
+    # ENUMs
+    ValidationOutcomeType,
+    FailureCategory,
+    # Dataclasses
+    ValidationOutcome,
+    ValidationFailurePattern,
+    # Functions
+    create_validation_outcome,
+    extract_failure_patterns,
+)
+
+from .validation_outcome_store import (
+    # Store classes
+    ValidationOutcomeStoreBase,
+    InMemoryValidationOutcomeStore,
+    ExperimentKnowledgeStore,
+    ValidationLearning,
+    # Global accessors
+    get_validation_outcome_store,
+    get_experiment_knowledge_store,
+    log_validation_outcome,
+)
+
 __all__ = [
     # ENUMs
     "RefutationStatus",
@@ -68,4 +94,19 @@ __all__ = [
     "ReviewGateDecision",
     "ReviewGateResult",
     "check_dag_approval",
+    # Phase 4: Validation Outcomes
+    "ValidationOutcomeType",
+    "FailureCategory",
+    "ValidationOutcome",
+    "ValidationFailurePattern",
+    "create_validation_outcome",
+    "extract_failure_patterns",
+    # Phase 4: Outcome Store
+    "ValidationOutcomeStoreBase",
+    "InMemoryValidationOutcomeStore",
+    "ExperimentKnowledgeStore",
+    "ValidationLearning",
+    "get_validation_outcome_store",
+    "get_experiment_knowledge_store",
+    "log_validation_outcome",
 ]
