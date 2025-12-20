@@ -1,3 +1,6 @@
+# RAGAS Evaluation Workflow
+# Required Secret: OPENAI_API_KEY must be configured in repository settings → Secrets and variables → Actions.
+
 name: RAGAS Evaluation
 
 on:
