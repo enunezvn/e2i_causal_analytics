@@ -522,3 +522,133 @@ def _generate_placeholder_response(
     }
 
     return responses.get(query_type, responses[QueryType.GENERAL])
+
+
+# =============================================================================
+# DSPy-ENHANCED RAG ENDPOINT
+# =============================================================================
+
+class CognitiveRAGRequest(BaseModel):
+    """Request for DSPy-enhanced cognitive RAG search."""
+    query: str = Field(..., min_length=1, max_length=5000, description="Natural language query")
+    conversation_id: Optional[str] = Field(None, description="Conversation/session ID for context continuity")
+    conversation_history: Optional[str] = Field(None, description="Compressed conversation history")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "query": "Why did Kisqali adoption increase in the Northeast last quarter?",
+                "conversation_id": "session-abc-123"
+            }
+        }
+
+
+class CognitiveRAGResponse(BaseModel):
+    """Response from DSPy-enhanced cognitive RAG search."""
+    response: str = Field(..., description="Synthesized natural language response")
+    evidence: List[Dict[str, Any]] = Field(default_factory=list, description="Evidence pieces gathered")
+    hop_count: int = Field(default=0, description="Number of retrieval hops performed")
+    visualization_config: Dict[str, Any] = Field(default_factory=dict, description="Chart configuration if applicable")
+    routed_agents: List[str] = Field(default_factory=list, description="Agents recommended for further processing")
+    entities: List[str] = Field(default_factory=list, description="Extracted entities")
+    intent: str = Field(default="", description="Detected query intent")
+    rewritten_query: str = Field(default="", description="DSPy-optimized query rewrite")
+    dspy_signals: List[Dict[str, Any]] = Field(default_factory=list, description="Training signals for optimization")
+    worth_remembering: bool = Field(default=False, description="Whether this exchange should be stored in long-term memory")
+    latency_ms: float = Field(..., description="Total processing time in milliseconds")
+    error: Optional[str] = Field(None, description="Error message if processing failed")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "response": "Kisqali adoption increased 15% in the Northeast due to increased oncologist engagement and successful speaker programs.",
+                "evidence": [{"content": "Northeast TRx up 15%...", "source": "agent_activities"}],
+                "hop_count": 2,
+                "entities": ["Kisqali", "Northeast"],
+                "intent": "causal",
+                "latency_ms": 1250.5
+            }
+        }
+
+
+@router.post("/rag", response_model=CognitiveRAGResponse)
+async def cognitive_rag_search(request: CognitiveRAGRequest) -> CognitiveRAGResponse:
+    """
+    Execute DSPy-enhanced 4-phase cognitive RAG workflow.
+
+    This endpoint provides LLM-powered multi-hop reasoning through:
+
+    **Phase 1 - Summarizer**:
+    - Query rewriting for optimal retrieval
+    - Entity extraction (brands, regions, KPIs)
+    - Intent classification
+
+    **Phase 2 - Investigator**:
+    - Multi-hop evidence gathering
+    - Adaptive retrieval across episodic, semantic, procedural memory
+    - Evidence relevance scoring
+
+    **Phase 3 - Agent**:
+    - Evidence synthesis into coherent response
+    - Agent routing for specialized processing
+    - Visualization configuration
+
+    **Phase 4 - Reflector**:
+    - Memory worthiness assessment
+    - Fact extraction for long-term storage
+    - DSPy training signal collection
+
+    **Performance**: Typical latency < 2s for simple queries.
+
+    **Requirements**: ANTHROPIC_API_KEY environment variable must be set.
+
+    Returns:
+        CognitiveRAGResponse with synthesized response, evidence trail,
+        and optimization signals.
+    """
+    try:
+        from src.rag.causal_rag import CausalRAG
+
+        # Create CausalRAG instance
+        rag = CausalRAG()
+
+        # Execute cognitive search
+        result = await rag.cognitive_search(
+            query=request.query,
+            conversation_id=request.conversation_id,
+            conversation_history=request.conversation_history
+        )
+
+        return CognitiveRAGResponse(
+            response=result.get("response", ""),
+            evidence=result.get("evidence", []),
+            hop_count=result.get("hop_count", 0),
+            visualization_config=result.get("visualization_config", {}),
+            routed_agents=result.get("routed_agents", []),
+            entities=result.get("entities", []),
+            intent=result.get("intent", ""),
+            rewritten_query=result.get("rewritten_query", request.query),
+            dspy_signals=result.get("dspy_signals", []),
+            worth_remembering=result.get("worth_remembering", False),
+            latency_ms=result.get("latency_ms", 0.0),
+            error=result.get("error")
+        )
+
+    except ImportError as e:
+        logger.error(f"Cognitive RAG import error: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail=f"Cognitive RAG dependencies not available: {str(e)}"
+        )
+    except ValueError as e:
+        logger.error(f"Cognitive RAG configuration error: {e}")
+        raise HTTPException(
+            status_code=400,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error(f"Cognitive RAG search failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Cognitive RAG search failed: {str(e)[:200]}"
+        )
