@@ -1,34 +1,92 @@
 """
-Query optimization with domain context.
+Query optimization with domain context and LLM enhancement.
 
 Expands queries with domain knowledge:
-- Add synonyms from domain_vocabulary.yaml
-- Include related KPIs
-- Add temporal context
+- Rule-based: Add synonyms from domain_vocabulary.yaml
+- LLM-based: Claude-powered semantic expansion
+- HyDE: Hypothetical Document Embeddings for improved retrieval
+
+CRITICAL: This is for OPERATIONAL queries only.
+NOT for: Medical/clinical query expansion.
 """
 
-from typing import Dict, List, Optional
+import asyncio
+import hashlib
+import logging
+import os
+import time
+from typing import Dict, List, Optional, Any, Union
+
+import anthropic
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type,
+)
+
+logger = logging.getLogger(__name__)
+
+# Expansion cache for repeated queries
+_EXPANSION_CACHE: Dict[str, Dict[str, Any]] = {}
+_CACHE_MAX_SIZE = 200
+_CACHE_TTL_SECONDS = 3600  # 1 hour
 
 
 class QueryOptimizer:
     """
-    Expand queries with domain knowledge for better retrieval.
+    Expand queries with domain knowledge and LLM enhancement for better retrieval.
+
+    Features:
+    1. Rule-based expansion with domain synonyms (fast, no API call)
+    2. LLM-based semantic expansion via Claude (richer understanding)
+    3. HyDE: Generate hypothetical documents for embedding-based retrieval
 
     Example:
-        "TRx for Kisqali" → "Total prescriptions TRx Kisqali breast cancer HR+ conversion"
+        Rule-based: "TRx for Kisqali" → "Total prescriptions TRx Kisqali breast cancer"
+        LLM-based:  "TRx for Kisqali" → "Kisqali total prescription volume HR+ breast
+                    cancer market performance ribociclib commercial adoption trends"
+        HyDE:       "TRx for Kisqali" → [hypothetical document about Kisqali prescriptions]
     """
 
-    def __init__(self, vocabulary_path: Optional[str] = None):
+    def __init__(
+        self,
+        vocabulary_path: Optional[str] = None,
+        model: str = "claude-sonnet-4-20250514",
+        max_tokens: int = 256,
+        temperature: float = 0.3,
+        cache_enabled: bool = True,
+    ):
         """
-        Initialize with domain vocabulary.
+        Initialize with domain vocabulary and LLM settings.
 
         Args:
             vocabulary_path: Path to domain_vocabulary.yaml
+            model: Claude model for LLM expansion
+            max_tokens: Max tokens for LLM response
+            temperature: LLM temperature (lower = more focused)
+            cache_enabled: Enable query expansion caching
         """
         self.vocabulary_path = vocabulary_path
+        self.model = model
+        self.max_tokens = max_tokens
+        self.temperature = temperature
+        self.cache_enabled = cache_enabled
+
         self._synonyms: Dict[str, List[str]] = {}
         self._kpi_relations: Dict[str, List[str]] = {}
+        self._client: Optional[anthropic.Anthropic] = None
+
         self._load_vocabulary()
+
+    def _get_client(self) -> anthropic.Anthropic:
+        """Lazy-load Anthropic client."""
+        if self._client is None:
+            api_key = os.environ.get("ANTHROPIC_API_KEY")
+            if not api_key:
+                raise ValueError("ANTHROPIC_API_KEY environment variable required")
+            self._client = anthropic.Anthropic(api_key=api_key)
+        return self._client
 
     def _load_vocabulary(self) -> None:
         """Load domain vocabulary from YAML file."""
@@ -42,17 +100,20 @@ class QueryOptimizer:
             "hcp": ["healthcare provider", "physician", "prescriber"],
             "conversion": ["conversion rate", "rx conversion", "switch rate"],
             "market share": ["share of voice", "sov", "competitive share"],
+            "adoption": ["adoption rate", "uptake", "market penetration"],
+            "territory": ["sales territory", "geographic region", "coverage area"],
         }
 
         self._kpi_relations = {
             "trx": ["nrx", "conversion_rate", "market_share"],
             "nrx": ["trx", "new_patient_starts", "time_to_first_rx"],
             "conversion_rate": ["trx", "nrx", "abandonment_rate"],
+            "adoption_rate": ["market_share", "penetration", "growth_rate"],
         }
 
-    def expand(self, query) -> str:
+    def expand(self, query: Union[str, Any]) -> str:
         """
-        Expand query with domain knowledge.
+        Expand query with domain knowledge (rule-based, synchronous).
 
         Args:
             query: ParsedQuery or string
@@ -95,3 +156,345 @@ class QueryOptimizer:
         if time_range:
             return f"{query} {time_range}"
         return query
+
+    # =========================================================================
+    # LLM-Enhanced Query Expansion
+    # =========================================================================
+
+    def _build_cache_key(self, query: str, expansion_type: str) -> str:
+        """Build cache key for query expansion."""
+        content = f"{expansion_type}:{query}"
+        return hashlib.md5(content.encode()).hexdigest()
+
+    def _get_cached(self, cache_key: str) -> Optional[str]:
+        """Get cached expansion if valid."""
+        if not self.cache_enabled:
+            return None
+
+        cached = _EXPANSION_CACHE.get(cache_key)
+        if cached:
+            # Check TTL
+            if time.time() - cached["timestamp"] < _CACHE_TTL_SECONDS:
+                logger.debug(f"Cache hit for {cache_key[:8]}...")
+                return cached["result"]
+            else:
+                # Expired, remove
+                del _EXPANSION_CACHE[cache_key]
+
+        return None
+
+    def _cache_result(self, cache_key: str, result: str) -> None:
+        """Cache expansion result with TTL."""
+        if not self.cache_enabled:
+            return
+
+        # Evict oldest entries if cache is full
+        if len(_EXPANSION_CACHE) >= _CACHE_MAX_SIZE:
+            oldest_key = min(
+                _EXPANSION_CACHE.keys(),
+                key=lambda k: _EXPANSION_CACHE[k]["timestamp"]
+            )
+            del _EXPANSION_CACHE[oldest_key]
+
+        _EXPANSION_CACHE[cache_key] = {
+            "result": result,
+            "timestamp": time.time(),
+        }
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        retry=retry_if_exception_type((anthropic.RateLimitError, anthropic.APIConnectionError)),
+    )
+    def _call_llm(self, prompt: str) -> str:
+        """Call Claude API with retry logic."""
+        client = self._get_client()
+
+        response = client.messages.create(
+            model=self.model,
+            max_tokens=self.max_tokens,
+            temperature=self.temperature,
+            messages=[{"role": "user", "content": prompt}],
+        )
+
+        return response.content[0].text
+
+    async def _call_llm_async(self, prompt: str) -> str:
+        """Async wrapper for LLM call."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._call_llm, prompt)
+
+    def expand_with_llm(
+        self,
+        query: Union[str, Any],
+        context: Optional[str] = None,
+    ) -> str:
+        """
+        Expand query using Claude for semantic understanding.
+
+        Falls back to rule-based expansion on API failure.
+
+        Args:
+            query: Original query text or ParsedQuery
+            context: Optional conversation context
+
+        Returns:
+            LLM-expanded query string
+        """
+        query_text = query.text if hasattr(query, 'text') else str(query)
+
+        # Check cache first
+        cache_key = self._build_cache_key(query_text, "llm_expand")
+        cached = self._get_cached(cache_key)
+        if cached:
+            return cached
+
+        try:
+            prompt = self._build_expansion_prompt(query_text, context)
+            expanded = self._call_llm(prompt)
+
+            # Clean up response (remove quotes, extra whitespace)
+            expanded = expanded.strip().strip('"\'')
+
+            # Cache successful result
+            self._cache_result(cache_key, expanded)
+
+            logger.info(f"LLM expanded: '{query_text[:50]}...' → '{expanded[:50]}...'")
+            return expanded
+
+        except Exception as e:
+            logger.warning(f"LLM expansion failed, falling back to rule-based: {e}")
+            return self.expand(query_text)
+
+    async def expand_with_llm_async(
+        self,
+        query: Union[str, Any],
+        context: Optional[str] = None,
+    ) -> str:
+        """
+        Async version of expand_with_llm.
+
+        Args:
+            query: Original query text or ParsedQuery
+            context: Optional conversation context
+
+        Returns:
+            LLM-expanded query string
+        """
+        query_text = query.text if hasattr(query, 'text') else str(query)
+
+        # Check cache first
+        cache_key = self._build_cache_key(query_text, "llm_expand")
+        cached = self._get_cached(cache_key)
+        if cached:
+            return cached
+
+        try:
+            prompt = self._build_expansion_prompt(query_text, context)
+            expanded = await self._call_llm_async(prompt)
+
+            # Clean up response
+            expanded = expanded.strip().strip('"\'')
+
+            # Cache successful result
+            self._cache_result(cache_key, expanded)
+
+            logger.info(f"LLM expanded: '{query_text[:50]}...' → '{expanded[:50]}...'")
+            return expanded
+
+        except Exception as e:
+            logger.warning(f"LLM expansion failed, falling back to rule-based: {e}")
+            return self.expand(query_text)
+
+    def _build_expansion_prompt(self, query: str, context: Optional[str] = None) -> str:
+        """Build prompt for LLM query expansion."""
+        context_section = ""
+        if context:
+            context_section = f"\nConversation context: {context}\n"
+
+        return f"""You are a pharmaceutical commercial analytics expert. Expand this search query with relevant terms to improve retrieval.
+
+Domain: Pharmaceutical sales, HCP targeting, prescription analytics
+Brands: Kisqali (breast cancer), Fabhalta (PNH), Remibrutinib (CSU)
+KPIs: TRx, NRx, market share, conversion rate, adoption rate
+
+Original query: "{query}"
+{context_section}
+Expand the query by adding:
+1. Synonyms and related terms
+2. Relevant KPIs if applicable
+3. Related business concepts
+
+Return ONLY the expanded query as a single line. Do not include explanations.
+
+Expanded query:"""
+
+    # =========================================================================
+    # HyDE: Hypothetical Document Embeddings
+    # =========================================================================
+
+    def generate_hyde_document(
+        self,
+        query: Union[str, Any],
+        document_type: str = "insight",
+    ) -> str:
+        """
+        Generate a hypothetical document for HyDE retrieval.
+
+        HyDE creates a hypothetical document that would answer the query,
+        then uses that document's embedding for retrieval. This often
+        improves retrieval quality for complex queries.
+
+        Args:
+            query: Original query text or ParsedQuery
+            document_type: Type of document to generate (insight, report, analysis)
+
+        Returns:
+            Hypothetical document text for embedding
+        """
+        query_text = query.text if hasattr(query, 'text') else str(query)
+
+        # Check cache first
+        cache_key = self._build_cache_key(f"{query_text}:{document_type}", "hyde")
+        cached = self._get_cached(cache_key)
+        if cached:
+            return cached
+
+        try:
+            prompt = self._build_hyde_prompt(query_text, document_type)
+            hyde_doc = self._call_llm(prompt)
+
+            # Cache successful result
+            self._cache_result(cache_key, hyde_doc)
+
+            logger.info(f"Generated HyDE document for: '{query_text[:50]}...'")
+            return hyde_doc
+
+        except Exception as e:
+            logger.warning(f"HyDE generation failed, using expanded query: {e}")
+            # Fallback: use expanded query as pseudo-document
+            return self.expand(query_text)
+
+    async def generate_hyde_document_async(
+        self,
+        query: Union[str, Any],
+        document_type: str = "insight",
+    ) -> str:
+        """
+        Async version of generate_hyde_document.
+
+        Args:
+            query: Original query text or ParsedQuery
+            document_type: Type of document to generate
+
+        Returns:
+            Hypothetical document text for embedding
+        """
+        query_text = query.text if hasattr(query, 'text') else str(query)
+
+        # Check cache first
+        cache_key = self._build_cache_key(f"{query_text}:{document_type}", "hyde")
+        cached = self._get_cached(cache_key)
+        if cached:
+            return cached
+
+        try:
+            prompt = self._build_hyde_prompt(query_text, document_type)
+            hyde_doc = await self._call_llm_async(prompt)
+
+            # Cache successful result
+            self._cache_result(cache_key, hyde_doc)
+
+            logger.info(f"Generated HyDE document for: '{query_text[:50]}...'")
+            return hyde_doc
+
+        except Exception as e:
+            logger.warning(f"HyDE generation failed, using expanded query: {e}")
+            return self.expand(query_text)
+
+    def _build_hyde_prompt(self, query: str, document_type: str) -> str:
+        """Build prompt for HyDE document generation."""
+        type_instructions = {
+            "insight": "a concise business insight or finding",
+            "report": "an executive summary paragraph",
+            "analysis": "a data analysis conclusion",
+        }
+
+        instruction = type_instructions.get(document_type, type_instructions["insight"])
+
+        return f"""You are a pharmaceutical commercial analytics system. Generate {instruction} that would answer this question.
+
+Domain: Pharmaceutical sales analytics for Kisqali, Fabhalta, Remibrutinib
+Data types: Prescriptions (TRx, NRx), market share, HCP activities, territory performance
+
+Question: "{query}"
+
+Write a realistic {document_type} that directly answers this question using specific metrics, trends, or findings. Be concrete and use plausible numbers.
+
+{document_type.capitalize()}:"""
+
+    # =========================================================================
+    # Combined Optimization
+    # =========================================================================
+
+    async def optimize_query(
+        self,
+        query: Union[str, Any],
+        use_llm: bool = True,
+        use_hyde: bool = False,
+        context: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Full query optimization pipeline.
+
+        Args:
+            query: Original query
+            use_llm: Whether to use LLM expansion
+            use_hyde: Whether to generate HyDE document
+            context: Optional conversation context
+
+        Returns:
+            Dict with:
+                - original: Original query text
+                - rule_expanded: Rule-based expansion
+                - llm_expanded: LLM expansion (if use_llm=True)
+                - hyde_document: HyDE document (if use_hyde=True)
+                - recommended: Best expansion to use for retrieval
+        """
+        query_text = query.text if hasattr(query, 'text') else str(query)
+
+        result = {
+            "original": query_text,
+            "rule_expanded": self.expand(query_text),
+            "llm_expanded": None,
+            "hyde_document": None,
+            "recommended": None,
+        }
+
+        if use_llm:
+            result["llm_expanded"] = await self.expand_with_llm_async(query_text, context)
+
+        if use_hyde:
+            result["hyde_document"] = await self.generate_hyde_document_async(query_text)
+
+        # Determine recommended expansion
+        if use_hyde and result["hyde_document"]:
+            result["recommended"] = result["hyde_document"]
+        elif use_llm and result["llm_expanded"]:
+            result["recommended"] = result["llm_expanded"]
+        else:
+            result["recommended"] = result["rule_expanded"]
+
+        return result
+
+    def clear_cache(self) -> int:
+        """
+        Clear the expansion cache.
+
+        Returns:
+            Number of entries cleared
+        """
+        count = len(_EXPANSION_CACHE)
+        _EXPANSION_CACHE.clear()
+        logger.info(f"Cleared {count} cached query expansions")
+        return count
