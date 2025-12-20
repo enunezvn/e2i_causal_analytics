@@ -397,8 +397,7 @@ class RAGASEvaluator:
                 context_recall,
             )
             from ragas.embeddings import OpenAIEmbeddings as RagasOpenAIEmbeddings
-            from ragas.llms import LangchainLLMWrapper
-            from langchain_openai import ChatOpenAI
+            from ragas.llms import llm_factory
             from datasets import Dataset
 
             # Create a wrapper that adds embed_query interface to RAGAS embeddings
@@ -428,8 +427,7 @@ class RAGASEvaluator:
             answer_relevancy.embeddings = embeddings
 
             # Configure LLM for metrics that need it
-            llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-            wrapped_llm = LangchainLLMWrapper(llm)
+            wrapped_llm = llm_factory("gpt-4o-mini", client=openai_client)
             faithfulness.llm = wrapped_llm
             answer_relevancy.llm = wrapped_llm
             context_precision.llm = wrapped_llm
