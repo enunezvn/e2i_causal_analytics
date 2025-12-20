@@ -3,7 +3,7 @@ Integration Tests for Health Score Agent
 """
 
 import pytest
-from datetime import datetime
+from datetime import datetime, timezone
 
 from src.agents.health_score.agent import (
     HealthScoreAgent,
@@ -161,7 +161,7 @@ class TestHealthScoreAgentHandoff:
             warnings=[],
             health_summary="System healthy",
             check_latency_ms=100,
-            timestamp=datetime.utcnow().isoformat(),
+            timestamp=datetime.now(timezone.utc).isoformat(),
         )
         handoff = agent.get_handoff(output)
 
@@ -183,7 +183,7 @@ class TestHealthScoreAgentHandoff:
             warnings=[],
             health_summary="System critical",
             check_latency_ms=100,
-            timestamp=datetime.utcnow().isoformat(),
+            timestamp=datetime.now(timezone.utc).isoformat(),
         )
         handoff = agent.get_handoff(output)
 
@@ -226,7 +226,7 @@ class TestGraphBuilding:
             "warnings": None,
             "health_summary": None,
             "check_latency_ms": 0,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "errors": [],
             "status": "pending",
         }
@@ -280,7 +280,7 @@ class TestInputOutputContracts:
             warnings=["Warning 1"],
             health_summary="System healthy",
             check_latency_ms=100,
-            timestamp=datetime.utcnow().isoformat(),
+            timestamp=datetime.now(timezone.utc).isoformat(),
         )
         assert output.overall_health_score == 85.0
         assert output.health_grade == "B"

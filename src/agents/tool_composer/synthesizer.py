@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from .models.composition_models import (
@@ -132,7 +132,7 @@ class ResponseSynthesizer:
                 caveats=parsed.get("caveats", []),
                 failed_components=parsed.get("failed_components", []),
                 synthesis_reasoning=parsed.get("reasoning", ""),
-                timestamp=datetime.utcnow()
+                timestamp=datetime.now(timezone.utc)
             )
             
             logger.info(f"Synthesis complete, confidence: {composed.confidence}")

@@ -14,7 +14,7 @@ Set E2E_USE_REAL_SERVICES=true to test with real backends.
 
 import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
-from datetime import datetime
+from datetime import datetime, timezone
 import asyncio
 import os
 
@@ -77,7 +77,7 @@ def mock_all_services():
             "brand": "Kisqali",
             "region": "northeast",
             "raw_content": {},
-            "occurred_at": datetime.utcnow().isoformat()
+            "occurred_at": datetime.now(timezone.utc).isoformat()
         }
         mock_update.return_value = None
         mock_signal.return_value = "signal_e2e_001"

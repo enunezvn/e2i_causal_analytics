@@ -5,7 +5,7 @@ requirements into formal ML problem specifications.
 """
 
 from typing import Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 from langgraph.graph import StateGraph, END
 
 from .state import ScopeDefinerState
@@ -56,7 +56,7 @@ async def finalize_scope(state: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "error": f"Error finalizing scope: {str(e)}",
             "error_type": "finalize_scope_error",
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
             "created_by": "scope_definer",
         }
 

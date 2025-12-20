@@ -11,7 +11,7 @@ Tests the cognitive workflow endpoints:
 import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
 from fastapi.testclient import TestClient
-from datetime import datetime
+from datetime import datetime, timezone
 
 from src.api.main import app
 from src.rag.models.retrieval_models import RetrievalResult
@@ -33,13 +33,13 @@ def mock_working_memory():
         "user_id": "user_001",
         "context": {"brand": "Kisqali", "region": "northeast"},
         "state": "active",
-        "created_at": datetime.utcnow(),
-        "last_activity": datetime.utcnow()
+        "created_at": datetime.now(timezone.utc),
+        "last_activity": datetime.now(timezone.utc)
     })
     memory.add_message = AsyncMock(return_value=True)
     memory.get_messages = AsyncMock(return_value=[
-        {"role": "user", "content": "Test query", "timestamp": datetime.utcnow().isoformat(), "metadata": {}},
-        {"role": "assistant", "content": "Test response", "timestamp": datetime.utcnow().isoformat(), "metadata": {"agent_name": "orchestrator"}}
+        {"role": "user", "content": "Test query", "timestamp": datetime.now(timezone.utc).isoformat(), "metadata": {}},
+        {"role": "assistant", "content": "Test response", "timestamp": datetime.now(timezone.utc).isoformat(), "metadata": {"agent_name": "orchestrator"}}
     ])
     memory.append_evidence = AsyncMock(return_value=True)
     memory.get_evidence_trail = AsyncMock(return_value=[

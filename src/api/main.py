@@ -16,7 +16,7 @@ Version: 4.1.0
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any
 
 from fastapi import FastAPI, status
@@ -91,7 +91,7 @@ async def health_check() -> Dict[str, Any]:
         "status": "healthy",
         "service": "e2i-causal-analytics-api",
         "version": "4.1.0",
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "components": {
             "api": "operational",
             "workers": "available",
@@ -125,7 +125,7 @@ async def readiness_check() -> Dict[str, Any]:
     if ready:
         return {
             "status": "ready",
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
     else:
         return JSONResponse(
@@ -166,7 +166,7 @@ async def startup_event():
     logger.info("E2I Causal Analytics Platform - Starting")
     logger.info("=" * 60)
     logger.info("Version: 4.1.0")
-    logger.info("Timestamp: %s", datetime.utcnow().isoformat())
+    logger.info("Timestamp: %s", datetime.now(timezone.utc).isoformat())
 
     # TODO: Initialize connections
     # - Redis connection pool
@@ -219,7 +219,7 @@ async def internal_error_handler(request, exc):
         content={
             "error": "internal_server_error",
             "message": "An internal error occurred. Please contact support.",
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
     )
 

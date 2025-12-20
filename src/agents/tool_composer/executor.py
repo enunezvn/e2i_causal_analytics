@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 from .models.composition_models import (
@@ -74,7 +74,7 @@ class PlanExecutor:
         
         trace = ExecutionTrace(
             plan_id=plan.plan_id,
-            started_at=datetime.utcnow()
+            started_at=datetime.now(timezone.utc)
         )
         
         # Store outputs for dependency resolution
@@ -110,18 +110,18 @@ class PlanExecutor:
                             outputs[result.step_id] = result.output.result
                     trace.parallel_executions += 1
             
-            trace.completed_at = datetime.utcnow()
+            trace.completed_at = datetime.now(timezone.utc)
             logger.info(
                 f"Execution complete: {trace.tools_succeeded}/{trace.tools_executed} succeeded"
             )
             
         except asyncio.TimeoutError:
             logger.error(f"Execution timed out after {self.timeout_seconds}s")
-            trace.completed_at = datetime.utcnow()
+            trace.completed_at = datetime.now(timezone.utc)
             
         except Exception as e:
             logger.error(f"Execution failed: {e}")
-            trace.completed_at = datetime.utcnow()
+            trace.completed_at = datetime.now(timezone.utc)
             raise ExecutionError(f"Plan execution failed: {e}") from e
         
         return trace
@@ -133,7 +133,7 @@ class PlanExecutor:
         context: Dict[str, Any]
     ) -> StepResult:
         """Execute a single step"""
-        started_at = datetime.utcnow()
+        started_at = datetime.now(timezone.utc)
         
         logger.debug(f"Executing step {step.step_id}: {step.tool_name}")
         
@@ -162,7 +162,7 @@ class PlanExecutor:
                 ),
                 status=ExecutionStatus.FAILED,
                 started_at=started_at,
-                completed_at=datetime.utcnow()
+                completed_at=datetime.now(timezone.utc)
             )
         
         # Execute with retries
@@ -181,7 +181,7 @@ class PlanExecutor:
                         lambda: tool_callable(**resolved_inputs)
                     )
                 
-                completed_at = datetime.utcnow()
+                completed_at = datetime.now(timezone.utc)
                 duration_ms = int((completed_at - started_at).total_seconds() * 1000)
                 
                 # Convert result to dict if needed
@@ -220,7 +220,7 @@ class PlanExecutor:
                     await asyncio.sleep(0.5 * (attempt + 1))  # Exponential backoff
         
         # All retries exhausted
-        completed_at = datetime.utcnow()
+        completed_at = datetime.now(timezone.utc)
         return StepResult(
             step_id=step.step_id,
             sub_question_id=step.sub_question_id,

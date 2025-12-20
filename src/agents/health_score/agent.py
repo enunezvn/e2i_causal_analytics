@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
@@ -158,7 +158,7 @@ class HealthScoreAgent:
             "warnings": None,
             "health_summary": None,
             "check_latency_ms": 0,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "errors": [],
             "status": "pending",
         }
@@ -187,7 +187,7 @@ class HealthScoreAgent:
                     "health_summary", "Health check completed"
                 ),
                 check_latency_ms=result.get("check_latency_ms", 0),
-                timestamp=result.get("timestamp", datetime.utcnow().isoformat()),
+                timestamp=result.get("timestamp", datetime.now(timezone.utc).isoformat()),
             )
 
             elapsed = int((time.time() - start_time) * 1000)
@@ -212,7 +212,7 @@ class HealthScoreAgent:
                 warnings=[],
                 health_summary="Health check failed due to an error.",
                 check_latency_ms=elapsed,
-                timestamp=datetime.utcnow().isoformat(),
+                timestamp=datetime.now(timezone.utc).isoformat(),
             )
 
     async def quick_check(self) -> HealthScoreOutput:

@@ -15,7 +15,7 @@ Version: 4.1.0
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 import logging
 
@@ -128,7 +128,7 @@ class MemorySearchResponse(BaseModel):
     total_results: int = Field(..., description="Number of results returned")
     retrieval_method: str = Field(..., description="Method used")
     search_latency_ms: float = Field(..., description="Search latency in milliseconds")
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 # -----------------------------------------------------------------------------
@@ -169,7 +169,7 @@ class EpisodicMemoryResponse(BaseModel):
     agent_name: Optional[str] = None
     brand: Optional[str] = None
     region: Optional[str] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -204,7 +204,7 @@ class ProceduralFeedbackResponse(BaseModel):
     feedback_recorded: bool
     new_success_rate: Optional[float] = None
     message: str
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 # -----------------------------------------------------------------------------
@@ -240,7 +240,7 @@ class SemanticPathResponse(BaseModel):
     total_paths: int = Field(..., description="Number of paths found")
     max_depth_searched: int = Field(..., description="Depth searched")
     query_latency_ms: float = Field(..., description="Query latency in milliseconds")
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 # =============================================================================
@@ -375,7 +375,7 @@ async def get_episodic_memory_endpoint(memory_id: str) -> EpisodicMemoryResponse
             agent_name=result.get("agent_name"),
             brand=result.get("brand"),
             region=result.get("region"),
-            created_at=result.get("occurred_at", datetime.utcnow()),
+            created_at=result.get("occurred_at", datetime.now(timezone.utc)),
             metadata=result.get("raw_content", {})
         )
 
@@ -514,7 +514,7 @@ async def get_memory_stats() -> Dict[str, Any]:
                 "total_entities": 0,
                 "total_relationships": 0
             },
-            "last_updated": datetime.utcnow().isoformat()
+            "last_updated": datetime.now(timezone.utc).isoformat()
         }
     except Exception as e:
         logger.error(f"Failed to get memory stats: {e}")
