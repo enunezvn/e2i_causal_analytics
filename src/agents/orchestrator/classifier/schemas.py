@@ -12,7 +12,7 @@ classification pipeline:
 
 from enum import Enum
 from typing import Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # =============================================================================
@@ -133,8 +133,7 @@ class Dependency(BaseModel):
     dependency_type: DependencyType
     reason: str
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class DependencyAnalysis(BaseModel):

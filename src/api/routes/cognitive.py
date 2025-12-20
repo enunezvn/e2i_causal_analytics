@@ -18,7 +18,7 @@ Version: 4.1.0
 """
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
 from enum import Enum
@@ -80,16 +80,15 @@ class CognitiveQueryRequest(BaseModel):
     max_memory_results: int = Field(default=10, ge=1, le=50, description="Max memory results to retrieve")
     metadata: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Additional metadata")
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "query": "Why did TRx drop 15% in northeast region last quarter?",
-                "brand": "Kisqali",
-                "region": "northeast",
-                "query_type": "causal",
-                "include_evidence": True
-            }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "query": "Why did TRx drop 15% in northeast region last quarter?",
+            "brand": "Kisqali",
+            "region": "northeast",
+            "query_type": "causal",
+            "include_evidence": True
         }
+    })
 
 
 class EvidenceItem(BaseModel):
@@ -534,13 +533,12 @@ class CognitiveRAGRequest(BaseModel):
     conversation_id: Optional[str] = Field(None, description="Conversation/session ID for context continuity")
     conversation_history: Optional[str] = Field(None, description="Compressed conversation history")
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "query": "Why did Kisqali adoption increase in the Northeast last quarter?",
-                "conversation_id": "session-abc-123"
-            }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "query": "Why did Kisqali adoption increase in the Northeast last quarter?",
+            "conversation_id": "session-abc-123"
         }
+    })
 
 
 class CognitiveRAGResponse(BaseModel):
@@ -558,17 +556,16 @@ class CognitiveRAGResponse(BaseModel):
     latency_ms: float = Field(..., description="Total processing time in milliseconds")
     error: Optional[str] = Field(None, description="Error message if processing failed")
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "response": "Kisqali adoption increased 15% in the Northeast due to increased oncologist engagement and successful speaker programs.",
-                "evidence": [{"content": "Northeast TRx up 15%...", "source": "agent_activities"}],
-                "hop_count": 2,
-                "entities": ["Kisqali", "Northeast"],
-                "intent": "causal",
-                "latency_ms": 1250.5
-            }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "response": "Kisqali adoption increased 15% in the Northeast due to increased oncologist engagement and successful speaker programs.",
+            "evidence": [{"content": "Northeast TRx up 15%...", "source": "agent_activities"}],
+            "hop_count": 2,
+            "entities": ["Kisqali", "Northeast"],
+            "intent": "causal",
+            "latency_ms": 1250.5
         }
+    })
 
 
 @router.post("/rag", response_model=CognitiveRAGResponse)
