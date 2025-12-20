@@ -1,0 +1,724 @@
+# =============================================================================
+# E2I Causal Analytics - Production Docker Compose
+# =============================================================================
+# 18-Agent 6-Tier Architecture | Tri-Memory System | MLOps Integration
+#
+# Usage:
+#   Production:  docker compose up -d
+#   Development: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+#
+# External Dependencies:
+#   - Supabase Cloud (PostgreSQL + pgvector)
+#   - Anthropic API (Claude for agents)
+# =============================================================================
+
+name: e2i-causal-analytics
+
+# =============================================================================
+# VOLUMES
+# =============================================================================
+volumes:
+  # ---------------------------------------------------------------------------
+  # PERSISTENT VOLUMES (State - survives container restarts)
+  # ---------------------------------------------------------------------------
+  redis_data:
+    driver: local
+    name: e2i_redis_data
+    
+  falkordb_data:
+    driver: local
+    name: e2i_falkordb_data
+    
+  mlflow_db:
+    driver: local
+    name: e2i_mlflow_db
+    
+  mlflow_artifacts:
+    driver: local
+    name: e2i_mlflow_artifacts
+    
+  opik_data:
+    driver: local
+    name: e2i_opik_data
+    
+  bentoml_models:
+    driver: local
+    name: e2i_bentoml_models
+
+  # ---------------------------------------------------------------------------
+  # SHARED VOLUMES (Inter-container data exchange)
+  # ---------------------------------------------------------------------------
+  ml_artifacts:
+    driver: local
+    name: e2i_ml_artifacts
+    
+  model_registry:
+    driver: local
+    name: e2i_model_registry
+    
+  causal_outputs:
+    driver: local
+    name: e2i_causal_outputs
+    
+  feature_cache:
+    driver: local
+    name: e2i_feature_cache
+    
+  agent_outputs:
+    driver: local
+    name: e2i_agent_outputs
+    
+  experiment_designs:
+    driver: local
+    name: e2i_experiment_designs
+
+# =============================================================================
+# NETWORKS
+# =============================================================================
+networks:
+  e2i_network:
+    driver: bridge
+    name: e2i_network
+    
+  # Isolated network for MLOps services
+  mlops_network:
+    driver: bridge
+    name: e2i_mlops_network
+
+# =============================================================================
+# SERVICES
+# =============================================================================
+services:
+  # ===========================================================================
+  # TIER 1: INFRASTRUCTURE (Memory Systems)
+  # ===========================================================================
+  
+  # ---------------------------------------------------------------------------
+  # Redis - Working Memory + LangGraph Checkpointing + Celery Broker
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: e2i_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - e2i_network
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    labels:
+      - "e2i.service=infrastructure"
+      - "e2i.memory=working"
+
+  # ---------------------------------------------------------------------------
+  # FalkorDB - Semantic Memory (Graphity Auto-Extraction)
+  # ---------------------------------------------------------------------------
+  falkordb:
+    image: falkordb/falkordb:latest
+    container_name: e2i_falkordb
+    restart: unless-stopped
+    ports:
+      - "6380:6379"  # Different port to avoid Redis conflict
+    volumes:
+      - falkordb_data:/data
+    environment:
+      - FALKORDB_ARGS=--maxmemory 1gb
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "6379", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - e2i_network
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+    labels:
+      - "e2i.service=infrastructure"
+      - "e2i.memory=semantic"
+
+  # ===========================================================================
+  # TIER 2: MLOPS SERVICES
+  # ===========================================================================
+  
+  # ---------------------------------------------------------------------------
+  # MLflow - Experiment Tracking & Model Registry
+  # ---------------------------------------------------------------------------
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.16.0
+    container_name: e2i_mlflow
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    volumes:
+      - mlflow_db:/mlflow/db
+      - mlflow_artifacts:/mlflow/artifacts
+      - ml_artifacts:/mlflow/ml_artifacts      # Shared: receives from training
+      - model_registry:/mlflow/model_registry  # Shared: sends to BentoML
+    environment:
+      - MLFLOW_TRACKING_URI=sqlite:///mlflow/db/mlflow.db
+      - MLFLOW_ARTIFACT_ROOT=/mlflow/artifacts
+    command: >
+      mlflow server
+      --backend-store-uri sqlite:///mlflow/db/mlflow.db
+      --default-artifact-root /mlflow/artifacts
+      --host 0.0.0.0
+      --port 5000
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - e2i_network
+      - mlops_network
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+    labels:
+      - "e2i.service=mlops"
+      - "e2i.component=experiment-tracking"
+
+  # ---------------------------------------------------------------------------
+  # BentoML - Model Serving (Decoupled from Agents)
+  # ---------------------------------------------------------------------------
+  bentoml:
+    image: bentoml/bentoml:latest
+    container_name: e2i_bentoml
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - bentoml_models:/home/bentoml/bentos
+      - model_registry:/models:ro  # Read-only: receives from MLflow
+    environment:
+      - BENTOML_HOME=/home/bentoml
+      - BENTOML_PORT=3000
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - e2i_network
+      - mlops_network
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 2G
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    labels:
+      - "e2i.service=mlops"
+      - "e2i.component=model-serving"
+
+  # ---------------------------------------------------------------------------
+  # Feast - Feature Store (Online + Offline Serving)
+  # ---------------------------------------------------------------------------
+  feast:
+    build:
+      context: .
+      dockerfile: Dockerfile.feast
+    container_name: e2i_feast
+    restart: unless-stopped
+    ports:
+      - "6566:6566"
+    volumes:
+      - feature_cache:/feast/data  # Shared: feature materialization
+    environment:
+      - FEAST_OFFLINE_STORE_TYPE=file
+      - FEAST_ONLINE_STORE_TYPE=redis
+      - FEAST_REDIS_HOST=redis
+      - FEAST_REDIS_PORT=6379
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6566/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - e2i_network
+      - mlops_network
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+    depends_on:
+      redis:
+        condition: service_healthy
+    labels:
+      - "e2i.service=mlops"
+      - "e2i.component=feature-store"
+
+  # ---------------------------------------------------------------------------
+  # Opik - LLM & Agent Observability (Self-Hosted)
+  # ---------------------------------------------------------------------------
+  opik:
+    image: comet-ml/opik:latest
+    container_name: e2i_opik
+    restart: unless-stopped
+    ports:
+      - "5173:5173"  # UI
+      - "5174:5174"  # API
+    volumes:
+      - opik_data:/app/data
+    environment:
+      - OPIK_BASE_URL=http://localhost:5173
+      - OPIK_BACKEND_URL=http://localhost:5174
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5173/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
+    networks:
+      - e2i_network
+      - mlops_network
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+    labels:
+      - "e2i.service=mlops"
+      - "e2i.component=observability"
+
+  # ===========================================================================
+  # TIER 3: APPLICATION SERVICES
+  # ===========================================================================
+  
+  # ---------------------------------------------------------------------------
+  # FastAPI Backend - 18-Agent Orchestration Layer
+  # ---------------------------------------------------------------------------
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: production
+    container_name: e2i_api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      # Shared volumes for data exchange
+      - ml_artifacts:/app/data/ml_artifacts
+      - causal_outputs:/app/data/causal_outputs
+      - agent_outputs:/app/data/agent_outputs
+      - experiment_designs:/app/data/experiment_designs
+      - feature_cache:/app/data/feature_cache:ro  # Read from Feast
+    environment:
+      # Supabase Cloud Connection
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_KEY=${SUPABASE_KEY}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+      
+      # Memory Systems
+      - REDIS_URL=redis://redis:6379/0
+      - FALKORDB_URL=redis://falkordb:6380/0
+      
+      # MLOps Services
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - BENTOML_URL=http://bentoml:3000
+      - FEAST_URL=http://feast:6566
+      - OPIK_URL=http://opik:5174
+      
+      # Celery Configuration
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      
+      # Claude API
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      
+      # Application Settings
+      - ENVIRONMENT=production
+      - LOG_LEVEL=INFO
+      - WORKERS=4
+    command: >
+      gunicorn src.api.main:app
+      --workers 4
+      --worker-class uvicorn.workers.UvicornWorker
+      --bind 0.0.0.0:8000
+      --timeout 120
+      --keep-alive 5
+      --access-logfile -
+      --error-logfile -
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - e2i_network
+      - mlops_network
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 2G
+    depends_on:
+      redis:
+        condition: service_healthy
+      falkordb:
+        condition: service_healthy
+      mlflow:
+        condition: service_healthy
+    labels:
+      - "e2i.service=application"
+      - "e2i.component=api"
+
+  # ---------------------------------------------------------------------------
+  # Celery Workers - Multi-Tier Architecture
+  # ---------------------------------------------------------------------------
+
+  # Worker Light - Quick tasks (API calls, cache updates, notifications)
+  # ---------------------------------------------------------------------------
+  worker_light:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: production
+    restart: unless-stopped
+    volumes:
+      - ml_artifacts:/app/data/ml_artifacts
+      - causal_outputs:/app/data/causal_outputs
+      - agent_outputs:/app/data/agent_outputs
+      - experiment_designs:/app/data/experiment_designs
+      - feature_cache:/app/data/feature_cache:ro
+    tmpfs:
+      - /app/tmp:size=256M,mode=1777
+    environment:
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_KEY=${SUPABASE_KEY}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+      - REDIS_URL=redis://redis:6379/0
+      - FALKORDB_URL=redis://falkordb:6380/0
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - BENTOML_URL=http://bentoml:3000
+      - FEAST_URL=http://feast:6566
+      - OPIK_URL=http://opik:5174
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - ENVIRONMENT=production
+      - LOG_LEVEL=INFO
+      - WORKER_TYPE=light
+    command: >
+      celery -A src.workers.celery_app worker
+      --loglevel=INFO
+      --concurrency=4
+      --queues=default,quick,api
+      --prefetch-multiplier=2
+      --max-tasks-per-child=100
+      --hostname=worker_light@%h
+    healthcheck:
+      test: ["CMD", "celery", "-A", "src.workers.celery_app", "inspect", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    networks:
+      - e2i_network
+      - mlops_network
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '1'
+          memory: 1G
+      replicas: 2  # Always run 2 light workers
+    depends_on:
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    labels:
+      - "e2i.service=application"
+      - "e2i.component=worker"
+      - "e2i.worker_tier=light"
+
+  # Worker Medium - Standard analytics (reports, aggregations, dashboards)
+  # ---------------------------------------------------------------------------
+  worker_medium:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: production
+    restart: unless-stopped
+    volumes:
+      - ml_artifacts:/app/data/ml_artifacts
+      - causal_outputs:/app/data/causal_outputs
+      - agent_outputs:/app/data/agent_outputs
+      - experiment_designs:/app/data/experiment_designs
+      - feature_cache:/app/data/feature_cache:ro
+    tmpfs:
+      - /app/tmp:size=2G,mode=1777
+    environment:
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_KEY=${SUPABASE_KEY}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+      - REDIS_URL=redis://redis:6379/0
+      - FALKORDB_URL=redis://falkordb:6380/0
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - BENTOML_URL=http://bentoml:3000
+      - FEAST_URL=http://feast:6566
+      - OPIK_URL=http://opik:5174
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - ENVIRONMENT=production
+      - LOG_LEVEL=INFO
+      - WORKER_TYPE=medium
+    command: >
+      celery -A src.workers.celery_app worker
+      --loglevel=INFO
+      --concurrency=2
+      --queues=analytics,reports,aggregations
+      --prefetch-multiplier=1
+      --max-tasks-per-child=50
+      --hostname=worker_medium@%h
+    healthcheck:
+      test: ["CMD", "celery", "-A", "src.workers.celery_app", "inspect", "ping"]
+      interval: 45s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
+    networks:
+      - e2i_network
+      - mlops_network
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+        reservations:
+          cpus: '2'
+          memory: 4G
+      replicas: 1  # Start with 1, can scale 0-3
+    depends_on:
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    labels:
+      - "e2i.service=application"
+      - "e2i.component=worker"
+      - "e2i.worker_tier=medium"
+
+  # Worker Heavy - Compute-intensive tasks (SHAP, causal refutation, ML, twins)
+  # ---------------------------------------------------------------------------
+  worker_heavy:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: production
+    restart: unless-stopped
+    volumes:
+      - ml_artifacts:/app/data/ml_artifacts
+      - causal_outputs:/app/data/causal_outputs
+      - agent_outputs:/app/data/agent_outputs
+      - experiment_designs:/app/data/experiment_designs
+      - feature_cache:/app/data/feature_cache:ro
+    tmpfs:
+      - /app/tmp:size=8G,mode=1777  # Large scratch space for heavy computation
+    environment:
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_KEY=${SUPABASE_KEY}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+      - REDIS_URL=redis://redis:6379/0
+      - FALKORDB_URL=redis://falkordb:6380/0
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - BENTOML_URL=http://bentoml:3000
+      - FEAST_URL=http://feast:6566
+      - OPIK_URL=http://opik:5174
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - ENVIRONMENT=production
+      - LOG_LEVEL=INFO
+      - WORKER_TYPE=heavy
+      # Performance tuning for heavy tasks
+      - OMP_NUM_THREADS=16  # OpenMP threads for numpy/scipy
+      - OPENBLAS_NUM_THREADS=16  # BLAS parallelization
+      - MKL_NUM_THREADS=16  # Intel MKL if available
+    command: >
+      celery -A src.workers.celery_app worker
+      --loglevel=INFO
+      --concurrency=2
+      --queues=shap,causal,ml,twins
+      --prefetch-multiplier=1
+      --max-tasks-per-child=10
+      --time-limit=3600
+      --soft-time-limit=3300
+      --hostname=worker_heavy@%h
+    healthcheck:
+      test: ["CMD", "celery", "-A", "src.workers.celery_app", "inspect", "ping"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 60s
+    networks:
+      - e2i_network
+      - mlops_network
+    deploy:
+      resources:
+        limits:
+          cpus: '16'
+          memory: 32G
+        reservations:
+          cpus: '8'
+          memory: 16G
+      replicas: 0  # Start with 0, scale on-demand (0-4)
+    depends_on:
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    labels:
+      - "e2i.service=application"
+      - "e2i.component=worker"
+      - "e2i.worker_tier=heavy"
+      - "e2i.autoscale=true"
+
+  # ---------------------------------------------------------------------------
+  # Celery Beat - Scheduled Tasks (Drift Monitoring, Health Checks)
+  # ---------------------------------------------------------------------------
+  scheduler:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: production
+    container_name: e2i_scheduler
+    restart: unless-stopped
+    volumes:
+      - causal_outputs:/app/data/causal_outputs:ro  # Read-only for monitoring
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_KEY=${SUPABASE_KEY}
+    command: >
+      celery -A src.workers.celery_app beat
+      --loglevel=INFO
+      --scheduler=celery.beat:PersistentScheduler
+    networks:
+      - e2i_network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    depends_on:
+      redis:
+        condition: service_healthy
+      worker_light:
+        condition: service_healthy
+    labels:
+      - "e2i.service=application"
+      - "e2i.component=scheduler"
+
+  # ---------------------------------------------------------------------------
+  # Frontend - React Dashboard (Production Build)
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: ../docker/frontend/Dockerfile
+      target: production
+    container_name: e2i_frontend
+    restart: unless-stopped
+    ports:
+      - "3001:80"
+    environment:
+      - VITE_API_URL=http://api:8000
+      - VITE_WS_URL=ws://api:8000
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    networks:
+      - e2i_network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    depends_on:
+      api:
+        condition: service_healthy
+    labels:
+      - "e2i.service=application"
+      - "e2i.component=frontend"
+
+  # ===========================================================================
+  # OPTIONAL: REVERSE PROXY (Uncomment for Production)
+  # ===========================================================================
+  
+  # nginx:
+  #   image: nginx:alpine
+  #   container_name: e2i_nginx
+  #   restart: unless-stopped
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #   volumes:
+  #     - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+  #     - ./nginx/ssl:/etc/nginx/ssl:ro
+  #   networks:
+  #     - e2i_network
+  #   depends_on:
+  #     - api
+  #     - frontend

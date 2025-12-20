@@ -1,0 +1,232 @@
+"""Experiment Designer Agent State Definitions.
+
+This module defines the TypedDict state structures for the experiment designer agent's
+LangGraph workflow.
+
+Contract: .claude/contracts/tier3-contracts.md lines 82-200
+Specialist: .claude/specialists/Agent_Specialists_Tiers 1-5/experiment-designer.md
+"""
+
+from datetime import datetime
+from typing import Any, Literal, Optional
+from typing_extensions import NotRequired, TypedDict
+
+
+# ===== TYPE ALIASES =====
+
+AgentStatus = Literal["pending", "loading_context", "reasoning", "calculating", "auditing", "redesigning", "generating", "completed", "failed"]
+FormalityLevel = Literal["light", "medium", "heavy"]
+DesignType = Literal["RCT", "quasi_experiment", "difference_in_differences", "regression_discontinuity", "instrumental_variable", "synthetic_control"]
+RandomizationUnit = Literal["individual", "cluster", "time_period", "geography"]
+ValidityThreatSeverity = Literal["low", "medium", "high", "critical"]
+ConfidenceLevel = Literal["low", "medium", "high"]
+
+
+# ===== NESTED TYPED DICTS =====
+
+class TreatmentDefinition(TypedDict):
+    """Definition of a treatment arm in the experiment.
+
+    Contract: .claude/contracts/tier3-contracts.md lines 145-155
+    """
+    name: str
+    description: str
+    implementation_details: str
+    target_population: str
+    dosage_or_intensity: NotRequired[str]
+    duration: NotRequired[str]
+    delivery_mechanism: NotRequired[str]
+
+
+class OutcomeDefinition(TypedDict):
+    """Definition of an outcome metric to measure.
+
+    Contract: .claude/contracts/tier3-contracts.md lines 157-170
+    """
+    name: str
+    metric_type: Literal["continuous", "binary", "count", "time_to_event"]
+    measurement_method: str
+    measurement_frequency: str
+    baseline_value: NotRequired[float]
+    expected_effect_size: NotRequired[float]
+    minimum_detectable_effect: NotRequired[float]
+    is_primary: bool
+
+
+class ValidityThreat(TypedDict):
+    """Identified threat to experimental validity.
+
+    Contract: .claude/contracts/tier3-contracts.md lines 172-185
+    """
+    threat_type: Literal["internal", "external", "construct", "statistical_conclusion"]
+    threat_name: str
+    description: str
+    severity: ValidityThreatSeverity
+    affected_outcomes: list[str]
+    mitigation_possible: bool
+    mitigation_strategy: NotRequired[str]
+
+
+class MitigationRecommendation(TypedDict):
+    """Recommended mitigation for a validity threat.
+
+    Contract: .claude/contracts/tier3-contracts.md lines 187-198
+    """
+    threat_addressed: str
+    strategy: str
+    implementation_steps: list[str]
+    cost_estimate: NotRequired[str]
+    effectiveness_rating: Literal["low", "medium", "high"]
+    trade_offs: list[str]
+
+
+class PowerAnalysisResult(TypedDict):
+    """Results from statistical power analysis.
+
+    Contract: .claude/contracts/tier3-contracts.md lines 200-215
+    """
+    required_sample_size: int
+    required_sample_size_per_arm: int
+    achieved_power: float
+    minimum_detectable_effect: float
+    alpha: float
+    effect_size_type: Literal["cohens_d", "odds_ratio", "rate_ratio", "percentage_change"]
+    assumptions: list[str]
+    sensitivity_analysis: NotRequired[dict[str, Any]]
+
+
+class DoWhySpec(TypedDict):
+    """DoWhy causal model specification.
+
+    Contract: .claude/contracts/tier3-contracts.md lines 217-230
+    """
+    treatment_variable: str
+    outcome_variable: str
+    common_causes: list[str]
+    instruments: NotRequired[list[str]]
+    effect_modifiers: NotRequired[list[str]]
+    graph_dot: str
+    identification_strategy: str
+
+
+class ExperimentTemplate(TypedDict):
+    """Generated experiment template for execution.
+
+    Contract: .claude/contracts/tier3-contracts.md lines 232-250
+    """
+    template_id: str
+    template_version: str
+    design_summary: str
+    treatments: list[TreatmentDefinition]
+    outcomes: list[OutcomeDefinition]
+    sample_size: int
+    duration_days: int
+    randomization_unit: RandomizationUnit
+    randomization_method: str
+    blocking_variables: NotRequired[list[str]]
+    stratification_variables: NotRequired[list[str]]
+    pre_registration_document: NotRequired[str]
+    analysis_code_template: NotRequired[str]
+    monitoring_checkpoints: list[dict[str, Any]]
+
+
+class ErrorDetails(TypedDict):
+    """Error information for debugging.
+
+    Contract: .claude/contracts/tier3-contracts.md lines 252-260
+    """
+    node: str
+    error: str
+    timestamp: str
+    recoverable: NotRequired[bool]
+    retry_count: NotRequired[int]
+
+
+class DesignIteration(TypedDict):
+    """Record of a design iteration in the redesign loop.
+
+    Specialist: .claude/specialists/Agent_Specialists_Tiers 1-5/experiment-designer.md lines 450-470
+    """
+    iteration_number: int
+    design_type: DesignType
+    validity_threats_identified: int
+    critical_threats: int
+    power_achieved: float
+    redesign_reason: NotRequired[str]
+    timestamp: str
+
+
+# ===== MAIN STATE =====
+
+class ExperimentDesignState(TypedDict):
+    """Complete state for experiment designer agent workflow.
+
+    This state flows through all nodes in the graph:
+    context_loader → design_reasoning → power_analysis → validity_audit →
+    (conditional redesign) → template_generator
+
+    Contract: .claude/contracts/tier3-contracts.md lines 82-142
+    Specialist: .claude/specialists/Agent_Specialists_Tiers 1-5/experiment-designer.md
+    """
+
+    # ===== Input Fields =====
+    business_question: str
+    constraints: dict[str, Any]
+    available_data: dict[str, Any]
+    preregistration_formality: FormalityLevel
+    max_redesign_iterations: int
+    enable_validity_audit: bool
+
+    # ===== Organizational Context =====
+    historical_experiments: NotRequired[list[dict[str, Any]]]
+    domain_knowledge: NotRequired[dict[str, Any]]
+    regulatory_requirements: NotRequired[list[str]]
+    budget_constraints: NotRequired[dict[str, Any]]
+    timeline_constraints: NotRequired[dict[str, Any]]
+
+    # ===== Design Reasoning Outputs =====
+    design_type: NotRequired[DesignType]
+    design_rationale: NotRequired[str]
+    treatments: NotRequired[list[TreatmentDefinition]]
+    outcomes: NotRequired[list[OutcomeDefinition]]
+    randomization_unit: NotRequired[RandomizationUnit]
+    randomization_method: NotRequired[str]
+    blocking_variables: NotRequired[list[str]]
+    stratification_variables: NotRequired[list[str]]
+    causal_assumptions: NotRequired[list[str]]
+
+    # ===== Power Analysis Outputs =====
+    power_analysis: NotRequired[PowerAnalysisResult]
+    sample_size_justification: NotRequired[str]
+    duration_estimate_days: NotRequired[int]
+    interim_analysis_schedule: NotRequired[list[dict[str, Any]]]
+
+    # ===== Validity Audit Outputs =====
+    validity_threats: NotRequired[list[ValidityThreat]]
+    mitigations: NotRequired[list[MitigationRecommendation]]
+    overall_validity_score: NotRequired[float]
+    validity_confidence: NotRequired[ConfidenceLevel]
+    redesign_needed: NotRequired[bool]
+    redesign_recommendations: NotRequired[list[str]]
+
+    # ===== DoWhy Integration Outputs =====
+    dowhy_spec: NotRequired[DoWhySpec]
+    causal_graph_dot: NotRequired[str]
+    identification_result: NotRequired[dict[str, Any]]
+    estimand: NotRequired[str]
+
+    # ===== Template Generation Outputs =====
+    experiment_template: NotRequired[ExperimentTemplate]
+    analysis_code: NotRequired[str]
+    monitoring_dashboard_spec: NotRequired[dict[str, Any]]
+
+    # ===== Execution Metadata =====
+    current_iteration: NotRequired[int]
+    iteration_history: NotRequired[list[DesignIteration]]
+    total_llm_tokens_used: NotRequired[int]
+    node_latencies_ms: NotRequired[dict[str, int]]
+
+    # ===== Error Handling =====
+    errors: list[ErrorDetails]
+    warnings: list[str]
+    status: AgentStatus

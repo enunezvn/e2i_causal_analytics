@@ -1,0 +1,9 @@
+# Ignore all SSL certificates and keys
+*.pem
+*.crt
+*.key
+*.csr
+
+# Allow README
+!README.md
+!.gitignore

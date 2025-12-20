@@ -1,0 +1,651 @@
+# ═══════════════════════════════════════════════════════════════════
+# E2I Causal Analytics - Confidence Score Calculation Logic
+# File: confidence_logic.yaml
+# Version: V4.1
+# Purpose: Define confidence score formula and reduction rules
+# Gap: Gap 12 - Confidence Calculation Logic
+# ═══════════════════════════════════════════════════════════════════
+
+# ═══════════════════════════════════════════════════════════════════
+# BASE CONFIDENCE FORMULA
+# ═══════════════════════════════════════════════════════════════════
+
+confidence_formula:
+  # Base confidence = weighted product of four components
+  # Confidence ∈ [0, 1] where 1 = highest confidence
+
+  base_formula: |
+    confidence = (sample_size_factor^0.25) ×
+                 (temporal_stability^0.25) ×
+                 (effect_consistency^0.25) ×
+                 (validation_strength^0.25)
+
+  # Alternative: Weighted average (easier to interpret)
+  weighted_average_formula: |
+    confidence = (sample_size_factor × 0.25) +
+                 (temporal_stability × 0.25) +
+                 (effect_consistency × 0.25) +
+                 (validation_strength × 0.25)
+
+  default_method: "weighted_average"  # "weighted_average" or "geometric_mean"
+
+  # Display confidence as percentage
+  display_format: "percentage"  # confidence × 100
+  decimal_places: 1
+
+
+# ═══════════════════════════════════════════════════════════════════
+# COMPONENT 1: SAMPLE SIZE FACTOR
+# ═══════════════════════════════════════════════════════════════════
+
+sample_size_factor:
+  description: "Confidence based on treatment and control group sizes"
+
+  # Formula: Asymptotic confidence based on effective sample size
+  formula: |
+    sample_size_factor = min(1.0, sqrt(effective_n / n_required))
+
+    where:
+      effective_n = (n_treatment × n_control) / (n_treatment + n_control)
+      n_required = threshold based on entity type
+
+  # Required sample sizes for high confidence (0.9+)
+  n_required:
+    hcp:
+      minimum: 30
+      recommended: 100
+      high_confidence: 300  # n_required for 1.0 confidence
+
+    patient:
+      minimum: 100
+      recommended: 500
+      high_confidence: 2000
+
+    prescription:
+      minimum: 500
+      recommended: 2000
+      high_confidence: 10000
+
+    territory:
+      minimum: 20
+      recommended: 50
+      high_confidence: 150
+
+  # Adjustment for imbalanced treatment/control
+  balance_penalty:
+    enabled: true
+    formula: |
+      balance_ratio = min(n_treatment, n_control) / max(n_treatment, n_control)
+      if balance_ratio < 0.5:
+        sample_size_factor *= (0.5 + 0.5 × balance_ratio)
+
+  # Minimum sample size threshold (below this, confidence = 0)
+  absolute_minimum:
+    hcp: 10
+    patient: 30
+    prescription: 100
+    territory: 5
+
+
+# ═══════════════════════════════════════════════════════════════════
+# COMPONENT 2: TEMPORAL STABILITY
+# ═══════════════════════════════════════════════════════════════════
+
+temporal_stability:
+  description: "Consistency of causal effect over time periods"
+
+  # Formula: Inverse coefficient of variation of effect sizes
+  formula: |
+    temporal_stability = 1 / (1 + CV_temporal)
+
+    where:
+      CV_temporal = std(effects_by_period) / abs(mean(effects_by_period))
+
+  # Time window for stability check
+  time_windows:
+    default: "monthly"  # Split data into monthly cohorts
+
+    minimum_periods: 3  # Need at least 3 periods for stability calculation
+
+    # Override by analysis granularity
+    overrides:
+      daily:
+        window: "weekly"
+        minimum_periods: 4
+      weekly:
+        window: "monthly"
+        minimum_periods: 3
+      monthly:
+        window: "quarterly"
+        minimum_periods: 3
+      quarterly:
+        window: "yearly"
+        minimum_periods: 2
+
+  # Interpretation thresholds
+  thresholds:
+    high_stability: 0.80  # CV < 0.25
+    moderate_stability: 0.60  # CV < 0.67
+    low_stability: 0.40  # CV < 1.5
+    unstable: 0.20  # CV >= 1.5
+
+  # Special handling
+  special_cases:
+    single_period:
+      # If only one time period available, use default
+      default_value: 0.70
+
+    trending_effect:
+      # If effect shows clear linear trend, adjust stability upward
+      detect_trend: true
+      r_squared_threshold: 0.70
+      adjustment: +0.10
+
+
+# ═══════════════════════════════════════════════════════════════════
+# COMPONENT 3: EFFECT CONSISTENCY
+# ═══════════════════════════════════════════════════════════════════
+
+effect_consistency:
+  description: "Homogeneity of effect across subgroups and dimensions"
+
+  # Formula: Based on heterogeneity metrics
+  formula: |
+    effect_consistency = exp(-heterogeneity_index)
+
+    where:
+      heterogeneity_index = I² / 100
+      I² = ((Q - df) / Q) × 100  (Higgins I² statistic)
+      Q = Cochran's Q statistic
+
+  # Subgroups to check for consistency
+  subgroups:
+    required:
+      - region  # Northeast, South, Midwest, West
+      - hcp_tier  # Tier 1, 2, 3, 4
+
+    optional:
+      - specialty  # Allergy, Hematology, Oncology, etc.
+      - patient_segment  # New vs existing
+      - seasonality  # Q1, Q2, Q3, Q4
+
+  # Interpretation thresholds (based on I²)
+  thresholds:
+    homogeneous: 0.85  # I² < 25% (low heterogeneity)
+    moderate: 0.65  # I² < 50% (moderate heterogeneity)
+    heterogeneous: 0.45  # I² < 75% (substantial heterogeneity)
+    very_heterogeneous: 0.25  # I² >= 75% (high heterogeneity)
+
+  # Minimum subgroup sample size
+  subgroup_minimum_n:
+    hcp: 10
+    patient: 30
+    prescription: 50
+
+  # What to do if subgroup is too small
+  insufficient_subgroup_handling: "exclude"  # "exclude" or "penalize"
+  insufficient_subgroup_penalty: -0.15  # If "penalize"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# COMPONENT 4: VALIDATION STRENGTH
+# ═══════════════════════════════════════════════════════════════════
+
+validation_strength:
+  description: "Aggregate strength from DoWhy refutation tests (Gap 3)"
+
+  # Integration with causal_validation_config.yaml
+  source: "causal_validations table"
+
+  # Formula: Weighted average of test outcomes
+  formula: |
+    validation_strength = Σ(test_weight × test_score) / Σ(test_weight)
+
+    where:
+      test_score ∈ {1.0, 0.5, 0.0} for {pass, review, fail}
+
+  # Test weights (must match causal_validation_config.yaml)
+  test_weights:
+    placebo_treatment_refuter: 0.30
+    random_common_cause_refuter: 0.25
+    data_subset_refuter: 0.20
+    bootstrap_refuter: 0.15
+    sensitivity_e_value: 0.10
+
+  # Mapping validation outcomes to scores
+  outcome_scores:
+    proceed: 1.0
+    review: 0.5
+    block: 0.0
+
+  # Fallback if no validation available
+  no_validation_available:
+    default_value: 0.50
+    display_warning: true
+
+  # Thresholds for interpretation
+  thresholds:
+    strong_validation: 0.85  # 4+ tests passed
+    moderate_validation: 0.65  # 3 tests passed or mix of pass/review
+    weak_validation: 0.45  # 2 tests passed, others review
+    failed_validation: 0.25  # 1+ tests failed
+
+
+# ═══════════════════════════════════════════════════════════════════
+# CONFIDENCE REDUCTION RULES
+# ═══════════════════════════════════════════════════════════════════
+
+confidence_reductions:
+  description: "Penalties applied to base confidence for known issues"
+
+  # Apply reductions multiplicatively: adjusted = base × (1 - reduction)
+  method: "multiplicative"
+
+  # Reduction rules
+  rules:
+    # High heterogeneity detected
+    high_heterogeneity:
+      condition: "effect_consistency < 0.45"
+      reduction: 0.20  # -20%
+      reason: "Substantial heterogeneity across subgroups"
+
+    # Missing important covariates
+    missing_covariates:
+      condition: "covariate_coverage < 0.80"
+      reduction: 0.15  # -15%
+      reason: "Key covariates missing or incomplete"
+
+      # Which covariates are critical
+      critical_covariates:
+        - specialty
+        - hcp_tier
+        - region
+        - patient_history
+
+    # Failed sensitivity analysis
+    failed_sensitivity:
+      condition: "sensitivity_e_value test outcome = block"
+      reduction: 0.25  # -25%
+      reason: "Effect not robust to unmeasured confounding"
+
+    # Small sample size
+    small_sample:
+      condition: "effective_n < n_required × 0.5"
+      reduction: 0.20  # -20%
+      reason: "Sample size below recommended threshold"
+
+    # Imbalanced treatment/control
+    imbalanced_groups:
+      condition: "balance_ratio < 0.33"
+      reduction: 0.15  # -15%
+      reason: "Severe imbalance between treatment and control"
+
+    # High temporal variation
+    unstable_over_time:
+      condition: "temporal_stability < 0.40"
+      reduction: 0.20  # -20%
+      reason: "Effect varies substantially over time"
+
+    # Poor data quality
+    low_data_quality:
+      condition: "data_quality_score < 70"
+      reduction: 0.15  # -15%
+      reason: "Low quality score from source data"
+
+      # Link to data_sources table (Gap 7)
+      source_quality_field: "quality_score"
+
+    # Missing data > threshold
+    excessive_missing:
+      condition: "missing_rate > 0.15"
+      reduction: 0.10  # -10%
+      reason: "High proportion of missing values"
+
+    # Short observation period
+    short_duration:
+      condition: "observation_days < 90"
+      reduction: 0.15  # -15%
+      reason: "Observation period too short for stable estimate"
+
+    # Multiple hypothesis testing without correction
+    no_multiple_testing_correction:
+      condition: "n_hypotheses > 5 AND correction_applied = false"
+      reduction: 0.10  # -10%
+      reason: "Multiple comparisons without adjustment"
+
+  # Maximum cumulative reduction
+  max_cumulative_reduction: 0.60  # Can't reduce more than 60%
+
+  # Apply floor after reductions
+  minimum_confidence_floor: 0.10  # Never below 10%
+
+
+# ═══════════════════════════════════════════════════════════════════
+# CONFIDENCE BOOST RULES
+# ═══════════════════════════════════════════════════════════════════
+
+confidence_boosts:
+  description: "Bonus for particularly strong evidence"
+
+  # Apply boosts additively: adjusted = base + boost (capped at 1.0)
+  method: "additive"
+
+  # Boost rules
+  rules:
+    # Randomized experiment
+    randomized_design:
+      condition: "study_design = RCT"
+      boost: 0.15  # +15%
+      reason: "Randomized controlled trial eliminates selection bias"
+
+    # All validation tests passed
+    perfect_validation:
+      condition: "validation_strength >= 0.95"
+      boost: 0.10  # +10%
+      reason: "All refutation tests passed with high confidence"
+
+    # Very large sample
+    large_sample:
+      condition: "effective_n > n_required × 3"
+      boost: 0.10  # +10%
+      reason: "Sample size well exceeds requirements"
+
+    # Consistent across all subgroups
+    perfect_consistency:
+      condition: "effect_consistency >= 0.90"
+      boost: 0.08  # +8%
+      reason: "Effect homogeneous across all subgroups"
+
+    # Highly stable over time
+    perfect_stability:
+      condition: "temporal_stability >= 0.90"
+      boost: 0.08  # +8%
+      reason: "Effect highly stable across time periods"
+
+    # External validation
+    external_validation:
+      condition: "has_external_validation = true"
+      boost: 0.12  # +12%
+      reason: "Effect replicated in independent dataset"
+
+    # Strong theoretical support
+    theory_supported:
+      condition: "has_causal_mechanism = true"
+      boost: 0.05  # +5%
+      reason: "Established causal mechanism supports finding"
+
+  # Maximum cumulative boost
+  max_cumulative_boost: 0.30  # Can't boost more than 30%
+
+  # Cap at maximum confidence
+  maximum_confidence_ceiling: 0.98  # Never claim > 98%
+
+
+# ═══════════════════════════════════════════════════════════════════
+# DISPLAY THRESHOLDS
+# ═══════════════════════════════════════════════════════════════════
+
+display_thresholds:
+  description: "When to show/hide results based on confidence"
+
+  # Minimum confidence to display result at all
+  minimum_to_display: 0.30  # Don't show confidence < 30%
+
+  # Confidence tiers for color coding
+  tiers:
+    high_confidence:
+      threshold: 0.75
+      color: "#22c55e"  # Green
+      label: "High Confidence"
+      display_badge: true
+
+    moderate_confidence:
+      threshold: 0.50
+      color: "#f59e0b"  # Amber
+      label: "Moderate Confidence"
+      display_badge: true
+
+    low_confidence:
+      threshold: 0.30
+      color: "#ef4444"  # Red
+      label: "Low Confidence"
+      display_badge: true
+      display_warning: true
+
+  # Recommendations based on confidence
+  recommendations:
+    high_confidence: "Actionable - proceed with implementation"
+    moderate_confidence: "Consider carefully - validate assumptions"
+    low_confidence: "Exploratory only - collect more data"
+
+  # When to trigger alerts (Gap 11)
+  alert_thresholds:
+    confidence_drop_alert: 0.15  # Alert if confidence drops by 15+ points
+    low_confidence_alert: 0.40  # Alert if any result falls below 40%
+
+
+# ═══════════════════════════════════════════════════════════════════
+# INTEGRATION WITH OTHER SYSTEMS
+# ═══════════════════════════════════════════════════════════════════
+
+integration:
+  # Link to causal validation system (Gap 3)
+  causal_validation:
+    table: "causal_validations"
+    source_field: "validation_strength"
+    gate_respect: true  # Respect block decisions
+
+  # Link to data sources quality (Gap 7)
+  data_sources:
+    table: "data_sources"
+    quality_field: "quality_score"
+    apply_quality_penalty: true
+
+  # Link to ROI calculations (Gap 9)
+  roi_methodology:
+    confidence_affects_roi: true
+    confidence_in_bootstrap: true  # Use confidence to weight simulations
+
+    # Adjust ROI ranges based on confidence
+    roi_range_adjustment:
+      high_confidence: "narrow_range"  # Tighter CI
+      moderate_confidence: "normal_range"
+      low_confidence: "wide_range"  # Wider CI
+
+  # Output to causal_impacts table
+  storage:
+    table: "causal_impacts"
+    field: "confidence_score"
+    store_components: true  # Store individual component scores
+    component_fields:
+      - sample_size_factor
+      - temporal_stability
+      - effect_consistency
+      - validation_strength
+
+
+# ═══════════════════════════════════════════════════════════════════
+# CONFIDENCE SCORE CALCULATION PIPELINE
+# ═══════════════════════════════════════════════════════════════════
+
+calculation_pipeline:
+  description: "Step-by-step process for calculating confidence score"
+
+  steps:
+    1_compute_components:
+      - name: "Calculate sample size factor"
+        function: "calculate_sample_size_factor()"
+        inputs: [n_treatment, n_control, entity_type]
+        output: sample_size_factor
+
+      - name: "Calculate temporal stability"
+        function: "calculate_temporal_stability()"
+        inputs: [effects_by_period, time_window]
+        output: temporal_stability
+
+      - name: "Calculate effect consistency"
+        function: "calculate_effect_consistency()"
+        inputs: [effects_by_subgroup, subgroup_definitions]
+        output: effect_consistency
+
+      - name: "Calculate validation strength"
+        function: "calculate_validation_strength()"
+        inputs: [validation_id, test_weights]
+        output: validation_strength
+
+    2_compute_base_confidence:
+      - name: "Combine components into base confidence"
+        function: "compute_base_confidence()"
+        formula: "weighted_average or geometric_mean"
+        inputs: [sample_size_factor, temporal_stability, effect_consistency, validation_strength]
+        output: base_confidence
+
+    3_apply_reductions:
+      - name: "Apply confidence reduction rules"
+        function: "apply_confidence_reductions()"
+        inputs: [base_confidence, reduction_rules, context]
+        output: reduced_confidence
+
+    4_apply_boosts:
+      - name: "Apply confidence boost rules"
+        function: "apply_confidence_boosts()"
+        inputs: [reduced_confidence, boost_rules, context]
+        output: boosted_confidence
+
+    5_finalize:
+      - name: "Clamp to valid range and round"
+        function: "finalize_confidence()"
+        inputs: [boosted_confidence]
+        constraints:
+          - minimum: 0.10
+          - maximum: 0.98
+        output: final_confidence
+
+    6_determine_tier:
+      - name: "Classify into confidence tier"
+        function: "classify_confidence_tier()"
+        inputs: [final_confidence, tier_thresholds]
+        output: confidence_tier
+
+    7_store_results:
+      - name: "Store in database"
+        table: "causal_impacts"
+        fields: [confidence_score, confidence_tier, component_scores]
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ERROR HANDLING
+# ═══════════════════════════════════════════════════════════════════
+
+error_handling:
+  missing_data:
+    sample_size_missing:
+      action: "set_to_minimum"
+      fallback_confidence: 0.20
+
+    temporal_data_missing:
+      action: "use_default"
+      default_stability: 0.70
+
+    subgroup_data_missing:
+      action: "skip_consistency"
+      default_consistency: 0.60
+
+    validation_data_missing:
+      action: "use_default"
+      default_validation: 0.50
+
+  calculation_errors:
+    division_by_zero:
+      action: "return_zero"
+
+    negative_confidence:
+      action: "clamp_to_minimum"
+      minimum: 0.10
+
+    confidence_exceeds_one:
+      action: "clamp_to_maximum"
+      maximum: 0.98
+
+  logging:
+    log_all_calculations: true
+    log_level: "INFO"
+    store_calculation_metadata: true
+
+
+# ═══════════════════════════════════════════════════════════════════
+# TESTING & VALIDATION
+# ═══════════════════════════════════════════════════════════════════
+
+testing:
+  unit_tests:
+    - name: "test_sample_size_factor"
+      cases:
+        - input: {n_treatment: 100, n_control: 100, entity: hcp}
+          expected: 0.58
+        - input: {n_treatment: 300, n_control: 300, entity: hcp}
+          expected: 1.00
+
+    - name: "test_temporal_stability"
+      cases:
+        - input: {effects: [0.10, 0.12, 0.09, 0.11], mean: 0.105}
+          expected: 0.88  # Low CV
+        - input: {effects: [0.10, 0.20, 0.05, 0.25], mean: 0.15}
+          expected: 0.47  # High CV
+
+    - name: "test_effect_consistency"
+      cases:
+        - input: {I_squared: 15}
+          expected: 0.86  # Homogeneous
+        - input: {I_squared: 80}
+          expected: 0.45  # Heterogeneous
+
+  integration_tests:
+    - name: "test_full_pipeline"
+      input:
+        n_treatment: 200
+        n_control: 180
+        effects_by_period: [0.12, 0.14, 0.13, 0.11]
+        I_squared: 22
+        validation_strength: 0.85
+      expected_range: [0.75, 0.85]
+
+    - name: "test_with_reductions"
+      input:
+        base_confidence: 0.80
+        small_sample: true
+        failed_sensitivity: false
+      expected: ~0.64  # 0.80 × (1 - 0.20)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# DOCUMENTATION REFERENCES
+# ═══════════════════════════════════════════════════════════════════
+
+documentation:
+  methodology_doc: "docs/confidence_methodology.md"
+  related_configs:
+    - "config/causal_validation_config.yaml"  # Gap 3
+    - "e2i_mlops/012_data_sources.sql"  # Gap 7
+    - "docs/roi_methodology.md"  # Gap 9
+
+  academic_references:
+    - "Higgins & Thompson (2002) - Quantifying heterogeneity in meta-analysis"
+    - "VanderWeele & Ding (2017) - Sensitivity analysis in observational research"
+    - "Imbens & Rubin (2015) - Causal Inference for Statistics"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# VERSION HISTORY
+# ═══════════════════════════════════════════════════════════════════
+
+version: "4.1"
+last_updated: "2025-12-15"
+changelog:
+  - version: "4.1"
+    date: "2025-12-15"
+    changes:
+      - "Initial creation for Gap 12 resolution"
+      - "Integrated with causal validation system (Gap 3)"
+      - "Linked to data sources quality (Gap 7)"
+      - "Aligned with ROI methodology (Gap 9)"

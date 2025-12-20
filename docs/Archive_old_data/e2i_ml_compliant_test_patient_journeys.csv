@@ -1,0 +1,71 @@
+patient_journey_id,patient_id,patient_hash,data_split,journey_start_date,journey_end_date,journey_duration_days,journey_stage,journey_status,primary_diagnosis_code,primary_diagnosis_desc,brand,age_group,gender,geographic_region,state,insurance_type,data_quality_score,comorbidities
+PJ-00007,PAT-00007,fc83794ce9a8,test,2025-07-25,2025-08-20,26,initial_treatment,transitioning,D59.5,Hemolytic-uremic syndrome,Fabhalta,55-64,F,south,VA,cash,0.83,"[""thrombosis"", ""anemia""]"
+PJ-00022,PAT-00022,ce4fe14f843e,test,2025-06-27,2025-07-05,8,treatment_switch,stable,C50.812,HR+ HER2- breast cancer,Kisqali,45-54,M,south,FL,cash,0.9,"[""hyperlipidemia"", ""diabetes_type2"", ""hypertension""]"
+PJ-00032,PAT-00032,8c1b2e205a64,test,2025-07-31,2025-08-10,10,initial_treatment,active,D59.3,Paroxysmal nocturnal hemoglobinuria,Fabhalta,55-64,M,south,VA,commercial,0.95,"[""aplastic_anemia"", ""thrombosis"", ""anemia""]"
+PJ-00033,PAT-00033,8c7ebd1b15ac,test,2025-06-16,2025-08-20,65,diagnosis,completed,D59.3,Paroxysmal nocturnal hemoglobinuria,Fabhalta,35-44,M,midwest,WI,commercial,0.97,[]
+PJ-00040,PAT-00040,ffba2d3a2400,test,2025-08-26,2025-09-04,9,maintenance,active,C50.911,HR+ HER2- breast cancer,Kisqali,75+,F,west,NM,medicare,0.92,"[""hyperlipidemia""]"
+PJ-00044,PAT-00044,6337f897edba,test,2025-07-12,2025-08-06,25,initial_treatment,transitioning,D59.5,Hemolytic-uremic syndrome,Fabhalta,35-44,M,south,SC,commercial,0.75,"[""anemia"", ""chronic_kidney_disease"", ""aplastic_anemia""]"
+PJ-00045,PAT-00045,256254b33abf,test,2025-07-18,2025-07-31,13,initial_treatment,active,D59.5,Hemolytic-uremic syndrome,Fabhalta,35-44,F,midwest,MO,commercial,0.92,[]
+PJ-00046,PAT-00046,1cba21b25957,test,2025-06-17,2025-07-29,42,treatment_optimization,stable,L50.8,"Urticaria, unspecified",Remibrutinib,45-54,F,midwest,OH,commercial,0.87,"[""asthma"", ""eczema"", ""food_allergies""]"
+PJ-00049,PAT-00049,e1302a167e98,test,2025-07-17,2025-09-01,46,diagnosis,stable,L50.8,"Urticaria, unspecified",Remibrutinib,18-24,M,west,NV,medicare,0.86,"[""allergic_rhinitis"", ""food_allergies"", ""asthma""]"
+PJ-00050,PAT-00050,acd3a45b953b,test,2025-07-16,2025-08-10,25,treatment_switch,transitioning,L50.8,Other urticaria,Remibrutinib,25-34,M,northeast,MA,cash,0.97,[]
+PJ-00055,PAT-00055,0ac295408357,test,2025-07-31,2025-09-03,34,treatment_switch,transitioning,C50.811,HR+ HER2- breast cancer,Kisqali,75+,M,south,AL,commercial,0.86,"[""osteoporosis"", ""hyperlipidemia""]"
+PJ-00073,PAT-00073,ed64048b1a65,test,2025-07-31,2025-08-23,23,diagnosis,completed,L50.9,Chronic spontaneous urticaria,Remibrutinib,55-64,M,northeast,PA,medicaid,0.94,[]
+PJ-00075,PAT-00075,825cec0c4f3d,test,2025-08-02,2025-08-20,18,diagnosis,stable,L50.8,Other urticaria,Remibrutinib,45-54,M,south,SC,cash,0.97,"[""food_allergies"", ""eczema""]"
+PJ-00087,PAT-00087,c7a6a29a9835,test,2025-07-24,2025-08-02,9,diagnosis,transitioning,L50.8,Chronic spontaneous urticaria,Remibrutinib,45-54,F,midwest,WI,cash,0.89,"[""food_allergies"", ""allergic_rhinitis""]"
+PJ-00095,PAT-00095,8e5043e3b5fc,test,2025-08-19,2025-09-05,17,maintenance,active,C50.911,HR+ HER2- breast cancer,Kisqali,45-54,F,south,TN,cash,0.91,"[""osteoporosis"", ""hypertension"", ""hyperlipidemia""]"
+PJ-00098,PAT-00098,a3550ebce686,test,2025-06-19,2025-08-19,61,treatment_optimization,active,C50.911,Malignant neoplasm of breast,Kisqali,75+,M,midwest,IN,cash,0.85,"[""hypertension"", ""hyperlipidemia"", ""osteoporosis""]"
+PJ-00106,PAT-00106,60e8eec359e2,test,2025-07-08,2025-07-25,17,treatment_optimization,stable,L50.1,Other urticaria,Remibrutinib,18-24,M,northeast,MA,medicaid,0.98,"[""allergic_rhinitis""]"
+PJ-00109,PAT-00109,052746d3591f,test,2025-08-25,2025-09-03,9,diagnosis,stable,D59.5,Hemolytic-uremic syndrome,Fabhalta,45-54,M,south,FL,commercial,0.99,"[""aplastic_anemia"", ""anemia""]"
+PJ-00120,PAT-00120,15660a2324c2,test,2025-08-24,2025-08-31,7,initial_treatment,active,D59.3,Paroxysmal nocturnal hemoglobinuria,Fabhalta,35-44,F,south,LA,medicare,0.9,[]
+PJ-00129,PAT-00129,c0ed7a006f66,test,2025-07-22,2025-08-26,35,treatment_optimization,active,D59.3,Hemolytic-uremic syndrome,Fabhalta,35-44,M,south,TX,commercial,0.88,[]
+PJ-00130,PAT-00130,81b826f99455,test,2025-07-19,2025-08-08,20,treatment_switch,transitioning,L50.8,Chronic spontaneous urticaria,Remibrutinib,55-64,F,south,GA,commercial,0.88,"[""food_allergies"", ""eczema""]"
+PJ-00136,PAT-00136,d6872594f95f,test,2025-08-21,2025-09-03,13,diagnosis,active,L50.1,"Urticaria, unspecified",Remibrutinib,55-64,M,midwest,IN,commercial,0.89,"[""asthma""]"
+PJ-00138,PAT-00138,745bd8d68230,test,2025-07-18,2025-08-07,20,maintenance,stable,C50.811,HR+ HER2- breast cancer,Kisqali,45-54,F,west,CO,medicare,0.86,"[""hypertension"", ""diabetes_type2"", ""hyperlipidemia""]"
+PJ-00141,PAT-00141,a62e6bf8bab7,test,2025-07-25,2025-08-31,37,initial_treatment,active,C50.911,HR+ HER2- breast cancer,Kisqali,55-64,M,northeast,ME,medicaid,0.86,"[""hyperlipidemia"", ""diabetes_type2"", ""hypertension""]"
+PJ-00149,PAT-00149,9731183b6b2b,test,2025-06-08,2025-08-05,58,initial_treatment,transitioning,D59.3,Hemolytic-uremic syndrome,Fabhalta,45-54,F,west,UT,commercial,0.89,"[""chronic_kidney_disease"", ""anemia""]"
+PJ-00194,PAT-00194,88590919ca6b,test,2025-08-01,2025-08-08,7,initial_treatment,stable,L50.1,"Urticaria, unspecified",Remibrutinib,45-54,M,south,GA,commercial,0.89,"[""eczema""]"
+PJ-00195,PAT-00195,0bfa73d4e1b4,test,2025-07-06,2025-08-06,31,treatment_switch,stable,C50.912,Malignant neoplasm of breast,Kisqali,35-44,F,west,CA,medicare,0.77,[]
+PJ-00204,PAT-00204,c81dc2e687b3,test,2025-08-04,2025-08-29,25,treatment_optimization,active,L50.1,Chronic spontaneous urticaria,Remibrutinib,55-64,F,midwest,IL,medicare,0.88,"[""allergic_rhinitis"", ""eczema""]"
+PJ-00207,PAT-00207,d468641372e4,test,2025-07-03,2025-07-28,25,treatment_optimization,transitioning,C50.911,Malignant neoplasm of breast,Kisqali,65-74,M,west,CO,commercial,0.88,"[""hyperlipidemia"", ""diabetes_type2"", ""hypertension""]"
+PJ-00210,PAT-00210,6759400f8315,test,2025-08-11,2025-08-24,13,initial_treatment,completed,C50.811,HR+ HER2- breast cancer,Kisqali,45-54,M,south,SC,cash,0.83,[]
+PJ-00216,PAT-00216,9679b7fc623b,test,2025-06-07,2025-06-26,19,maintenance,stable,D59.5,Hemolytic-uremic syndrome,Fabhalta,55-64,F,northeast,ME,medicaid,0.77,"[""chronic_kidney_disease"", ""aplastic_anemia"", ""anemia""]"
+PJ-00218,PAT-00218,3b4cb3fc3988,test,2025-07-15,2025-07-27,12,initial_treatment,completed,C50.912,Malignant neoplasm of breast,Kisqali,55-64,M,west,OR,medicare,0.76,[]
+PJ-00226,PAT-00226,3cb44f1e12ef,test,2025-06-17,2025-07-30,43,maintenance,active,C50.812,Malignant neoplasm of breast,Kisqali,65-74,M,south,NC,commercial,0.92,"[""diabetes_type2""]"
+PJ-00244,PAT-00244,30146955d979,test,2025-06-12,2025-07-28,46,maintenance,active,L50.1,"Urticaria, unspecified",Remibrutinib,18-24,M,northeast,PA,medicaid,0.81,"[""asthma""]"
+PJ-00251,PAT-00251,67ce25c257e6,test,2025-07-10,2025-08-29,50,initial_treatment,transitioning,C50.912,Malignant neoplasm of breast,Kisqali,35-44,F,midwest,MN,cash,0.82,"[""hypertension"", ""osteoporosis""]"
+PJ-00257,PAT-00257,90cd01e67192,test,2025-06-25,2025-08-11,47,treatment_switch,transitioning,C50.911,HR+ HER2- breast cancer,Kisqali,45-54,F,south,NC,cash,0.88,"[""hypertension""]"
+PJ-00270,PAT-00270,6fed8d876d56,test,2025-07-03,2025-07-10,7,initial_treatment,completed,D59.5,Hemolytic-uremic syndrome,Fabhalta,35-44,F,midwest,IN,medicare,0.77,"[""anemia"", ""thrombosis""]"
+PJ-00275,PAT-00275,1b9e98f7f0d3,test,2025-07-01,2025-07-25,24,initial_treatment,active,C50.812,HR+ HER2- breast cancer,Kisqali,75+,M,midwest,WI,cash,0.98,"[""osteoporosis"", ""diabetes_type2""]"
+PJ-00278,PAT-00278,7adccfcd0e95,test,2025-07-16,2025-08-20,35,treatment_optimization,completed,D59.5,Hemolytic-uremic syndrome,Fabhalta,45-54,F,south,SC,medicaid,0.98,[]
+PJ-00283,PAT-00283,be2baea96d86,test,2025-08-15,2025-08-26,11,maintenance,active,L50.8,Other urticaria,Remibrutinib,25-34,F,midwest,MO,cash,0.81,[]
+PJ-00284,PAT-00284,20ec41c614cb,test,2025-07-25,2025-08-31,37,maintenance,active,L50.1,"Urticaria, unspecified",Remibrutinib,18-24,F,northeast,RI,medicare,0.84,[]
+PJ-00293,PAT-00293,d58d852119a1,test,2025-08-02,2025-08-20,18,diagnosis,stable,C50.812,HR+ HER2- breast cancer,Kisqali,45-54,F,west,NV,commercial,0.81,"[""osteoporosis""]"
+PJ-00294,PAT-00294,d86b3722f802,test,2025-07-14,2025-08-14,31,treatment_switch,stable,D59.5,Hemolytic-uremic syndrome,Fabhalta,45-54,F,south,FL,medicaid,0.96,[]
+PJ-00299,PAT-00299,f5b00cc8b772,test,2025-08-03,2025-08-23,20,initial_treatment,completed,L50.1,Chronic spontaneous urticaria,Remibrutinib,18-24,M,northeast,VT,commercial,0.87,"[""asthma"", ""allergic_rhinitis""]"
+PJ-00303,PAT-00303,eebbcc48b8b0,test,2025-07-29,2025-08-25,27,initial_treatment,active,L50.9,Chronic spontaneous urticaria,Remibrutinib,25-34,F,midwest,OH,medicare,0.85,[]
+PJ-00304,PAT-00304,597550297050,test,2025-08-08,2025-08-22,14,maintenance,completed,L50.8,"Urticaria, unspecified",Remibrutinib,55-64,F,northeast,NJ,cash,0.76,"[""asthma"", ""allergic_rhinitis"", ""eczema""]"
+PJ-00309,PAT-00309,ac151f7c0b9d,test,2025-08-19,2025-08-26,7,initial_treatment,active,D59.5,Paroxysmal nocturnal hemoglobinuria,Fabhalta,45-54,M,midwest,IA,cash,0.81,[]
+PJ-00314,PAT-00314,a43cf39ebef4,test,2025-07-05,2025-07-21,16,maintenance,completed,D59.5,Paroxysmal nocturnal hemoglobinuria,Fabhalta,45-54,M,northeast,ME,commercial,0.93,[]
+PJ-00326,PAT-00326,75cc407848be,test,2025-08-04,2025-08-18,14,initial_treatment,transitioning,L50.1,"Urticaria, unspecified",Remibrutinib,18-24,M,midwest,IA,medicaid,0.88,"[""allergic_rhinitis"", ""asthma"", ""eczema""]"
+PJ-00336,PAT-00336,22abd4863884,test,2025-08-18,2025-09-02,15,maintenance,completed,L50.8,Chronic spontaneous urticaria,Remibrutinib,18-24,M,midwest,WI,commercial,0.88,"[""allergic_rhinitis"", ""food_allergies""]"
+PJ-00344,PAT-00344,3597354d5305,test,2025-07-13,2025-09-07,56,diagnosis,completed,L50.8,Other urticaria,Remibrutinib,18-24,M,northeast,CT,medicare,0.89,"[""allergic_rhinitis"", ""asthma"", ""eczema""]"
+PJ-00350,PAT-00350,e193a52a7ebc,test,2025-08-29,2025-09-08,10,initial_treatment,active,C50.911,HR+ HER2- breast cancer,Kisqali,75+,M,west,OR,commercial,0.78,"[""hypertension"", ""diabetes_type2""]"
+PJ-00359,PAT-00359,b6ffb5e64988,test,2025-07-12,2025-08-13,32,maintenance,active,L50.8,Other urticaria,Remibrutinib,25-34,M,west,WA,commercial,0.93,"[""asthma"", ""eczema"", ""allergic_rhinitis""]"
+PJ-00372,PAT-00372,f4262c379e7a,test,2025-08-09,2025-09-08,30,diagnosis,completed,L50.8,"Urticaria, unspecified",Remibrutinib,35-44,F,west,WA,medicare,0.85,"[""allergic_rhinitis"", ""eczema"", ""food_allergies""]"
+PJ-00379,PAT-00379,15481fe14761,test,2025-07-07,2025-08-22,46,treatment_switch,stable,L50.1,"Urticaria, unspecified",Remibrutinib,35-44,M,midwest,IL,medicare,0.81,[]
+PJ-00381,PAT-00381,903889486a15,test,2025-07-07,2025-08-15,39,initial_treatment,transitioning,L50.1,Other urticaria,Remibrutinib,35-44,F,northeast,VT,medicaid,0.85,[]
+PJ-00386,PAT-00386,c34591bf85fd,test,2025-08-27,2025-09-05,9,treatment_switch,stable,C50.812,HR+ HER2- breast cancer,Kisqali,55-64,M,west,CA,medicare,0.89,"[""osteoporosis""]"
+PJ-00393,PAT-00393,f16762dad1c4,test,2025-07-05,2025-07-21,16,treatment_optimization,completed,D59.3,Hemolytic-uremic syndrome,Fabhalta,55-64,M,northeast,NH,medicaid,0.96,[]
+PJ-00395,PAT-00395,30a86b33c291,test,2025-06-30,2025-07-19,19,treatment_optimization,active,C50.811,Malignant neoplasm of breast,Kisqali,35-44,M,south,VA,cash,0.87,"[""diabetes_type2""]"
+PJ-00396,PAT-00396,057cc4e4e04d,test,2025-07-20,2025-08-12,23,initial_treatment,active,D59.3,Paroxysmal nocturnal hemoglobinuria,Fabhalta,35-44,M,midwest,WI,cash,0.76,"[""anemia"", ""chronic_kidney_disease"", ""aplastic_anemia""]"
+PJ-00397,PAT-00397,a1d26d32767b,test,2025-06-06,2025-07-30,54,maintenance,completed,L50.8,Other urticaria,Remibrutinib,25-34,M,west,NM,medicare,0.88,[]
+PJ-00423,PAT-00423,9ef252199c69,test,2025-08-21,2025-08-31,10,treatment_optimization,active,C50.911,HR+ HER2- breast cancer,Kisqali,55-64,F,northeast,MA,medicaid,0.83,"[""osteoporosis""]"
+PJ-00427,PAT-00427,bbd8e9438657,test,2025-06-19,2025-07-11,22,maintenance,stable,C50.812,Malignant neoplasm of breast,Kisqali,45-54,M,northeast,NH,cash,0.99,"[""diabetes_type2"", ""hyperlipidemia"", ""hypertension""]"
+PJ-00446,PAT-00446,b8df66bc5c37,test,2025-06-25,2025-08-23,59,treatment_optimization,completed,L50.9,"Urticaria, unspecified",Remibrutinib,25-34,M,midwest,IA,medicaid,0.94,"[""asthma""]"
+PJ-00447,PAT-00447,91ff300cb865,test,2025-06-23,2025-08-18,56,initial_treatment,completed,L50.8,Other urticaria,Remibrutinib,18-24,M,northeast,PA,cash,0.85,"[""asthma"", ""food_allergies""]"
+PJ-00458,PAT-00458,ba3513ccd03d,test,2025-07-07,2025-09-03,58,initial_treatment,transitioning,L50.1,Chronic spontaneous urticaria,Remibrutinib,45-54,F,west,CO,medicaid,0.78,"[""food_allergies"", ""asthma"", ""eczema""]"
+PJ-00464,PAT-00464,cf8eb8002cb4,test,2025-08-08,2025-08-19,11,diagnosis,active,C50.912,HR+ HER2- breast cancer,Kisqali,45-54,M,midwest,OH,medicare,0.92,"[""diabetes_type2"", ""hyperlipidemia"", ""osteoporosis""]"
+PJ-00481,PAT-00481,7fc715bdae25,test,2025-08-20,2025-08-29,9,treatment_optimization,transitioning,C50.912,Malignant neoplasm of breast,Kisqali,55-64,M,west,UT,medicare,0.84,[]
+PJ-00494,PAT-00494,c79ab62ff785,test,2025-07-30,2025-08-07,8,initial_treatment,stable,L50.1,Chronic spontaneous urticaria,Remibrutinib,55-64,F,south,SC,medicaid,0.98,[]
+PJ-00495,PAT-00495,a34029ab17f4,test,2025-08-14,2025-09-02,19,treatment_switch,stable,C50.911,Malignant neoplasm of breast,Kisqali,55-64,M,northeast,CT,commercial,0.87,"[""hyperlipidemia""]"

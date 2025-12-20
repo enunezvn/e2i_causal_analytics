@@ -1,0 +1,21 @@
+[
+  {
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "config_name": "e2i_pilot_v3",
+    "config_version": "3.0.0",
+    "train_ratio": 0.6,
+    "validation_ratio": 0.2,
+    "test_ratio": 0.15,
+    "holdout_ratio": 0.05,
+    "data_start_date": "2025-01-01",
+    "data_end_date": "2025-10-31",
+    "train_end_date": "2025-06-30",
+    "validation_end_date": "2025-08-31",
+    "test_end_date": "2025-09-30",
+    "temporal_gap_days": 7,
+    "patient_level_isolation": true,
+    "split_strategy": "chronological",
+    "is_active": true,
+    "created_at": "2025-11-28T15:39:47.840063"
+  }
+]

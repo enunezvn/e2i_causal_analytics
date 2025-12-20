@@ -1,0 +1,353 @@
+# Agent Handoff Contract
+
+## Overview
+
+This contract defines the format for agent responses returned to the Orchestrator after execution.
+
+## Handoff Response Schema
+
+```yaml
+agent_handoff:
+  # Required identification
+  request_id: string          # Original request ID
+  agent: string               # Agent that produced this response
+  timestamp: string           # ISO 8601 completion timestamp
+  
+  # Execution status
+  status:
+    code: string              # "success" | "partial" | "failed"
+    message: string           # Human-readable status
+    
+  # Execution metrics
+  metrics:
+    latency_ms: int           # Total execution time
+    model_used: string        # LLM model used (if any)
+    tokens_used: int          # Total tokens (if LLM used)
+    
+  # Analysis results
+  analysis_type: string       # Type of analysis performed
+  key_findings: list          # Top 3-5 key findings
+  confidence: float           # Overall confidence (0-1)
+  
+  # Detailed results (agent-specific)
+  results: object             # Agent-specific result structure
+  
+  # Narrative output
+  narrative:
+    summary: string           # Executive summary (<100 words)
+    detailed: string          # Full narrative explanation
+    
+  # Recommendations
+  recommendations: list       # Actionable recommendations
+  
+  # Warnings and caveats
+  warnings: list              # Important caveats
+  errors: list                # Errors encountered
+  
+  # Follow-up suggestions
+  follow_up:
+    suggested_analyses: list  # Suggested follow-up analyses
+    suggested_agents: list    # Agents for further analysis
+    questions: list           # Follow-up questions
+    
+  # Metadata
+  metadata:
+    trace_id: string
+    version: string           # Agent version
+```
+
+## Agent-Specific Result Structures
+
+### Causal Impact Agent
+
+```yaml
+results:
+  causal_effect:
+    treatment: string
+    outcome: string
+    ate: float
+    confidence_interval: [float, float]
+    p_value: float
+    
+  robustness:
+    refutation_passed: bool
+    sensitivity_bound: float
+    robustness_score: float
+    
+  methodology:
+    estimation_method: string
+    identification_strategy: string
+    sample_size: int
+```
+
+### Gap Analyzer Agent
+
+```yaml
+results:
+  gaps:
+    - segment: string
+      metric: string
+      gap_type: string
+      gap_size: float
+      roi_estimate: float
+      priority: string
+      
+  summary:
+    total_gaps: int
+    quick_wins: int
+    strategic_bets: int
+    total_opportunity: float
+```
+
+### Heterogeneous Optimizer Agent
+
+```yaml
+results:
+  cate:
+    overall_ate: float
+    heterogeneity_score: float
+    
+  segments:
+    - segment_name: string
+      segment_definition: object
+      cate: float
+      confidence_interval: [float, float]
+      sample_size: int
+      
+  policy:
+    recommendations:
+      - segment: string
+        treatment_rate: float
+        expected_lift: float
+```
+
+### Experiment Designer Agent
+
+```yaml
+results:
+  design:
+    hypothesis: string
+    design_type: string
+    treatment_definition: object
+    outcome_definition: object
+    
+  power_analysis:
+    required_sample_size: int
+    minimum_detectable_effect: float
+    power: float
+    
+  validity:
+    internal_validity_score: float
+    threats: list
+    mitigations: list
+    
+  templates:
+    dag_specification: object
+    analysis_code: string
+    pre_registration: string
+```
+
+### Drift Monitor Agent
+
+```yaml
+results:
+  drift_score: float
+  
+  data_drift:
+    - feature: string
+      psi: float
+      p_value: float
+      severity: string
+      
+  model_drift:
+    - metric: string
+      change: float
+      severity: string
+      
+  alerts:
+    - severity: string
+      message: string
+      recommended_action: string
+```
+
+### Health Score Agent
+
+```yaml
+results:
+  overall_score: float
+  grade: string
+  
+  component_scores:
+    component: float
+    model: float
+    pipeline: float
+    agent: float
+    
+  issues:
+    critical: list
+    warnings: list
+```
+
+### Prediction Synthesizer Agent
+
+```yaml
+results:
+  prediction:
+    point_estimate: float
+    confidence_interval: [float, float]
+    confidence: float
+    
+  ensemble:
+    method: string
+    models_used: int
+    model_agreement: float
+    
+  context:
+    historical_accuracy: float
+    trend: string
+```
+
+### Resource Optimizer Agent
+
+```yaml
+results:
+  optimization:
+    objective_value: float
+    solver_status: string
+    
+  allocations:
+    - entity_id: string
+      current: float
+      optimized: float
+      change: float
+      expected_impact: float
+      
+  projected_impact:
+    total_outcome: float
+    roi: float
+```
+
+### Explainer Agent
+
+```yaml
+results:
+  insights:
+    - category: string
+      statement: string
+      confidence: float
+      actionability: string
+      
+  narrative:
+    sections:
+      - title: string
+        content: string
+        
+  visuals:
+    - type: string
+      description: string
+```
+
+### Feedback Learner Agent
+
+```yaml
+results:
+  patterns:
+    - pattern_type: string
+      description: string
+      severity: string
+      
+  recommendations:
+    - category: string
+      description: string
+      priority: int
+      
+  updates_applied: list
+```
+
+## Example Handoff
+
+```yaml
+agent_handoff:
+  request_id: "550e8400-e29b-41d4-a716-446655440000"
+  agent: "causal_impact"
+  timestamp: "2025-01-15T10:30:45Z"
+  
+  status:
+    code: "success"
+    message: "Analysis completed successfully"
+    
+  metrics:
+    latency_ms: 12500
+    model_used: "claude-sonnet-4-20250514"
+    tokens_used: 2340
+    
+  analysis_type: "causal_effect_estimation"
+  key_findings:
+    - "HCP targeting increases Kisqali prescriptions by 23%"
+    - "Effect is statistically significant (p < 0.01)"
+    - "Effect is robust to confounding up to r² = 0.15"
+  confidence: 0.85
+  
+  results:
+    causal_effect:
+      treatment: "HCP targeting"
+      outcome: "Kisqali prescriptions"
+      ate: 0.23
+      confidence_interval: [0.18, 0.28]
+      p_value: 0.003
+    robustness:
+      refutation_passed: true
+      sensitivity_bound: 0.15
+      robustness_score: 0.82
+    methodology:
+      estimation_method: "CausalForestDML"
+      identification_strategy: "backdoor"
+      sample_size: 15420
+  
+  narrative:
+    summary: "HCP targeting has a significant positive effect on Kisqali prescriptions, increasing them by approximately 23%. The effect is robust to moderate unmeasured confounding."
+    detailed: "..."
+    
+  recommendations:
+    - "Continue HCP targeting program with current approach"
+    - "Consider expanding to similar HCP segments"
+    - "Design follow-up experiment to validate effect durability"
+    
+  warnings:
+    - "Results assume no contamination between treatment and control"
+    
+  errors: []
+  
+  follow_up:
+    suggested_analyses:
+      - "Heterogeneous treatment effect analysis by HCP specialty"
+      - "Duration analysis of treatment effect"
+    suggested_agents:
+      - "heterogeneous_optimizer"
+      - "experiment_designer"
+    questions:
+      - "Which HCP segments respond best to targeting?"
+      - "How long does the treatment effect persist?"
+      
+  metadata:
+    trace_id: "trace_xyz789"
+    version: "1.2.0"
+```
+
+## Validation Rules
+
+1. **request_id**: Must match original dispatch request_id
+2. **status.code**: Must be "success", "partial", or "failed"
+3. **confidence**: Must be between 0 and 1
+4. **latency_ms**: Must be > 0
+5. **key_findings**: Should have 1-5 items
+
+## Orchestrator Processing
+
+Upon receiving handoff:
+1. Validate against schema
+2. Log metrics for monitoring
+3. If status is "failed", attempt fallback
+4. If multi-agent query, collect all results
+5. Synthesize final response using Explainer if needed
+6. Return to user

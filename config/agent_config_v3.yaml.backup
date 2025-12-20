@@ -1,0 +1,548 @@
+# E2I Causal Analytics - Agent Configuration V3.0
+# 11-Agent Tiered Architecture Configuration
+
+version: "3.0.0"
+last_updated: "2025-11-28"
+
+# ═══════════════════════════════════════════════════════════════════
+# GLOBAL SETTINGS
+# ═══════════════════════════════════════════════════════════════════
+
+global:
+  default_model: "claude-sonnet-4-20250514"
+  max_tokens: 4096
+  temperature: 0.3
+  timeout_seconds: 60
+  max_retries: 2
+  enable_verification: true
+  enable_caching: true
+  cache_ttl_seconds: 300
+
+# ═══════════════════════════════════════════════════════════════════
+# TIER CONFIGURATIONS
+# ═══════════════════════════════════════════════════════════════════
+
+tiers:
+  coordination:
+    description: "Query routing and response synthesis"
+    priority: 1
+    timeout_seconds: 30
+    max_retries: 3
+    model: "claude-sonnet-4-20250514"
+    temperature: 0.2
+    max_tokens: 2048
+    
+  causal_analytics:
+    description: "Core E2I mission - causal inference"
+    priority: 2
+    timeout_seconds: 90
+    max_retries: 2
+    model: "claude-sonnet-4-20250514"
+    temperature: 0.3
+    max_tokens: 8192
+    enable_causal_engine: true
+    
+  monitoring:
+    description: "System health and drift detection"
+    priority: 3
+    timeout_seconds: 45
+    max_retries: 2
+    model: "claude-sonnet-4-20250514"
+    temperature: 0.2
+    max_tokens: 4096
+    alert_enabled: true
+    
+  ml_predictions:
+    description: "Model predictions and resource optimization"
+    priority: 4
+    timeout_seconds: 120
+    max_retries: 1
+    model: "claude-sonnet-4-20250514"
+    temperature: 0.1
+    max_tokens: 4096
+    
+  self_improvement:
+    description: "Explanation generation and learning"
+    priority: 5
+    timeout_seconds: 60
+    max_retries: 2
+    model: "claude-sonnet-4-20250514"
+    temperature: 0.4
+    max_tokens: 4096
+    learning_enabled: true
+
+# ═══════════════════════════════════════════════════════════════════
+# AGENT CONFIGURATIONS
+# ═══════════════════════════════════════════════════════════════════
+
+agents:
+  # ─────────────────────────────────────────────────────────────────
+  # TIER 1: COORDINATION
+  # ─────────────────────────────────────────────────────────────────
+  
+  orchestrator:
+    tier: coordination
+    enabled: true
+    description: "Coordinates multi-agent workflows"
+    
+    routing:
+      intent_threshold: 0.7
+      max_agents_per_query: 3
+      enable_parallel_execution: true
+      fallback_agent: explainer
+      
+    synthesis:
+      max_response_length: 2000
+      include_confidence: true
+      include_sources: true
+      
+    capabilities:
+      - intent_routing
+      - multi_agent_coordination
+      - response_synthesis
+      - error_recovery
+      
+    data_access:
+      train: true
+      validation: true
+      test: true
+      holdout: false  # Production only
+      
+  # ─────────────────────────────────────────────────────────────────
+  # TIER 2: CAUSAL ANALYTICS
+  # ─────────────────────────────────────────────────────────────────
+  
+  causal_impact:
+    tier: causal_analytics
+    enabled: true
+    description: "Traces causal chains and estimates effects"
+    
+    causal_engine:
+      library: "dowhy"  # dowhy, econml, or causalml
+      estimator: "propensity_score_matching"
+      refutation_tests:
+        - placebo_treatment
+        - random_common_cause
+        - data_subset
+      confidence_level: 0.95
+      
+    capabilities:
+      - causal_chain_tracing
+      - effect_estimation
+      - counterfactual_analysis
+      - mediation_analysis
+      
+    data_access:
+      train: true
+      validation: true
+      test: false  # Final eval only
+      holdout: false
+      
+    routes_from_intents:
+      - IMPACT
+      - CAUSAL
+      - EFFECT
+      - WHY
+      
+  gap_analyzer:
+    tier: causal_analytics
+    enabled: true
+    description: "Identifies ROI opportunities"
+    
+    analysis:
+      min_roi_threshold: 1.5
+      min_sample_size: 100
+      gap_significance_level: 0.05
+      
+    capabilities:
+      - gap_detection
+      - roi_estimation
+      - opportunity_ranking
+      - benchmark_comparison
+      
+    data_access:
+      train: true
+      validation: true
+      test: false
+      holdout: false
+      
+    routes_from_intents:
+      - GAP
+      - OPPORTUNITY
+      - IMPROVE
+      - OPTIMIZE
+      
+  heterogeneous_optimizer:
+    tier: causal_analytics
+    enabled: true
+    description: "Analyzes treatment effect heterogeneity"
+    
+    segmentation:
+      min_segment_size: 50
+      max_segments: 10
+      significance_level: 0.05
+      
+    causal_forest:
+      n_trees: 100
+      min_samples_leaf: 10
+      
+    capabilities:
+      - cate_estimation
+      - segment_analysis
+      - targeting_optimization
+      - fairness_analysis
+      
+    data_access:
+      train: true
+      validation: true
+      test: false
+      holdout: false
+      
+    routes_from_intents:
+      - SEGMENT
+      - HETEROGENEOUS
+      - TARGETING
+      - CATE
+      
+  # ─────────────────────────────────────────────────────────────────
+  # TIER 3: MONITORING
+  # ─────────────────────────────────────────────────────────────────
+  
+  drift_monitor:
+    tier: monitoring
+    enabled: true
+    description: "Detects data and concept drift"
+    
+    thresholds:
+      psi_warning: 0.1
+      psi_critical: 0.25
+      feature_drift_pct: 0.2
+      concept_drift_auc_drop: 0.05
+      
+    monitoring:
+      check_frequency_hours: 24
+      lookback_days: 30
+      reference_window_days: 90
+      
+    capabilities:
+      - psi_calculation
+      - feature_drift_detection
+      - concept_drift_detection
+      - alert_generation
+      
+    data_access:
+      train: true  # Baseline
+      validation: true
+      test: true
+      holdout: true  # Production monitoring
+      
+    routes_from_intents:
+      - DRIFT
+      - CHANGE
+      - SHIFT
+      - STABILITY
+      
+  experiment_designer:
+    tier: monitoring
+    enabled: true
+    description: "Designs A/B tests and experiments"
+    
+    design:
+      default_power: 0.8
+      default_alpha: 0.05
+      min_effect_size: 0.1
+      max_duration_days: 90
+      
+    capabilities:
+      - test_design
+      - power_analysis
+      - sample_size_calculation
+      - randomization_strategy
+      
+    data_access:
+      train: true
+      validation: true
+      test: false
+      holdout: false
+      
+    routes_from_intents:
+      - EXPERIMENT
+      - TEST
+      - AB_TEST
+      - DESIGN
+      
+  health_score:
+    tier: monitoring
+    enabled: true
+    description: "Computes system health metrics"
+    
+    health_weights:
+      data_quality: 0.25
+      model_performance: 0.25
+      system_uptime: 0.20
+      user_satisfaction: 0.15
+      kpi_coverage: 0.15
+      
+    thresholds:
+      healthy: 0.8
+      warning: 0.6
+      critical: 0.4
+      
+    capabilities:
+      - health_computation
+      - quality_assessment
+      - threshold_alerting
+      - trend_analysis
+      
+    data_access:
+      train: true
+      validation: true
+      test: true
+      holdout: true
+      
+    routes_from_intents:
+      - HEALTH
+      - STATUS
+      - QUALITY
+      - SCORE
+      
+  # ─────────────────────────────────────────────────────────────────
+  # TIER 4: ML PREDICTIONS
+  # ─────────────────────────────────────────────────────────────────
+  
+  prediction_synthesizer:
+    tier: ml_predictions
+    enabled: true
+    description: "Generates ensemble predictions"
+    
+    ensemble:
+      method: "stacking"  # stacking, voting, or averaging
+      base_models:
+        - xgboost
+        - lightgbm
+        - random_forest
+      meta_learner: "logistic_regression"
+      
+    calibration:
+      method: "isotonic"  # isotonic or platt
+      enable: true
+      
+    capabilities:
+      - ensemble_prediction
+      - model_combination
+      - uncertainty_quantification
+      - calibration
+      
+    data_access:
+      train: true
+      validation: true
+      test: false  # Final eval only
+      holdout: false
+      
+    routes_from_intents:
+      - PREDICT
+      - FORECAST
+      - PROPENSITY
+      - LIKELIHOOD
+      
+  resource_optimizer:
+    tier: ml_predictions
+    enabled: true
+    description: "Optimizes resource allocation"
+    
+    optimization:
+      objective: "maximize_roi"
+      constraints:
+        min_coverage_pct: 0.6
+        max_cost_per_hcp: 500
+      algorithm: "linear_programming"
+      
+    capabilities:
+      - budget_optimization
+      - resource_allocation
+      - roi_maximization
+      - constraint_handling
+      
+    data_access:
+      train: true
+      validation: true
+      test: false
+      holdout: false
+      
+    routes_from_intents:
+      - BUDGET
+      - RESOURCE
+      - ALLOCATE
+      - PRIORITIZE
+      
+  # ─────────────────────────────────────────────────────────────────
+  # TIER 5: SELF-IMPROVEMENT
+  # ─────────────────────────────────────────────────────────────────
+  
+  explainer:
+    tier: self_improvement
+    enabled: true
+    description: "Generates natural language explanations"
+    
+    explanation:
+      max_length: 500
+      include_examples: true
+      include_caveats: true
+      reading_level: "professional"
+      
+    visualization:
+      auto_generate: true
+      preferred_types:
+        - bar_chart
+        - line_chart
+        - sankey_diagram
+        
+    capabilities:
+      - narrative_generation
+      - visualization_explanation
+      - insight_summarization
+      - uncertainty_communication
+      
+    data_access:
+      train: true
+      validation: true
+      test: true
+      holdout: true
+      
+    routes_from_intents:
+      - EXPLAIN
+      - SUMMARIZE
+      - DESCRIBE
+      - CLARIFY
+      
+  feedback_learner:
+    tier: self_improvement
+    enabled: true
+    description: "Learns from user feedback"
+    
+    learning:
+      feedback_weight: 0.1
+      min_feedback_count: 10
+      learning_rate: 0.05
+      batch_size: 32
+      
+    optimization:
+      method: "dspy_miprov2"
+      metric: "user_satisfaction"
+      
+    capabilities:
+      - feedback_processing
+      - prompt_optimization
+      - pattern_learning
+      - performance_tracking
+      
+    data_access:
+      train: true
+      validation: true
+      test: false
+      holdout: false
+      
+    routes_from_intents:
+      - FEEDBACK
+      - LEARN
+      - IMPROVE_SELF
+
+# ═══════════════════════════════════════════════════════════════════
+# ROUTING CONFIGURATION
+# ═══════════════════════════════════════════════════════════════════
+
+routing:
+  # Intent detection settings
+  intent_detection:
+    model: "claude-sonnet-4-20250514"
+    confidence_threshold: 0.7
+    max_intents: 3
+    
+  # Multi-agent routing
+  multi_agent:
+    enable_parallel: true
+    max_parallel_agents: 3
+    timeout_seconds: 120
+    
+  # Fallback behavior
+  fallback:
+    default_agent: explainer
+    error_agent: orchestrator
+    
+  # Priority ordering for tie-breaking
+  priority_order:
+    - orchestrator
+    - causal_impact
+    - gap_analyzer
+    - heterogeneous_optimizer
+    - drift_monitor
+    - experiment_designer
+    - health_score
+    - prediction_synthesizer
+    - resource_optimizer
+    - explainer
+    - feedback_learner
+
+# ═══════════════════════════════════════════════════════════════════
+# VERIFICATION CONFIGURATION
+# ═══════════════════════════════════════════════════════════════════
+
+verification:
+  enabled: true
+  
+  checks:
+    hallucination_detection:
+      enabled: true
+      threshold: 0.8
+      
+    causal_validity:
+      enabled: true
+      require_stored_path: false
+      
+    confidence_calibration:
+      enabled: true
+      min_confidence: 0.6
+      
+    compliance:
+      enabled: true
+      rules_file: "compliance_rules.yaml"
+      
+  retry_on_failure: true
+  max_retries: 2
+
+# ═══════════════════════════════════════════════════════════════════
+# CACHING CONFIGURATION
+# ═══════════════════════════════════════════════════════════════════
+
+caching:
+  enabled: true
+  backend: "redis"  # redis or memory
+  
+  ttl:
+    causal_paths: 3600      # 1 hour
+    predictions: 1800       # 30 minutes
+    explanations: 3600      # 1 hour
+    health_scores: 300      # 5 minutes
+    
+  invalidation:
+    on_new_data: true
+    on_model_update: true
+
+# ═══════════════════════════════════════════════════════════════════
+# OBSERVABILITY
+# ═══════════════════════════════════════════════════════════════════
+
+observability:
+  logging:
+    level: "INFO"
+    format: "json"
+    include_request_id: true
+    
+  metrics:
+    enabled: true
+    backend: "prometheus"
+    
+  tracing:
+    enabled: true
+    backend: "jaeger"
+    sample_rate: 0.1

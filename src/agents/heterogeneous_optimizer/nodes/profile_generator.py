@@ -1,0 +1,249 @@
+"""Profile Generator Node for Heterogeneous Optimizer Agent.
+
+This node generates visualization data and executive summaries.
+Pure computation - no LLM needed.
+"""
+
+import time
+from typing import Dict, Any, List
+
+from ..state import HeterogeneousOptimizerState
+
+
+class ProfileGeneratorNode:
+    """Generate visualization data and executive summaries."""
+
+    async def execute(
+        self, state: HeterogeneousOptimizerState
+    ) -> HeterogeneousOptimizerState:
+        """Execute profile generation."""
+        start_time = time.time()
+
+        if state.get("status") == "failed":
+            return state
+
+        try:
+            # Generate CATE plot data
+            cate_plot_data = self._generate_cate_plot_data(state)
+
+            # Generate segment grid data
+            segment_grid_data = self._generate_segment_grid_data(state)
+
+            # Generate executive summary
+            executive_summary = self._generate_executive_summary(state)
+
+            # Generate key insights
+            key_insights = self._generate_key_insights(state)
+
+            return {
+                **state,
+                "cate_plot_data": cate_plot_data,
+                "segment_grid_data": segment_grid_data,
+                "executive_summary": executive_summary,
+                "key_insights": key_insights,
+                "status": "completed",
+            }
+
+        except Exception as e:
+            return {
+                **state,
+                "errors": [{"node": "profile_generator", "error": str(e)}],
+                "status": "failed",
+            }
+
+    def _generate_cate_plot_data(
+        self, state: HeterogeneousOptimizerState
+    ) -> Dict[str, Any]:
+        """Generate data for CATE visualization plots.
+
+        Returns data structure suitable for plotting CATE estimates by segment.
+        """
+
+        cate_by_segment = state.get("cate_by_segment", {})
+        overall_ate = state.get("overall_ate", 0)
+
+        plot_data = {
+            "overall_ate": overall_ate,
+            "segments": [],
+        }
+
+        for segment_var, results in cate_by_segment.items():
+            for result in results:
+                plot_data["segments"].append(
+                    {
+                        "segment_var": segment_var,
+                        "segment_value": result["segment_value"],
+                        "cate": result["cate_estimate"],
+                        "ci_lower": result["cate_ci_lower"],
+                        "ci_upper": result["cate_ci_upper"],
+                        "sample_size": result["sample_size"],
+                        "significant": result["statistical_significance"],
+                    }
+                )
+
+        # Sort by CATE for visualization
+        plot_data["segments"].sort(key=lambda x: x["cate"], reverse=True)
+
+        return plot_data
+
+    def _generate_segment_grid_data(
+        self, state: HeterogeneousOptimizerState
+    ) -> Dict[str, Any]:
+        """Generate segment grid data for heatmap visualization.
+
+        Returns data structure suitable for segment comparison heatmap.
+        """
+
+        high_responders = state.get("high_responders", [])
+        low_responders = state.get("low_responders", [])
+        segment_comparison = state.get("segment_comparison", {})
+
+        grid_data = {
+            "comparison_metrics": segment_comparison,
+            "high_responder_segments": [
+                {
+                    "segment_id": h["segment_id"],
+                    "cate": h["cate_estimate"],
+                    "size_pct": h["size_percentage"],
+                }
+                for h in high_responders
+            ],
+            "low_responder_segments": [
+                {
+                    "segment_id": l["segment_id"],
+                    "cate": l["cate_estimate"],
+                    "size_pct": l["size_percentage"],
+                }
+                for l in low_responders
+            ],
+        }
+
+        return grid_data
+
+    def _generate_executive_summary(
+        self, state: HeterogeneousOptimizerState
+    ) -> str:
+        """Generate executive summary of heterogeneous optimization analysis."""
+
+        overall_ate = state.get("overall_ate", 0)
+        heterogeneity_score = state.get("heterogeneity_score", 0)
+        high_responders = state.get("high_responders", [])
+        low_responders = state.get("low_responders", [])
+        expected_total_lift = state.get("expected_total_lift", 0)
+        optimal_allocation_summary = state.get("optimal_allocation_summary", "")
+
+        if not high_responders and not low_responders:
+            return (
+                f"Heterogeneous effect analysis complete. "
+                f"Overall treatment effect: {overall_ate:.3f}. "
+                f"Limited heterogeneity detected (score: {heterogeneity_score:.2f}). "
+                f"Treatment effects are relatively uniform across segments."
+            )
+
+        summary_parts = [
+            f"Heterogeneous treatment effect analysis complete.",
+            f"Overall treatment effect: {overall_ate:.3f}.",
+            f"Heterogeneity score: {heterogeneity_score:.2f} (0=uniform, 1=highly heterogeneous).",
+        ]
+
+        if high_responders:
+            top_high = high_responders[0]
+            summary_parts.append(
+                f"Top high-responder: {top_high['segment_id']} "
+                f"(CATE: {top_high['cate_estimate']:.3f}, "
+                f"{top_high['size_percentage']:.1f}% of population)."
+            )
+
+        if low_responders:
+            top_low = low_responders[0]
+            summary_parts.append(
+                f"Top low-responder: {top_low['segment_id']} "
+                f"(CATE: {top_low['cate_estimate']:.3f}, "
+                f"{top_low['size_percentage']:.1f}% of population)."
+            )
+
+        if optimal_allocation_summary:
+            summary_parts.append(optimal_allocation_summary)
+
+        if expected_total_lift != 0:
+            summary_parts.append(
+                f"Implementing optimal allocation policy could yield "
+                f"{abs(expected_total_lift):.1f} units of {'incremental' if expected_total_lift > 0 else 'avoided'} outcome."
+            )
+
+        return " ".join(summary_parts)
+
+    def _generate_key_insights(
+        self, state: HeterogeneousOptimizerState
+    ) -> List[str]:
+        """Generate key insights from heterogeneous optimization analysis."""
+
+        insights = []
+
+        overall_ate = state.get("overall_ate", 0)
+        heterogeneity_score = state.get("heterogeneity_score", 0)
+        high_responders = state.get("high_responders", [])
+        low_responders = state.get("low_responders", [])
+        feature_importance = state.get("feature_importance", {})
+        segment_comparison = state.get("segment_comparison", {})
+
+        # Insight 1: Overall treatment effect
+        if overall_ate > 0:
+            insights.append(
+                f"Treatment has positive overall effect (ATE: {overall_ate:.3f}), "
+                f"but effect varies significantly across segments."
+            )
+        elif overall_ate < 0:
+            insights.append(
+                f"Treatment has negative overall effect (ATE: {overall_ate:.3f}). "
+                f"Consider segment-specific interventions."
+            )
+        else:
+            insights.append(
+                f"Treatment has minimal overall effect (ATE: {overall_ate:.3f}). "
+                f"Heterogeneity analysis reveals segment-specific opportunities."
+            )
+
+        # Insight 2: Heterogeneity level
+        if heterogeneity_score > 0.7:
+            insights.append(
+                f"High treatment effect heterogeneity detected (score: {heterogeneity_score:.2f}). "
+                f"Segment-specific strategies strongly recommended."
+            )
+        elif heterogeneity_score > 0.4:
+            insights.append(
+                f"Moderate treatment effect heterogeneity (score: {heterogeneity_score:.2f}). "
+                f"Targeting high-responder segments can improve outcomes."
+            )
+        else:
+            insights.append(
+                f"Low treatment effect heterogeneity (score: {heterogeneity_score:.2f}). "
+                f"Effects are relatively uniform across segments."
+            )
+
+        # Insight 3: High vs low responders
+        if high_responders and low_responders:
+            effect_ratio = segment_comparison.get("effect_ratio", 1)
+            if effect_ratio > 3:
+                insights.append(
+                    f"High-responder segments show {effect_ratio:.1f}x stronger effects than low-responders. "
+                    f"Resource reallocation could significantly improve efficiency."
+                )
+
+        # Insight 4: Feature importance
+        if feature_importance:
+            top_feature = max(feature_importance.items(), key=lambda x: x[1])
+            insights.append(
+                f"Treatment effect most strongly moderated by '{top_feature[0]}' "
+                f"(importance: {top_feature[1]:.3f}). Use this for targeting."
+            )
+
+        # Insight 5: Segment-specific recommendations
+        if high_responders:
+            high_count = len(high_responders)
+            insights.append(
+                f"Prioritize treatment for {high_count} high-responder segments "
+                f"to maximize outcome gains."
+            )
+
+        return insights[:5]  # Limit to top 5 insights

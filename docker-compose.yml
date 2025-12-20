@@ -1,0 +1,186 @@
+# E2I Causal Analytics - Base Docker Compose Configuration
+# This file contains shared configuration across all environments
+# Use with docker-compose.dev.yml for local development
+# Use with docker-compose.prod.yml for production deployment
+
+version: '3.8'
+
+services:
+  # FastAPI Backend Service
+  fastapi:
+    build:
+      context: .
+      dockerfile: docker/fastapi/Dockerfile
+    container_name: e2i-fastapi
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - APP_ENV=${APP_ENV:-development}
+    depends_on:
+      - redis
+    networks:
+      - frontend-network
+      - backend-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # React Frontend Service
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend/Dockerfile
+      args:
+        - REACT_APP_API_URL=${REACT_APP_API_URL:-http://localhost:8000}
+    container_name: e2i-frontend
+    env_file:
+      - .env
+    depends_on:
+      - fastapi
+    networks:
+      - frontend-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # MLflow Experiment Tracking Service
+  mlflow:
+    build:
+      context: .
+      dockerfile: docker/mlflow/Dockerfile
+    container_name: e2i-mlflow
+    env_file:
+      - .env
+    environment:
+      - MLFLOW_BACKEND_STORE_URI=${DATABASE_URL}
+      - MLFLOW_ARTIFACT_ROOT=${MLFLOW_ARTIFACT_ROOT:-./mlflow-artifacts}
+      - AWS_ACCESS_KEY_ID=${DO_SPACES_KEY}
+      - AWS_SECRET_ACCESS_KEY=${DO_SPACES_SECRET}
+      - MLFLOW_S3_ENDPOINT_URL=https://${DO_SPACES_ENDPOINT}
+    volumes:
+      - mlflow-data:/mlflow
+    networks:
+      - backend-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Redis Cache/Queue Service
+  redis:
+    image: redis:7-alpine
+    container_name: e2i-redis
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-devpassword}
+    volumes:
+      - redis-data:/data
+    networks:
+      - backend-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Phoenix LLM Observability Service
+  phoenix:
+    image: arizephoenix/phoenix:latest
+    container_name: e2i-phoenix
+    ports:
+      - "6006:6006"
+    env_file:
+      - .env
+    environment:
+      - PHOENIX_PORT=6006
+      - PHOENIX_HOST=0.0.0.0
+    volumes:
+      - phoenix-data:/phoenix
+    networks:
+      - backend-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6006"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # Agent Worker Service (Background Tasks)
+  agent-worker:
+    build:
+      context: .
+      dockerfile: docker/fastapi/Dockerfile
+    # Note: container_name removed to allow scaling in production
+    # Set in docker-compose.dev.yml for development
+    command: python -m src.agents.worker
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - APP_ENV=${APP_ENV:-development}
+      - WORKER_MODE=true
+    depends_on:
+      - redis
+      - fastapi
+    networks:
+      - backend-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Nginx Reverse Proxy (Production only, overridden in dev)
+  nginx:
+    image: nginx:alpine
+    container_name: e2i-nginx
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./docker/nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - fastapi
+      - frontend
+    networks:
+      - frontend-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  # Frontend network: nginx <-> fastapi, frontend
+  frontend-network:
+    driver: bridge
+    name: e2i-frontend-network
+
+  # Backend network: fastapi <-> redis, mlflow, workers
+  backend-network:
+    driver: bridge
+    name: e2i-backend-network
+
+volumes:
+  # Persistent data volumes
+  mlflow-data:
+    name: e2i-mlflow-data
+
+  redis-data:
+    name: e2i-redis-data
+
+  phoenix-data:
+    name: e2i-phoenix-data

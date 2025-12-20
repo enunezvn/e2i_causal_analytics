@@ -1,0 +1,87 @@
+[
+  {
+    "metadata_id": "1acc36d9-54f6-4d01-a42b-b382fb81b7f6",
+    "split_config_id": "56d62bc0-47f1-4775-8e8a-c652c33edd4d",
+    "computed_on_split": "train",
+    "computed_at": "2025-11-28T15:39:47.839533",
+    "feature_means": {
+      "age": 0.671,
+      "comorbidity_count": 0.6029,
+      "risk_score": 0.3535,
+      "prior_rx_count": 0.6733,
+      "days_since_dx": 0.6401
+    },
+    "feature_stds": {
+      "age": 0.2078,
+      "comorbidity_count": 0.2979,
+      "risk_score": 0.2267,
+      "prior_rx_count": 0.2382,
+      "days_since_dx": 0.2436
+    },
+    "feature_mins": {
+      "age": 0.1828,
+      "comorbidity_count": 0.1953,
+      "risk_score": 0.0499,
+      "prior_rx_count": 0.1154,
+      "days_since_dx": 0.1935
+    },
+    "feature_maxs": {
+      "age": 0.8924,
+      "comorbidity_count": 0.9025,
+      "risk_score": 0.8485,
+      "prior_rx_count": 0.9776,
+      "days_since_dx": 0.9678
+    },
+    "categorical_encodings": {
+      "region": {
+        "northeast": 0,
+        "south": 1,
+        "midwest": 2,
+        "west": 3
+      },
+      "brand": {
+        "Remibrutinib": 0,
+        "Fabhalta": 1,
+        "Kisqali": 2
+      },
+      "journey_stage": {
+        "diagnosis": 0,
+        "initial_treatment": 1,
+        "treatment_optimization": 2,
+        "maintenance": 3,
+        "treatment_switch": 4
+      }
+    },
+    "feature_distributions": {
+      "age": {
+        "mean": 0.6178,
+        "std": 0.2537
+      },
+      "comorbidity_count": {
+        "mean": 0.4261,
+        "std": 0.1788
+      },
+      "risk_score": {
+        "mean": 0.6739,
+        "std": 0.1466
+      },
+      "prior_rx_count": {
+        "mean": 0.3795,
+        "std": 0.2731
+      },
+      "days_since_dx": {
+        "mean": 0.6017,
+        "std": 0.1677
+      }
+    },
+    "num_training_samples": 134,
+    "feature_list": [
+      "age",
+      "comorbidity_count",
+      "risk_score",
+      "prior_rx_count",
+      "days_since_dx"
+    ],
+    "preprocessing_pipeline_version": "3.0.0"
+  }
+]

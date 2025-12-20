@@ -1,0 +1,906 @@
+# ============================================================================
+# E2I CAUSAL ANALYTICS - FASTTEXT TRAINING CORPUS
+# ============================================================================
+# Purpose: Train domain-specific embeddings for typo-tolerant query matching
+# Version: 1.0.0
+# Generated: December 2025
+# 
+# Structure:
+#   - Each line is a training example
+#   - Related terms appear together to build semantic clusters
+#   - Includes canonical forms, aliases, typos, and contextual phrases
+# ============================================================================
+
+# ============================================================================
+# SECTION 1: BRAND NAMES (Drug Products)
+# ============================================================================
+
+# Remibrutinib - BTK inhibitor for CSU
+Remibrutinib remibrutinib remi Remi REMI brand drug therapy treatment
+remibrutinib brand pharmaceutical drug product therapeutic
+Remibrutinib BTK inhibitor chronic spontaneous urticaria CSU treatment
+remi remibrutinib performance conversion prescription
+Remibrutinib market share TRx NRx prescriptions
+remibrutinib therapy drug brand product medicine medication
+Remibrutinib patient journey treatment pathway therapeutic
+remibrutinib HCP engagement prescription behavior
+
+# Remibrutinib typos and misspellings
+Remibrutinib remibrutinab remibritunib remiburtinib remibruitinib
+remibrutinib remibritinib reminrutinib remibriutinib remibrutinub
+Remibrutinib Remibrutanib Remibruitinib Remiburtinib Remibritunib
+remibrutinib rembrutinib remibutinib remibruntinib remibrutinb
+
+# Fabhalta - Factor B inhibitor for PNH
+Fabhalta fabhalta fab Fab FAB brand drug therapy treatment
+fabhalta brand pharmaceutical drug product therapeutic
+Fabhalta factor B inhibitor paroxysmal nocturnal hemoglobinuria PNH treatment
+fab fabhalta performance conversion prescription
+Fabhalta market share TRx NRx prescriptions
+fabhalta therapy drug brand product medicine medication
+Fabhalta patient journey treatment pathway therapeutic
+fabhalta HCP engagement prescription behavior
+
+# Fabhalta typos and misspellings
+Fabhalta fabhalta fabhlta fabhata fabalta fabhltaa
+fabhalta fabhlata fabahalta fabhalta fabhlata fabhallta
+Fabhalta Fabhlata Fabhata Fabalta Fabhallta Fabahalta
+
+# Kisqali - CDK4/6 inhibitor (ribociclib) for breast cancer
+Kisqali kisqali kisq Kisq KISQ brand drug therapy treatment
+kisqali brand pharmaceutical drug product therapeutic ribociclib
+Kisqali ribociclib CDK4 CDK6 inhibitor breast cancer treatment
+kisq kisqali performance conversion prescription
+Kisqali market share TRx NRx prescriptions
+kisqali therapy drug brand product medicine medication
+Kisqali patient journey treatment pathway therapeutic
+kisqali HCP engagement prescription behavior oncology
+
+# Kisqali typos and misspellings
+Kisqali kisqali kisquali kisqalli kisqalii kiqali
+kisqali kisqal kisaqli kisqaali kisquali kiqsali
+Kisqali Kisquali Kisqalli Kiqali Kisqal Kisqaali
+ribociclib ribociclip ribocyclib riboiciclib ribociclib
+
+# Generic brand terms
+brand brands drug drugs therapy therapies treatment treatments
+medication medications pharmaceutical pharmaceuticals product products
+therapeutic therapeutics medicine medicines prescription prescriptions
+competitor competitors other alternative generics biosimilar
+
+# ============================================================================
+# SECTION 2: GEOGRAPHIC REGIONS
+# ============================================================================
+
+# Northeast region
+northeast Northeast NE ne north east northest northease
+northeast region territory area market geography zone
+NE northeast north east new england atlantic seaboard
+northeast territory performance market share regional
+northeast new england atlantic northeast region NE area
+northest norhteast norteast north_east north-east
+
+# Southeast / South region
+south South SE se southeast southest souht region
+south southeast region territory area market geography zone
+SE south southeast southern territory area region
+south florida texas georgia carolinas southern states
+southeast region territory southeast SE southern area
+souht soth sourth south_east south-east southeastern
+
+# Midwest region
+midwest Midwest MW mw mid west midwst central
+midwest region territory area market geography zone
+MW midwest mid west central heartland
+midwest illinois ohio michigan indiana wisconsin territory
+midwest region territory midwest MW central area
+midwset midwets mid_west mid-west middlewest midwestern
+
+# West region
+west West pacific coast western region territory
+west region territory area market geography zone
+west pacific coast california arizona nevada colorado
+west territory performance market share regional western
+wesst wets weest west_coast pacific northwest southwest
+
+# General regional terms
+region regions regional territory territories territorial
+geography geographic geographical area areas zone zones
+market markets performance territorial coverage expansion
+
+# ============================================================================
+# SECTION 3: KPI METRICS AND MEASUREMENTS
+# ============================================================================
+
+# Prescription metrics
+TRx trx total prescriptions rx scripts volume
+NRx nrx new prescriptions new scripts new rx
+NBRx nbrx new to brand prescriptions new brand rx
+TRx_share trx share market share prescription share
+TRx NRx NBRx prescription volume scripts fills refills
+total prescriptions TRx trx rx scripts dispensed
+
+# TRx/NRx/NBRx typos
+TRx trx TRX Trx TRX total_rx totalrx total-rx
+NRx nrx NRX Nrx NRX new_rx newrx new-rx
+NBRx nbrx NBRX Nbrx NBrx new_brand_rx newbrandrx
+
+# Conversion and engagement metrics
+conversion_rate conversion rate cvr conversion ratio
+conversion rate percentage success ratio rate
+engagement_score engagement score eng_score engagement level
+engagement score HCP engagement rep engagement activity
+territory_performance territory performance region performance
+territory performance KPI metric regional benchmark
+
+# Treatment effect metrics
+treatment_effect treatment effect ATE average treatment effect
+treatment effect causal impact intervention effect therapy effect
+causal_impact causal impact CI effect size lift uplift
+causal impact effect treatment outcome intervention result
+CATE cate conditional average treatment effect heterogeneous effect
+heterogeneous effect subgroup effect segment effect personalized effect
+
+# Coverage metrics
+HCP_coverage hcp coverage healthcare provider coverage physician coverage
+hcp coverage target coverage reach penetration
+patient_coverage patient coverage patient reach patient penetration
+coverage percentage rate target actual gap shortfall
+
+# Time metrics
+time_to_therapy ttt time to therapy treatment delay latency
+time to therapy TtT ttt treatment initiation delay start
+lead_time lead time trigger timing advance notice
+lead time days weeks optimal timing window
+
+# Performance metrics
+ROI roi return on investment return value
+return on investment ROI value benefit cost ratio
+AUC auc area under curve roc auc performance metric
+auc roc curve performance discrimination ability
+precision recall f1 score accuracy sensitivity specificity
+precision recall f1 accuracy model performance metrics
+
+# Quality metrics
+acceptance_rate acceptance rate trigger acceptance approval rate
+acceptance rate percentage approved accepted utilized
+action_rate action rate response rate uptake rate
+action rate percentage acted responded utilized
+false_positive_rate fpr false positive rate error rate
+false positive rate fpr type I error false alarm
+
+# Business metrics
+market_share market share share of market sov som
+market share percentage competitive position share
+revenue value impact business outcome financial result
+revenue sales income profit margin bottom line
+
+# KPI typos and variations
+conversion_rate conversionrate conversion-rate cvr CVR
+engagement_score engagementscore engagement-score eng
+treatment_effect treatmenteffect treatment-effect effect
+hcp_coverage hcpcoverage hcp-coverage coverage
+time_to_therapy timetotherapy time-to-therapy ttt TtT
+
+# ============================================================================
+# SECTION 4: PATIENT JOURNEY STAGES
+# ============================================================================
+
+# Diagnosis stage
+diagnosis dx diagnosed diagnosing diagnoses diagnostic
+diagnosis stage initial identification assessment screening
+dx diagnosis diagnosed patient identification disease detection
+diagnosis diagnostic workup testing evaluation confirmation
+
+# Initial treatment stage
+initial_treatment first treatment initial therapy start treatment
+initial treatment first line therapy treatment initiation start
+treatment initiation starting therapy beginning treatment first dose
+first line treatment initial prescription starting medication
+
+# Treatment optimization stage
+treatment_optimization optimize optimizing adjustment modification
+treatment optimization dose adjustment therapy modification tweak
+optimization optimizing adjusting modifying improving therapy
+treatment adjustment modification optimization personalization
+
+# Maintenance stage
+maintenance maintaining continued ongoing sustained therapy
+maintenance stage ongoing therapy continued treatment stable
+maintenance continued sustained ongoing stable therapy regiment
+long term therapy maintenance chronic treatment ongoing
+
+# Treatment switch stage
+treatment_switch switch switching changed transition therapy
+treatment switch therapy change medication switch brand switch
+switch transition change discontinue restart new therapy
+therapy change treatment modification brand transition switch
+
+# Journey stage typos and variations
+diagnosis diagnoses diagnossi diagnoisis dx Dx DX
+initial_treatment initialtreatment initial-treatment first_line
+treatment_optimization treatmentoptimization treatment-optimization
+maintenance maintenence maintainence maintanance maintenanc
+treatment_switch treatmentswitch treatment-switch switch
+
+# General journey terms
+journey journeys patient journey treatment pathway care path
+pathway pathways treatment pathway clinical pathway care journey
+stage stages phase phases step steps milestone milestones
+progression progressing progress advance advancing advancing
+
+# ============================================================================
+# SECTION 5: AI AGENTS (11-Agent Architecture)
+# ============================================================================
+
+# Tier 0: Orchestrator
+orchestrator orchestration coordinator router hub
+orchestrator agent coordinator central hub traffic router
+orchestration routing coordinating dispatching managing agents
+orchestrator central agent routing coordination master
+
+# Tier 1: Operational Agents
+causal_impact causal impact agent causal chain analyzer why agent
+causal impact agent treatment effect estimation inference
+causal chain analyzer causal inference effect estimation why
+causal_impact_agent causal agent impact agent effect agent
+
+gap_analyzer gap analyzer multiplier discoverer roi agent
+gap analyzer agent opportunity finder efficiency analyzer
+multiplier discoverer gap identification roi optimization
+gap_analyzer_agent gap agent roi agent opportunity agent
+
+# Tier 2: Analytical Agents
+heterogeneous_optimizer heterogeneous optimizer segment optimizer
+heterogeneous optimizer CATE optimizer subgroup personalization
+CATE optimization personalized effects heterogeneous treatment
+heterogeneous_optimizer_agent cate agent segment agent
+
+drift_monitor drift monitor concept drift distribution shift
+drift monitor agent model monitoring stability tracking
+drift detection concept shift distribution change monitoring
+drift_monitor_agent monitoring agent stability agent
+
+experiment_designer experiment designer ab test design power
+experiment designer agent trial design statistical power
+ab test design power analysis sample size experiment
+experiment_designer_agent experiment agent design agent test agent
+
+# Tier 3: Intelligence Agents
+health_score health score composite metric overall health
+health score agent system health monitoring composite score
+system health metric composite health indicator score
+health_score_agent health agent score agent metric agent
+
+prediction_synthesizer prediction synthesizer ensemble predictor
+prediction synthesizer agent model ensemble combination fusion
+ensemble prediction model synthesis combined forecast
+prediction_synthesizer_agent prediction agent synthesis agent
+
+resource_optimizer resource optimizer allocation efficiency
+resource optimizer agent resource allocation optimization
+resource allocation optimization efficiency scheduling
+resource_optimizer_agent allocation agent efficiency agent
+
+# Tier 4: Meta Agents
+explainer explain agent interpretation narrative generation
+explainer agent insight explanation natural language narrative
+insight explanation narrative generation interpretation
+explainer_agent explanation agent narrative agent insight agent
+
+feedback_learner feedback learner self improvement learning
+feedback learner agent continuous learning self improvement
+continuous learning feedback loop self improving adaptation
+feedback_learner_agent learning agent feedback agent adaptive agent
+
+# Agent aliases and legacy names
+causal_chain_analyzer causal impact agent why agent effect agent
+multiplier_discoverer gap analyzer agent roi agent opportunity agent
+
+# Agent typos and variations
+orchestrator orchstrator orchestrtor orchestator orcastrator
+causal_impact causalimpact causal-impact causal_impcat caual_impact
+gap_analyzer gapanalyzer gap-analyzer gap_anlyzer gap_analzyer
+heterogeneous_optimizer heterogeneousoptimizer hetero_optimizer
+drift_monitor driftmonitor drift-monitor drfit_monitor
+experiment_designer experimentdesigner experiment-designer
+health_score healthscore health-score health_scroe
+prediction_synthesizer predictionsynthesizer prediction-synthesizer
+resource_optimizer resourceoptimizer resource-optimizer
+explainer explainr explainer explianer exlpainer
+feedback_learner feedbacklearner feedback-learner fedback_learner
+
+# ============================================================================
+# SECTION 6: WORKSTREAMS
+# ============================================================================
+
+# Workstream 1: Data & Model Development
+WS1 ws1 workstream1 workstream 1 data model development
+workstream one data and model ML machine learning development
+WS1 data model machine learning feature engineering
+data model development ML workstream ws1 features training
+
+# Workstream 2: HCP Triggers & Decision Engine
+WS2 ws2 workstream2 workstream 2 triggers decision engine
+workstream two HCP triggers decision engine alerts
+WS2 triggers decision HCP alerts notifications
+triggers decision engine workstream ws2 alerts recommendations
+
+# Workstream 3: Impact & Platform
+WS3 ws3 workstream3 workstream 3 impact platform
+workstream three impact platform measurement analytics
+WS3 impact platform analytics measurement
+impact platform analytics workstream ws3 measurement
+
+# Workstream typos
+WS1 ws1 WS-1 WS_1 worstream1 workstrem1
+WS2 ws2 WS-2 WS_2 worstream2 workstrem2
+WS3 ws3 WS-3 WS_3 worstream3 workstrem3
+workstream workstreem wrokstream worksstream workstram
+
+# ============================================================================
+# SECTION 7: HEALTHCARE PROFESSIONAL (HCP) TERMINOLOGY
+# ============================================================================
+
+# HCP general terms
+HCP hcp healthcare provider healthcare professional physician doctor
+healthcare provider HCP physician doctor prescriber clinician
+physician doctor prescriber HCP healthcare professional MD
+doctor physician prescriber clinician medical professional
+
+# HCP specialties
+oncologist oncology cancer specialist tumor physician
+oncologist oncology specialist cancer doctor tumor expert
+rheumatologist rheumatology autoimmune specialist joint doctor
+rheumatologist rheumatology specialist autoimmune disease expert
+dermatologist dermatology skin specialist skin doctor
+dermatologist dermatology specialist skin expert
+hematologist hematology blood specialist blood doctor
+hematologist hematology specialist blood disease expert
+allergist allergy immunology specialist
+allergist allergy immunology immunologist specialist
+
+# HCP engagement
+HCP_engagement hcp engagement provider engagement physician engagement
+hcp engagement detailing calls visits interactions touchpoints
+rep engagement sales representative interaction field force
+engagement touchpoints interactions calls visits details
+
+# HCP ID patterns
+HCP-12345 hcp id provider id physician id prescriber id
+hcp id HCP identifier provider identifier physician identifier
+
+# HCP typos
+HCP hcp HPC hpc heathcare provider healthcrae provider
+healthcare healthcrae helthcare heathcare healthacare
+physician physican phsyician physicain physicion
+prescriber prescribler presciber perscriber prescirber
+
+# ============================================================================
+# SECTION 8: PATIENT TERMINOLOGY
+# ============================================================================
+
+# Patient general terms
+patient patients pt pts individual individuals person
+patient individual person case subject participant
+patient population cohort group segment subgroup
+patient journey treatment pathway care path experience
+
+# Patient ID patterns
+PAT-12345 patient id patient identifier pt id
+patient id PAT identifier patient identifier record
+
+# Patient conditions (E2I specific)
+CSU csu chronic spontaneous urticaria hives itching
+chronic spontaneous urticaria CSU chronic hives skin condition
+PNH pnh paroxysmal nocturnal hemoglobinuria blood disorder
+paroxysmal nocturnal hemoglobinuria PNH blood condition
+breast cancer BC oncology tumor malignancy neoplasm
+breast cancer oncology bc cancer tumor malignancy
+
+# Patient typos
+patient pateint patinet paitent pateient
+patients patietns paitents patienst
+
+# ============================================================================
+# SECTION 9: CAUSAL INFERENCE AND STATISTICS
+# ============================================================================
+
+# Causal inference frameworks
+DoWhy dowhy causal inference framework structural causal model
+DoWhy dowhy SCM structural causal model identification estimation
+EconML econml heterogeneous treatment effect machine learning
+EconML econml CATE DML double machine learning treatment effect
+CausalML causalml uplift modeling treatment effect estimation
+CausalML causalml uplift meta learners treatment effects
+NetworkX networkx graph analysis DAG causal graph network
+NetworkX networkx directed acyclic graph DAG path analysis
+
+# Framework typos
+DoWhy dowhy DoWHY DOWHY dowwhy doWhy do_why
+EconML econml ECONML econML econ_ml econ-ml
+CausalML causalml CAUSALML CausalMl causal_ml causal-ml
+NetworkX networkx NETWORKX NetworkX network_x network-x
+
+# Causal concepts
+causal causality causation cause effect treatment outcome
+causal inference causation cause and effect treatment effect
+treatment effect intervention effect causal impact lift
+effect treatment intervention causal impact outcome change
+confound confounder confounding variable bias selection bias
+confound confounder bias spurious correlation selection
+counterfactual counterfactuals what if scenario alternative outcome
+counterfactual what if alternative scenario hypothetical outcome
+DAG dag directed acyclic graph causal graph structure
+directed acyclic graph DAG causal structure graph model
+
+# Statistical terms
+ATE ate average treatment effect mean effect overall effect
+average treatment effect ATE mean treatment effect overall
+ATT att average treatment effect treated effect on treated
+average treatment effect on treated ATT treated effect
+ITT itt intention to treat intention analysis
+intention to treat ITT intent to treat analysis
+IV iv instrumental variable instrument identification
+instrumental variable IV instrument identification strategy
+DID did difference in differences diff in diff
+difference in differences DID diff in diff quasi experiment
+RCT rct randomized controlled trial experiment ab test
+randomized controlled trial RCT experiment randomization
+propensity score matching PSM psm matching covariate balance
+propensity score PSM matching balancing observational
+
+# Statistical metric terms
+p-value pvalue significance statistical significance probability
+p value significance test hypothesis test probability
+confidence interval CI ci interval estimate uncertainty
+confidence interval CI uncertainty bounds estimate range
+standard error SE se variance sampling error uncertainty
+standard error SE sampling variability uncertainty estimate
+
+# ============================================================================
+# SECTION 10: MACHINE LEARNING AND MLOPS
+# ============================================================================
+
+# ML general terms
+machine learning ML ml artificial intelligence AI model
+machine learning ML model prediction classification regression
+model models modeling predictive prediction forecast
+model training fitting learning optimization tuning
+feature features variable variables input inputs predictor
+feature engineering selection extraction transformation
+
+# ML metrics
+accuracy precision recall f1 score performance metric
+accuracy precision recall f1 classification metric
+AUC ROC auc roc curve discrimination performance
+AUC ROC receiver operating characteristic performance
+PR-AUC pr auc precision recall curve imbalanced
+precision recall AUC PR curve imbalanced data
+Brier score brier calibration probability score
+Brier score calibration probability accuracy metric
+
+# MLOps tools
+MLflow mlflow experiment tracking model registry versioning
+MLflow mlflow tracking registry artifact model versioning
+Opik opik LLM observability tracing monitoring
+Opik opik observability tracing LLM monitoring evaluation
+Great Expectations great expectations data quality validation
+Great Expectations data validation quality testing expectations
+Feast feast feature store feature serving online offline
+Feast feature store serving features online offline store
+Optuna optuna hyperparameter optimization tuning search
+Optuna optuna tuning optimization hyperparameter search trial
+SHAP shap explainability feature importance interpretation
+SHAP shap shapley values explainability interpretation feature
+BentoML bentoml model serving deployment inference API
+BentoML bentoml serving deployment model inference endpoint
+
+# MLOps typos
+MLflow mlflow MLFlow MLFLOW ml_flow ml-flow
+Optuna optuna OPTUNA Optuna optuna optuma
+SHAP shap Shap SHAP shapley shapely
+BentoML bentoml BEntoML BENTOML bento_ml bento-ml
+
+# Data splits
+train training training set training data fit data
+training train fit training set training data model training
+validation val validation set tuning set development set
+validation val tuning validation set hyperparameter selection
+test testing test set evaluation set holdout
+test testing evaluation test set final evaluation
+holdout hold out reserved future comparison baseline
+holdout holdout set reserved set future comparison
+
+# ============================================================================
+# SECTION 11: TRIGGERS AND ALERTS
+# ============================================================================
+
+# Trigger terms
+trigger triggers alert alerts notification notifications
+trigger alert notification recommendation action item
+triggered triggered alert activated fired generated
+trigger generation activation firing recommendation generation
+
+# Trigger attributes
+priority critical high medium low urgency importance
+priority level critical high medium low urgent
+lead time advance notice timing window days weeks
+lead time timing window advance notice days ahead
+channel channels CRM email push mobile dashboard
+channel CRM email push notification mobile dashboard alert
+
+# Trigger ID patterns
+TRG-123456 trigger id trigger identifier alert id
+trigger id TRG identifier alert identifier notification id
+
+# Trigger effectiveness
+trigger effectiveness acceptance rate action rate success
+trigger performance effectiveness action acceptance utilization
+CFR cfr counterfactual failure rate trigger evaluation
+counterfactual failure rate CFR trigger effectiveness metric
+
+# Trigger typos
+trigger trigegr triggre triiger tirger
+triggers trigegrs triggres tirggers trggers
+alert alret alret aleart aletr
+notification notificaton notifcation notifiation
+
+# ============================================================================
+# SECTION 12: TIME AND DATE TERMINOLOGY
+# ============================================================================
+
+# Time periods
+quarter quarters Q1 Q2 Q3 Q4 quarterly
+quarter Q1 Q2 Q3 Q4 quarterly period fiscal
+month months monthly jan feb mar apr may jun jul aug sep oct nov dec
+month months monthly january february march april may june july august september october november december
+week weeks weekly daily day days yearly annual
+week weeks weekly daily day days annual yearly
+YTD ytd year to date year-to-date cumulative annual
+year to date YTD ytd cumulative annual running total
+
+# Relative time
+last month previous month prior month month ago
+last month previous month past month one month ago
+last quarter previous quarter prior quarter quarter ago
+last quarter previous quarter past quarter one quarter ago
+last week previous week prior week week ago
+last week previous week past week one week ago
+last year previous year prior year year ago
+last year previous year past year one year ago
+
+# Time ranges
+this month current month present month ongoing month
+this month current month present ongoing now
+this quarter current quarter present quarter ongoing quarter
+this quarter current quarter present ongoing now
+date range time range period range span interval
+date range from to between time period interval
+
+# Time typos
+quarter quater quartr quatrer qurter
+monthly monthyl montlhy montly monhtly
+weekly weekyl weelky wekly weekely
+last lsat lasst lat alst
+previous previos previuos pervious prevous
+
+# ============================================================================
+# SECTION 13: QUERY INTENT TYPES
+# ============================================================================
+
+# Causal queries
+why did what caused reason behind cause of explanation
+why did what caused reason for explanation behind causal
+causal relationship causation cause effect driver influence
+causal cause effect relationship driver impact influence
+
+# Exploratory queries
+show me display present visualize what is how is
+show me display visualize present what how is state
+explore exploring exploration analysis overview summary
+explore analysis examine investigate look at review
+
+# Comparative queries
+compare comparison versus vs between difference
+compare comparison vs versus between across difference
+compare regions brands compare to against benchmark
+comparison versus vs between regions brands across
+
+# Trend queries
+trend trends trending over time change progression
+trend trends trending over time historical change
+how has what happened evolution progression history
+evolution progression history over time change development
+
+# What-if queries
+what if what would what happens if scenario hypothetical
+what if scenario hypothetical what would happen if
+simulate simulation project projection forecast estimate
+simulate scenario what if project forecast estimate model
+
+# Intent typos
+causal casusl cusal casusal causla
+compare comprae comapre compre compair
+trend trned trand trned ternd
+what if whatif what-if waht if whta if
+
+# ============================================================================
+# SECTION 14: VISUALIZATION AND DASHBOARD
+# ============================================================================
+
+# Chart types
+chart charts graph graphs visualization visualizations
+chart graph visualization plot figure diagram
+bar chart bar graph histogram column chart
+bar chart bar graph column histogram bars
+line chart line graph time series trend chart
+line chart line graph time series trend line
+pie chart donut chart circular chart proportion
+pie chart donut proportion composition breakdown
+scatter plot scatter chart xy plot correlation
+scatter plot scatter chart correlation relationship
+heatmap heat map matrix correlation matrix
+heatmap heat map intensity matrix density
+
+# Dashboard terms
+dashboard dashboards panel panels view views
+dashboard panel view interface display screen
+widget widgets component components tile tiles
+widget component tile element card module
+filter filters filtering dimension slice segment
+filter filtering dimension slice segment subset
+drill down drilldown detail expand explore
+drill down expand detail explore investigate
+
+# Visualization typos
+visualization visualisation vizualization visualizaiton
+chart cahrt chrat cahrt chrta
+dashboard dahsboard dasboard dashbaord dashbord
+graph grpah grahp grpah grap
+
+# ============================================================================
+# SECTION 15: DATA ARCHITECTURE TERMS
+# ============================================================================
+
+# Database terms
+database databases db table tables schema
+database db table schema repository store
+Supabase supabase postgresql postgres database
+Supabase postgresql postgres database backend
+pgvector vector database embedding search similarity
+pgvector vector embedding similarity search database
+Redis redis cache caching memory store
+Redis redis cache memory key value store
+
+# Data quality
+data quality accuracy completeness consistency validity
+data quality complete accurate consistent valid fresh
+freshness fresh stale old outdated current recent
+freshness current fresh recent up to date stale old
+
+# Data leakage
+leakage data leakage information leakage target leakage
+data leakage information leakage contamination bias
+split data split train test validation holdout
+data split training testing validation holdout separation
+temporal leakage time leakage future information look ahead
+temporal leakage future leak look ahead bias time leak
+
+# Architecture typos
+database databse dtabase databsae databaes
+Supabase supbase supabse suapbase supaabse
+schema shcema scehma schma shema
+leakage leakge leakgae lekage leagage
+
+# ============================================================================
+# SECTION 16: COMMON QUERY PATTERNS (Full Sentences)
+# ============================================================================
+
+# Causal queries about brands
+Why did Remibrutinib conversion drop in Midwest last quarter
+Why is Fabhalta performance declining in Northeast region
+What caused Kisqali market share to decrease this month
+Why did remi conversion rate fall in the midwest last Q3
+What is driving the drop in Fabhalta prescription volume
+
+# Comparative queries
+Compare Remibrutinib performance across all regions
+How does Midwest compare to Northeast for Kisqali
+Compare trigger effectiveness between regions for Fabhalta
+Which region has the highest conversion rate for remi
+Compare Q1 vs Q2 performance for all brands
+
+# Trend queries
+Show me Remibrutinib TRx trend over the past year
+What is the trend for HCP engagement in West region
+How has conversion rate changed over the last 6 months
+Show trend of market share for Kisqali by quarter
+Display Fabhalta prescription volume trend YTD
+
+# What-if queries
+What would happen if we increase HCP coverage to 92%
+What if we reduced digital engagement by 20%
+What is the ROI gap if we increase trigger acceptance rate
+Model the impact of increasing lead time to 21 days
+Simulate effect of 10% increase in rep engagement
+
+# Gap analysis queries
+What is the ROI gap for Remibrutinib in Midwest
+Identify coverage gaps for HCP engagement in South
+Find opportunity gaps for Kisqali conversion optimization
+Show me the biggest performance gaps by region
+What gaps exist in trigger acceptance rate by brand
+
+# Agent-specific queries
+Run causal impact analysis for Midwest Remibrutinib
+Ask the gap analyzer about ROI opportunities
+What does the drift monitor show for Q3 models
+Design an experiment for testing trigger timing
+Get explainer insights for Fabhalta performance drop
+
+# KPI queries
+Show me current TRx share for all brands
+What is the conversion rate for Kisqali this quarter
+Display HCP coverage metrics by region
+Show engagement score trends over time
+What is the time to therapy for Remibrutinib patients
+
+# ============================================================================
+# SECTION 17: ABBREVIATIONS AND EXPANSIONS
+# ============================================================================
+
+# Medical abbreviations
+HCP healthcare provider healthcare professional physician
+Rx prescription medication script fill dispense
+Dx diagnosis diagnosed diagnostic assessment
+Tx treatment therapy therapeutic intervention
+NRx new prescription new script new Rx
+TRx total prescription total scripts total Rx
+NBRx new to brand new brand prescription brand switch
+CSU chronic spontaneous urticaria hives skin condition
+PNH paroxysmal nocturnal hemoglobinuria blood disorder
+BTK bruton tyrosine kinase enzyme inhibitor target
+CDK cyclin dependent kinase cell cycle inhibitor target
+AH antihistamine histamine blocker allergy medication
+
+# Analytics abbreviations
+ROI return on investment return value benefit
+AUC area under curve performance metric discrimination
+CI confidence interval causal impact statistical interval
+ATE average treatment effect mean effect overall
+CATE conditional average treatment effect heterogeneous
+CFR counterfactual failure rate trigger effectiveness
+KPI key performance indicator metric measurement
+SLA service level agreement performance target contract
+PSI population stability index drift metric distribution
+MAU monthly active users engagement platform usage
+DAU daily active users engagement platform activity
+WAU weekly active users engagement platform activity
+
+# Technical abbreviations
+ML machine learning artificial intelligence modeling
+NLP natural language processing text analysis parsing
+API application programming interface endpoint service
+ETL extract transform load data pipeline processing
+RAG retrieval augmented generation knowledge search
+DAG directed acyclic graph causal structure network
+SCM structural causal model causal framework graph
+DML double machine learning debiased estimation method
+
+# Organization abbreviations
+IDS integrated data science analytics team department
+DORA DevOps research assessment metrics deployment
+RBAC role based access control security permissions
+HIPAA health insurance portability accountability compliance
+
+# ============================================================================
+# SECTION 18: COMMON TYPOS AND MISSPELLINGS DICTIONARY
+# ============================================================================
+
+# Brand typos (repeated for emphasis in embedding training)
+remibrutinib remibrutanib remibritunib remiburtinib remibruitinib
+remibrutinib remibritinib reminrutinib remibriutinib remibrutinub
+remibrutinib rembrutinib remibutinib remibruntinib remibrutinb
+fabhalta fabhalta fabhlta fabhata fabalta fabhltaa
+fabhalta fabhlata fabahalta fabhalta fabhlata fabhallta
+kisqali kisquali kisqalli kisqalii kiqali kisqal kisaqli
+
+# Region typos (repeated for emphasis)
+northeast northest norhteast norteast northease
+midwest midwset midwets middlewest midwst
+southeast southest souhteast souteast
+west wesst wets weest
+
+# KPI typos (repeated for emphasis)
+conversion conversoin converison convrsion coversion
+engagement engagment engagemnet engagmenet engagament
+treatment treatmnet treatement treatmant treatmetn
+performance performace perfromance preformance performnace
+
+# Agent typos (repeated for emphasis)
+orchestrator orchstrator orchestrtor orchestator orcastrator
+analyzer analyser analzyer anlyzer analyzre analysr
+optimizer optimzer optmizer optimizr optmiser optimiser
+monitor moniter monitr montor montior monitore
+designer desinger deisgner desginer designre
+
+# General analytics typos
+causal causla casusl cusal casaul
+impact impcat imapct impct impacct
+analysis anaylsis analyis anlaysis anlysis analsyis
+metric metircs metirc metrc metic metrick
+trigger trigegr triggre triiger tirger trgiger
+patient pateint patinet paitent pateient
+
+# ============================================================================
+# SECTION 19: CONTEXTUAL PHRASES AND INDUSTRY JARGON
+# ============================================================================
+
+# Commercial excellence phrases
+commercial analytics commercial operations field excellence
+commercial excellence field force optimization sales analytics
+field operations commercial success sales effectiveness
+go to market strategy commercial launch brand performance
+
+# Patient access phrases
+patient access access programs support services hub
+patient access support hub reimbursement coverage
+prior authorization PA prior auth insurance approval
+prior authorization coverage determination benefit verification
+specialty pharmacy distribution channel fulfillment
+specialty pharmacy SP distribution specialty distributor
+
+# HCP engagement phrases
+share of voice SOV voice share message share
+share of voice SOV competitive messaging brand voice
+detailing calls rep visits field engagement touchpoints
+detailing calls visits field force engagement interactions
+key opinion leader KOL thought leader influencer
+key opinion leader KOL advocate influencer expert
+
+# Market dynamics phrases
+market dynamics competitive landscape industry trends
+market dynamics competitive environment market forces
+market access payer strategy reimbursement coverage
+market access payer formulary coverage reimbursement tier
+brand performance brand health brand metrics brand KPIs
+brand performance metrics brand health indicators success
+
+# Trigger and alert phrases
+actionable insights actionable intelligence recommendations
+actionable insights prescriptive analytics recommendations actions
+next best action NBA optimal recommendation suggestion
+next best action NBA recommendation optimal action decision
+real time alerts real time notifications immediate alerts
+real time alerts notifications immediate timely urgent
+
+# ============================================================================
+# SECTION 20: NUMBERS AND QUANTITATIVE TERMS
+# ============================================================================
+
+# Percentage terms
+percent percentage pct % points basis points
+percent percentage pct % rate ratio proportion
+increase decrease change delta difference variance
+increase decrease change up down rise fall growth decline
+lift uplift improvement gain positive change enhancement
+lift uplift improvement enhancement boost increase positive
+
+# Magnitude terms
+high low medium critical moderate significant
+high low medium critical moderate significant severe
+above below over under exceeds below threshold
+above below over under exceeds meets misses threshold
+target actual goal baseline benchmark threshold
+target actual goal baseline benchmark standard threshold
+
+# Volume terms
+volume count number amount quantity total sum
+volume count number total quantity sum aggregate
+million M thousands K billions B hundreds
+million M thousands K hundreds units items records
+
+# ============================================================================
+# END OF CORPUS
+# ============================================================================

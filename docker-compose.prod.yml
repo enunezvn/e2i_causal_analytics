@@ -1,0 +1,176 @@
+# E2I Causal Analytics - Production Environment Overrides
+# Usage: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+version: '3.8'
+
+services:
+  # FastAPI - Production Configuration
+  fastapi:
+    command: uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --workers 4 --log-level info
+    # No volume mounts - code is baked into image
+    # No exposed ports - accessed via nginx only
+    environment:
+      - DEBUG=false
+      - LOG_LEVEL=INFO
+      - RELOAD=false
+      # Strict CORS for production
+      - CORS_ORIGINS=${CORS_ORIGINS}
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # Frontend - Production Configuration
+  frontend:
+    # Frontend is built as static files served by nginx in production
+    # This service could be removed if using nginx to serve static build
+    environment:
+      - NODE_ENV=production
+      - REACT_APP_API_URL=${REACT_APP_API_URL}
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # MLflow - Production Configuration
+  mlflow:
+    command: |
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri ${DATABASE_URL}
+      --default-artifact-root ${MLFLOW_ARTIFACT_ROOT}
+      --serve-artifacts
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      # Use DO Spaces for artifact storage
+      - AWS_ACCESS_KEY_ID=${DO_SPACES_KEY}
+      - AWS_SECRET_ACCESS_KEY=${DO_SPACES_SECRET}
+      - MLFLOW_S3_ENDPOINT_URL=https://${DO_SPACES_ENDPOINT}
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Redis - Production Configuration
+  redis:
+    command: |
+      redis-server
+      --appendonly yes
+      --requirepass ${REDIS_PASSWORD}
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  # Agent Worker - Production Configuration
+  agent-worker:
+    environment:
+      - DEBUG=false
+      - LOG_LEVEL=INFO
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+      # Scale workers in production
+      replicas: 2
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Nginx - Production Configuration
+  nginx:
+    ports:
+      - "80:80"      # HTTP (redirects to HTTPS)
+      - "443:443"    # HTTPS
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./docker/nginx/ssl:/etc/nginx/ssl:ro
+      - nginx-logs:/var/log/nginx
+      # Serve frontend static files
+      - ./frontend/build:/usr/share/nginx/html:ro
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+networks:
+  frontend-network:
+    driver: bridge
+
+  backend-network:
+    driver: bridge
+    internal: true  # Backend network isolated from external access
+
+volumes:
+  mlflow-data:
+    driver: local
+
+  redis-data:
+    driver: local
+
+  nginx-logs:
+    driver: local
