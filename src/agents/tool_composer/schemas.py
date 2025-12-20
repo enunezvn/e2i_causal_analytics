@@ -12,7 +12,7 @@ This module defines data structures for:
 from enum import Enum
 from typing import Any, Callable, Optional
 from dataclasses import dataclass, field
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # =============================================================================
@@ -95,8 +95,7 @@ class DependencyInput(BaseModel):
     dependency_type: str
     reason: str
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class CompositionRequest(BaseModel):

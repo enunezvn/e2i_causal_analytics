@@ -13,7 +13,7 @@ Version: 4.1.0
 """
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
 from enum import Enum
@@ -99,16 +99,15 @@ class MemorySearchRequest(BaseModel):
         description="Minimum score threshold"
     )
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "query": "Why did TRx drop in northeast region?",
-                "k": 10,
-                "retrieval_method": "hybrid",
-                "kpi_name": "TRx",
-                "filters": {"brand": "Kisqali", "region": "northeast"}
-            }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "query": "Why did TRx drop in northeast region?",
+            "k": 10,
+            "retrieval_method": "hybrid",
+            "kpi_name": "TRx",
+            "filters": {"brand": "Kisqali", "region": "northeast"}
         }
+    })
 
 
 class MemorySearchResult(BaseModel):
@@ -147,17 +146,16 @@ class EpisodicMemoryInput(BaseModel):
     patient_id: Optional[str] = Field(None, description="Associated patient ID")
     metadata: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Additional metadata")
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "content": "User asked about TRx trends in northeast region for Kisqali",
-                "event_type": "query",
-                "session_id": "sess_abc123",
-                "agent_name": "orchestrator",
-                "brand": "Kisqali",
-                "region": "northeast"
-            }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "content": "User asked about TRx trends in northeast region for Kisqali",
+            "event_type": "query",
+            "session_id": "sess_abc123",
+            "agent_name": "orchestrator",
+            "brand": "Kisqali",
+            "region": "northeast"
         }
+    })
 
 
 class EpisodicMemoryResponse(BaseModel):
@@ -186,16 +184,15 @@ class ProceduralFeedbackRequest(BaseModel):
     session_id: Optional[str] = Field(None, description="Session context")
     agent_name: Optional[str] = Field(None, description="Agent providing feedback")
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "procedure_id": "proc_causal_analysis_001",
-                "outcome": "success",
-                "score": 0.85,
-                "feedback_text": "Causal analysis correctly identified HCP engagement drop",
-                "agent_name": "feedback_learner"
-            }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "procedure_id": "proc_causal_analysis_001",
+            "outcome": "success",
+            "score": 0.85,
+            "feedback_text": "Causal analysis correctly identified HCP engagement drop",
+            "agent_name": "feedback_learner"
         }
+    })
 
 
 class ProceduralFeedbackResponse(BaseModel):
@@ -223,15 +220,14 @@ class SemanticPathRequest(BaseModel):
     max_depth: int = Field(default=3, ge=1, le=10, description="Maximum traversal depth")
     min_confidence: float = Field(default=0.5, ge=0.0, le=1.0, description="Minimum confidence")
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "kpi_name": "TRx",
-                "relationship_type": "causal_path",
-                "max_depth": 3,
-                "min_confidence": 0.6
-            }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "kpi_name": "TRx",
+            "relationship_type": "causal_path",
+            "max_depth": 3,
+            "min_confidence": 0.6
         }
+    })
 
 
 class SemanticPathResponse(BaseModel):

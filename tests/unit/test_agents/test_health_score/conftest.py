@@ -5,7 +5,7 @@ Provides mock clients, sample data, and shared utilities.
 """
 
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 from unittest.mock import AsyncMock
 

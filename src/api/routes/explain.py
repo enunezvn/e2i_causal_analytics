@@ -17,7 +17,7 @@ Version: 4.1.0
 
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
 from enum import Enum
@@ -62,17 +62,16 @@ class FeatureContribution(BaseModel):
     shap_value: float = Field(..., description="SHAP contribution to prediction")
     contribution_direction: str = Field(..., description="positive or negative")
     contribution_rank: int = Field(..., description="Rank by absolute SHAP value")
-    
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "feature_name": "days_since_last_hcp_visit",
-                "feature_value": 45,
-                "shap_value": 0.234,
-                "contribution_direction": "positive",
-                "contribution_rank": 1
-            }
+
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "feature_name": "days_since_last_hcp_visit",
+            "feature_value": 45,
+            "shap_value": 0.234,
+            "contribution_direction": "positive",
+            "contribution_rank": 1
         }
+    })
 
 
 class ExplainRequest(BaseModel):
@@ -86,18 +85,17 @@ class ExplainRequest(BaseModel):
     top_k: int = Field(default=5, ge=1, le=20, description="Number of top features to return")
     include_base_value: bool = Field(default=True, description="Include model's base prediction value")
     store_for_audit: bool = Field(default=True, description="Store explanation in ml_shap_analyses for compliance")
-    
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "patient_id": "PAT-2024-001234",
-                "hcp_id": "HCP-NE-5678",
-                "model_type": "propensity",
-                "format": "top_k",
-                "top_k": 5,
-                "store_for_audit": True
-            }
+
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "patient_id": "PAT-2024-001234",
+            "hcp_id": "HCP-NE-5678",
+            "model_type": "propensity",
+            "format": "top_k",
+            "top_k": 5,
+            "store_for_audit": True
         }
+    })
 
 
 class ExplainResponse(BaseModel):
@@ -124,33 +122,32 @@ class ExplainResponse(BaseModel):
     # Metadata
     computation_time_ms: float = Field(..., description="Time to compute explanation")
     audit_stored: bool = Field(..., description="Whether explanation was stored for compliance")
-    
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "explanation_id": "EXPL-2024-abc123",
-                "request_timestamp": "2024-12-15T10:30:00Z",
-                "patient_id": "PAT-2024-001234",
-                "model_type": "propensity",
-                "model_version_id": "v2.3.1-prod",
-                "prediction_class": "high_propensity",
-                "prediction_probability": 0.78,
-                "base_value": 0.42,
-                "top_features": [
-                    {
-                        "feature_name": "days_since_last_hcp_visit",
-                        "feature_value": 45,
-                        "shap_value": 0.15,
-                        "contribution_direction": "positive",
-                        "contribution_rank": 1
-                    }
-                ],
-                "shap_sum": 0.36,
-                "narrative_explanation": None,
-                "computation_time_ms": 127.5,
-                "audit_stored": True
-            }
+
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "explanation_id": "EXPL-2024-abc123",
+            "request_timestamp": "2024-12-15T10:30:00Z",
+            "patient_id": "PAT-2024-001234",
+            "model_type": "propensity",
+            "model_version_id": "v2.3.1-prod",
+            "prediction_class": "high_propensity",
+            "prediction_probability": 0.78,
+            "base_value": 0.42,
+            "top_features": [
+                {
+                    "feature_name": "days_since_last_hcp_visit",
+                    "feature_value": 45,
+                    "shap_value": 0.15,
+                    "contribution_direction": "positive",
+                    "contribution_rank": 1
+                }
+            ],
+            "shap_sum": 0.36,
+            "narrative_explanation": None,
+            "computation_time_ms": 127.5,
+            "audit_stored": True
         }
+    })
 
 
 class BatchExplainRequest(BaseModel):

@@ -129,8 +129,11 @@ class PipelineHealthNode:
                     last_success_dt = datetime.fromisoformat(
                         last_success.replace("Z", "+00:00")
                     )
+                    # Ensure timezone-aware comparison
+                    if last_success_dt.tzinfo is None:
+                        last_success_dt = last_success_dt.replace(tzinfo=timezone.utc)
                     freshness_hours = (
-                        datetime.now(timezone.utc) - last_success_dt.replace(tzinfo=None)
+                        datetime.now(timezone.utc) - last_success_dt
                     ).total_seconds() / 3600
                 except (ValueError, AttributeError):
                     freshness_hours = float("inf")
