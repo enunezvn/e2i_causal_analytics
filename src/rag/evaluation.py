@@ -388,6 +388,7 @@ class RAGASEvaluator:
     ) -> EvaluationResult:
         """Evaluate using RAGAS library."""
         try:
+            import openai
             from ragas import evaluate
             from ragas.metrics import (
                 faithfulness,
@@ -395,7 +396,44 @@ class RAGASEvaluator:
                 context_precision,
                 context_recall,
             )
+            from ragas.embeddings import OpenAIEmbeddings as RagasOpenAIEmbeddings
+            from ragas.llms import LangchainLLMWrapper
+            from langchain_openai import ChatOpenAI
             from datasets import Dataset
+
+            # Create a wrapper that adds embed_query interface to RAGAS embeddings
+            # RAGAS 0.4.x internally calls embed_query but its embeddings use embed_text
+            class EmbeddingsWrapper:
+                """Wrapper to bridge RAGAS embeddings with LangChain interface."""
+
+                def __init__(self, ragas_embeddings):
+                    self._embeddings = ragas_embeddings
+
+                def embed_query(self, text: str) -> list:
+                    """LangChain-compatible embed_query method."""
+                    return self._embeddings.embed_text(text)
+
+                def embed_documents(self, texts: list) -> list:
+                    """LangChain-compatible embed_documents method."""
+                    return self._embeddings.embed_texts(texts)
+
+                def __getattr__(self, name):
+                    return getattr(self._embeddings, name)
+
+            # Configure embeddings for answer_relevancy metric
+            # RAGAS 0.4.x requires explicit embeddings configuration
+            openai_client = openai.OpenAI()
+            ragas_embeddings = RagasOpenAIEmbeddings(client=openai_client)
+            embeddings = EmbeddingsWrapper(ragas_embeddings)
+            answer_relevancy.embeddings = embeddings
+
+            # Configure LLM for metrics that need it
+            llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+            wrapped_llm = LangchainLLMWrapper(llm)
+            faithfulness.llm = wrapped_llm
+            answer_relevancy.llm = wrapped_llm
+            context_precision.llm = wrapped_llm
+            context_recall.llm = wrapped_llm
 
             # Prepare dataset in RAGAS format
             data = {
