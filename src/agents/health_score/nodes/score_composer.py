@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
 from ..state import HealthScoreState
@@ -86,7 +86,7 @@ class ScoreComposerNode:
                 "warnings": warnings,
                 "health_summary": summary,
                 "check_latency_ms": check_time,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "status": "completed",
             }
 

@@ -39,7 +39,7 @@ class LearningSignal:
     session_id: Optional[str] = None
     cycle_id: Optional[str] = None
     signal_details: Dict[str, Any] = field(default_factory=dict)
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 @dataclass
@@ -55,7 +55,7 @@ class TrainingExample:
     score: float
     is_positive: bool  # Good example (score > 0.8) or negative
     metadata: Dict[str, Any] = field(default_factory=dict)
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 @dataclass
@@ -66,7 +66,7 @@ class AgentPerformanceMetric:
     metric_value: float
     window_size: str  # hour, day, week
     sample_count: int
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 # =============================================================================

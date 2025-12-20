@@ -20,7 +20,7 @@ Version: 4.1.0
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 import logging
 import uuid
@@ -111,7 +111,7 @@ class CognitiveQueryResponse(BaseModel):
     evidence: Optional[List[EvidenceItem]] = Field(None, description="Evidence trail")
     phases_completed: List[CognitivePhase] = Field(..., description="Workflow phases completed")
     processing_time_ms: float = Field(..., description="Total processing time in ms")
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -126,8 +126,8 @@ class SessionContext(BaseModel):
     brand: Optional[str] = None
     region: Optional[str] = None
     state: SessionState = Field(default=SessionState.ACTIVE)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    last_activity: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    last_activity: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     message_count: int = Field(default=0)
     current_phase: Optional[CognitivePhase] = None
 
@@ -136,7 +136,7 @@ class SessionMessage(BaseModel):
     """Message in session history."""
     role: str = Field(..., description="Message role (user, assistant, system)")
     content: str = Field(..., description="Message content")
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     agent_name: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
@@ -161,7 +161,7 @@ class CreateSessionResponse(BaseModel):
     """Response for session creation."""
     session_id: str = Field(..., description="Created session ID")
     state: SessionState = Field(default=SessionState.ACTIVE)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     expires_at: datetime = Field(..., description="Session expiration time")
 
 
@@ -327,7 +327,7 @@ async def get_session(session_id: str) -> SessionResponse:
             SessionMessage(
                 role=m.get("role", "user"),
                 content=m.get("content", ""),
-                timestamp=m.get("timestamp", datetime.utcnow()),
+                timestamp=m.get("timestamp", datetime.now(timezone.utc)),
                 agent_name=m.get("metadata", {}).get("agent_name"),
                 metadata=m.get("metadata", {})
             )
@@ -352,8 +352,8 @@ async def get_session(session_id: str) -> SessionResponse:
             brand=session.get("context", {}).get("brand"),
             region=session.get("context", {}).get("region"),
             state=SessionState(session.get("state", "active")),
-            created_at=session.get("created_at", datetime.utcnow()),
-            last_activity=session.get("last_activity", datetime.utcnow()),
+            created_at=session.get("created_at", datetime.now(timezone.utc)),
+            last_activity=session.get("last_activity", datetime.now(timezone.utc)),
             message_count=len(messages)
         )
 
@@ -402,7 +402,7 @@ async def create_session(request: CreateSessionRequest) -> CreateSessionResponse
         )
 
         # Session expires in 1 hour
-        expires_at = datetime.utcnow().replace(hour=datetime.utcnow().hour + 1)
+        expires_at = datetime.now(timezone.utc).replace(hour=datetime.now(timezone.utc).hour + 1)
 
         return CreateSessionResponse(
             session_id=session_id,
@@ -427,7 +427,7 @@ async def delete_session(session_id: str) -> Dict[str, Any]:
         return {
             "session_id": session_id,
             "deleted": True,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
 
     except Exception as e:

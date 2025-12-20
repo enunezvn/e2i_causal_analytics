@@ -11,7 +11,7 @@ Integrates with:
 
 import logging
 from typing import Optional, Dict, List, Any
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID
 import json
 
@@ -364,7 +364,7 @@ class TwinRepository:
             "performance_metrics": metrics.to_dict(),
             "brand": config.brand.value,
             "is_active": True,
-            "created_at": datetime.utcnow(),
+            "created_at": datetime.now(timezone.utc),
         }
         # Insert into database
     
@@ -389,7 +389,7 @@ class TwinRepository:
             "brand": config.brand.value,
             "fidelity_score": None,
             "r2_score": metrics.r2_score,
-            "cached_at": datetime.utcnow().isoformat(),
+            "cached_at": datetime.now(timezone.utc).isoformat(),
         }
         
         self.redis_client.setex(

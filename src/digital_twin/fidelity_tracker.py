@@ -200,11 +200,11 @@ class FidelityTracker:
         cache_key = f"{model_id}_{lookback_days}"
         if cache_key in self.model_fidelity_cache:
             cached = self.model_fidelity_cache[cache_key]
-            if (datetime.utcnow() - cached["computed_at"]).seconds < 3600:
+            if (datetime.now(timezone.utc) - cached["computed_at"]).seconds < 3600:
                 return cached
         
         # Gather validated records for this model
-        cutoff = datetime.utcnow() - timedelta(days=lookback_days)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)
         validated_records = [
             r for r in self.records.values()
             if r.validated_at and r.validated_at >= cutoff and r.actual_ate is not None
@@ -215,7 +215,7 @@ class FidelityTracker:
                 "model_id": str(model_id),
                 "validation_count": 0,
                 "message": "No validated records in timeframe",
-                "computed_at": datetime.utcnow(),
+                "computed_at": datetime.now(timezone.utc),
             }
         
         # Calculate metrics
@@ -241,7 +241,7 @@ class FidelityTracker:
             "grade_distribution": grade_counts,
             "fidelity_score": self._calculate_fidelity_score(errors, ci_coverages),
             "degradation_alert": self._check_degradation(validated_records),
-            "computed_at": datetime.utcnow(),
+            "computed_at": datetime.now(timezone.utc),
         }
         
         self.model_fidelity_cache[cache_key] = report
@@ -269,7 +269,7 @@ class FidelityTracker:
                 "message": "Model fidelity has degraded significantly",
                 "current_error": report["metrics"]["mean_absolute_error"],
                 "recommendation": "Consider retraining twin model",
-                "generated_at": datetime.utcnow(),
+                "generated_at": datetime.now(timezone.utc),
             }
         
         return None

@@ -422,8 +422,8 @@ class RedisWorkingMemory:
         session_data = {
             "session_id": session_id,
             "user_id": user_id or "anonymous",
-            "created_at": datetime.utcnow().isoformat(),
-            "last_activity_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "last_activity_at": datetime.now(timezone.utc).isoformat(),
             "message_count": "0",
             "current_phase": "init",
             "user_preferences": json.dumps(initial_context.get("preferences", {}) if initial_context else {}),
@@ -472,7 +472,7 @@ class RedisWorkingMemory:
             if isinstance(value, (int, float)):
                 updates[key] = str(value)
         
-        updates["last_activity_at"] = datetime.utcnow().isoformat()
+        updates["last_activity_at"] = datetime.now(timezone.utc).isoformat()
         
         await redis.hset(session_key, mapping=updates)
         await redis.expire(session_key, self.config["ttl_seconds"])
@@ -531,7 +531,7 @@ class RedisWorkingMemory:
         message = {
             "role": role,
             "content": content,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "metadata": json.dumps(metadata or {})
         }
         
@@ -742,7 +742,7 @@ async def insert_episodic_memory(
         "agent_name": memory.agent_name,
         "importance_score": memory.importance_score,
         "embedding": embedding,
-        "occurred_at": datetime.utcnow().isoformat()
+        "occurred_at": datetime.now(timezone.utc).isoformat()
     }
     
     # Add E2I entity references if provided
@@ -1026,7 +1026,7 @@ async def bulk_insert_episodic_memories(
             "agent_name": memory.agent_name,
             "importance_score": memory.importance_score,
             "embedding": embedding,
-            "occurred_at": datetime.utcnow().isoformat()
+            "occurred_at": datetime.now(timezone.utc).isoformat()
         }
         
         if memory.e2i_refs:
@@ -1065,7 +1065,7 @@ async def get_recent_experiences(
     """
     client = get_supabase_client()
     
-    cutoff = (datetime.utcnow() - timedelta(days=days_back)).isoformat()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days_back)).isoformat()
     
     query = client.table("episodic_memories") \
         .select("*") \
@@ -1182,7 +1182,7 @@ class FalkorDBSemanticMemory:
         label = label_map.get(entity_type, "Entity")
         props = properties or {}
         props["e2i_entity_type"] = entity_type.value
-        props["updated_at"] = datetime.utcnow().isoformat()
+        props["updated_at"] = datetime.now(timezone.utc).isoformat()
         
         prop_items = [f"{k}: ${k}" for k in props.keys()]
         prop_string = ", ".join(prop_items)
@@ -1236,7 +1236,7 @@ class FalkorDBSemanticMemory:
         target_label = label_map.get(target_type, "Entity")
         
         props = properties or {}
-        props["updated_at"] = datetime.utcnow().isoformat()
+        props["updated_at"] = datetime.now(timezone.utc).isoformat()
         
         prop_items = [f"{k}: ${k}" for k in props.keys()]
         prop_string = ", ".join(prop_items) if prop_items else ""
@@ -1719,7 +1719,7 @@ async def insert_procedural_memory(
             .update({
                 "usage_count": existing[0].get("usage_count", 0) + 1,
                 "success_count": existing[0].get("success_count", 0) + 1,
-                "updated_at": datetime.utcnow().isoformat()
+                "updated_at": datetime.now(timezone.utc).isoformat()
             }) \
             .eq("procedure_id", procedure_id) \
             .execute()
@@ -1743,8 +1743,8 @@ async def insert_procedural_memory(
         "usage_count": 1,
         "success_count": 1,
         "is_active": True,
-        "created_at": datetime.utcnow().isoformat(),
-        "updated_at": datetime.utcnow().isoformat()
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat()
     }
     
     client.table("procedural_memories").insert(record).execute()
@@ -1845,7 +1845,7 @@ async def record_learning_signal(
         "dspy_metric_value": signal.dspy_metric_value,
         "training_input": signal.training_input,
         "training_output": signal.training_output,
-        "created_at": datetime.utcnow().isoformat()
+        "created_at": datetime.now(timezone.utc).isoformat()
     }
     
     # Remove None values
@@ -1928,7 +1928,7 @@ async def _increment_memory_stats(
     """
     client = get_supabase_client()
     
-    today = datetime.utcnow().date().isoformat()
+    today = datetime.now(timezone.utc).date().isoformat()
     
     try:
         # Upsert stats record
@@ -1938,7 +1938,7 @@ async def _increment_memory_stats(
                 "memory_type": memory_type,
                 "subtype": subtype or "general",
                 "count": 1,
-                "updated_at": datetime.utcnow().isoformat()
+                "updated_at": datetime.now(timezone.utc).isoformat()
             }, on_conflict="stat_date,memory_type,subtype") \
             .execute()
     except Exception as e:
@@ -1962,7 +1962,7 @@ async def get_memory_statistics(
     """
     client = get_supabase_client()
     
-    cutoff = (datetime.utcnow() - timedelta(days=days_back)).date().isoformat()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days_back)).date().isoformat()
     
     query = client.table("memory_statistics") \
         .select("*") \

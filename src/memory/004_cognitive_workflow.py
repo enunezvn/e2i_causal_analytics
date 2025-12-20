@@ -12,7 +12,7 @@ Version: 1.0
 """
 
 from typing import TypedDict, Annotated, Literal, Optional, List, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 import operator
 import uuid
 
@@ -42,7 +42,7 @@ class Message(BaseModel):
     tool_name: Optional[str] = None
     tool_input: Optional[Dict[str, Any]] = None
     tool_output: Optional[Dict[str, Any]] = None
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class CognitiveState(TypedDict):
@@ -120,7 +120,7 @@ async def summarizer_node(state: CognitiveState) -> CognitiveState:
     from .memory_backends import get_embedding_service, get_llm_service
     
     # Record phase start
-    state["phase_timings"]["summarizer"] = {"start": datetime.utcnow()}
+    state["phase_timings"]["summarizer"] = {"start": datetime.now(timezone.utc)}
     
     # Add user message to conversation
     user_message = Message(role="user", content=state["user_query"])
@@ -161,7 +161,7 @@ async def summarizer_node(state: CognitiveState) -> CognitiveState:
     state["detected_intent"] = await detect_intent(state["user_query"])
     
     # Record phase end
-    state["phase_timings"]["summarizer"]["end"] = datetime.utcnow()
+    state["phase_timings"]["summarizer"]["end"] = datetime.now(timezone.utc)
     state["phase_completed"] = "summarizer"
     
     return state
@@ -260,7 +260,7 @@ async def investigator_node(state: CognitiveState) -> CognitiveState:
         get_llm_service
     )
     
-    state["phase_timings"]["investigator"] = {"start": datetime.utcnow()}
+    state["phase_timings"]["investigator"] = {"start": datetime.now(timezone.utc)}
     
     # Set investigation goal
     llm = get_llm_service()
@@ -361,7 +361,7 @@ async def investigator_node(state: CognitiveState) -> CognitiveState:
     # Select most relevant evidence for agent phase
     state["evidence_trail"] = select_top_evidence(state["evidence_trail"], top_k=10)
     
-    state["phase_timings"]["investigator"]["end"] = datetime.utcnow()
+    state["phase_timings"]["investigator"]["end"] = datetime.now(timezone.utc)
     state["phase_completed"] = "investigator"
     
     return state
@@ -450,7 +450,7 @@ async def agent_node(state: CognitiveState) -> CognitiveState:
     from .memory_backends import get_llm_service
     from .agent_registry import invoke_agent
     
-    state["phase_timings"]["agent"] = {"start": datetime.utcnow()}
+    state["phase_timings"]["agent"] = {"start": datetime.now(timezone.utc)}
     
     # Determine which agents to invoke based on intent
     intent_to_agents = {
@@ -536,7 +536,7 @@ Response:"""
     assistant_message = Message(role="assistant", content=state["synthesized_response"])
     state["messages"] = [assistant_message]
     
-    state["phase_timings"]["agent"]["end"] = datetime.utcnow()
+    state["phase_timings"]["agent"]["end"] = datetime.now(timezone.utc)
     state["phase_completed"] = "agent"
     
     return state
@@ -585,7 +585,7 @@ async def reflector_node(state: CognitiveState) -> CognitiveState:
         sync_to_semantic_graph
     )
     
-    state["phase_timings"]["reflector"] = {"start": datetime.utcnow()}
+    state["phase_timings"]["reflector"] = {"start": datetime.now(timezone.utc)}
     
     llm = get_llm_service()
     
@@ -609,7 +609,7 @@ Answer: REMEMBER or SKIP, followed by a brief reason."""
     state["worth_remembering"] = "REMEMBER" in evaluation.upper()
     
     if not state["worth_remembering"]:
-        state["phase_timings"]["reflector"]["end"] = datetime.utcnow()
+        state["phase_timings"]["reflector"]["end"] = datetime.now(timezone.utc)
         state["phase_completed"] = "reflector"
         return state
     
@@ -681,7 +681,7 @@ Triplets (one per line, or NONE if no new facts):"""
         "dspy_metric_value": state["confidence_score"]
     }]
     
-    state["phase_timings"]["reflector"]["end"] = datetime.utcnow()
+    state["phase_timings"]["reflector"]["end"] = datetime.now(timezone.utc)
     state["phase_completed"] = "reflector"
     
     return state

@@ -14,7 +14,7 @@ Integration:
 
 import logging
 from typing import Optional, Dict, List, Any, Tuple
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID, uuid4
 import json
 
@@ -141,7 +141,7 @@ class TwinGenerator:
         Raises:
             ValueError: If insufficient training data
         """
-        start_time = datetime.utcnow()
+        start_time = datetime.now(timezone.utc)
         
         # Validate data
         if len(data) < self.MIN_TRAINING_SAMPLES:
@@ -184,7 +184,7 @@ class TwinGenerator:
         y_pred = self.model.predict(X_val)
         cv_scores = cross_val_score(self.model, X, y, cv=5, scoring='r2')
         
-        training_duration = (datetime.utcnow() - start_time).total_seconds()
+        training_duration = (datetime.now(timezone.utc) - start_time).total_seconds()
         
         # Feature importances
         importances = dict(zip(
