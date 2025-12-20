@@ -1,0 +1,145 @@
+name: RAGAS Evaluation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/rag/**'
+      - 'scripts/run_ragas_eval.py'
+      - '.github/workflows/ragas-evaluation.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/rag/**'
+      - 'scripts/run_ragas_eval.py'
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  ragas-evaluation:
+    name: RAG Quality Evaluation
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        python-version: ['3.11']
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-ragas-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-ragas-
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          # Install project in editable mode
+          pip install -e .
+
+      - name: Run RAGAS evaluation
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python scripts/run_ragas_eval.py \
+            --no-mlflow \
+            --fail-on-threshold \
+            --output ragas-results/evaluation-report.json
+
+      - name: Upload evaluation results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ragas-evaluation-results
+          path: ragas-results/
+          retention-days: 30
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## RAGAS Evaluation Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ -f ragas-results/evaluation-report.json ]; then
+            echo "### Metrics" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Metric | Score | Threshold |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|-------|-----------|" >> $GITHUB_STEP_SUMMARY
+            python -c "
+import json
+with open('ragas-results/evaluation-report.json') as f:
+    report = json.load(f)
+thresholds = {'faithfulness': 0.80, 'answer_relevancy': 0.85, 'context_precision': 0.80, 'context_recall': 0.70}
+for metric, threshold in thresholds.items():
+    score = report.get(f'avg_{metric}', 'N/A')
+    if isinstance(score, float):
+        status = '✅' if score >= threshold else '❌'
+        print(f'| {metric.replace(\"_\", \" \").title()} | {score:.3f} {status} | {threshold} |')
+    else:
+        print(f'| {metric.replace(\"_\", \" \").title()} | {score} | {threshold} |')
+print(f'| **Overall Score** | **{report.get(\"overall_score\", \"N/A\"):.3f}** | 0.80 |')
+" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Samples**: ${report.get('total_samples', 'N/A')} total, ${report.get('passed_samples', 'N/A')} passed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ Evaluation report not found" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  ragas-regression:
+    name: RAG Quality Regression Check
+    runs-on: ubuntu-latest
+    needs: ragas-evaluation
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - name: Download evaluation results
+        uses: actions/download-artifact@v4
+        with:
+          name: ragas-evaluation-results
+          path: ragas-results/
+
+      - name: Check for quality regression
+        run: |
+          echo "Checking for RAG quality regression..."
+          if [ -f ragas-results/evaluation-report.json ]; then
+            python -c "
+import json
+import sys
+
+with open('ragas-results/evaluation-report.json') as f:
+    report = json.load(f)
+
+thresholds = {
+    'faithfulness': 0.80,
+    'answer_relevancy': 0.85,
+    'context_precision': 0.80,
+    'context_recall': 0.70,
+}
+
+failed = []
+for metric, threshold in thresholds.items():
+    score = report.get(f'avg_{metric}')
+    if score is not None and score < threshold:
+        failed.append(f'{metric}: {score:.3f} < {threshold}')
+
+if failed:
+    print('::error::RAG quality regression detected!')
+    for f in failed:
+        print(f'  - {f}')
+    sys.exit(1)
+else:
+    print('::notice::All RAG quality thresholds passed')
+"
+          else
+            echo "::warning::Evaluation report not found, skipping regression check"
+          fi
