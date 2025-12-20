@@ -16,6 +16,7 @@ Version: 4.1.0
 """
 
 import logging
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Dict, Any
 
@@ -36,6 +37,48 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # =============================================================================
+# LIFESPAN CONTEXT MANAGER
+# =============================================================================
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Lifespan context manager for startup and shutdown events.
+
+    Replaces deprecated @app.on_event("startup") and @app.on_event("shutdown").
+    """
+    # Startup
+    logger.info("=" * 60)
+    logger.info("E2I Causal Analytics Platform - Starting")
+    logger.info("=" * 60)
+    logger.info("Version: 4.1.0")
+    logger.info("Timestamp: %s", datetime.now(timezone.utc).isoformat())
+
+    # TODO: Initialize connections
+    # - Redis connection pool
+    # - FalkorDB client
+    # - Supabase client
+    # - MLflow client
+    # - BentoML client
+    # - Feast client
+    # - Opik client
+
+    logger.info("API server ready to accept connections")
+
+    yield  # Application runs here
+
+    # Shutdown
+    logger.info("E2I Causal Analytics Platform - Shutting down")
+
+    # TODO: Cleanup connections
+    # - Close Redis connections
+    # - Close database connections
+    # - Flush pending logs
+
+    logger.info("Shutdown complete")
+
+
+# =============================================================================
 # FASTAPI APPLICATION
 # =============================================================================
 
@@ -45,7 +88,8 @@ app = FastAPI(
     version="4.1.0",
     docs_url="/api/docs",
     redoc_url="/api/redoc",
-    openapi_url="/api/openapi.json"
+    openapi_url="/api/openapi.json",
+    lifespan=lifespan
 )
 
 # =============================================================================
@@ -153,44 +197,6 @@ app.include_router(cognitive_router)
 # - Digital twins: /api/twins
 # - Feature engineering: /api/features
 # - Model training: /api/models
-
-
-# =============================================================================
-# STARTUP & SHUTDOWN EVENTS
-# =============================================================================
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize services on application startup."""
-    logger.info("=" * 60)
-    logger.info("E2I Causal Analytics Platform - Starting")
-    logger.info("=" * 60)
-    logger.info("Version: 4.1.0")
-    logger.info("Timestamp: %s", datetime.now(timezone.utc).isoformat())
-
-    # TODO: Initialize connections
-    # - Redis connection pool
-    # - FalkorDB client
-    # - Supabase client
-    # - MLflow client
-    # - BentoML client
-    # - Feast client
-    # - Opik client
-
-    logger.info("API server ready to accept connections")
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Cleanup on application shutdown."""
-    logger.info("E2I Causal Analytics Platform - Shutting down")
-
-    # TODO: Cleanup connections
-    # - Close Redis connections
-    # - Close database connections
-    # - Flush pending logs
-
-    logger.info("Shutdown complete")
 
 
 # =============================================================================
