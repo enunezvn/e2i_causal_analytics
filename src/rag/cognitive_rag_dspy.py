@@ -920,23 +920,129 @@ class CognitiveRAGOptimizer:
 
 
 # =============================================================================
-# 8. USAGE EXAMPLE
+# 8. PRODUCTION FACTORY & USAGE
 # =============================================================================
+
+
+def create_production_cognitive_workflow(
+    supabase_client: Optional[Any] = None,
+    falkordb_memory: Optional[Any] = None,
+    memory_connector: Optional[Any] = None,
+    embedding_model: Optional[Any] = None,
+    agent_registry: Optional[Dict[str, Any]] = None,
+    domain_vocabulary: Optional[str] = None,
+    lm_model: str = "anthropic/claude-sonnet-4-20250514",
+    configure_dspy: bool = True,
+) -> Any:
+    """
+    Create a production cognitive workflow with real memory backends.
+
+    This factory function wires up the CognitiveRAGWorkflow with real
+    memory implementations (Supabase, FalkorDB) instead of mocks.
+
+    Args:
+        supabase_client: Supabase client for database access
+        falkordb_memory: FalkorDBSemanticMemory instance
+        memory_connector: MemoryConnector instance for hybrid retrieval
+        embedding_model: Embedding model for vector operations
+        agent_registry: Dict of available specialized agents
+        domain_vocabulary: Domain vocabulary for query understanding
+        lm_model: DSPy language model to use
+        configure_dspy: Whether to configure DSPy LM (set False if already configured)
+
+    Returns:
+        LangGraph workflow configured with production backends
+
+    Example:
+        from supabase import create_client
+        from src.rag.memory_connector import MemoryConnector
+        from src.memory.semantic_memory import FalkorDBSemanticMemory
+
+        client = create_client(url, key)
+        connector = MemoryConnector(client)
+        falkordb = FalkorDBSemanticMemory(...)
+
+        workflow = create_production_cognitive_workflow(
+            supabase_client=client,
+            falkordb_memory=falkordb,
+            memory_connector=connector,
+        )
+
+        result = await workflow.ainvoke(CognitiveState(
+            user_query="Why did Kisqali adoption increase?"
+        ))
+    """
+    # Import adapters here to avoid circular imports
+    from src.rag.memory_adapters import (
+        EpisodicMemoryAdapter,
+        SemanticMemoryAdapter,
+        ProceduralMemoryAdapter,
+        SignalCollectorAdapter,
+    )
+
+    # Configure DSPy if requested
+    if configure_dspy:
+        lm = dspy.LM(lm_model)
+        dspy.configure(lm=lm)
+
+    # Create adapters that wrap real backends
+    episodic_adapter = EpisodicMemoryAdapter(
+        memory_connector=memory_connector,
+        embedding_model=embedding_model,
+    )
+    semantic_adapter = SemanticMemoryAdapter(
+        falkordb_memory=falkordb_memory,
+        memory_connector=memory_connector,
+    )
+    procedural_adapter = ProceduralMemoryAdapter(
+        supabase_client=supabase_client,
+        embedding_model=embedding_model,
+    )
+    signal_collector = SignalCollectorAdapter(
+        supabase_client=supabase_client,
+    )
+
+    # Configure memory backends for the workflow
+    memory_backends = {
+        "episodic": episodic_adapter,
+        "semantic": semantic_adapter,
+        "procedural": procedural_adapter,
+    }
+
+    # Create the workflow
+    return create_dspy_cognitive_workflow(
+        memory_backends=memory_backends,
+        memory_writers=memory_backends,  # Adapters handle writes too
+        agent_registry=agent_registry or {},
+        signal_collector=signal_collector,
+        domain_vocabulary=domain_vocabulary or _default_domain_vocabulary(),
+    )
+
+
+def _default_domain_vocabulary() -> str:
+    """Return default E2I domain vocabulary."""
+    return """
+    brands: [Remibrutinib (CSU), Fabhalta (PNH), Kisqali (HR+/HER2- breast cancer)]
+    kpis: [TRx, NRx, conversion_rate, market_share, adoption_rate]
+    entities: [HCP, patient, territory, region, therapeutic_area]
+    metrics: [prescriptions, visits, detailing, samples]
+    """
+
 
 async def main():
     """Example usage of DSPy-enhanced cognitive RAG."""
-    
+
     # Configure DSPy
     lm = dspy.LM("anthropic/claude-sonnet-4-20250514")
     dspy.configure(lm=lm)
-    
-    # Mock backends (replace with real implementations)
+
+    # Mock backends (for demo - use create_production_cognitive_workflow for production)
     memory_backends = {
         "episodic": MockEpisodicMemory(),
         "semantic": MockSemanticMemory(),
         "procedural": MockProceduralMemory()
     }
-    
+
     # Create workflow
     workflow = create_dspy_cognitive_workflow(
         memory_backends=memory_backends,
@@ -945,19 +1051,24 @@ async def main():
         signal_collector=MockSignalCollector(),
         domain_vocabulary="brands: [Remibrutinib, Fabhalta, Kisqali]..."
     )
-    
+
     # Run cognitive cycle
     initial_state = CognitiveState(
         user_query="Why did Kisqali adoption increase in the Northeast last quarter?",
         conversation_id="demo-123"
     )
-    
+
     result = await workflow.ainvoke(initial_state)
-    
+
     print(f"Response: {result.response}")
     print(f"Hops: {result.hop_count}")
     print(f"Evidence: {len(result.evidence_board)} pieces")
     print(f"DSPy signals collected: {len(result.dspy_signals)}")
+
+
+# =============================================================================
+# MOCK BACKENDS (for testing and demos only)
+# =============================================================================
 
 
 class MockEpisodicMemory:
