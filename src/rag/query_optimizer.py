@@ -2,6 +2,7 @@
 Query optimization with domain context and LLM enhancement.
 
 Expands queries with domain knowledge:
+- Typo correction: FastText-based subword correction
 - Rule-based: Add synonyms from domain_vocabulary.yaml
 - LLM-based: Claude-powered semantic expansion
 - HyDE: Hypothetical Document Embeddings for improved retrieval
@@ -24,6 +25,8 @@ from tenacity import (
     wait_exponential,
     retry_if_exception_type,
 )
+
+from src.nlp.typo_handler import TypoHandler, CorrectionResult
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +59,8 @@ class QueryOptimizer:
         max_tokens: int = 256,
         temperature: float = 0.3,
         cache_enabled: bool = True,
+        typo_correction_enabled: bool = True,
+        fasttext_model_path: Optional[str] = None,
     ):
         """
         Initialize with domain vocabulary and LLM settings.
@@ -66,18 +71,37 @@ class QueryOptimizer:
             max_tokens: Max tokens for LLM response
             temperature: LLM temperature (lower = more focused)
             cache_enabled: Enable query expansion caching
+            typo_correction_enabled: Enable fastText typo correction
+            fasttext_model_path: Optional path to fastText model
         """
         self.vocabulary_path = vocabulary_path
         self.model = model
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.cache_enabled = cache_enabled
+        self.typo_correction_enabled = typo_correction_enabled
 
         self._synonyms: Dict[str, List[str]] = {}
         self._kpi_relations: Dict[str, List[str]] = {}
         self._client: Optional[anthropic.Anthropic] = None
+        self._typo_handler: Optional[TypoHandler] = None
 
         self._load_vocabulary()
+
+        # Initialize typo handler if enabled
+        if typo_correction_enabled:
+            try:
+                self._typo_handler = TypoHandler(
+                    model_path=fasttext_model_path,
+                    cache_enabled=cache_enabled,
+                )
+                logger.info(
+                    f"Typo correction enabled "
+                    f"(fasttext={self._typo_handler.is_fasttext_available})"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to initialize typo handler: {e}")
+                self._typo_handler = None
 
     def _get_client(self) -> anthropic.Anthropic:
         """Lazy-load Anthropic client."""
@@ -156,6 +180,109 @@ class QueryOptimizer:
         if time_range:
             return f"{query} {time_range}"
         return query
+
+    # =========================================================================
+    # Typo Correction
+    # =========================================================================
+
+    def correct_typos(
+        self,
+        query: Union[str, Any],
+        correct_all_words: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Correct typos in a query using fastText subword embeddings.
+
+        Falls back to edit-distance based correction when fastText is unavailable.
+
+        Args:
+            query: Query text or ParsedQuery
+            correct_all_words: If True, attempt correction on all words
+
+        Returns:
+            Dict with:
+                - original: Original query
+                - corrected: Typo-corrected query
+                - corrections: List of corrections made
+                - latency_ms: Processing time
+        """
+        query_text = query.text if hasattr(query, 'text') else str(query)
+
+        if not self._typo_handler:
+            return {
+                "original": query_text,
+                "corrected": query_text,
+                "corrections": [],
+                "latency_ms": 0.0,
+            }
+
+        start_time = time.time()
+        corrected, corrections = self._typo_handler.correct_query(
+            query_text, correct_all_words=correct_all_words
+        )
+        latency_ms = (time.time() - start_time) * 1000
+
+        return {
+            "original": query_text,
+            "corrected": corrected,
+            "corrections": [
+                {
+                    "original": c.original,
+                    "corrected": c.corrected,
+                    "confidence": c.confidence,
+                    "category": c.category,
+                }
+                for c in corrections
+            ],
+            "latency_ms": latency_ms,
+        }
+
+    def correct_term(
+        self,
+        term: str,
+        category: Optional[str] = None,
+    ) -> CorrectionResult:
+        """
+        Correct a single term.
+
+        Args:
+            term: Term to correct
+            category: Optional category hint (brands, kpis, regions, etc.)
+
+        Returns:
+            CorrectionResult with corrected term and metadata
+        """
+        if not self._typo_handler:
+            return CorrectionResult(
+                original=term,
+                corrected=term,
+                confidence=0.0,
+                was_corrected=False,
+            )
+
+        return self._typo_handler.correct_term(term, category)
+
+    def get_typo_suggestions(
+        self,
+        term: str,
+        top_k: int = 5,
+        category: Optional[str] = None,
+    ) -> List[tuple]:
+        """
+        Get typo correction suggestions for a term.
+
+        Args:
+            term: Term to get suggestions for
+            top_k: Number of suggestions
+            category: Optional category hint
+
+        Returns:
+            List of (suggestion, score) tuples
+        """
+        if not self._typo_handler:
+            return []
+
+        return self._typo_handler.get_suggestions(term, top_k, category)
 
     # =========================================================================
     # LLM-Enhanced Query Expansion
@@ -440,6 +567,7 @@ Write a realistic {document_type} that directly answers this question using spec
     async def optimize_query(
         self,
         query: Union[str, Any],
+        use_typo_correction: bool = True,
         use_llm: bool = True,
         use_hyde: bool = False,
         context: Optional[str] = None,
@@ -447,8 +575,15 @@ Write a realistic {document_type} that directly answers this question using spec
         """
         Full query optimization pipeline.
 
+        Pipeline order:
+        1. Typo correction (fastText or edit-distance)
+        2. Rule-based expansion (synonyms)
+        3. LLM expansion (Claude)
+        4. HyDE document generation (optional)
+
         Args:
             query: Original query
+            use_typo_correction: Whether to correct typos first
             use_llm: Whether to use LLM expansion
             use_hyde: Whether to generate HyDE document
             context: Optional conversation context
@@ -456,6 +591,8 @@ Write a realistic {document_type} that directly answers this question using spec
         Returns:
             Dict with:
                 - original: Original query text
+                - typo_corrected: Typo-corrected query (if enabled)
+                - typo_corrections: List of corrections made
                 - rule_expanded: Rule-based expansion
                 - llm_expanded: LLM expansion (if use_llm=True)
                 - hyde_document: HyDE document (if use_hyde=True)
@@ -465,17 +602,32 @@ Write a realistic {document_type} that directly answers this question using spec
 
         result = {
             "original": query_text,
-            "rule_expanded": self.expand(query_text),
+            "typo_corrected": None,
+            "typo_corrections": [],
+            "rule_expanded": None,
             "llm_expanded": None,
             "hyde_document": None,
             "recommended": None,
         }
 
-        if use_llm:
-            result["llm_expanded"] = await self.expand_with_llm_async(query_text, context)
+        # Step 1: Typo correction
+        working_query = query_text
+        if use_typo_correction and self._typo_handler:
+            typo_result = self.correct_typos(query_text)
+            result["typo_corrected"] = typo_result["corrected"]
+            result["typo_corrections"] = typo_result["corrections"]
+            working_query = typo_result["corrected"]
 
+        # Step 2: Rule-based expansion
+        result["rule_expanded"] = self.expand(working_query)
+
+        # Step 3: LLM expansion
+        if use_llm:
+            result["llm_expanded"] = await self.expand_with_llm_async(working_query, context)
+
+        # Step 4: HyDE document
         if use_hyde:
-            result["hyde_document"] = await self.generate_hyde_document_async(query_text)
+            result["hyde_document"] = await self.generate_hyde_document_async(working_query)
 
         # Determine recommended expansion
         if use_hyde and result["hyde_document"]:
