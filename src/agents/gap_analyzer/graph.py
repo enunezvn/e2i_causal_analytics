@@ -4,8 +4,18 @@ Defines the 4-node linear workflow:
 gap_detector → roi_calculator → prioritizer → formatter
 
 Performance target: <20s total execution time
+
+ROI Methodology:
+Uses ROICalculationService for full methodology implementation:
+- 6 value drivers (TRx Lift, Patient ID, Action Rate, ITP, Data Quality, Drift)
+- Bootstrap confidence intervals (1,000 simulations)
+- Attribution framework (Full/Partial/Shared/Minimal)
+- Risk adjustment (4 factors)
+
+Reference: docs/roi_methodology.md, src/services/roi_calculation.py
 """
 
+from typing import Optional
 from langgraph.graph import StateGraph, END
 
 from .state import GapAnalyzerState
@@ -15,23 +25,37 @@ from .nodes import (
     PrioritizerNode,
     FormatterNode,
 )
+from src.services.roi_calculation import ROICalculationService
 
 
-def create_gap_analyzer_graph() -> StateGraph:
+def create_gap_analyzer_graph(
+    roi_service: Optional[ROICalculationService] = None,
+    use_bootstrap: bool = True,
+    n_simulations: int = 1000,
+) -> StateGraph:
     """Create the Gap Analyzer LangGraph workflow.
 
     Workflow:
     1. gap_detector: Detect performance gaps across segments (parallel)
-    2. roi_calculator: Calculate ROI for each gap
+    2. roi_calculator: Calculate ROI for each gap using full methodology
     3. prioritizer: Rank and categorize opportunities
     4. formatter: Generate executive summary and insights
+
+    Args:
+        roi_service: Optional injected ROICalculationService (for testing/customization)
+        use_bootstrap: Whether to compute bootstrap confidence intervals
+        n_simulations: Number of Monte Carlo simulations for bootstrap
 
     Returns:
         Compiled StateGraph ready for execution
     """
     # Initialize nodes
     gap_detector = GapDetectorNode()
-    roi_calculator = ROICalculatorNode()
+    roi_calculator = ROICalculatorNode(
+        roi_service=roi_service,
+        use_bootstrap=use_bootstrap,
+        n_simulations=n_simulations,
+    )
     prioritizer = PrioritizerNode()
     formatter = FormatterNode()
 
