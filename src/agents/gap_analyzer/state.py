@@ -26,19 +26,50 @@ class PerformanceGap(TypedDict):
     gap_type: Literal["vs_target", "vs_benchmark", "vs_potential", "temporal"]
 
 
+class ConfidenceIntervalDict(TypedDict):
+    """Bootstrap confidence interval for ROI estimates."""
+
+    lower_bound: float  # 2.5th percentile
+    median: float  # 50th percentile
+    upper_bound: float  # 97.5th percentile
+    probability_positive: float  # P(ROI > 1x)
+    probability_target: float  # P(ROI > target)
+
+
 class ROIEstimate(TypedDict):
     """ROI estimate for closing a specific performance gap.
 
-    Uses pharmaceutical-specific economics to estimate revenue impact,
-    cost to close, expected ROI, and payback period.
+    Uses pharmaceutical-specific economics from ROI methodology:
+    - 6 value drivers (TRx lift, patient ID, action rate, ITP, data quality, drift)
+    - Bootstrap confidence intervals (1,000 simulations)
+    - Causal attribution framework
+    - Risk adjustment
+
+    Reference: docs/roi_methodology.md
     """
 
     gap_id: str  # References PerformanceGap.gap_id
     estimated_revenue_impact: float  # Annual revenue impact (USD)
     estimated_cost_to_close: float  # One-time cost to close gap (USD)
-    expected_roi: float  # ROI ratio ((revenue - cost) / cost)
+    expected_roi: float  # Base ROI ratio ((revenue - cost) / cost)
+    risk_adjusted_roi: float  # ROI after risk adjustment
     payback_period_months: int  # Months to recoup investment (1-24)
-    confidence: float  # Confidence in estimate (0.0-1.0)
+
+    # Confidence interval from bootstrap
+    confidence_interval: Optional[ConfidenceIntervalDict]  # 95% CI
+
+    # Attribution
+    attribution_level: str  # "full", "partial", "shared", "minimal"
+    attribution_rate: float  # 0.0-1.0
+
+    # Risk factors
+    total_risk_adjustment: float  # Combined risk adjustment (0.0-1.0)
+
+    # Value breakdown by driver
+    value_by_driver: Optional[Dict[str, float]]  # e.g., {"trx_lift": 850000}
+
+    # Legacy fields for backwards compatibility
+    confidence: float  # Legacy confidence in estimate (0.0-1.0)
     assumptions: List[str]  # Economic assumptions made
 
 
