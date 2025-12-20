@@ -1,0 +1,457 @@
+# ============================================================================
+# E2I AGENTIC MEMORY CONFIGURATION
+# Technology Mappings and Settings for Memory System
+# Version: 1.1
+# ============================================================================
+# 
+# Architecture (from Deep Agentic Memory specification):
+# ┌─────────────────┬─────────────────────────────────────┬─────────────────────────────┐
+# │ Memory Type     │ Function                            │ Technology                  │
+# ├─────────────────┼─────────────────────────────────────┼─────────────────────────────┤
+# │ Short-Term      │ Current context, scratchpad,        │ Redis + LangGraph           │
+# │ (Working)       │ immediate message history           │ MemorySaver checkpointer    │
+# ├─────────────────┼─────────────────────────────────────┼─────────────────────────────┤
+# │ Episodic        │ Experiences: "What did I do?"       │ Supabase (Postgres +        │
+# │ (Long-Term)     │ "What happened yesterday?"          │ pgvector)                   │
+# ├─────────────────┼─────────────────────────────────────┼─────────────────────────────┤
+# │ Semantic        │ Facts: "What is the relationship    │ FalkorDB + Graphity         │
+# │ (Long-Term)     │ between Project X and User Y?"      │ Extractor node updates      │
+# ├─────────────────┼─────────────────────────────────────┼─────────────────────────────┤
+# │ Procedural      │ Skills: "How did I solve this       │ Supabase (vector store of   │
+# │ (Long-Term)     │ error last time?"                   │ tool call sequences)        │
+# └─────────────────┴─────────────────────────────────────┴─────────────────────────────┘
+#
+# ============================================================================
+
+schema_version: "1.1"
+environment: "local_pilot"  # local_pilot | aws_production
+
+# ============================================================================
+# MEMORY BACKEND CONFIGURATION
+# ============================================================================
+
+memory_backends:
+  
+  # --- Short-Term / Working Memory ---
+  # Holds current context, scratchpad, and immediate message history
+  # Technology: Redis via LangGraph MemorySaver checkpointer + In-Context Prompting
+  working:
+    description: "Current context, scratchpad, immediate message history"
+    local_pilot:
+      backend: "redis"
+      connection: "${REDIS_URL}"  # Default: redis://localhost:6379
+      # LangGraph integration
+      langgraph_checkpointer: "RedisSaver"
+      checkpoint_prefix: "e2i:checkpoint:"
+      # Session management
+      session_prefix: "e2i:session:"
+      evidence_prefix: "e2i:evidence:"
+      ttl_seconds: 86400  # 24 hours
+      max_sessions_per_user: 10
+      # In-context prompting support
+      context_window_messages: 10  # Keep last N messages in context
+      scratchpad_key_suffix: ":scratchpad"
+    aws_production:
+      backend: "redis"
+      connection: "${ELASTICACHE_REDIS_URL}"
+      cluster_mode: true
+      langgraph_checkpointer: "RedisSaver"
+      checkpoint_prefix: "e2i:checkpoint:"
+      ttl_seconds: 86400
+      
+  # --- Episodic Memory (Long-Term) ---
+  # Stores experiences: "What did I do?" "What happened yesterday?"
+  # Technology: Supabase (Postgres + pgvector) for User/AI interaction traces
+  episodic:
+    description: "User/AI interaction traces, experiences, event logs"
+    local_pilot:
+      backend: "supabase"
+      connection: "${SUPABASE_URL}"
+      table: "episodic_memories"
+      vector_column: "embedding"
+      vector_dims: 1536
+      index_type: "ivfflat"
+      index_lists: 100
+      # What gets stored
+      trace_types:
+        - user_query
+        - agent_action
+        - system_event
+        - feedback
+        - error
+      # Retention
+      retention_days: 365
+    aws_production:
+      backend: "aurora_postgresql"
+      connection: "${AURORA_ENDPOINT}"
+      table: "episodic_memories"
+      vector_extension: "pgvector"
+      
+  # --- Semantic Memory (Long-Term) ---
+  # Stores facts: "What is the relationship between Project X and User Y?"
+  # Technology: FalkorDB + Graphity. Extractor node updates this graph.
+  semantic:
+    description: "Facts and relationships, knowledge graph"
+    local_pilot:
+      backend: "falkordb"
+      connection: "${FALKORDB_URL}"  # Default: redis://localhost:6379 (FalkorDB uses Redis protocol)
+      graph_name: "e2i_semantic"
+      # Graphity integration for automatic graph building
+      graphity:
+        enabled: true
+        model: "claude-3-5-sonnet-20241022"
+        extraction_prompt_template: "graphity_extraction"
+        entity_types:
+          - Patient
+          - HCP
+          - Brand
+          - Region
+          - KPI
+          - CausalPath
+          - Trigger
+          - Agent
+        relationship_types:
+          - TREATED_BY
+          - PRESCRIBED
+          - PRESCRIBES
+          - CAUSES
+          - IMPACTS
+          - INFLUENCES
+          - DISCOVERED
+          - GENERATED
+      # Cache layer in Supabase for fast retrieval
+      cache:
+        enabled: true
+        backend: "supabase"
+        table: "semantic_memory_cache"
+        sync_frequency_seconds: 300
+    aws_production:
+      backend: "neptune"
+      connection: "${NEPTUNE_ENDPOINT}"
+      query_language: "opencypher"
+      graphity:
+        enabled: true
+        model: "anthropic.claude-3-5-sonnet-20241022-v2:0"
+      
+  # --- Procedural Memory (Long-Term) ---
+  # Stores skills: "How did I solve this error last time?"
+  # Technology: Supabase vector store of successful tool call sequences (few-shot examples)
+  procedural:
+    description: "Successful tool call sequences, few-shot examples"
+    local_pilot:
+      backend: "supabase"
+      connection: "${SUPABASE_URL}"
+      table: "procedural_memories"
+      vector_column: "trigger_embedding"
+      vector_dims: 1536
+      # What gets stored
+      skill_types:
+        - tool_sequence      # Successful multi-step tool usage
+        - query_pattern      # Effective query reformulations
+        - error_recovery     # How errors were resolved
+        - optimization       # Performance improvements
+      # Few-shot retrieval settings
+      few_shot:
+        max_examples: 5
+        min_similarity: 0.7
+        prefer_recent: true
+        weight_by_success_rate: true
+    aws_production:
+      backend: "aurora_postgresql"
+      connection: "${AURORA_ENDPOINT}"
+      table: "procedural_memories"
+
+# ============================================================================
+# EMBEDDING CONFIGURATION
+# ============================================================================
+
+embeddings:
+  local_pilot:
+    provider: "openai"
+    model: "text-embedding-ada-002"
+    dimensions: 1536
+    batch_size: 100
+    cache_embeddings: true
+    cache_backend: "supabase"
+    cache_table: "embedding_cache"
+    
+  aws_production:
+    provider: "bedrock"
+    model: "amazon.titan-embed-text-v1"
+    dimensions: 1536
+    batch_size: 50
+
+# ============================================================================
+# LLM CONFIGURATION
+# ============================================================================
+
+llm:
+  local_pilot:
+    provider: "anthropic"
+    model: "claude-3-5-sonnet-20241022"
+    max_tokens: 4096
+    temperature: 0.3
+    
+  aws_production:
+    provider: "bedrock"
+    model: "anthropic.claude-3-5-sonnet-20241022-v2:0"
+    max_tokens: 4096
+    temperature: 0.3
+    region: "us-east-1"
+
+# ============================================================================
+# COGNITIVE WORKFLOW SETTINGS
+# Deep Agentic Memory Workflow with 4 phases
+# ============================================================================
+
+cognitive_workflow:
+  
+  # Phase 1: Input & Context Pruning (summarizer_node)
+  summarizer:
+    description: "Ingest user message, compress history if needed"
+    compression_threshold_messages: 10
+    keep_recent_messages: 5
+    max_summary_tokens: 500
+    # Redis working memory integration
+    redis_context_key: "conversation_summary"
+    
+  # Phase 2: Multi-Hop Investigator (investigator_node)
+  investigator:
+    description: "Iterative retrieval across memory types"
+    max_hops: 4  # Controlled by investigator_router
+    min_relevance_threshold: 0.5
+    high_relevance_threshold: 0.8
+    max_evidence_items: 20
+    # Evidence board stored in Redis
+    evidence_board_key: "evidence_trail"
+    # Hop strategies define which memory to query at each hop
+    hop_strategies:
+      - hop: 1
+        sources: ["episodic"]  # Supabase pgvector
+        query_type: "search_event_logs"
+        description: "Find WHICH module/event is relevant"
+      - hop: 2
+        sources: ["semantic"]  # FalkorDB graph traversal
+        query_type: "expand_graph_entity"
+        description: "Find WHO owns that module, related entities"
+      - hop: 3
+        sources: ["procedural"]  # Supabase pgvector
+        query_type: "find_similar_solutions"
+        description: "Find HOW we solved similar problems"
+      - hop: 4
+        sources: ["semantic", "episodic"]
+        query_type: "deep_investigation"
+        description: "Follow causal chains if needed"
+    # Decision criteria
+    decision_criteria:
+      sufficient_evidence_count: 3
+      sufficient_confidence: 0.85
+        
+  # Phase 3: Synthesis & Action (agent_node)
+  agent:
+    description: "Route to E2I agents, synthesize response"
+    default_agents: ["orchestrator"]
+    max_concurrent_agents: 3
+    agent_timeout_seconds: 30
+    synthesis_max_tokens: 2000
+    # Context injection from Redis
+    inject_summary: true
+    inject_evidence_board: true
+    
+  # Phase 4: Learning & Self-Updating (reflector_node)
+  reflector:
+    description: "Extract facts, learn procedures, update memories"
+    run_async: true  # Runs AFTER response is sent
+    # Selective attention: decide if worth remembering
+    min_confidence_for_learning: 0.6
+    min_confidence_for_training_example: 0.8
+    # Extraction limits
+    max_facts_per_cycle: 10  # Triplets → FalkorDB
+    max_procedures_per_cycle: 3  # Tool sequences → Supabase
+    # Graphity integration for automatic fact extraction
+    use_graphity_extractor: true
+    graphity_batch_size: 5
+
+# ============================================================================
+# AGENT REGISTRY
+# Maps intents to E2I agents
+# ============================================================================
+
+agent_routing:
+  causal_intents:
+    primary: "causal_impact"
+    secondary: ["explainer"]
+    viz_type: "sankey"
+    
+  trend_intents:
+    primary: "drift_monitor"
+    secondary: ["health_score", "explainer"]
+    viz_type: "line"
+    
+  comparison_intents:
+    primary: "gap_analyzer"
+    secondary: ["explainer"]
+    viz_type: "bar"
+    
+  optimization_intents:
+    primary: "heterogeneous_optimizer"
+    secondary: ["resource_optimizer"]
+    viz_type: "heatmap"
+    
+  experiment_intents:
+    primary: "experiment_designer"
+    secondary: []
+    viz_type: "table"
+    
+  prediction_intents:
+    primary: "prediction_synthesizer"
+    secondary: ["explainer"]
+    viz_type: "gauge"
+    
+  default:
+    primary: "orchestrator"
+    secondary: ["explainer"]
+    viz_type: "table"
+
+# ============================================================================
+# LEARNING & OPTIMIZATION SETTINGS
+# ============================================================================
+
+learning:
+  
+  # DSPy optimization
+  dspy:
+    enabled: true
+    optimizer: "MIPROv2"
+    min_examples_for_optimization: 50
+    optimization_frequency_hours: 24
+    metrics:
+      - name: "response_quality"
+        weight: 0.4
+      - name: "user_satisfaction"
+        weight: 0.3
+      - name: "confidence_accuracy"
+        weight: 0.2
+      - name: "latency_score"
+        weight: 0.1
+        
+  # Feedback collection
+  feedback:
+    enabled: true
+    types:
+      - thumbs_up_down
+      - star_rating
+      - correction
+      - comment
+    min_feedback_for_signals: 10
+    
+  # A/B testing
+  ab_testing:
+    enabled: false  # Enable after baseline established
+    traffic_split: 0.1  # 10% to experiment
+    min_sample_size: 100
+
+# ============================================================================
+# MONITORING & OBSERVABILITY
+# ============================================================================
+
+monitoring:
+  
+  metrics:
+    enabled: true
+    local_pilot:
+      backend: "console"  # Log to console
+    aws_production:
+      backend: "cloudwatch"
+      namespace: "E2I/AgenticMemory"
+      
+  tracing:
+    enabled: true
+    local_pilot:
+      backend: "console"
+    aws_production:
+      backend: "xray"
+      sampling_rate: 0.1
+      
+  logging:
+    level: "INFO"
+    format: "json"
+    include_state: false  # Don't log full state (privacy)
+
+# ============================================================================
+# PERFORMANCE TUNING
+# ============================================================================
+
+performance:
+  
+  # Vector search
+  vector_search:
+    ef_search: 100  # Higher = more accurate, slower
+    num_candidates: 50
+    
+  # Caching
+  cache:
+    enabled: true
+    embedding_cache_size: 10000
+    procedure_cache_size: 1000
+    semantic_cache_ttl_minutes: 5
+    
+  # Concurrency
+  concurrency:
+    max_concurrent_investigations: 10
+    max_concurrent_agent_calls: 5
+    
+  # Timeouts
+  timeouts:
+    embedding_seconds: 10
+    llm_seconds: 30
+    graph_query_seconds: 5
+    total_cycle_seconds: 60
+
+# ============================================================================
+# DATA RETENTION & CLEANUP
+# ============================================================================
+
+retention:
+  
+  episodic_memories:
+    retention_days: 365
+    archive_after_days: 90
+    
+  procedural_memories:
+    retention_days: null  # Keep indefinitely
+    prune_unused_after_days: 180
+    min_usage_count_to_keep: 3
+    
+  working_sessions:
+    retention_hours: 24
+    cleanup_frequency_minutes: 60
+    
+  learning_signals:
+    retention_days: 90
+    aggregate_after_days: 7
+
+# ============================================================================
+# SECURITY
+# ============================================================================
+
+security:
+  
+  # Row-level security
+  rls:
+    enabled: true
+    user_isolation: true
+    
+  # Data masking
+  pii_masking:
+    enabled: true
+    fields:
+      - patient_id
+      - hcp_id
+      - npi
+      
+  # Audit logging
+  audit:
+    enabled: true
+    log_queries: true
+    log_responses: false  # Privacy

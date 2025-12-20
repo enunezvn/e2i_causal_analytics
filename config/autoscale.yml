@@ -1,0 +1,155 @@
+# =============================================================================
+# E2I Celery Worker Autoscaler Configuration
+# =============================================================================
+# Defines scaling rules for each worker tier based on queue depth.
+#
+# Scaling Logic:
+#   - Scale UP when queue_depth >= scale_up_threshold
+#   - Scale DOWN when queue_depth <= scale_down_threshold
+#   - Respect min/max replicas bounds
+#   - Wait cooldown_minutes between scale operations
+# =============================================================================
+
+# Global settings
+global:
+  check_interval_seconds: 60  # How often to check queue depths
+  redis_url: ${CELERY_BROKER_URL}  # Redis broker URL
+  docker_compose_dir: ./docker  # Path to docker-compose.yml
+
+# Worker tier configurations
+workers:
+  # ---------------------------------------------------------------------------
+  # Light Workers - Quick tasks (API, cache, notifications)
+  # ---------------------------------------------------------------------------
+  worker_light:
+    queues:
+      - default
+      - quick
+      - api
+
+    # Scaling parameters
+    min_replicas: 2  # Always keep 2 light workers running
+    max_replicas: 4  # Max 4 light workers
+    scale_up_threshold: 20  # Scale up if >20 tasks in queues
+    scale_down_threshold: 0  # Scale down if queues empty
+    cooldown_minutes: 3  # Wait 3 minutes between scale operations
+
+    # Resource requirements (for monitoring)
+    cpu_per_replica: 2
+    memory_per_replica_gb: 2
+
+  # ---------------------------------------------------------------------------
+  # Medium Workers - Analytics and reports
+  # ---------------------------------------------------------------------------
+  worker_medium:
+    queues:
+      - analytics
+      - reports
+      - aggregations
+
+    # Scaling parameters
+    min_replicas: 1  # Keep 1 medium worker during business hours
+    max_replicas: 3  # Max 3 medium workers
+    scale_up_threshold: 10  # Scale up if >10 tasks in queues
+    scale_down_threshold: 0  # Scale down if queues empty
+    cooldown_minutes: 5  # Wait 5 minutes between scale operations
+
+    # Resource requirements
+    cpu_per_replica: 4
+    memory_per_replica_gb: 8
+
+  # ---------------------------------------------------------------------------
+  # Heavy Workers - Compute-intensive (SHAP, causal, ML, twins)
+  # ---------------------------------------------------------------------------
+  worker_heavy:
+    queues:
+      - shap
+      - causal
+      - ml
+      - twins
+
+    # Scaling parameters
+    min_replicas: 0  # Start with 0 heavy workers (on-demand)
+    max_replicas: 4  # Max 4 heavy workers
+    scale_up_threshold: 1  # Scale up immediately if ANY task in queue
+    scale_down_threshold: 0  # Scale down if queues empty
+    cooldown_minutes: 10  # Wait 10 minutes before scaling down
+
+    # Resource requirements
+    cpu_per_replica: 16
+    memory_per_replica_gb: 32
+
+    # Special settings for heavy workers
+    idle_shutdown_minutes: 15  # Shut down after 15 min idle
+    startup_time_seconds: 120  # Expected time to start (2 min)
+
+# =============================================================================
+# ADVANCED SCALING RULES (Optional)
+# =============================================================================
+
+advanced:
+  # Time-based scaling
+  schedule:
+    # Scale up during business hours (9 AM - 6 PM UTC)
+    business_hours:
+      enabled: false
+      timezone: "UTC"
+      start_hour: 9
+      end_hour: 18
+      weekdays: [1, 2, 3, 4, 5]  # Mon-Fri
+      min_replicas_override:
+        worker_light: 3
+        worker_medium: 2
+        worker_heavy: 1
+
+    # Scale down during nights/weekends
+    off_hours:
+      enabled: false
+      max_replicas_override:
+        worker_light: 2
+        worker_medium: 1
+        worker_heavy: 0
+
+  # Predictive scaling
+  predictive:
+    enabled: false
+    lookback_hours: 24  # Look at last 24 hours of queue patterns
+    forecast_minutes: 15  # Forecast next 15 minutes
+    scale_proactively: true  # Scale up before queue depth hits threshold
+
+  # Cost optimization
+  cost_optimization:
+    enabled: false
+    max_cost_per_hour_usd: 5.0  # Max $5/hour on workers
+    prefer_fewer_large_workers: false  # True = prefer 1 heavy over 2 medium
+    shutdown_idle_workers: true
+
+  # Alerts
+  alerts:
+    enabled: false
+    webhook_url: ${SLACK_WEBHOOK_URL}
+    alert_on:
+      - queue_depth_exceeded  # Queue depth > threshold for >5 min
+      - worker_startup_failed  # Worker failed to start
+      - scaling_limit_reached  # Hit max replicas
+      - cost_limit_exceeded  # Cost > max_cost_per_hour
+
+# =============================================================================
+# MONITORING & LOGGING
+# =============================================================================
+
+monitoring:
+  # Metrics collection
+  metrics:
+    enabled: true
+    prometheus_port: 9090  # Expose metrics for Prometheus
+    export_to_file: false
+    file_path: /var/log/autoscaler_metrics.json
+
+  # Logging
+  logging:
+    level: INFO  # DEBUG, INFO, WARNING, ERROR
+    format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    file: /var/log/autoscaler.log
+    max_bytes: 10485760  # 10 MB
+    backup_count: 3

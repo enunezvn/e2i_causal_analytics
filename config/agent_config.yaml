@@ -1,0 +1,1270 @@
+# E2I Causal Analytics - Agent Configuration V4.2
+# 18-Agent 6-Tier Architecture Configuration
+# Includes: Tier 0 ML Foundation, Causal Validation, MLOps Integration, Feature Store
+
+version: "4.2.0"
+last_updated: "2025-12-19"
+
+# ═══════════════════════════════════════════════════════════════════
+# GLOBAL SETTINGS
+# ═══════════════════════════════════════════════════════════════════
+
+global:
+  default_model: "claude-sonnet-4-20250514"
+  max_tokens: 4096
+  temperature: 0.3
+  timeout_seconds: 60
+  max_retries: 2
+  enable_verification: true
+  enable_caching: true
+  cache_ttl_seconds: 300
+  enable_validation_gates: true  # V4.1: Causal validation gating
+
+# ═══════════════════════════════════════════════════════════════════
+# FEATURE STORE CONFIGURATION (V4.2)
+# ═══════════════════════════════════════════════════════════════════
+
+feature_store:
+  enabled: true
+  client_type: "lightweight"  # Supabase + Redis + MLflow
+
+  # Offline storage (Supabase PostgreSQL)
+  offline:
+    provider: "supabase"
+    connection_from_env: "DATABASE_URL"
+    tables:
+      - feature_groups
+      - features
+      - feature_values
+
+  # Online serving (Redis cache)
+  online:
+    provider: "redis"
+    connection_from_env: "REDIS_URL"
+    cache_ttl_seconds: 3600
+    enable_cache: true
+
+  # Tracking (MLflow)
+  tracking:
+    provider: "mlflow"
+    connection_from_env: "MLFLOW_TRACKING_URI"
+    log_feature_definitions: true
+
+  # Default feature retrieval settings
+  retrieval:
+    include_stale: true
+    use_cache: true
+    timeout_seconds: 5
+
+# ═══════════════════════════════════════════════════════════════════
+# TIER CONFIGURATIONS (6 Tiers)
+# ═══════════════════════════════════════════════════════════════════
+
+tiers:
+  ml_foundation:
+    description: "ML lifecycle management and infrastructure"
+    priority: 0
+    timeout_seconds: 120
+    max_retries: 2
+    model: "claude-sonnet-4-20250514"
+    temperature: 0.2
+    max_tokens: 4096
+    enable_mlops_integration: true
+    
+  coordination:
+    description: "Query routing and response synthesis"
+    priority: 1
+    timeout_seconds: 30
+    max_retries: 3
+    model: "claude-sonnet-4-20250514"
+    temperature: 0.2
+    max_tokens: 2048
+    
+  causal_analytics:
+    description: "Core E2I mission - causal inference"
+    priority: 2
+    timeout_seconds: 90
+    max_retries: 2
+    model: "claude-sonnet-4-20250514"
+    temperature: 0.3
+    max_tokens: 8192
+    enable_causal_engine: true
+    enable_validation_gates: true  # V4.1
+    
+  monitoring:
+    description: "System health and drift detection"
+    priority: 3
+    timeout_seconds: 45
+    max_retries: 2
+    model: "claude-sonnet-4-20250514"
+    temperature: 0.2
+    max_tokens: 4096
+    alert_enabled: true
+    
+  ml_predictions:
+    description: "Model predictions and resource optimization"
+    priority: 4
+    timeout_seconds: 120
+    max_retries: 1
+    model: "claude-sonnet-4-20250514"
+    temperature: 0.1
+    max_tokens: 4096
+    
+  self_improvement:
+    description: "Explanation generation and learning"
+    priority: 5
+    timeout_seconds: 60
+    max_retries: 2
+    model: "claude-sonnet-4-20250514"
+    temperature: 0.4
+    max_tokens: 4096
+    learning_enabled: true
+
+# ═══════════════════════════════════════════════════════════════════
+# AGENT CONFIGURATIONS (18 Agents)
+# ═══════════════════════════════════════════════════════════════════
+
+agents:
+  # ─────────────────────────────────────────────────────────────────
+  # TIER 0: ML FOUNDATION (7 agents) - NEW in V4
+  # ─────────────────────────────────────────────────────────────────
+  
+  scope_definer:
+    tier: ml_foundation
+    enabled: true
+    description: "Defines ML problem scope, success criteria, and business objectives"
+    
+    scope:
+      require_business_objective: true
+      require_success_metrics: true
+      require_constraints: true
+      
+    capabilities:
+      - problem_definition
+      - success_criteria_specification
+      - constraint_identification
+      - stakeholder_alignment
+      
+    data_access:
+      train: true
+      validation: false
+      test: false
+      holdout: false
+      
+    routes_from_intents:
+      - SCOPE
+      - DEFINE
+      - OBJECTIVE
+      - CRITERIA
+      
+  data_preparer:
+    tier: ml_foundation
+    enabled: true
+    description: "Data quality assessment, baseline metrics, and preprocessing"
+    
+    quality:
+      min_completeness: 0.95
+      max_null_pct: 0.05
+      require_baseline_metrics: true
+      
+    integrations:
+      great_expectations: true
+      feature_store: true  # V4.2: Lightweight feature store
+      
+    capabilities:
+      - quality_assessment
+      - baseline_computation
+      - preprocessing_pipeline
+      - split_enforcement
+      
+    data_access:
+      train: true
+      validation: true
+      test: false
+      holdout: false
+      
+    routes_from_intents:
+      - DATA_QUALITY
+      - PREPARE
+      - BASELINE
+      - PREPROCESS
+      
+  feature_analyzer:
+    tier: ml_foundation
+    enabled: true
+    description: "Feature engineering, selection, and importance analysis"
+    
+    analysis:
+      shap_enabled: true
+      importance_threshold: 0.01
+      max_features: 100
+      
+    integrations:
+      shap: true
+      feature_store: true  # V4.2: Lightweight feature store
+      
+    capabilities:
+      - feature_engineering
+      - feature_selection
+      - importance_analysis
+      - shap_computation
+      
+    data_access:
+      train: true
+      validation: true
+      test: false
+      holdout: false
+      
+    routes_from_intents:
+      - FEATURE
+      - IMPORTANCE
+      - SHAP
+      - ENGINEER
+      
+  model_selector:
+    tier: ml_foundation
+    enabled: true
+    description: "Algorithm evaluation, selection, and hyperparameter optimization"
+    
+    selection:
+      candidate_models:
+        - xgboost
+        - lightgbm
+        - random_forest
+        - logistic_regression
+        - causal_forest
+      optimization_method: "optuna"
+      n_trials: 100
+      
+    integrations:
+      optuna: true
+      mlflow: true
+      
+    capabilities:
+      - algorithm_evaluation
+      - model_selection
+      - hyperparameter_optimization
+      - cross_validation
+      
+    data_access:
+      train: true
+      validation: true
+      test: false
+      holdout: false
+      
+    routes_from_intents:
+      - MODEL_SELECTION
+      - ALGORITHM
+      - HYPERPARAMETER
+      - TUNE
+      
+  model_trainer:
+    tier: ml_foundation
+    enabled: true
+    description: "Training pipeline execution with split enforcement"
+    
+    training:
+      early_stopping: true
+      patience: 10
+      checkpoint_frequency: 5
+      enforce_split_isolation: true
+      
+    integrations:
+      mlflow: true
+      opik: true
+      
+    capabilities:
+      - training_execution
+      - checkpoint_management
+      - split_enforcement
+      - experiment_tracking
+      
+    data_access:
+      train: true
+      validation: true
+      test: false
+      holdout: false
+      
+    routes_from_intents:
+      - TRAIN
+      - FIT
+      - LEARN
+      - TRAINING
+      
+  model_deployer:
+    tier: ml_foundation
+    enabled: true
+    description: "Model registry management and deployment orchestration"
+    
+    deployment:
+      stages:
+        - development
+        - staging
+        - shadow
+        - production
+        - archived
+      require_validation: true
+      shadow_duration_days: 7
+      
+    integrations:
+      mlflow: true
+      bentoml: true
+      
+    capabilities:
+      - model_registry
+      - stage_promotion
+      - deployment_orchestration
+      - rollback_management
+      
+    data_access:
+      train: true
+      validation: true
+      test: true
+      holdout: true
+      
+    routes_from_intents:
+      - DEPLOY
+      - REGISTRY
+      - PROMOTE
+      - ROLLBACK
+      
+  observability_connector:
+    tier: ml_foundation
+    enabled: true
+    description: "LLM and agent observability, span emission, trace management"
+    
+    observability:
+      trace_sample_rate: 0.1
+      span_batch_size: 100
+      retention_days: 30
+      
+    integrations:
+      opik: true
+      
+    capabilities:
+      - span_emission
+      - trace_management
+      - performance_monitoring
+      - error_tracking
+      
+    data_access:
+      train: true
+      validation: true
+      test: true
+      holdout: true
+      
+    routes_from_intents:
+      - OBSERVABILITY
+      - TRACE
+      - MONITOR_AGENT
+      - SPAN
+
+  # ─────────────────────────────────────────────────────────────────
+  # TIER 1: COORDINATION (1 agent)
+  # ─────────────────────────────────────────────────────────────────
+  
+  orchestrator:
+    tier: coordination
+    enabled: true
+    description: "Coordinates multi-agent workflows across all 6 tiers"
+    
+    routing:
+      intent_threshold: 0.7
+      max_agents_per_query: 5  # Increased for 18-agent system
+      enable_parallel_execution: true
+      fallback_agent: explainer
+      tier_priority_routing: true  # V4: Route by tier priority
+      
+    synthesis:
+      max_response_length: 2000
+      include_confidence: true
+      include_sources: true
+      include_validation_status: true  # V4.1
+      
+    capabilities:
+      - intent_routing
+      - multi_agent_coordination
+      - response_synthesis
+      - error_recovery
+      - tier_management
+      
+    data_access:
+      train: true
+      validation: true
+      test: true
+      holdout: false
+
+  # ─────────────────────────────────────────────────────────────────
+  # TIER 2: CAUSAL ANALYTICS (3 agents)
+  # ─────────────────────────────────────────────────────────────────
+  
+  causal_impact:
+    tier: causal_analytics
+    enabled: true
+    description: "Traces causal chains and estimates effects with validation"
+    agent_type: "hybrid"  # Computation + LLM interpretation
+    
+    workflow:
+      # V4.1: 5-node workflow with validation
+      nodes:
+        - graph_builder
+        - estimation
+        - refutation
+        - sensitivity
+        - interpretation
+      require_dag_approval: true
+      gate_on_refutation_failure: true
+    
+    causal_engine:
+      library: "dowhy"
+      estimator: "propensity_score_matching"
+      refutation_tests:
+        - placebo_treatment
+        - random_common_cause
+        - data_subset
+        - bootstrap
+        - sensitivity_e_value
+      confidence_level: 0.95
+      
+    validation:  # V4.1: Validation settings
+      min_refutation_pass_rate: 0.6
+      require_sensitivity_analysis: true
+      e_value_threshold: 1.5
+      persist_to_causal_validations: true
+      
+    capabilities:
+      - causal_chain_tracing
+      - effect_estimation
+      - counterfactual_analysis
+      - mediation_analysis
+      - refutation_testing
+      - validation_gating
+      
+    data_access:
+      train: true
+      validation: true
+      test: false
+      holdout: false
+      
+    routes_from_intents:
+      - IMPACT
+      - CAUSAL
+      - EFFECT
+      - WHY
+      - VALIDATION
+      
+  gap_analyzer:
+    tier: causal_analytics
+    enabled: true
+    description: "Identifies ROI opportunities and performance gaps"
+    
+    analysis:
+      min_roi_threshold: 1.5
+      min_sample_size: 100
+      gap_significance_level: 0.05
+      
+    capabilities:
+      - gap_detection
+      - roi_estimation
+      - opportunity_ranking
+      - benchmark_comparison
+      
+    data_access:
+      train: true
+      validation: true
+      test: false
+      holdout: false
+      
+    routes_from_intents:
+      - GAP
+      - OPPORTUNITY
+      - IMPROVE
+      - OPTIMIZE
+      
+  heterogeneous_optimizer:
+    tier: causal_analytics
+    enabled: true
+    description: "Analyzes treatment effect heterogeneity across segments"
+    
+    segmentation:
+      min_segment_size: 50
+      max_segments: 10
+      significance_level: 0.05
+      
+    causal_forest:
+      n_trees: 100
+      min_samples_leaf: 10
+      
+    capabilities:
+      - cate_estimation
+      - segment_analysis
+      - targeting_optimization
+      - fairness_analysis
+      
+    data_access:
+      train: true
+      validation: true
+      test: false
+      holdout: false
+      
+    routes_from_intents:
+      - SEGMENT
+      - HETEROGENEOUS
+      - TARGETING
+      - CATE
+
+  # ─────────────────────────────────────────────────────────────────
+  # TIER 3: MONITORING (3 agents)
+  # ─────────────────────────────────────────────────────────────────
+  
+  drift_monitor:
+    tier: monitoring
+    enabled: true
+    description: "Detects data and concept drift across features"
+    
+    thresholds:
+      psi_warning: 0.1
+      psi_critical: 0.25
+      feature_drift_pct: 0.2
+      concept_drift_auc_drop: 0.05
+      
+    monitoring:
+      check_frequency_hours: 24
+      lookback_days: 30
+      reference_window_days: 90
+      
+    capabilities:
+      - psi_calculation
+      - feature_drift_detection
+      - concept_drift_detection
+      - alert_generation
+      
+    data_access:
+      train: true
+      validation: true
+      test: true
+      holdout: true
+      
+    routes_from_intents:
+      - DRIFT
+      - CHANGE
+      - SHIFT
+      - STABILITY
+      
+  experiment_designer:
+    tier: monitoring
+    enabled: true
+    description: "Designs A/B tests and causal experiments"
+    agent_type: "hybrid"  # Design + LLM reasoning
+    
+    workflow:
+      # V4.1: 5-node experiment design workflow
+      nodes:
+        - context_analysis
+        - design_generation
+        - power_analysis
+        - validity_audit
+        - template_generation
+      enable_redesign_loop: true
+      
+    design:
+      default_power: 0.8
+      default_alpha: 0.05
+      min_effect_size: 0.1
+      max_duration_days: 90
+      generate_dowhy_templates: true
+      
+    capabilities:
+      - test_design
+      - power_analysis
+      - sample_size_calculation
+      - randomization_strategy
+      - pre_registration_generation
+      
+    data_access:
+      train: true
+      validation: true
+      test: false
+      holdout: false
+      
+    routes_from_intents:
+      - EXPERIMENT
+      - TEST
+      - AB_TEST
+      - DESIGN
+      
+  health_score:
+    tier: monitoring
+    enabled: true
+    description: "Computes composite system health metrics"
+    
+    health_weights:
+      data_quality: 0.25
+      model_performance: 0.25
+      system_uptime: 0.20
+      user_satisfaction: 0.15
+      kpi_coverage: 0.15
+      
+    thresholds:
+      healthy: 0.8
+      warning: 0.6
+      critical: 0.4
+      
+    capabilities:
+      - health_computation
+      - quality_assessment
+      - threshold_alerting
+      - trend_analysis
+      
+    data_access:
+      train: true
+      validation: true
+      test: true
+      holdout: true
+      
+    routes_from_intents:
+      - HEALTH
+      - STATUS
+      - QUALITY
+      - SCORE
+
+  # ─────────────────────────────────────────────────────────────────
+  # TIER 4: ML PREDICTIONS (2 agents)
+  # ─────────────────────────────────────────────────────────────────
+  
+  prediction_synthesizer:
+    tier: ml_predictions
+    enabled: true
+    description: "Generates calibrated ensemble predictions"
+    
+    ensemble:
+      method: "stacking"
+      base_models:
+        - xgboost
+        - lightgbm
+        - random_forest
+      meta_learner: "logistic_regression"
+      
+    calibration:
+      method: "isotonic"
+      enable: true
+      
+    integrations:
+      mlflow: true
+      bentoml: true
+      
+    capabilities:
+      - ensemble_prediction
+      - model_combination
+      - uncertainty_quantification
+      - calibration
+      
+    data_access:
+      train: true
+      validation: true
+      test: false
+      holdout: false
+      
+    routes_from_intents:
+      - PREDICT
+      - FORECAST
+      - PROPENSITY
+      - LIKELIHOOD
+      
+  resource_optimizer:
+    tier: ml_predictions
+    enabled: true
+    description: "Optimizes resource allocation for maximum ROI"
+    
+    optimization:
+      objective: "maximize_roi"
+      constraints:
+        min_coverage_pct: 0.6
+        max_cost_per_hcp: 500
+      algorithm: "linear_programming"
+      
+    capabilities:
+      - budget_optimization
+      - resource_allocation
+      - roi_maximization
+      - constraint_handling
+      
+    data_access:
+      train: true
+      validation: true
+      test: false
+      holdout: false
+      
+    routes_from_intents:
+      - BUDGET
+      - RESOURCE
+      - ALLOCATE
+      - PRIORITIZE
+
+  # ─────────────────────────────────────────────────────────────────
+  # TIER 5: SELF-IMPROVEMENT (2 agents)
+  # ─────────────────────────────────────────────────────────────────
+  
+  explainer:
+    tier: self_improvement
+    enabled: true
+    description: "Generates natural language explanations and narratives"
+    agent_type: "deep"  # Extended reasoning
+    
+    explanation:
+      max_length: 500
+      include_examples: true
+      include_caveats: true
+      include_validation_status: true  # V4.1
+      reading_level: "professional"
+      
+    visualization:
+      auto_generate: true
+      preferred_types:
+        - bar_chart
+        - line_chart
+        - sankey_diagram
+        - validation_badge  # V4.1
+        
+    capabilities:
+      - narrative_generation
+      - visualization_explanation
+      - insight_summarization
+      - uncertainty_communication
+      - validation_interpretation
+      
+    data_access:
+      train: true
+      validation: true
+      test: true
+      holdout: true
+      
+    routes_from_intents:
+      - EXPLAIN
+      - SUMMARIZE
+      - DESCRIBE
+      - CLARIFY
+      
+  feedback_learner:
+    tier: self_improvement
+    enabled: true
+    description: "Learns from user feedback to optimize prompts"
+    agent_type: "deep"  # Extended reasoning
+    
+    learning:
+      feedback_weight: 0.1
+      min_feedback_count: 10
+      learning_rate: 0.05
+      batch_size: 32
+      
+    optimization:
+      method: "dspy_miprov2"
+      metric: "user_satisfaction"
+      
+    knowledge_store:
+      # V4.1: Experimental learning cycle
+      store_name: "experiment_knowledge_store"
+      persist_lessons: true
+      
+    capabilities:
+      - feedback_processing
+      - prompt_optimization
+      - pattern_learning
+      - performance_tracking
+      - experiment_lesson_storage
+      
+    data_access:
+      train: true
+      validation: true
+      test: false
+      holdout: false
+      
+    routes_from_intents:
+      - FEEDBACK
+      - LEARN
+      - IMPROVE_SELF
+
+# ═══════════════════════════════════════════════════════════════════
+# ROUTING CONFIGURATION
+# ═══════════════════════════════════════════════════════════════════
+
+routing:
+  intent_detection:
+    model: "claude-sonnet-4-20250514"
+    confidence_threshold: 0.7
+    max_intents: 3
+    
+  multi_agent:
+    enable_parallel: true
+    max_parallel_agents: 5
+    timeout_seconds: 180
+    
+  fallback:
+    default_agent: explainer
+    error_agent: orchestrator
+    
+  # V4.1: Priority ordering for all 18 agents
+  priority_order:
+    # Tier 0: ML Foundation
+    - scope_definer
+    - data_preparer
+    - feature_analyzer
+    - model_selector
+    - model_trainer
+    - model_deployer
+    - observability_connector
+    # Tier 1: Coordination
+    - orchestrator
+    # Tier 2: Causal Analytics
+    - causal_impact
+    - gap_analyzer
+    - heterogeneous_optimizer
+    # Tier 3: Monitoring
+    - drift_monitor
+    - experiment_designer
+    - health_score
+    # Tier 4: ML Predictions
+    - prediction_synthesizer
+    - resource_optimizer
+    # Tier 5: Self-Improvement
+    - explainer
+    - feedback_learner
+
+# ═══════════════════════════════════════════════════════════════════
+# CAUSAL VALIDATION CONFIGURATION (V4.1)
+# ═══════════════════════════════════════════════════════════════════
+
+causal_validation:
+  enabled: true
+  
+  refutation:
+    tests:
+      - placebo_treatment
+      - random_common_cause
+      - data_subset
+      - bootstrap
+      - sensitivity_e_value
+    min_pass_rate: 0.6
+    
+  gate_decisions:
+    proceed_threshold: 0.8  # Pass rate >= 0.8 → proceed
+    review_threshold: 0.6   # 0.6 <= pass rate < 0.8 → review
+    block_threshold: 0.6    # Pass rate < 0.6 → block
+    
+  expert_review:
+    require_dag_approval: true
+    approval_validity_days: 90
+    review_types:
+      - dag_approval
+      - methodology_review
+      - quarterly_audit
+      - ad_hoc_validation
+
+# ═══════════════════════════════════════════════════════════════════
+# MLOPS INTEGRATION CONFIGURATION (V4)
+# ═══════════════════════════════════════════════════════════════════
+
+mlops:
+  mlflow:
+    enabled: true
+    tracking_uri: "${MLFLOW_TRACKING_URI}"
+    experiment_prefix: "e2i_"
+    auto_log: true
+    
+  opik:
+    enabled: true
+    endpoint: "${OPIK_ENDPOINT}"
+    trace_sample_rate: 0.1
+    
+  great_expectations:
+    enabled: true
+    expectations_store: "expectations/"
+    validation_store: "validations/"
+    
+  feast:
+    enabled: true
+    feature_store_path: "feature_store/"
+    online_store: "redis"
+    
+  optuna:
+    enabled: true
+    n_trials: 100
+    pruner: "median"
+    
+  shap:
+    enabled: true
+    max_samples: 1000
+    background_samples: 100
+    
+  bentoml:
+    enabled: true
+    service_port: 3000
+    runner_timeout: 60
+
+# ═══════════════════════════════════════════════════════════════════
+# VERIFICATION CONFIGURATION
+# ═══════════════════════════════════════════════════════════════════
+
+verification:
+  enabled: true
+  
+  checks:
+    hallucination_detection:
+      enabled: true
+      threshold: 0.8
+      
+    causal_validity:
+      enabled: true
+      require_stored_path: false
+      require_validation_gate: true  # V4.1
+      
+    confidence_calibration:
+      enabled: true
+      min_confidence: 0.6
+      
+    compliance:
+      enabled: true
+      rules_file: "compliance_rules.yaml"
+      
+  retry_on_failure: true
+  max_retries: 2
+
+# ═══════════════════════════════════════════════════════════════════
+# CACHING CONFIGURATION
+# ═══════════════════════════════════════════════════════════════════
+
+caching:
+  enabled: true
+  backend: "redis"
+  
+  ttl:
+    causal_paths: 3600
+    predictions: 1800
+    explanations: 3600
+    health_scores: 300
+    validations: 7200  # V4.1: Validation results cache
+    
+  invalidation:
+    on_new_data: true
+    on_model_update: true
+    on_validation_failure: true  # V4.1
+
+# ═══════════════════════════════════════════════════════════════════
+# TRI-MEMORY CONFIGURATION (V4)
+# ═══════════════════════════════════════════════════════════════════
+
+memory:
+  working:
+    backend: "redis"
+    provider: "langgraph_memory_saver"
+    ttl_seconds: 3600
+    
+  episodic:
+    backend: "supabase"
+    vector_store: "pgvector"
+    embedding_model: "text-embedding-3-small"
+    
+  procedural:
+    backend: "supabase"
+    vector_store: "pgvector"
+    
+  semantic:
+    backend: "falkordb"
+    provider: "graphity"
+    max_nodes: 10000
+
+# ═══════════════════════════════════════════════════════════════════
+# OBSERVABILITY
+# ═══════════════════════════════════════════════════════════════════
+
+observability:
+  logging:
+    level: "INFO"
+    format: "json"
+    include_request_id: true
+    
+  metrics:
+    enabled: true
+    backend: "prometheus"
+    
+  tracing:
+    enabled: true
+    backend: "opik"  # V4: Changed to Opik
+    sample_rate: 0.1
+
+# ═══════════════════════════════════════════════════════════════════
+# ERROR HANDLING (V4)
+# ═══════════════════════════════════════════════════════════════════
+
+error_handling:
+  retry_config:
+    max_retries: 3
+    backoff_type: "exponential"
+    initial_delay_ms: 1000
+    max_delay_ms: 30000
+    
+  fallback_chains:
+    primary: "claude-sonnet-4-20250514"
+    secondary: "claude-haiku-4-20250514"
+    tertiary: "template_response"
+    
+  agent_error_classification:
+    - timeout
+    - rate_limit
+    - validation_failure
+    - causal_gate_blocked
+    - model_not_found
+    - data_access_denied
+
+# ═══════════════════════════════════════════════════════════════════
+# DASHBOARD TAB ROUTING (Gap 2) - V4.1
+# ═══════════════════════════════════════════════════════════════════
+
+tab_routing:
+  # Tab: 🤖 AI Agent Insights
+  ai_agent_insights:
+    description: "Multi-agent activity dashboard showing all agent outputs"
+    primary_agents:
+      - orchestrator
+      - gap_analyzer
+      - causal_impact
+    secondary_agents:
+      - drift_monitor
+      - experiment_designer
+      - heterogeneous_optimizer
+      - health_score
+      - resource_optimizer
+    cache_ttl: 300  # 5 minutes
+    prefetch_tabs:
+      - causal_analysis
+    data_sources:
+      - agent_activities
+      - business_metrics
+      - causal_paths
+    refresh_on:
+      - agent_execution_complete
+      - new_insights_generated
+
+  # Tab: 📊 Overview
+  overview:
+    description: "High-level dashboard summary and health metrics"
+    primary_agents:
+      - orchestrator
+      - health_score
+    secondary_agents: []
+    cache_ttl: 600  # 10 minutes
+    prefetch_tabs: []
+    data_sources:
+      - business_metrics
+      - ml_deployments
+      - health_scores
+    refresh_on:
+      - data_update
+      - health_score_change
+
+  # Tab: 🗃️ WS1: Data Quality
+  ws1_data_quality:
+    description: "Data quality metrics, coverage, completeness"
+    primary_agents:
+      - data_preparer
+      - observability_connector
+    secondary_agents:
+      - scope_definer
+    cache_ttl: 1800  # 30 minutes
+    prefetch_tabs:
+      - ws1_ml_model
+    data_sources:
+      - ml_data_quality_reports
+      - data_source_tracking
+      - ml_split_registry
+      - preprocessing_metadata
+    refresh_on:
+      - data_update
+      - quality_check_complete
+
+  # Tab: 🤖 WS1: ML & Model
+  ws1_ml_model:
+    description: "Model training, deployment, feature importance"
+    primary_agents:
+      - model_trainer
+      - feature_analyzer
+      - model_deployer
+    secondary_agents:
+      - model_selector
+      - observability_connector
+    cache_ttl: 900  # 15 minutes
+    prefetch_tabs:
+      - ws2_triggers
+    data_sources:
+      - ml_experiments
+      - ml_model_registry
+      - ml_training_runs
+      - ml_shap_analyses
+      - ml_deployments
+    refresh_on:
+      - model_training_complete
+      - deployment_status_change
+
+  # Tab: 🎯 WS2: Triggers
+  ws2_triggers:
+    description: "Trigger predictions and drift monitoring"
+    primary_agents:
+      - prediction_synthesizer
+      - drift_monitor
+    secondary_agents:
+      - model_deployer
+    cache_ttl: 300  # 5 minutes
+    prefetch_tabs:
+      - ws3_impact
+    data_sources:
+      - ml_predictions
+      - triggers
+      - agent_activities
+    refresh_on:
+      - prediction_generated
+      - drift_detected
+
+  # Tab: 📈 WS3: Impact
+  ws3_impact:
+    description: "Causal impact analysis, gap analysis, ROI optimization"
+    primary_agents:
+      - causal_impact
+      - gap_analyzer
+      - resource_optimizer
+    secondary_agents:
+      - heterogeneous_optimizer
+      - explainer
+    cache_ttl: 600  # 10 minutes
+    prefetch_tabs:
+      - causal_analysis
+    data_sources:
+      - causal_paths
+      - business_metrics
+      - agent_activities
+    refresh_on:
+      - causal_analysis_complete
+      - gap_analysis_complete
+
+  # Tab: ⚡ Causal Analysis
+  causal_analysis:
+    description: "Deep causal inference with validation gates"
+    primary_agents:
+      - causal_impact
+      - heterogeneous_optimizer
+      - explainer
+    secondary_agents:
+      - experiment_designer
+    cache_ttl: 900  # 15 minutes
+    prefetch_tabs: []
+    data_sources:
+      - causal_paths
+      - causal_validations  # V4.1
+      - expert_reviews      # V4.1
+      - ml_predictions
+    refresh_on:
+      - causal_validation_complete
+      - expert_review_complete
+    validation_required: true  # V4.1: Must pass validation gates
+
+  # Tab: 📖 KPI Dictionary
+  kpi_dictionary:
+    description: "Static KPI definitions and formulas"
+    primary_agents: []
+    secondary_agents: []
+    static: true
+    cache_ttl: 86400  # 24 hours
+    prefetch_tabs: []
+    data_sources:
+      - kpi_definitions  # From YAML config
+    refresh_on: []
+
+  # Tab: 🏷️ Status Legend
+  status_legend:
+    description: "Static legend for status indicators and badges"
+    primary_agents: []
+    secondary_agents: []
+    static: true
+    cache_ttl: 86400  # 24 hours
+    prefetch_tabs: []
+    data_sources: []
+    refresh_on: []
+
+  # Tab: 📚 Agentic Methodology
+  methodology:
+    description: "Static documentation on agentic system methodology"
+    primary_agents: []
+    secondary_agents: []
+    static: true
+    cache_ttl: 86400  # 24 hours
+    prefetch_tabs: []
+    data_sources: []
+    refresh_on: []
+
+# Tab refresh triggers
+tab_refresh_triggers:
+  agent_execution_complete:
+    affected_tabs:
+      - ai_agent_insights
+      - overview
+
+  data_update:
+    affected_tabs:
+      - ws1_data_quality
+      - ws2_triggers
+      - ws3_impact
+      - overview
+
+  model_training_complete:
+    affected_tabs:
+      - ws1_ml_model
+      - ws2_triggers
+
+  deployment_status_change:
+    affected_tabs:
+      - ws1_ml_model
+      - ws2_triggers
+      - overview
+
+  causal_validation_complete:
+    affected_tabs:
+      - causal_analysis
+      - ws3_impact
+      - ai_agent_insights
+
+  drift_detected:
+    affected_tabs:
+      - ws2_triggers
+      - overview
+      - ai_agent_insights
+
+# Cache invalidation strategy per tab
+cache_invalidation_strategy:
+  brand_filter_changed:
+    invalidate_tabs:
+      - ai_agent_insights
+      - causal_analysis
+      - ws3_impact
+      - ws2_triggers
+      - ws1_ml_model
+
+  region_filter_changed:
+    invalidate_tabs:
+      - ai_agent_insights
+      - ws3_impact
+      - ws1_data_quality
+
+  date_range_changed:
+    invalidate_all_except:
+      - kpi_dictionary
+      - status_legend
+      - methodology
+
+  specialty_filter_changed:
+    invalidate_tabs:
+      - ws3_impact
+      - ws2_triggers
+
+  hcp_segment_filter_changed:
+    invalidate_tabs:
+      - ws3_impact
+      - ws2_triggers

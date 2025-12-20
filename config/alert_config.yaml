@@ -1,0 +1,1068 @@
+# ═══════════════════════════════════════════════════════════════════
+# E2I Causal Analytics - Alert System Configuration
+# File: alert_config.yaml
+# Version: V4.1
+# Purpose: Define alert triggers, priority levels, and notification routing
+# Gap: Gap 11 - Alert System Configuration
+# ═══════════════════════════════════════════════════════════════════
+
+# ═══════════════════════════════════════════════════════════════════
+# ALERT SYSTEM OVERVIEW
+# ═══════════════════════════════════════════════════════════════════
+
+system:
+  enabled: true
+  default_timezone: "America/New_York"
+
+  # Alert deduplication window (prevent duplicate alerts)
+  deduplication_window_seconds: 3600  # 1 hour
+
+  # Alert aggregation (combine similar alerts)
+  aggregation_enabled: true
+  aggregation_window_seconds: 300  # 5 minutes
+
+  # Rate limiting (prevent alert storms)
+  rate_limit:
+    enabled: true
+    max_alerts_per_hour: 50
+    max_alerts_per_day: 200
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ALERT SEVERITY LEVELS
+# ═══════════════════════════════════════════════════════════════════
+
+severity_levels:
+  critical:
+    priority: 1
+    color: "#dc2626"  # Red
+    icon: "🔴"
+    requires_acknowledgment: true
+    escalation_minutes: 15  # Escalate if not acknowledged
+    notification_channels: ["email", "slack", "dashboard"]
+
+  urgent:
+    priority: 2
+    color: "#ea580c"  # Orange
+    icon: "🟠"
+    requires_acknowledgment: true
+    escalation_minutes: 30
+    notification_channels: ["email", "slack", "dashboard"]
+
+  warning:
+    priority: 3
+    color: "#f59e0b"  # Amber
+    icon: "⚠️"
+    requires_acknowledgment: false
+    escalation_minutes: null
+    notification_channels: ["slack", "dashboard"]
+
+  info:
+    priority: 4
+    color: "#3b82f6"  # Blue
+    icon: "ℹ️"
+    requires_acknowledgment: false
+    escalation_minutes: null
+    notification_channels: ["dashboard"]
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ALERT CATEGORIES
+# ═══════════════════════════════════════════════════════════════════
+
+categories:
+  data_quality:
+    label: "Data Quality"
+    description: "Issues with data freshness, completeness, or accuracy"
+    default_severity: "warning"
+    owner: "data_engineering_team"
+
+  model_performance:
+    label: "Model Performance"
+    description: "Model drift, accuracy degradation, or prediction failures"
+    default_severity: "urgent"
+    owner: "ml_ops_team"
+
+  causal_validation:
+    label: "Causal Validation"
+    description: "Failed refutation tests or low confidence estimates"
+    default_severity: "warning"
+    owner: "analytics_team"
+
+  system_health:
+    label: "System Health"
+    description: "Infrastructure, API, or integration issues"
+    default_severity: "critical"
+    owner: "platform_team"
+
+  business_metrics:
+    label: "Business Metrics"
+    description: "Unexpected changes in KPIs or ROI estimates"
+    default_severity: "warning"
+    owner: "analytics_team"
+
+  agent_execution:
+    label: "Agent Execution"
+    description: "Agent failures, timeouts, or unexpected behaviors"
+    default_severity: "urgent"
+    owner: "ml_ops_team"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# DATA QUALITY ALERTS
+# ═══════════════════════════════════════════════════════════════════
+
+data_quality_alerts:
+  # Gap 7 integration - Data sources quality monitoring
+
+  stale_data_source:
+    enabled: true
+    category: "data_quality"
+    severity: "warning"
+
+    trigger:
+      condition: "freshness_days > scheduled_freshness_days * 2"
+      source: "data_sources table"
+      check_frequency: "hourly"
+
+    message_template: |
+      Data source '{source_name}' is stale.
+      Last refresh: {last_refresh_date}
+      Expected refresh: every {freshness_days} days
+      Current delay: {delay_days} days
+
+    metadata:
+      affected_tabs: ["ws1_data_quality", "ai_agent_insights"]
+      recommended_action: "Check data pipeline and refresh schedule"
+      runbook_url: "https://docs.internal/runbooks/stale-data-source"
+
+
+  low_data_quality_score:
+    enabled: true
+    category: "data_quality"
+    severity: "urgent"
+
+    trigger:
+      condition: "quality_score < 70"
+      source: "v_data_source_quality view"
+      check_frequency: "daily"
+
+    message_template: |
+      Data source '{source_name}' has low quality score: {quality_score}/100
+
+      Metrics:
+      - Coverage: {coverage_percent}%
+      - Completeness: {completeness_score}
+      - Freshness: {freshness_days} days
+      - Match Rate: {match_rate}
+
+    metadata:
+      recommended_action: "Review data quality metrics and investigate root cause"
+      runbook_url: "https://docs.internal/runbooks/low-quality-data"
+
+
+  high_missing_rate:
+    enabled: true
+    category: "data_quality"
+    severity: "warning"
+
+    trigger:
+      condition: "missing_rate > 0.15"  # > 15% missing
+      source: "data profiling pipeline"
+      check_frequency: "daily"
+
+    message_template: |
+      High missing data rate detected: {missing_rate:.1%}
+      Dataset: {dataset_name}
+      Key fields affected: {affected_fields}
+
+    metadata:
+      recommended_action: "Investigate data ingestion and transformation logic"
+
+
+  data_schema_drift:
+    enabled: true
+    category: "data_quality"
+    severity: "critical"
+
+    trigger:
+      condition: "schema_changed = true"
+      source: "schema validation pipeline"
+      check_frequency: "on_ingest"
+
+    message_template: |
+      Schema drift detected in {source_name}
+
+      Changes:
+      - Added columns: {added_columns}
+      - Removed columns: {removed_columns}
+      - Type changes: {type_changes}
+
+    metadata:
+      recommended_action: "Review schema changes with data provider; update ETL pipelines"
+      runbook_url: "https://docs.internal/runbooks/schema-drift"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# MODEL PERFORMANCE ALERTS
+# ═══════════════════════════════════════════════════════════════════
+
+model_performance_alerts:
+  # Gap 6 integration - Model drift monitoring
+
+  model_drift_detected:
+    enabled: true
+    category: "model_performance"
+    severity: "urgent"
+
+    trigger:
+      condition: "drift_score > drift_threshold"
+      source: "ml_drift_metrics table"
+      check_frequency: "hourly"
+
+    message_template: |
+      Model drift detected: {model_name}
+
+      Drift Metrics:
+      - AUC drop: {auc_drop:.3f}
+      - PSI: {psi_score:.3f} (threshold: {psi_threshold})
+      - Feature drift: {drifted_features}
+
+      Last trained: {last_training_date}
+
+    metadata:
+      affected_tabs: ["ws1_ml_model", "ws2_triggers"]
+      recommended_action: "Retrain model or investigate data distribution changes"
+      runbook_url: "https://docs.internal/runbooks/model-drift"
+
+
+  low_model_accuracy:
+    enabled: true
+    category: "model_performance"
+    severity: "urgent"
+
+    trigger:
+      condition: "auc < minimum_acceptable_auc"
+      source: "model_evaluation_results table"
+      check_frequency: "daily"
+
+    thresholds:
+      trigger_model: 0.75
+      propensity_model: 0.70
+      churn_model: 0.68
+
+    message_template: |
+      Model accuracy below threshold: {model_name}
+      Current AUC: {current_auc:.3f}
+      Minimum acceptable: {minimum_auc:.3f}
+
+      Performance by segment:
+      {segment_performance}
+
+    metadata:
+      recommended_action: "Review model features and training data; consider retraining"
+
+
+  prediction_failures:
+    enabled: true
+    category: "model_performance"
+    severity: "critical"
+
+    trigger:
+      condition: "failed_predictions_rate > 0.05"  # > 5% failure rate
+      source: "prediction_logs"
+      check_frequency: "every_15_minutes"
+
+    message_template: |
+      High prediction failure rate: {failure_rate:.1%}
+      Model: {model_name}
+      Failed predictions: {failed_count}/{total_count}
+
+      Common error: {most_common_error}
+
+    metadata:
+      recommended_action: "Check model deployment and input data validation"
+      runbook_url: "https://docs.internal/runbooks/prediction-failures"
+
+
+  model_serving_latency:
+    enabled: true
+    category: "model_performance"
+    severity: "warning"
+
+    trigger:
+      condition: "p95_latency_ms > latency_threshold_ms"
+      source: "mlflow metrics"
+      check_frequency: "every_5_minutes"
+
+    thresholds:
+      realtime_inference: 200  # ms
+      batch_inference: 5000    # ms
+
+    message_template: |
+      Model serving latency elevated: {model_name}
+      P95 latency: {p95_latency_ms}ms (threshold: {threshold_ms}ms)
+      Request volume: {requests_per_minute}/min
+
+
+# ═══════════════════════════════════════════════════════════════════
+# CAUSAL VALIDATION ALERTS
+# ═══════════════════════════════════════════════════════════════════
+
+causal_validation_alerts:
+  # Gap 3 & Gap 12 integration - Validation and confidence monitoring
+
+  validation_gate_blocked:
+    enabled: true
+    category: "causal_validation"
+    severity: "urgent"
+
+    trigger:
+      condition: "gate_decision = 'block'"
+      source: "causal_validations table"
+      check_frequency: "on_validation_complete"
+
+    message_template: |
+      Causal validation BLOCKED: {analysis_name}
+
+      Failed tests:
+      {failed_tests_details}
+
+      Analysis ID: {analysis_id}
+      Treatment: {treatment_variable}
+      Outcome: {outcome_variable}
+
+    metadata:
+      affected_tabs: ["causal_analysis", "ws3_impact"]
+      recommended_action: "Review causal assumptions and model specification"
+      runbook_url: "https://docs.internal/runbooks/validation-blocked"
+
+
+  low_confidence_estimate:
+    enabled: true
+    category: "causal_validation"
+    severity: "warning"
+
+    trigger:
+      condition: "confidence_score < 0.40"
+      source: "causal_impacts table"
+      check_frequency: "on_impact_calculation"
+
+    message_template: |
+      Low confidence causal estimate: {analysis_name}
+      Confidence: {confidence_score:.1%}
+
+      Components:
+      - Sample Size Factor: {sample_size_factor:.2f}
+      - Temporal Stability: {temporal_stability:.2f}
+      - Effect Consistency: {effect_consistency:.2f}
+      - Validation Strength: {validation_strength:.2f}
+
+      Primary issue: {lowest_component}
+
+    metadata:
+      recommended_action: "Collect more data or investigate heterogeneity"
+
+
+  confidence_drop_detected:
+    enabled: true
+    category: "causal_validation"
+    severity: "warning"
+
+    trigger:
+      condition: "abs(confidence_score - previous_confidence_score) > 0.15"
+      source: "causal_impacts table (time series)"
+      check_frequency: "on_reanalysis"
+
+    message_template: |
+      Confidence score dropped significantly: {analysis_name}
+      Previous: {previous_confidence:.1%}
+      Current: {current_confidence:.1%}
+      Change: {confidence_change:+.1%}
+
+      Possible causes: {suspected_causes}
+
+    metadata:
+      recommended_action: "Investigate data quality changes or new confounders"
+
+
+  high_heterogeneity_detected:
+    enabled: true
+    category: "causal_validation"
+    severity: "info"
+
+    trigger:
+      condition: "effect_consistency < 0.45"  # I² > 75%
+      source: "causal_impacts table"
+      check_frequency: "on_impact_calculation"
+
+    message_template: |
+      High effect heterogeneity detected: {analysis_name}
+      Effect Consistency: {effect_consistency:.2f}
+      I² statistic: {i_squared:.1f}%
+
+      Effect varies substantially across:
+      {heterogeneous_dimensions}
+
+      Consider heterogeneous treatment effect analysis.
+
+
+# ═══════════════════════════════════════════════════════════════════
+# BUSINESS METRICS ALERTS
+# ═══════════════════════════════════════════════════════════════════
+
+business_metrics_alerts:
+  # Gap 9 integration - ROI and business impact monitoring
+
+  unexpected_kpi_change:
+    enabled: true
+    category: "business_metrics"
+    severity: "warning"
+
+    trigger:
+      condition: "abs(kpi_pct_change) > change_threshold"
+      source: "business_metrics table"
+      check_frequency: "daily"
+
+    thresholds:
+      trx_volume: 0.15  # ±15%
+      market_share: 0.10  # ±10%
+      hcp_engagement: 0.20  # ±20%
+
+    message_template: |
+      Unexpected change in {kpi_name}: {kpi_pct_change:+.1%}
+
+      Current: {current_value}
+      Previous: {previous_value}
+      Expected range: [{lower_bound}, {upper_bound}]
+
+      Brand: {brand}
+      Region: {region}
+
+    metadata:
+      affected_tabs: ["overview", "ai_agent_insights"]
+      recommended_action: "Investigate root cause (market event, data issue, or real trend)"
+
+
+  negative_roi_detected:
+    enabled: true
+    category: "business_metrics"
+    severity: "urgent"
+
+    trigger:
+      condition: "roi < 1.0"
+      source: "gap_analysis_results table"
+      check_frequency: "on_roi_calculation"
+
+    message_template: |
+      Initiative shows NEGATIVE ROI: {initiative_name}
+
+      ROI: {roi:.2f}x (95% CI: [{roi_lower:.2f}x, {roi_upper:.2f}x])
+      Incremental Value: ${incremental_value:,.0f}
+      Implementation Cost: ${implementation_cost:,.0f}
+
+      Risk-Adjusted ROI: {risk_adjusted_roi:.2f}x
+
+    metadata:
+      recommended_action: "Reconsider initiative or re-evaluate assumptions"
+
+
+  roi_below_threshold:
+    enabled: true
+    category: "business_metrics"
+    severity: "warning"
+
+    trigger:
+      condition: "roi < minimum_acceptable_roi"
+      source: "gap_analysis_results table"
+      check_frequency: "on_roi_calculation"
+
+    thresholds:
+      minimum_acceptable_roi: 3.0  # 3x minimum
+
+    message_template: |
+      Initiative ROI below threshold: {initiative_name}
+      ROI: {roi:.2f}x (minimum: {minimum_acceptable_roi:.1f}x)
+
+      Key sensitivities:
+      {sensitivity_analysis}
+
+    metadata:
+      recommended_action: "Review assumptions and explore optimization opportunities"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# AGENT EXECUTION ALERTS
+# ═══════════════════════════════════════════════════════════════════
+
+agent_execution_alerts:
+  # Tier 1-5 agent monitoring
+
+  agent_execution_failure:
+    enabled: true
+    category: "agent_execution"
+    severity: "critical"
+
+    trigger:
+      condition: "execution_status = 'failed'"
+      source: "agent_activities table"
+      check_frequency: "realtime"
+
+    message_template: |
+      Agent execution failed: {agent_name}
+
+      Task: {task_description}
+      Error: {error_message}
+
+      Execution ID: {execution_id}
+      Start Time: {start_time}
+      Duration: {execution_duration_seconds}s
+
+    metadata:
+      recommended_action: "Check agent logs and error stack trace"
+      runbook_url: "https://docs.internal/runbooks/agent-failure"
+
+
+  agent_timeout:
+    enabled: true
+    category: "agent_execution"
+    severity: "urgent"
+
+    trigger:
+      condition: "execution_duration > timeout_threshold"
+      source: "agent_activities table"
+      check_frequency: "realtime"
+
+    thresholds:
+      orchestrator: 300  # 5 minutes
+      causal_impact: 600  # 10 minutes
+      model_trainer: 3600  # 1 hour
+      default: 600  # 10 minutes
+
+    message_template: |
+      Agent execution timeout: {agent_name}
+      Duration: {execution_duration_seconds}s (timeout: {timeout_threshold}s)
+
+      Status: {current_status}
+      Last checkpoint: {last_checkpoint}
+
+
+  high_agent_error_rate:
+    enabled: true
+    category: "agent_execution"
+    severity: "urgent"
+
+    trigger:
+      condition: "error_rate_1h > 0.20"  # > 20% error rate
+      source: "agent_activities table (aggregated)"
+      check_frequency: "every_15_minutes"
+
+    message_template: |
+      High error rate for {agent_name}: {error_rate_1h:.1%}
+
+      Last hour:
+      - Total executions: {total_executions}
+      - Failed: {failed_executions}
+      - Common error: {most_common_error}
+
+    metadata:
+      recommended_action: "Check for infrastructure issues or recent code changes"
+
+
+  agent_dependency_failure:
+    enabled: true
+    category: "agent_execution"
+    severity: "critical"
+
+    trigger:
+      condition: "dependency_check_failed = true"
+      source: "agent health checks"
+      check_frequency: "every_5_minutes"
+
+    message_template: |
+      Agent dependency unavailable: {agent_name}
+
+      Failed dependency: {dependency_name}
+      Dependency type: {dependency_type}  # API, database, MCP server
+      Error: {dependency_error}
+
+    metadata:
+      affected_agents: []  # List of downstream agents affected
+      recommended_action: "Restore dependency service"
+      runbook_url: "https://docs.internal/runbooks/dependency-failure"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# SYSTEM HEALTH ALERTS
+# ═══════════════════════════════════════════════════════════════════
+
+system_health_alerts:
+
+  database_connection_failure:
+    enabled: true
+    category: "system_health"
+    severity: "critical"
+
+    trigger:
+      condition: "db_connection_failed = true"
+      source: "health check endpoint"
+      check_frequency: "every_1_minute"
+
+    message_template: |
+      Database connection failure: {database_name}
+      Error: {error_message}
+
+      Retry attempts: {retry_count}
+      Last successful connection: {last_success_time}
+
+    metadata:
+      recommended_action: "Check database status and network connectivity"
+      runbook_url: "https://docs.internal/runbooks/db-connection-failure"
+
+
+  api_rate_limit_approaching:
+    enabled: true
+    category: "system_health"
+    severity: "warning"
+
+    trigger:
+      condition: "api_usage_pct > 0.80"  # > 80% of limit
+      source: "API usage monitoring"
+      check_frequency: "every_15_minutes"
+
+    message_template: |
+      API rate limit approaching: {api_provider}
+      Current usage: {current_usage}/{rate_limit} ({usage_pct:.1%})
+
+      Endpoint: {endpoint}
+      Reset time: {reset_time}
+
+    metadata:
+      recommended_action: "Throttle non-critical requests or request limit increase"
+
+
+  memory_usage_high:
+    enabled: true
+    category: "system_health"
+    severity: "warning"
+
+    trigger:
+      condition: "memory_usage_pct > 0.85"  # > 85%
+      source: "infrastructure monitoring"
+      check_frequency: "every_5_minutes"
+
+    message_template: |
+      High memory usage: {service_name}
+      Memory: {memory_usage_mb}MB / {memory_total_mb}MB ({memory_usage_pct:.1%})
+
+      Top consumers:
+      {top_memory_consumers}
+
+
+  disk_space_low:
+    enabled: true
+    category: "system_health"
+    severity: "urgent"
+
+    trigger:
+      condition: "disk_usage_pct > 0.90"  # > 90%
+      source: "infrastructure monitoring"
+      check_frequency: "every_15_minutes"
+
+    message_template: |
+      Low disk space: {volume_name}
+      Used: {disk_used_gb}GB / {disk_total_gb}GB ({disk_usage_pct:.1%})
+
+      Estimated time to full: {time_to_full}
+
+
+# ═══════════════════════════════════════════════════════════════════
+# NOTIFICATION CHANNELS
+# ═══════════════════════════════════════════════════════════════════
+
+notification_channels:
+
+  email:
+    enabled: true
+    provider: "sendgrid"
+
+    # Recipient routing by category and severity
+    routing:
+      critical:
+        - "oncall-platform@company.com"
+        - "vp-analytics@company.com"
+      urgent:
+        - "oncall-platform@company.com"
+        - "ml-ops-team@company.com"
+      warning:
+        - "analytics-team@company.com"
+      info:
+        - "analytics-notifications@company.com"
+
+    # Email template
+    template:
+      subject: "[{severity}] {category}: {alert_title}"
+      from: "e2i-alerts@company.com"
+      reply_to: "no-reply@company.com"
+
+    # Quiet hours (no email notifications)
+    quiet_hours:
+      enabled: true
+      start_time: "22:00"  # 10 PM
+      end_time: "07:00"    # 7 AM
+      timezone: "America/New_York"
+      exceptions: ["critical"]  # Critical alerts always sent
+
+
+  slack:
+    enabled: true
+    workspace: "company-workspace"
+
+    # Channel routing by category
+    channels:
+      data_quality: "#data-quality-alerts"
+      model_performance: "#ml-ops-alerts"
+      causal_validation: "#analytics-alerts"
+      system_health: "#platform-alerts"
+      business_metrics: "#analytics-alerts"
+      agent_execution: "#ml-ops-alerts"
+
+    # Mention routing by severity
+    mentions:
+      critical: "<!channel>"
+      urgent: "@oncall"
+      warning: null
+      info: null
+
+    # Message formatting
+    format:
+      include_emoji: true
+      include_severity_color: true
+      include_alert_id: true
+
+
+  dashboard:
+    enabled: true
+
+    # Alert badge in UI
+    badge:
+      show_count: true
+      max_count: 99
+      blink_on_critical: true
+
+    # Alert panel
+    panel:
+      max_visible_alerts: 10
+      auto_dismiss_info_after: 300  # 5 minutes
+      auto_dismiss_warning_after: 3600  # 1 hour
+      # Critical and urgent require manual dismissal
+
+    # Tab indicators
+    tab_indicators:
+      enabled: true
+      affected_tabs_highlight: true
+
+
+  webhook:
+    enabled: false
+
+    # Custom webhook for integrations (PagerDuty, Datadog, etc.)
+    endpoints:
+      pagerduty:
+        url: "https://events.pagerduty.com/v2/enqueue"
+        method: "POST"
+        headers:
+          Content-Type: "application/json"
+          Authorization: "Token token={PAGERDUTY_TOKEN}"
+        severity_mapping:
+          critical: "critical"
+          urgent: "error"
+          warning: "warning"
+          info: "info"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ALERT ROUTING RULES
+# ═══════════════════════════════════════════════════════════════════
+
+routing_rules:
+  # Advanced routing based on context
+
+  route_by_brand:
+    enabled: true
+
+    mapping:
+      remibrutinib:
+        primary_owner: "remibrutinib-analytics@company.com"
+        secondary_owner: "analytics-team@company.com"
+        slack_channel: "#remibrutinib-alerts"
+
+      fabhalta:
+        primary_owner: "fabhalta-analytics@company.com"
+        secondary_owner: "analytics-team@company.com"
+        slack_channel: "#fabhalta-alerts"
+
+      kisqali:
+        primary_owner: "kisqali-analytics@company.com"
+        secondary_owner: "analytics-team@company.com"
+        slack_channel: "#kisqali-alerts"
+
+
+  route_by_time:
+    enabled: true
+
+    # Business hours vs off-hours routing
+    business_hours:
+      days: ["monday", "tuesday", "wednesday", "thursday", "friday"]
+      start_time: "09:00"
+      end_time: "18:00"
+      timezone: "America/New_York"
+
+    during_business_hours:
+      notification_channels: ["email", "slack", "dashboard"]
+      escalation_enabled: false
+
+    outside_business_hours:
+      notification_channels: ["email", "dashboard"]  # No Slack spam
+      escalation_enabled: true  # Only for critical/urgent
+
+
+  escalation_policy:
+    enabled: true
+
+    # Escalate if alert not acknowledged
+    levels:
+      level_1:
+        wait_minutes: 15
+        notify: ["primary_owner"]
+
+      level_2:
+        wait_minutes: 30
+        notify: ["secondary_owner", "team_lead"]
+
+      level_3:
+        wait_minutes: 60
+        notify: ["vp_analytics", "oncall_platform"]
+
+    # Only escalate these severities
+    escalate_severities: ["critical", "urgent"]
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ALERT SUPPRESSION RULES
+# ═══════════════════════════════════════════════════════════════════
+
+suppression_rules:
+  # Suppress alerts during known maintenance windows or expected events
+
+  maintenance_windows:
+    enabled: true
+
+    # Scheduled maintenance
+    windows:
+      - name: "Weekly DB Maintenance"
+        schedule: "sunday 02:00-04:00"
+        timezone: "America/New_York"
+        suppress_categories: ["system_health", "data_quality"]
+        suppress_severities: ["warning", "info"]
+
+      - name: "Monthly Data Refresh"
+        schedule: "first_saturday 01:00-06:00"
+        timezone: "America/New_York"
+        suppress_categories: ["data_quality"]
+        suppress_alerts: ["stale_data_source"]
+
+
+  known_issues:
+    enabled: true
+
+    # Suppress alerts for known issues with open tickets
+    issues:
+      - issue_id: "JIRA-1234"
+        title: "IQVIA LAAD Intermittent Connection Issues"
+        suppress_alerts: ["stale_data_source"]
+        suppress_conditions:
+          source_name: "IQVIA LAAD"
+        expires: "2025-12-31"
+
+
+  event_based_suppression:
+    enabled: true
+
+    # Suppress alerts after related events
+    rules:
+      - trigger_event: "model_retraining_started"
+        suppress_alerts: ["model_drift_detected", "low_model_accuracy"]
+        suppress_duration_minutes: 120
+
+      - trigger_event: "data_pipeline_backfill_started"
+        suppress_alerts: ["stale_data_source", "high_missing_rate"]
+        suppress_duration_minutes: 360
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ALERT ACTIONS
+# ═══════════════════════════════════════════════════════════════════
+
+alert_actions:
+  # Automated actions triggered by specific alerts
+
+  auto_remediation:
+    enabled: false  # Disabled by default for safety
+
+    actions:
+      stale_data_source:
+        action: "trigger_data_refresh"
+        parameters:
+          source_id: "{source_id}"
+        requires_approval: true
+
+      model_drift_detected:
+        action: "trigger_model_retraining"
+        parameters:
+          model_name: "{model_name}"
+        requires_approval: true
+
+
+  create_ticket:
+    enabled: true
+
+    # Auto-create JIRA tickets for critical/urgent alerts
+    conditions:
+      severities: ["critical", "urgent"]
+      categories: ["system_health", "model_performance"]
+
+    ticket_config:
+      project: "E2I"
+      issue_type: "Incident"
+      priority_mapping:
+        critical: "P0"
+        urgent: "P1"
+      assignee: "oncall"
+
+
+  run_diagnostic:
+    enabled: true
+
+    # Run diagnostic scripts/queries on alert
+    diagnostics:
+      low_model_accuracy:
+        script: "scripts/diagnose_model_performance.py"
+        parameters:
+          model_name: "{model_name}"
+        attach_output: true
+
+      high_missing_rate:
+        query: "SELECT * FROM data_profiling WHERE dataset='{dataset_name}' ORDER BY missing_rate DESC LIMIT 10"
+        attach_results: true
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ALERT ANALYTICS
+# ═══════════════════════════════════════════════════════════════════
+
+analytics:
+  # Track alert metrics for improvement
+
+  metrics:
+    - alert_volume_by_category
+    - alert_volume_by_severity
+    - mean_time_to_acknowledge
+    - mean_time_to_resolve
+    - false_positive_rate
+    - escalation_rate
+
+  reporting:
+    enabled: true
+    frequency: "weekly"
+    recipients: ["analytics-team@company.com", "ml-ops-team@company.com"]
+    include_charts: true
+
+  tuning:
+    # Recommend threshold adjustments based on alert patterns
+    enabled: true
+    review_frequency: "monthly"
+    criteria:
+      - "Alerts with >50% false positive rate"
+      - "Alerts never acknowledged"
+      - "Alerts with no resolution actions"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# STORAGE AND RETENTION
+# ═══════════════════════════════════════════════════════════════════
+
+storage:
+  # Alert storage in database
+
+  table: "alerts"
+
+  retention_policy:
+    critical: 365  # days
+    urgent: 180
+    warning: 90
+    info: 30
+
+  archive_to: "s3://e2i-alerts-archive/"
+
+  indexes:
+    - alert_timestamp
+    - severity
+    - category
+    - acknowledged_at
+
+
+# ═══════════════════════════════════════════════════════════════════
+# TESTING
+# ═══════════════════════════════════════════════════════════════════
+
+testing:
+  # Test alert configuration
+
+  test_alerts:
+    enabled: true
+
+    # Send test alerts to verify configuration
+    schedule: "daily 08:00"
+
+    test_cases:
+      - severity: "info"
+        category: "system_health"
+        message: "Daily alert system health check"
+        channels: ["dashboard"]
+
+      - severity: "warning"
+        category: "data_quality"
+        message: "Weekly alert routing test"
+        channels: ["slack"]
+        schedule: "monday 09:00"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# DOCUMENTATION
+# ═══════════════════════════════════════════════════════════════════
+
+documentation:
+  runbook_base_url: "https://docs.internal/runbooks/"
+
+  alert_definitions_url: "https://docs.internal/alerts/definitions"
+
+  oncall_schedule_url: "https://pagerduty.com/schedules/e2i-oncall"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# VERSION HISTORY
+# ═══════════════════════════════════════════════════════════════════
+
+version: "4.1"
+last_updated: "2025-12-15"
+changelog:
+  - version: "4.1"
+    date: "2025-12-15"
+    changes:
+      - "Initial creation for Gap 11 resolution"
+      - "Integrated with confidence scoring (Gap 12)"
+      - "Integrated with data sources quality (Gap 7)"
+      - "Integrated with ROI methodology (Gap 9)"
+      - "Integrated with causal validation system (Gap 3)"
+      - "Added model drift monitoring (Gap 6)"

@@ -1,0 +1,131 @@
+%%{init: {'theme': 'dark', 'themeVariables': { 'primaryColor': '#8b5cf6', 'primaryTextColor': '#fff', 'primaryBorderColor': '#a855f7', 'lineColor': '#6366f1', 'secondaryColor': '#ec4899', 'tertiaryColor': '#06b6d4'}}}%%
+
+flowchart TB
+    subgraph INPUT["🔤 LAYER 1: NLP (Conversational Interface)"]
+        direction LR
+        A[👤 User Query] --> B[Query Processor]
+        B --> C[Intent Classifier]
+        B --> D[Entity Extractor]
+        C --> E{IntentType}
+        D --> F[ExtractedEntities]
+        E --> G[ParsedQuery]
+        F --> G
+    end
+
+    subgraph ORCH["🎛️ TIER 1: Orchestration"]
+        direction LR
+        G --> H[Dynamic Router]
+        H --> I[Multi-Step Planner]
+        I --> J{Agent Dispatch}
+    end
+
+    subgraph T0["🤖 TIER 0: ML Foundation (NEW V4)"]
+        direction TB
+        J -->|ML_SCOPE| K[Scope Definer]
+        K --> L[Data Preparer]
+        L -->|🚦 QC GATE| M{QC Pass?}
+        M -->|Yes| N[Model Selector]
+        M -->|No| BLOCK1[❌ BLOCKED]
+        N --> O[Model Trainer]
+        O --> P[Feature Analyzer]
+        P --> Q[Model Deployer]
+        Q --> R[Observability]
+    end
+
+    subgraph T2["📊 TIER 2: Causal Analytics"]
+        direction TB
+        J -->|CAUSAL| S[Causal Impact Agent]
+        J -->|GAP| T[Gap Analyzer]
+        J -->|HETERO| U[Heterogeneous Optimizer]
+    end
+
+    subgraph CAUSAL["⚡ LAYER 2: Causal Engine"]
+        direction TB
+        S --> V[DAG Builder]
+        V --> W[Effect Estimator]
+        W --> X[RefutationRunner]
+        X -->|🚦 GATE| Y{Gate Decision}
+        Y -->|proceed| Z[Sensitivity Analysis]
+        Y -->|block| BLOCK2[❌ BLOCKED]
+        Z --> AA[Interpretation]
+    end
+
+    subgraph RAG["🔍 CausalRAG"]
+        direction TB
+        AB[Hybrid Retrieval] --> AC[Dense + Sparse + Graph]
+        AC --> AD[Cross-Encoder Rerank]
+    end
+
+    subgraph T35["📈 TIERS 3-5: Monitoring & Learning"]
+        direction TB
+        J -->|DRIFT| AE[Drift Monitor]
+        J -->|EXPERIMENT| AF[Experiment Designer]
+        J -->|HEALTH| AG[Health Score Agent]
+        J -->|PREDICT| AH[Prediction Synthesizer]
+        J -->|EXPLAIN| AI[Explainer]
+        J -->|LEARN| AJ[Feedback Learner]
+    end
+
+    subgraph SYNTH["🔗 Response Synthesis"]
+        direction LR
+        AA --> AK[Synthesizer]
+        T --> AK
+        U --> AK
+        P --> AK
+        AE --> AK
+        AG --> AK
+        AK --> AL[Verification Node]
+        AL --> AM[Chart Selector]
+    end
+
+    subgraph DB["🗄️ Database (28 Tables)"]
+        direction TB
+        AN[(causal_validations)]
+        AO[(causal_paths)]
+        AP[(business_metrics)]
+        AQ[(agent_activities)]
+        AR[(ml_experiments)]
+    end
+
+    subgraph DASH["🖥️ DASHBOARD END STATES"]
+        direction TB
+        AM --> AS[💬 Chat Response]
+        AM --> AT[📊 Causal DAG Viz]
+        AM --> AU[📈 46 KPI Cards]
+        AM --> AV[🗺️ CATE Heatmap]
+        AM --> AW[📉 Resource Sankey]
+        AM --> AX[✅ Validation Badge]
+        AM --> AY[🎯 Health Radar]
+    end
+
+    %% Data persistence flows
+    X -.->|persist| AN
+    AA -.->|persist| AO
+    AE -.->|persist| AP
+    AK -.->|persist| AQ
+    O -.->|persist| AR
+
+    %% RAG retrieval flows
+    AD -.->|retrieve| AO
+    AD -.->|retrieve| AP
+    AD -.->|retrieve| AQ
+    AD -.->|retrieve| AN
+    AD --> S
+    AD --> T
+
+    %% Styling
+    classDef inputStyle fill:#8b5cf6,stroke:#a855f7,color:#fff
+    classDef processStyle fill:#1e293b,stroke:#475569,color:#e2e8f0
+    classDef agentStyle fill:#3b82f6,stroke:#60a5fa,color:#fff
+    classDef outputStyle fill:#f59e0b,stroke:#fbbf24,color:#1a1a25
+    classDef gateStyle fill:#ef4444,stroke:#f87171,color:#fff
+    classDef newStyle fill:#ec4899,stroke:#f472b6,color:#fff
+    classDef dbStyle fill:#10b981,stroke:#34d399,color:#fff
+
+    class A,G inputStyle
+    class B,C,D,H,I,V,W,X,Z,AA,AB,AC,AD,AK,AL,AM processStyle
+    class K,L,N,O,P,Q,R,S,T,U,AE,AF,AG,AH,AI,AJ agentStyle
+    class AS,AT,AU,AV,AW,AX,AY outputStyle
+    class M,Y,BLOCK1,BLOCK2 gateStyle
+    class T0 newStyle
+    class AN,AO,AP,AQ,AR dbStyle

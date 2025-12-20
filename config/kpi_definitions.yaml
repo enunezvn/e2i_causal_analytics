@@ -1,0 +1,954 @@
+# E2I Causal Analytics - KPI Definitions V3.0
+# 46 KPIs - 100% Calculable from V3 Schema
+
+version: "3.0.0"
+last_updated: "2025-11-28"
+
+# ═══════════════════════════════════════════════════════════════════
+# SUMMARY
+# ═══════════════════════════════════════════════════════════════════
+
+summary:
+  total_kpis: 46
+  direct_calculable: 28
+  derived_calculable: 18
+  gaps: 0
+  
+  by_workstream:
+    ws1_data_quality: 9
+    ws1_model_performance: 9
+    ws2_triggers: 8
+    ws3_business: 10
+    brand_specific: 5
+    causal_metrics: 5
+
+# ═══════════════════════════════════════════════════════════════════
+# WS1: DATA COVERAGE & QUALITY (9 KPIs)
+# ═══════════════════════════════════════════════════════════════════
+
+ws1_data_quality:
+
+  source_coverage_patients:
+    id: "WS1-DQ-001"
+    name: "Source Coverage - Patients"
+    definition: "Percentage of eligible patients present in source vs reference universe"
+    formula: "covered_patients / reference_patients"
+    calculation_type: derived
+    tables:
+      - patient_journeys
+      - reference_universe
+    columns:
+      - patient_journeys.patient_id
+      - reference_universe.total_count
+    view: null
+    threshold:
+      target: 0.85
+      warning: 0.70
+      critical: 0.50
+    frequency: daily
+    workstream: WS1
+    
+  source_coverage_hcps:
+    id: "WS1-DQ-002"
+    name: "Source Coverage - HCPs"
+    definition: "Percentage of priority HCPs present in source vs universe"
+    formula: "covered_hcps / reference_hcps"
+    calculation_type: derived
+    tables:
+      - hcp_profiles
+      - reference_universe
+    columns:
+      - hcp_profiles.coverage_status
+      - reference_universe.total_count
+    view: null
+    threshold:
+      target: 0.80
+      warning: 0.65
+      critical: 0.45
+    frequency: daily
+    workstream: WS1
+    
+  cross_source_match_rate:
+    id: "WS1-DQ-003"
+    name: "Cross-source Match Rate"
+    definition: "Percentage of entities linkable across data sources"
+    formula: "records_matched / total_records"
+    calculation_type: direct
+    tables:
+      - data_source_tracking    # V3 NEW
+    columns:
+      - data_source_tracking.match_rate_vs_claims
+      - data_source_tracking.match_rate_vs_ehr
+      - data_source_tracking.match_rate_vs_specialty
+    view: v_kpi_cross_source_match
+    threshold:
+      target: 0.75
+      warning: 0.60
+      critical: 0.40
+    frequency: daily
+    workstream: WS1
+    note: "V3: New data_source_tracking table"
+    
+  stacking_lift:
+    id: "WS1-DQ-004"
+    name: "Stacking Lift"
+    definition: "Incremental value from combining multiple data sources"
+    formula: "(stacked_value - baseline) / baseline"
+    calculation_type: direct
+    tables:
+      - data_source_tracking    # V3 NEW
+    columns:
+      - data_source_tracking.stacking_lift_percentage
+      - data_source_tracking.stacking_eligible_records
+      - data_source_tracking.stacking_applied_records
+    view: v_kpi_stacking_lift
+    threshold:
+      target: 0.15
+      warning: 0.10
+      critical: 0.05
+    frequency: daily
+    workstream: WS1
+    note: "V3: New data_source_tracking table"
+    
+  completeness_pass_rate:
+    id: "WS1-DQ-005"
+    name: "Completeness Pass Rate"
+    definition: "1 minus null rate across brand-critical fields"
+    formula: "1 - (null_critical / total_records)"
+    calculation_type: derived
+    tables:
+      - patient_journeys
+    columns:
+      - patient_journeys.data_quality_score
+    view: null
+    threshold:
+      target: 0.95
+      warning: 0.90
+      critical: 0.80
+    frequency: daily
+    workstream: WS1
+    
+  geographic_consistency:
+    id: "WS1-DQ-006"
+    name: "Geographic Consistency"
+    definition: "Max absolute gap between source share and universe share across regions"
+    formula: "max_region(|share_source - share_universe|)"
+    calculation_type: derived
+    tables:
+      - patient_journeys
+      - reference_universe
+    columns:
+      - patient_journeys.geographic_region
+      - patient_journeys.state
+    view: null
+    threshold:
+      target: 0.05
+      warning: 0.10
+      critical: 0.20
+    frequency: weekly
+    workstream: WS1
+    
+  data_lag_median:
+    id: "WS1-DQ-007"
+    name: "Data Lag (Median)"
+    definition: "Median days from service date to availability in warehouse"
+    formula: "median(ingestion_timestamp - source_timestamp)"
+    calculation_type: direct
+    tables:
+      - patient_journeys    # V3 NEW fields
+    columns:
+      - patient_journeys.source_timestamp
+      - patient_journeys.ingestion_timestamp
+      - patient_journeys.data_lag_hours
+    view: v_kpi_data_lag
+    threshold:
+      target: 3
+      warning: 7
+      critical: 14
+    unit: days
+    frequency: daily
+    workstream: WS1
+    note: "V3: New fields in patient_journeys"
+    
+  label_quality_iaa:
+    id: "WS1-DQ-008"
+    name: "Label Quality (IAA)"
+    definition: "Inter-annotator agreement score for labeled data"
+    formula: "avg(agreement_score) for iaa_groups"
+    calculation_type: direct
+    tables:
+      - ml_annotations    # V3 NEW
+    columns:
+      - ml_annotations.iaa_group_id
+      - ml_annotations.annotation_value
+      - ml_annotations.annotation_confidence
+    view: v_kpi_label_quality
+    threshold:
+      target: 0.85
+      warning: 0.70
+      critical: 0.60
+    frequency: weekly
+    workstream: WS1
+    note: "V3: New ml_annotations table with IAA tracking"
+    
+  time_to_release:
+    id: "WS1-DQ-009"
+    name: "Time-to-Release (TTR)"
+    definition: "Hours from source data timestamp to pipeline completion"
+    formula: "run_completed_at - source_data_timestamp"
+    calculation_type: direct
+    tables:
+      - etl_pipeline_metrics    # V3 NEW
+    columns:
+      - etl_pipeline_metrics.source_data_timestamp
+      - etl_pipeline_metrics.run_completed_at
+      - etl_pipeline_metrics.time_to_release_hours
+    view: v_kpi_time_to_release
+    threshold:
+      target: 24
+      warning: 48
+      critical: 72
+    unit: hours
+    frequency: daily
+    workstream: WS1
+    note: "V3: New etl_pipeline_metrics table"
+
+# ═══════════════════════════════════════════════════════════════════
+# WS1: MODEL PERFORMANCE (9 KPIs)
+# ═══════════════════════════════════════════════════════════════════
+
+ws1_model_performance:
+
+  roc_auc:
+    id: "WS1-MP-001"
+    name: "ROC-AUC"
+    definition: "Area Under the ROC Curve"
+    formula: "∫TPR d(FPR)"
+    calculation_type: direct
+    tables:
+      - ml_predictions
+    columns:
+      - ml_predictions.model_auc
+    view: null
+    threshold:
+      target: 0.80
+      warning: 0.70
+      critical: 0.60
+    frequency: daily
+    workstream: WS1
+    
+  pr_auc:
+    id: "WS1-MP-002"
+    name: "PR-AUC"
+    definition: "Area under the Precision-Recall curve"
+    formula: "∫Precision d(Recall)"
+    calculation_type: direct
+    tables:
+      - ml_predictions    # V3 NEW field
+    columns:
+      - ml_predictions.model_pr_auc
+    view: null
+    threshold:
+      target: 0.70
+      warning: 0.55
+      critical: 0.40
+    frequency: daily
+    workstream: WS1
+    note: "V3: New model_pr_auc field"
+    
+  f1_score:
+    id: "WS1-MP-003"
+    name: "F1 Score"
+    definition: "Harmonic mean of precision and recall"
+    formula: "2 * (precision * recall) / (precision + recall)"
+    calculation_type: derived
+    tables:
+      - ml_predictions
+    columns:
+      - ml_predictions.model_precision
+      - ml_predictions.model_recall
+    view: null
+    threshold:
+      target: 0.75
+      warning: 0.60
+      critical: 0.45
+    frequency: daily
+    workstream: WS1
+    
+  recall_at_top_k:
+    id: "WS1-MP-004"
+    name: "Recall@Top-K"
+    definition: "Recall achieved when selecting top K predictions"
+    formula: "TP_at_K / total_positives"
+    calculation_type: direct
+    tables:
+      - ml_predictions    # V3 NEW field
+    columns:
+      - ml_predictions.rank_metrics  # JSONB: {recall_at_5, recall_at_10, recall_at_20}
+    view: null
+    threshold:
+      target: 0.60
+      warning: 0.45
+      critical: 0.30
+    frequency: daily
+    workstream: WS1
+    note: "V3: New rank_metrics JSONB field"
+    
+  brier_score:
+    id: "WS1-MP-005"
+    name: "Brier Score"
+    definition: "Mean squared error of probability predictions"
+    formula: "mean((p - y)^2)"
+    calculation_type: direct
+    tables:
+      - ml_predictions    # V3 NEW field
+    columns:
+      - ml_predictions.brier_score
+    view: null
+    threshold:
+      target: 0.15
+      warning: 0.25
+      critical: 0.35
+    frequency: daily
+    workstream: WS1
+    note: "V3: New brier_score field"
+    
+  calibration_slope:
+    id: "WS1-MP-006"
+    name: "Calibration Slope"
+    definition: "Slope of predicted vs actual probability regression"
+    formula: "logistic_regression(y ~ predicted_prob).slope"
+    calculation_type: direct
+    tables:
+      - ml_predictions
+    columns:
+      - ml_predictions.calibration_score
+    view: null
+    threshold:
+      target: 1.0
+      warning: 0.8
+      critical: 0.6
+    frequency: weekly
+    workstream: WS1
+    
+  shap_coverage:
+    id: "WS1-MP-007"
+    name: "SHAP Coverage"
+    definition: "Percentage of predictions with SHAP explanations"
+    formula: "count(shap_values IS NOT NULL) / total_predictions"
+    calculation_type: derived
+    tables:
+      - ml_predictions
+    columns:
+      - ml_predictions.shap_values
+    view: null
+    threshold:
+      target: 0.95
+      warning: 0.80
+      critical: 0.60
+    frequency: daily
+    workstream: WS1
+    
+  fairness_gap_recall:
+    id: "WS1-MP-008"
+    name: "Fairness Gap (ΔRecall)"
+    definition: "Max difference in recall across protected groups"
+    formula: "max_group(recall) - min_group(recall)"
+    calculation_type: direct
+    tables:
+      - ml_predictions
+    columns:
+      - ml_predictions.fairness_metrics  # JSONB
+    view: null
+    threshold:
+      target: 0.05
+      warning: 0.10
+      critical: 0.20
+    frequency: weekly
+    workstream: WS1
+    
+  feature_drift_psi:
+    id: "WS1-MP-009"
+    name: "Feature Drift (PSI)"
+    definition: "Population Stability Index measuring feature distribution shift"
+    formula: "Σ_b (q_b - p_b) * ln(q_b / p_b)"
+    calculation_type: derived
+    tables:
+      - ml_preprocessing_metadata
+      - ml_predictions
+    columns:
+      - ml_preprocessing_metadata.feature_distributions
+    view: null
+    threshold:
+      target: 0.10
+      warning: 0.20
+      critical: 0.25
+    frequency: daily
+    workstream: WS1
+
+# ═══════════════════════════════════════════════════════════════════
+# WS2: TRIGGER PERFORMANCE (8 KPIs)
+# ═══════════════════════════════════════════════════════════════════
+
+ws2_triggers:
+
+  trigger_precision:
+    id: "WS2-TR-001"
+    name: "Trigger Precision"
+    definition: "Percentage of fired triggers resulting in positive outcome"
+    formula: "true_positives / (true_positives + false_positives)"
+    calculation_type: derived
+    tables:
+      - triggers
+    columns:
+      - triggers.outcome_tracked
+      - triggers.outcome_value
+    view: null
+    threshold:
+      target: 0.70
+      warning: 0.55
+      critical: 0.40
+    frequency: daily
+    workstream: WS2
+    
+  trigger_recall:
+    id: "WS2-TR-002"
+    name: "Trigger Recall"
+    definition: "Percentage of positive outcomes preceded by a trigger"
+    formula: "true_positives / (true_positives + false_negatives)"
+    calculation_type: derived
+    tables:
+      - triggers
+      - treatment_events
+    columns:
+      - triggers.trigger_id
+      - treatment_events.event_type
+    view: null
+    threshold:
+      target: 0.60
+      warning: 0.45
+      critical: 0.30
+    frequency: daily
+    workstream: WS2
+    
+  action_rate_uplift:
+    id: "WS2-TR-003"
+    name: "Action Rate Uplift"
+    definition: "Incremental action rate vs control group"
+    formula: "(action_rate_treatment - action_rate_control) / action_rate_control"
+    calculation_type: derived
+    tables:
+      - triggers
+    columns:
+      - triggers.action_taken
+      - triggers.control_group_flag
+    view: null
+    threshold:
+      target: 0.15
+      warning: 0.10
+      critical: 0.05
+    frequency: weekly
+    workstream: WS2
+    
+  acceptance_rate:
+    id: "WS2-TR-004"
+    name: "Acceptance Rate"
+    definition: "Percentage of delivered triggers accepted by reps"
+    formula: "count(accepted) / count(delivered)"
+    calculation_type: direct
+    tables:
+      - triggers
+    columns:
+      - triggers.acceptance_status
+    view: null
+    threshold:
+      target: 0.60
+      warning: 0.45
+      critical: 0.30
+    frequency: daily
+    workstream: WS2
+    
+  false_alert_rate:
+    id: "WS2-TR-005"
+    name: "False Alert Rate"
+    definition: "Percentage of triggers marked as false positives"
+    formula: "count(false_positive) / total_triggers"
+    calculation_type: direct
+    tables:
+      - triggers
+    columns:
+      - triggers.false_positive_flag
+    view: null
+    threshold:
+      target: 0.10
+      warning: 0.20
+      critical: 0.30
+    frequency: daily
+    workstream: WS2
+    
+  override_rate:
+    id: "WS2-TR-006"
+    name: "Override Rate"
+    definition: "Percentage of triggers overridden by users"
+    formula: "count(overridden) / count(delivered)"
+    calculation_type: derived
+    tables:
+      - triggers
+    columns:
+      - triggers.acceptance_status
+    view: null
+    threshold:
+      target: 0.15
+      warning: 0.25
+      critical: 0.40
+    frequency: daily
+    workstream: WS2
+    
+  lead_time_days:
+    id: "WS2-TR-007"
+    name: "Lead Time"
+    definition: "Median days between trigger and outcome"
+    formula: "median(outcome_date - trigger_date)"
+    calculation_type: direct
+    tables:
+      - triggers
+    columns:
+      - triggers.lead_time_days
+    view: null
+    threshold:
+      target: 14
+      warning: 21
+      critical: 30
+    unit: days
+    frequency: weekly
+    workstream: WS2
+    
+  change_fail_rate:
+    id: "WS2-TR-008"
+    name: "Change-Fail Rate (CFR)"
+    definition: "Percentage of trigger changes that resulted in worse outcomes"
+    formula: "count(change_failed) / count(changed_triggers)"
+    calculation_type: derived
+    tables:
+      - triggers    # V3 NEW fields
+    columns:
+      - triggers.previous_trigger_id
+      - triggers.change_type
+      - triggers.change_failed
+      - triggers.change_outcome_delta
+    view: v_kpi_change_fail_rate
+    threshold:
+      target: 0.10
+      warning: 0.20
+      critical: 0.30
+    frequency: weekly
+    workstream: WS2
+    note: "V3: New change tracking fields in triggers"
+
+# ═══════════════════════════════════════════════════════════════════
+# WS3: BUSINESS IMPACT (10 KPIs)
+# ═══════════════════════════════════════════════════════════════════
+
+ws3_business:
+
+  active_users_mau:
+    id: "WS3-BI-001"
+    name: "Monthly Active Users (MAU)"
+    definition: "Unique users with at least one session in past 30 days"
+    formula: "count(distinct user_id) where session_start >= now() - 30 days"
+    calculation_type: direct
+    tables:
+      - user_sessions    # V3 NEW
+    columns:
+      - user_sessions.user_id
+      - user_sessions.session_start
+    view: v_kpi_active_users
+    threshold:
+      target: 2000
+      warning: 1500
+      critical: 1000
+    frequency: daily
+    workstream: WS3
+    note: "V3: New user_sessions table"
+    
+  active_users_wau:
+    id: "WS3-BI-002"
+    name: "Weekly Active Users (WAU)"
+    definition: "Unique users with at least one session in past 7 days"
+    formula: "count(distinct user_id) where session_start >= now() - 7 days"
+    calculation_type: direct
+    tables:
+      - user_sessions    # V3 NEW
+    columns:
+      - user_sessions.user_id
+      - user_sessions.session_start
+    view: v_kpi_active_users
+    threshold:
+      target: 1200
+      warning: 900
+      critical: 600
+    frequency: daily
+    workstream: WS3
+    note: "V3: New user_sessions table"
+    
+  patient_touch_rate:
+    id: "WS3-BI-003"
+    name: "Patient Touch Rate"
+    definition: "Percentage of eligible patients with trigger-driven touchpoint"
+    formula: "patients_with_trigger / eligible_patients"
+    calculation_type: derived
+    tables:
+      - triggers
+      - patient_journeys
+    columns:
+      - triggers.patient_id
+      - patient_journeys.patient_id
+    view: null
+    threshold:
+      target: 0.40
+      warning: 0.30
+      critical: 0.20
+    frequency: weekly
+    workstream: WS3
+    
+  hcp_coverage:
+    id: "WS3-BI-004"
+    name: "HCP Coverage"
+    definition: "Percentage of priority HCPs with active engagement"
+    formula: "count(covered) / total_priority_hcps"
+    calculation_type: direct
+    tables:
+      - hcp_profiles
+    columns:
+      - hcp_profiles.coverage_status
+    view: null
+    threshold:
+      target: 0.75
+      warning: 0.60
+      critical: 0.45
+    frequency: weekly
+    workstream: WS3
+    
+  trx:
+    id: "WS3-BI-005"
+    name: "Total Prescriptions (TRx)"
+    definition: "Total prescription volume"
+    formula: "count(event_type = 'prescription')"
+    calculation_type: derived
+    tables:
+      - treatment_events
+    columns:
+      - treatment_events.event_type
+    view: null
+    threshold: null  # Volume metric
+    frequency: daily
+    workstream: WS3
+    
+  nrx:
+    id: "WS3-BI-006"
+    name: "New Prescriptions (NRx)"
+    definition: "First-time prescriptions for a patient"
+    formula: "count(first_prescription)"
+    calculation_type: derived
+    tables:
+      - treatment_events
+    columns:
+      - treatment_events.event_type
+      - treatment_events.sequence_number
+    view: null
+    threshold: null  # Volume metric
+    frequency: daily
+    workstream: WS3
+    
+  nbrx:
+    id: "WS3-BI-007"
+    name: "New-to-Brand Prescriptions (NBRx)"
+    definition: "First prescription of specific brand for a patient"
+    formula: "count(first_brand_prescription)"
+    calculation_type: derived
+    tables:
+      - treatment_events
+    columns:
+      - treatment_events.event_type
+      - treatment_events.brand
+    view: null
+    threshold: null  # Volume metric
+    frequency: daily
+    workstream: WS3
+    
+  trx_share:
+    id: "WS3-BI-008"
+    name: "TRx Share"
+    definition: "Brand prescription share of total category"
+    formula: "brand_trx / category_trx"
+    calculation_type: derived
+    tables:
+      - treatment_events
+    columns:
+      - treatment_events.brand
+    view: null
+    threshold:
+      target: 0.30
+      warning: 0.20
+      critical: 0.10
+    frequency: weekly
+    workstream: WS3
+    
+  conversion_rate:
+    id: "WS3-BI-009"
+    name: "Conversion Rate"
+    definition: "Percentage of triggers resulting in prescription"
+    formula: "prescriptions_after_trigger / triggers_delivered"
+    calculation_type: derived
+    tables:
+      - triggers
+      - treatment_events
+    columns:
+      - triggers.trigger_id
+      - treatment_events.event_type
+    view: null
+    threshold:
+      target: 0.08
+      warning: 0.05
+      critical: 0.02
+    frequency: weekly
+    workstream: WS3
+    
+  roi:
+    id: "WS3-BI-010"
+    name: "Return on Investment"
+    definition: "Value generated per dollar invested"
+    formula: "value_captured / cost_invested"
+    calculation_type: direct
+    tables:
+      - business_metrics
+      - agent_activities
+    columns:
+      - business_metrics.roi
+      - agent_activities.roi_estimate
+    view: null
+    threshold:
+      target: 3.0
+      warning: 2.0
+      critical: 1.0
+    frequency: monthly
+    workstream: WS3
+
+# ═══════════════════════════════════════════════════════════════════
+# BRAND-SPECIFIC (5 KPIs)
+# ═══════════════════════════════════════════════════════════════════
+
+brand_specific:
+
+  remi_ah_uncontrolled_pct:
+    id: "BR-001"
+    name: "Remi - AH Uncontrolled %"
+    definition: "Percentage of antihistamine patients with uncontrolled symptoms"
+    formula: "uncontrolled_patients / ah_patients"
+    calculation_type: derived
+    brand: Remibrutinib
+    tables:
+      - patient_journeys
+      - treatment_events
+    columns:
+      - patient_journeys.diagnosis
+      - treatment_events.treatment_response
+    view: null
+    threshold:
+      target: 0.40
+      warning: 0.50
+      critical: 0.60
+    frequency: weekly
+    
+  remi_intent_to_prescribe_delta:
+    id: "BR-002"
+    name: "Remi - Intent-to-Prescribe Δ"
+    definition: "Change in HCP intent-to-prescribe score after intervention"
+    formula: "post_intent - pre_intent"
+    calculation_type: direct
+    brand: Remibrutinib
+    tables:
+      - hcp_intent_surveys    # V3 NEW
+    columns:
+      - hcp_intent_surveys.intent_to_prescribe_score
+      - hcp_intent_surveys.intent_to_prescribe_change
+      - hcp_intent_surveys.previous_survey_id
+    view: v_kpi_intent_to_prescribe
+    threshold:
+      target: 0.5
+      warning: 0.3
+      critical: 0.0
+    unit: points (1-7 scale)
+    frequency: monthly
+    note: "V3: New hcp_intent_surveys table"
+    
+  fabhalta_pnh_tested_pct:
+    id: "BR-003"
+    name: "Fabhalta - % PNH Tested"
+    definition: "Percentage of eligible patients tested for PNH"
+    formula: "pnh_tested / eligible_patients"
+    calculation_type: derived
+    brand: Fabhalta
+    tables:
+      - treatment_events
+    columns:
+      - treatment_events.event_type
+      - treatment_events.test_type
+    view: null
+    threshold:
+      target: 0.60
+      warning: 0.45
+      critical: 0.30
+    frequency: weekly
+    
+  kisqali_dx_adoption:
+    id: "BR-004"
+    name: "Kisqali - Dx Adoption"
+    definition: "Time from diagnosis to first Kisqali prescription"
+    formula: "median(first_kisqali_date - diagnosis_date)"
+    calculation_type: derived
+    brand: Kisqali
+    tables:
+      - patient_journeys
+      - treatment_events
+    columns:
+      - patient_journeys.diagnosis_date
+      - treatment_events.event_date
+    view: null
+    threshold:
+      target: 30
+      warning: 45
+      critical: 60
+    unit: days
+    frequency: weekly
+    
+  kisqali_oncologist_reach:
+    id: "BR-005"
+    name: "Kisqali - Oncologist Reach"
+    definition: "Percentage of oncologists with Kisqali engagement"
+    formula: "engaged_oncologists / total_oncologists"
+    calculation_type: derived
+    brand: Kisqali
+    tables:
+      - hcp_profiles
+      - triggers
+    columns:
+      - hcp_profiles.specialty
+      - triggers.hcp_id
+    view: null
+    threshold:
+      target: 0.70
+      warning: 0.55
+      critical: 0.40
+    frequency: weekly
+
+# ═══════════════════════════════════════════════════════════════════
+# CAUSAL METRICS (5 KPIs)
+# ═══════════════════════════════════════════════════════════════════
+
+causal_metrics:
+
+  treatment_effect_ate:
+    id: "CM-001"
+    name: "Average Treatment Effect (ATE)"
+    definition: "Average causal effect of treatment on outcome"
+    formula: "E[Y(1) - Y(0)]"
+    calculation_type: direct
+    tables:
+      - ml_predictions
+    columns:
+      - ml_predictions.treatment_effect_estimate
+    view: null
+    frequency: weekly
+    
+  treatment_effect_cate:
+    id: "CM-002"
+    name: "Conditional ATE (CATE)"
+    definition: "Treatment effect conditioned on segment"
+    formula: "E[Y(1) - Y(0) | X=x]"
+    calculation_type: direct
+    tables:
+      - ml_predictions
+    columns:
+      - ml_predictions.heterogeneous_effect
+      - ml_predictions.segment_assignment
+    view: null
+    frequency: weekly
+    
+  causal_impact:
+    id: "CM-003"
+    name: "Causal Impact"
+    definition: "Estimated causal effect size on causal paths"
+    formula: "causal_effect_size from causal analysis"
+    calculation_type: direct
+    tables:
+      - causal_paths
+    columns:
+      - causal_paths.causal_effect_size
+      - causal_paths.confidence_level
+    view: null
+    frequency: on_demand
+    
+  counterfactual_outcome:
+    id: "CM-004"
+    name: "Counterfactual Outcome"
+    definition: "Predicted outcome under alternative treatment"
+    formula: "E[Y(a') | do(A=a), X]"
+    calculation_type: direct
+    tables:
+      - ml_predictions
+    columns:
+      - ml_predictions.counterfactual_outcome
+    view: null
+    frequency: on_demand
+    
+  mediation_effect:
+    id: "CM-005"
+    name: "Mediation Effect"
+    definition: "Effect mediated through intermediate variables"
+    formula: "indirect_effect / total_effect"
+    calculation_type: derived
+    tables:
+      - causal_paths
+    columns:
+      - causal_paths.mediators_identified
+      - causal_paths.pathway_details
+    view: null
+    frequency: on_demand
+
+# ═══════════════════════════════════════════════════════════════════
+# KPI HELPER VIEWS (V3)
+# ═══════════════════════════════════════════════════════════════════
+
+helper_views:
+  - name: v_kpi_cross_source_match
+    description: "Daily cross-source match rates by source"
+    tables: [data_source_tracking]
+    
+  - name: v_kpi_stacking_lift
+    description: "Stacking lift percentages"
+    tables: [data_source_tracking]
+    
+  - name: v_kpi_data_lag
+    description: "Data lag statistics (avg, median, p95)"
+    tables: [patient_journeys]
+    
+  - name: v_kpi_label_quality
+    description: "Label quality and IAA metrics"
+    tables: [ml_annotations]
+    
+  - name: v_kpi_time_to_release
+    description: "TTR by pipeline"
+    tables: [etl_pipeline_metrics]
+    
+  - name: v_kpi_change_fail_rate
+    description: "Change-fail rate by change type"
+    tables: [triggers]
+    
+  - name: v_kpi_active_users
+    description: "MAU, WAU, DAU counts"
+    tables: [user_sessions]
+    
+  - name: v_kpi_intent_to_prescribe
+    description: "Intent scores by brand/month"
+    tables: [hcp_intent_surveys]

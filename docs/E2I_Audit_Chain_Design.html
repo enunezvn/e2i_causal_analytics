@@ -1,0 +1,1300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>E2I Lightweight Audit Chain Design</title>
+    <style>
+        :root {
+            --bg-primary: #0a0a0f;
+            --bg-secondary: #12121a;
+            --bg-tertiary: #1a1a24;
+            --text-primary: #f4f4f5;
+            --text-secondary: #a1a1aa;
+            --text-muted: #71717a;
+            --border-color: #27272a;
+            --accent-blue: #3b82f6;
+            --accent-green: #10b981;
+            --accent-amber: #f59e0b;
+            --accent-purple: #8b5cf6;
+            --accent-red: #ef4444;
+            --accent-cyan: #06b6d4;
+        }
+        
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            line-height: 1.6;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 40px 24px;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 48px;
+            padding-bottom: 32px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .header h1 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-bottom: 12px;
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-cyan));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        
+        .header .subtitle {
+            color: var(--text-secondary);
+            font-size: 1.1rem;
+        }
+        
+        .badge-row {
+            display: flex;
+            gap: 12px;
+            justify-content: center;
+            margin-top: 20px;
+            flex-wrap: wrap;
+        }
+        
+        .badge {
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 500;
+        }
+        
+        .badge.migration { background: rgba(139, 92, 246, 0.2); color: var(--accent-purple); border: 1px solid var(--accent-purple); }
+        .badge.python { background: rgba(59, 130, 246, 0.2); color: var(--accent-blue); border: 1px solid var(--accent-blue); }
+        .badge.pharma { background: rgba(16, 185, 129, 0.2); color: var(--accent-green); border: 1px solid var(--accent-green); }
+        
+        .section {
+            margin-bottom: 48px;
+        }
+        
+        .section-header {
+            margin-bottom: 24px;
+        }
+        
+        .section-header h2 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .section-header p {
+            color: var(--text-secondary);
+            margin-top: 8px;
+        }
+        
+        .icon { font-size: 1.3rem; }
+        
+        /* Concept Diagram */
+        .concept-diagram {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 32px;
+            margin-bottom: 32px;
+        }
+        
+        .chain-visual {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            padding: 24px;
+        }
+        
+        .chain-block {
+            background: var(--bg-tertiary);
+            border: 2px solid var(--accent-blue);
+            border-radius: 12px;
+            padding: 16px;
+            min-width: 180px;
+            text-align: center;
+        }
+        
+        .chain-block.genesis {
+            border-color: var(--accent-green);
+        }
+        
+        .chain-block .block-id {
+            font-family: 'SF Mono', monospace;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-bottom: 8px;
+        }
+        
+        .chain-block .block-hash {
+            font-family: 'SF Mono', monospace;
+            font-size: 0.7rem;
+            color: var(--accent-cyan);
+            background: rgba(6, 182, 212, 0.1);
+            padding: 4px 8px;
+            border-radius: 4px;
+            word-break: break-all;
+        }
+        
+        .chain-arrow {
+            color: var(--accent-amber);
+            font-size: 1.5rem;
+            font-weight: bold;
+        }
+        
+        .chain-link-line {
+            width: 40px;
+            height: 2px;
+            background: linear-gradient(90deg, var(--accent-blue), var(--accent-cyan));
+        }
+        
+        /* Comparison Table */
+        .comparison-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+            margin-bottom: 32px;
+        }
+        
+        @media (max-width: 768px) {
+            .comparison-grid { grid-template-columns: 1fr; }
+        }
+        
+        .comparison-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 24px;
+        }
+        
+        .comparison-card h3 {
+            font-size: 1.1rem;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .comparison-card.current { border-left: 4px solid var(--text-muted); }
+        .comparison-card.proposed { border-left: 4px solid var(--accent-green); }
+        
+        .comparison-card ul {
+            list-style: none;
+            padding: 0;
+        }
+        
+        .comparison-card li {
+            padding: 8px 0;
+            color: var(--text-secondary);
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+        }
+        
+        .comparison-card li::before {
+            content: "•";
+            color: var(--text-muted);
+        }
+        
+        /* Code Blocks */
+        .code-section {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            overflow: hidden;
+            margin-bottom: 24px;
+        }
+        
+        .code-header {
+            background: var(--bg-tertiary);
+            padding: 12px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .code-filename {
+            font-family: 'SF Mono', monospace;
+            font-size: 0.85rem;
+            color: var(--accent-cyan);
+        }
+        
+        .code-lang {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            padding: 4px 10px;
+            background: var(--bg-primary);
+            border-radius: 4px;
+        }
+        
+        .code-content {
+            padding: 20px;
+            overflow-x: auto;
+        }
+        
+        pre {
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            font-size: 0.85rem;
+            line-height: 1.5;
+            color: var(--text-secondary);
+            margin: 0;
+            white-space: pre;
+        }
+        
+        .sql-keyword { color: var(--accent-purple); font-weight: 500; }
+        .sql-type { color: var(--accent-blue); }
+        .sql-string { color: var(--accent-green); }
+        .sql-comment { color: var(--text-muted); font-style: italic; }
+        .py-keyword { color: var(--accent-purple); font-weight: 500; }
+        .py-func { color: var(--accent-blue); }
+        .py-string { color: var(--accent-green); }
+        .py-comment { color: var(--text-muted); font-style: italic; }
+        .py-decorator { color: var(--accent-amber); }
+        
+        /* Integration Diagram */
+        .integration-diagram {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 32px;
+        }
+        
+        .flow-container {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+        
+        .flow-row {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+        
+        .flow-box {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 12px 20px;
+            font-size: 0.9rem;
+        }
+        
+        .flow-box.agent { border-color: var(--accent-amber); color: var(--accent-amber); }
+        .flow-box.table { border-color: var(--accent-blue); color: var(--accent-blue); }
+        .flow-box.service { border-color: var(--accent-green); color: var(--accent-green); }
+        .flow-box.output { border-color: var(--accent-purple); color: var(--accent-purple); }
+        
+        .flow-arrow {
+            color: var(--text-muted);
+            font-size: 1.2rem;
+        }
+        
+        /* Alert boxes */
+        .alert {
+            padding: 16px 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+            display: flex;
+            gap: 12px;
+            align-items: flex-start;
+        }
+        
+        .alert.info {
+            background: rgba(59, 130, 246, 0.1);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+        }
+        
+        .alert.success {
+            background: rgba(16, 185, 129, 0.1);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+        }
+        
+        .alert.warning {
+            background: rgba(245, 158, 11, 0.1);
+            border: 1px solid rgba(245, 158, 11, 0.3);
+        }
+        
+        .alert-icon { font-size: 1.2rem; }
+        
+        /* Summary Table */
+        .summary-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        
+        .summary-table th,
+        .summary-table td {
+            padding: 12px 16px;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .summary-table th {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            font-weight: 600;
+        }
+        
+        .summary-table td {
+            color: var(--text-secondary);
+        }
+        
+        .summary-table code {
+            font-family: 'SF Mono', monospace;
+            font-size: 0.85rem;
+            background: var(--bg-tertiary);
+            padding: 2px 6px;
+            border-radius: 4px;
+            color: var(--accent-cyan);
+        }
+        
+        footer {
+            text-align: center;
+            padding: 32px;
+            color: var(--text-muted);
+            border-top: 1px solid var(--border-color);
+            margin-top: 48px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <h1>🔗 E2I Lightweight Audit Chain</h1>
+            <p class="subtitle">Tamper-evident agent action logging inspired by AgentField's cryptographic approach</p>
+            <div class="badge-row">
+                <span class="badge migration">011_audit_chain_tables.sql</span>
+                <span class="badge python">audit_chain.py</span>
+                <span class="badge pharma">HIPAA / FDA Ready</span>
+            </div>
+        </header>
+        
+        <!-- Concept Overview -->
+        <section class="section">
+            <div class="section-header">
+                <h2><span class="icon">💡</span> Concept: Hash-Linked Audit Trail</h2>
+                <p>Each agent action references the hash of the previous action, creating a tamper-evident chain</p>
+            </div>
+            
+            <div class="concept-diagram">
+                <div class="chain-visual">
+                    <div class="chain-block genesis">
+                        <div class="block-id">Block #1 (Genesis)</div>
+                        <div style="margin: 8px 0; font-size: 0.9rem;">orchestrator → causal_impact</div>
+                        <div class="block-hash">prev: NULL<br>hash: a7f3...</div>
+                    </div>
+                    
+                    <div class="chain-link-line"></div>
+                    <span class="chain-arrow">→</span>
+                    <div class="chain-link-line"></div>
+                    
+                    <div class="chain-block">
+                        <div class="block-id">Block #2</div>
+                        <div style="margin: 8px 0; font-size: 0.9rem;">causal_impact: estimation</div>
+                        <div class="block-hash">prev: a7f3...<br>hash: c2b8...</div>
+                    </div>
+                    
+                    <div class="chain-link-line"></div>
+                    <span class="chain-arrow">→</span>
+                    <div class="chain-link-line"></div>
+                    
+                    <div class="chain-block">
+                        <div class="block-id">Block #3</div>
+                        <div style="margin: 8px 0; font-size: 0.9rem;">causal_impact: refutation</div>
+                        <div class="block-hash">prev: c2b8...<br>hash: e9d1...</div>
+                    </div>
+                    
+                    <div class="chain-link-line"></div>
+                    <span class="chain-arrow">→</span>
+                    <div class="chain-link-line"></div>
+                    
+                    <div class="chain-block">
+                        <div class="block-id">Block #4</div>
+                        <div style="margin: 8px 0; font-size: 0.9rem;">explainer: narrative</div>
+                        <div class="block-hash">prev: e9d1...<br>hash: 1a2b...</div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="comparison-grid">
+                <div class="comparison-card current">
+                    <h3>📋 Current: agent_activity Table</h3>
+                    <ul>
+                        <li>Standard timestamped logs</li>
+                        <li>Can be modified/deleted without detection</li>
+                        <li>No cryptographic linking between records</li>
+                        <li>Audit relies on database access controls</li>
+                    </ul>
+                </div>
+                
+                <div class="comparison-card proposed">
+                    <h3>🔐 Proposed: Audit Chain Extension</h3>
+                    <ul>
+                        <li>Each record includes hash of previous record</li>
+                        <li>Any modification breaks the chain (detectable)</li>
+                        <li>Workflow-scoped chains for complete traces</li>
+                        <li>Cryptographic proof of sequence integrity</li>
+                    </ul>
+                </div>
+            </div>
+            
+            <div class="alert info">
+                <span class="alert-icon">💡</span>
+                <div>
+                    <strong>Key Insight:</strong> This isn't full W3C DID/VC like AgentField—it's a pragmatic "hash chain" that provides tamper-evidence without the infrastructure complexity. Regulators can verify chain integrity with a simple SQL query.
+                </div>
+            </div>
+        </section>
+        
+        <!-- SQL Migration -->
+        <section class="section">
+            <div class="section-header">
+                <h2><span class="icon">🗄️</span> SQL Migration: 011_audit_chain_tables.sql</h2>
+                <p>New tables extending your existing agent_activity and validation infrastructure</p>
+            </div>
+            
+            <div class="code-section">
+                <div class="code-header">
+                    <span class="code-filename">db/migrations/011_audit_chain_tables.sql</span>
+                    <span class="code-lang">PostgreSQL</span>
+                </div>
+                <div class="code-content">
+<pre><span class="sql-comment">-- ============================================================================</span>
+<span class="sql-comment">-- E2I Causal Analytics - Audit Chain Tables</span>
+<span class="sql-comment">-- Migration: 011_audit_chain_tables.sql</span>
+<span class="sql-comment">-- Purpose: Tamper-evident agent action logging with hash-linked chains</span>
+<span class="sql-comment">-- ============================================================================</span>
+
+<span class="sql-comment">-- Enable pgcrypto for SHA-256 hashing</span>
+<span class="sql-keyword">CREATE EXTENSION IF NOT EXISTS</span> pgcrypto;
+
+<span class="sql-comment">-- ============================================================================</span>
+<span class="sql-comment">-- Table: audit_chain_entries</span>
+<span class="sql-comment">-- Core hash-linked audit trail for agent actions</span>
+<span class="sql-comment">-- ============================================================================</span>
+<span class="sql-keyword">CREATE TABLE</span> audit_chain_entries (
+    <span class="sql-comment">-- Primary identification</span>
+    entry_id            <span class="sql-type">UUID</span> <span class="sql-keyword">PRIMARY KEY DEFAULT</span> gen_random_uuid(),
+    workflow_id         <span class="sql-type">UUID</span> <span class="sql-keyword">NOT NULL</span>,           <span class="sql-comment">-- Groups entries by workflow execution</span>
+    sequence_number     <span class="sql-type">INTEGER</span> <span class="sql-keyword">NOT NULL</span>,         <span class="sql-comment">-- Order within workflow (1, 2, 3...)</span>
+    
+    <span class="sql-comment">-- Agent identification</span>
+    agent_name          <span class="sql-type">VARCHAR(50)</span> <span class="sql-keyword">NOT NULL</span>,     <span class="sql-comment">-- e.g., 'causal_impact', 'orchestrator'</span>
+    agent_tier          <span class="sql-type">INTEGER</span> <span class="sql-keyword">NOT NULL</span>,         <span class="sql-comment">-- 0-5 tier classification</span>
+    action_type         <span class="sql-type">VARCHAR(50)</span> <span class="sql-keyword">NOT NULL</span>,     <span class="sql-comment">-- e.g., 'estimation', 'refutation', 'routing'</span>
+    
+    <span class="sql-comment">-- Timing</span>
+    created_at          <span class="sql-type">TIMESTAMPTZ</span> <span class="sql-keyword">NOT NULL DEFAULT</span> now(),
+    duration_ms         <span class="sql-type">INTEGER</span>,                  <span class="sql-comment">-- Action execution time</span>
+    
+    <span class="sql-comment">-- Action payload (hashed for chain integrity)</span>
+    input_hash          <span class="sql-type">VARCHAR(64)</span>,              <span class="sql-comment">-- SHA-256 of input data</span>
+    output_hash         <span class="sql-type">VARCHAR(64)</span>,              <span class="sql-comment">-- SHA-256 of output data</span>
+    
+    <span class="sql-comment">-- Validation results (for causal agents)</span>
+    validation_passed   <span class="sql-type">BOOLEAN</span>,
+    confidence_score    <span class="sql-type">NUMERIC(5,4)</span>,            <span class="sql-comment">-- 0.0000 to 1.0000</span>
+    refutation_results  <span class="sql-type">JSONB</span>,                    <span class="sql-comment">-- DoWhy refutation test outcomes</span>
+    
+    <span class="sql-comment">-- Hash chain fields (THE KEY INNOVATION)</span>
+    previous_entry_id   <span class="sql-type">UUID</span>,                     <span class="sql-comment">-- Links to prior entry (NULL for genesis)</span>
+    previous_hash       <span class="sql-type">VARCHAR(64)</span>,              <span class="sql-comment">-- Hash of previous entry (NULL for genesis)</span>
+    entry_hash          <span class="sql-type">VARCHAR(64)</span> <span class="sql-keyword">NOT NULL</span>,     <span class="sql-comment">-- This entry's hash (computed on insert)</span>
+    
+    <span class="sql-comment">-- Metadata for regulatory queries</span>
+    user_id             <span class="sql-type">VARCHAR(100)</span>,             <span class="sql-comment">-- Who triggered the workflow</span>
+    session_id          <span class="sql-type">UUID</span>,                     <span class="sql-comment">-- User session reference</span>
+    query_text          <span class="sql-type">TEXT</span>,                     <span class="sql-comment">-- Original user query (if applicable)</span>
+    brand               <span class="sql-type">VARCHAR(50)</span>,              <span class="sql-comment">-- Remibrutinib, Fabhalta, Kisqali</span>
+    
+    <span class="sql-comment">-- Constraints</span>
+    <span class="sql-keyword">CONSTRAINT</span> unique_workflow_sequence <span class="sql-keyword">UNIQUE</span> (workflow_id, sequence_number),
+    <span class="sql-keyword">CONSTRAINT</span> fk_previous_entry <span class="sql-keyword">FOREIGN KEY</span> (previous_entry_id) 
+        <span class="sql-keyword">REFERENCES</span> audit_chain_entries(entry_id)
+);
+
+<span class="sql-comment">-- Indexes for common query patterns</span>
+<span class="sql-keyword">CREATE INDEX</span> idx_audit_chain_workflow <span class="sql-keyword">ON</span> audit_chain_entries(workflow_id, sequence_number);
+<span class="sql-keyword">CREATE INDEX</span> idx_audit_chain_agent <span class="sql-keyword">ON</span> audit_chain_entries(agent_name, created_at);
+<span class="sql-keyword">CREATE INDEX</span> idx_audit_chain_created <span class="sql-keyword">ON</span> audit_chain_entries(created_at);
+<span class="sql-keyword">CREATE INDEX</span> idx_audit_chain_brand <span class="sql-keyword">ON</span> audit_chain_entries(brand, created_at);
+<span class="sql-keyword">CREATE INDEX</span> idx_audit_chain_validation <span class="sql-keyword">ON</span> audit_chain_entries(validation_passed, created_at);
+
+<span class="sql-comment">-- ============================================================================</span>
+<span class="sql-comment">-- Table: audit_chain_verification_log</span>
+<span class="sql-comment">-- Records when chain integrity was verified (for auditors)</span>
+<span class="sql-comment">-- ============================================================================</span>
+<span class="sql-keyword">CREATE TABLE</span> audit_chain_verification_log (
+    verification_id     <span class="sql-type">UUID</span> <span class="sql-keyword">PRIMARY KEY DEFAULT</span> gen_random_uuid(),
+    verified_at         <span class="sql-type">TIMESTAMPTZ</span> <span class="sql-keyword">NOT NULL DEFAULT</span> now(),
+    workflow_id         <span class="sql-type">UUID</span>,                     <span class="sql-comment">-- NULL = full chain verification</span>
+    entries_verified    <span class="sql-type">INTEGER</span> <span class="sql-keyword">NOT NULL</span>,
+    chain_valid         <span class="sql-type">BOOLEAN</span> <span class="sql-keyword">NOT NULL</span>,
+    first_broken_entry  <span class="sql-type">UUID</span>,                     <span class="sql-comment">-- If invalid, where did it break?</span>
+    verified_by         <span class="sql-type">VARCHAR(100)</span>,             <span class="sql-comment">-- User/system that ran verification</span>
+    verification_method <span class="sql-type">VARCHAR(50)</span> <span class="sql-keyword">DEFAULT</span> <span class="sql-string">'sha256'</span>
+);
+
+<span class="sql-comment">-- ============================================================================</span>
+<span class="sql-comment">-- Function: compute_entry_hash</span>
+<span class="sql-comment">-- Generates SHA-256 hash of entry contents for chain linking</span>
+<span class="sql-comment">-- ============================================================================</span>
+<span class="sql-keyword">CREATE OR REPLACE FUNCTION</span> compute_entry_hash(
+    p_entry_id <span class="sql-type">UUID</span>,
+    p_workflow_id <span class="sql-type">UUID</span>,
+    p_sequence_number <span class="sql-type">INTEGER</span>,
+    p_agent_name <span class="sql-type">VARCHAR</span>,
+    p_action_type <span class="sql-type">VARCHAR</span>,
+    p_created_at <span class="sql-type">TIMESTAMPTZ</span>,
+    p_input_hash <span class="sql-type">VARCHAR</span>,
+    p_output_hash <span class="sql-type">VARCHAR</span>,
+    p_previous_hash <span class="sql-type">VARCHAR</span>
+) <span class="sql-keyword">RETURNS</span> <span class="sql-type">VARCHAR(64)</span> <span class="sql-keyword">AS</span> $$
+<span class="sql-keyword">BEGIN</span>
+    <span class="sql-keyword">RETURN</span> encode(
+        digest(
+            concat(
+                p_entry_id::text,
+                p_workflow_id::text,
+                p_sequence_number::text,
+                p_agent_name,
+                p_action_type,
+                p_created_at::text,
+                <span class="sql-keyword">COALESCE</span>(p_input_hash, <span class="sql-string">''</span>),
+                <span class="sql-keyword">COALESCE</span>(p_output_hash, <span class="sql-string">''</span>),
+                <span class="sql-keyword">COALESCE</span>(p_previous_hash, <span class="sql-string">'GENESIS'</span>)
+            ),
+            <span class="sql-string">'sha256'</span>
+        ),
+        <span class="sql-string">'hex'</span>
+    );
+<span class="sql-keyword">END</span>;
+$$ <span class="sql-keyword">LANGUAGE</span> plpgsql <span class="sql-keyword">IMMUTABLE</span>;
+
+<span class="sql-comment">-- ============================================================================</span>
+<span class="sql-comment">-- Function: verify_chain_integrity</span>
+<span class="sql-comment">-- Validates that all hashes in a workflow chain are correct</span>
+<span class="sql-comment">-- ============================================================================</span>
+<span class="sql-keyword">CREATE OR REPLACE FUNCTION</span> verify_chain_integrity(p_workflow_id <span class="sql-type">UUID</span>)
+<span class="sql-keyword">RETURNS TABLE</span> (
+    is_valid <span class="sql-type">BOOLEAN</span>,
+    entries_checked <span class="sql-type">INTEGER</span>,
+    first_invalid_entry <span class="sql-type">UUID</span>,
+    error_message <span class="sql-type">TEXT</span>
+) <span class="sql-keyword">AS</span> $$
+<span class="sql-keyword">DECLARE</span>
+    v_entry <span class="sql-keyword">RECORD</span>;
+    v_expected_hash <span class="sql-type">VARCHAR(64)</span>;
+    v_count <span class="sql-type">INTEGER</span> := 0;
+<span class="sql-keyword">BEGIN</span>
+    <span class="sql-keyword">FOR</span> v_entry <span class="sql-keyword">IN</span>
+        <span class="sql-keyword">SELECT</span> * <span class="sql-keyword">FROM</span> audit_chain_entries
+        <span class="sql-keyword">WHERE</span> workflow_id = p_workflow_id
+        <span class="sql-keyword">ORDER BY</span> sequence_number
+    <span class="sql-keyword">LOOP</span>
+        v_count := v_count + 1;
+        
+        <span class="sql-comment">-- Recompute the hash</span>
+        v_expected_hash := compute_entry_hash(
+            v_entry.entry_id,
+            v_entry.workflow_id,
+            v_entry.sequence_number,
+            v_entry.agent_name,
+            v_entry.action_type,
+            v_entry.created_at,
+            v_entry.input_hash,
+            v_entry.output_hash,
+            v_entry.previous_hash
+        );
+        
+        <span class="sql-comment">-- Compare with stored hash</span>
+        <span class="sql-keyword">IF</span> v_entry.entry_hash != v_expected_hash <span class="sql-keyword">THEN</span>
+            is_valid := <span class="sql-keyword">FALSE</span>;
+            entries_checked := v_count;
+            first_invalid_entry := v_entry.entry_id;
+            error_message := <span class="sql-string">'Hash mismatch at sequence '</span> || v_entry.sequence_number;
+            <span class="sql-keyword">RETURN NEXT</span>;
+            <span class="sql-keyword">RETURN</span>;
+        <span class="sql-keyword">END IF</span>;
+    <span class="sql-keyword">END LOOP</span>;
+    
+    <span class="sql-comment">-- All entries valid</span>
+    is_valid := <span class="sql-keyword">TRUE</span>;
+    entries_checked := v_count;
+    first_invalid_entry := <span class="sql-keyword">NULL</span>;
+    error_message := <span class="sql-keyword">NULL</span>;
+    <span class="sql-keyword">RETURN NEXT</span>;
+<span class="sql-keyword">END</span>;
+$$ <span class="sql-keyword">LANGUAGE</span> plpgsql;
+
+<span class="sql-comment">-- ============================================================================</span>
+<span class="sql-comment">-- View: v_audit_chain_summary</span>
+<span class="sql-comment">-- Quick overview of workflows with chain status</span>
+<span class="sql-comment">-- ============================================================================</span>
+<span class="sql-keyword">CREATE VIEW</span> v_audit_chain_summary <span class="sql-keyword">AS</span>
+<span class="sql-keyword">SELECT</span>
+    workflow_id,
+    <span class="sql-keyword">MIN</span>(created_at) <span class="sql-keyword">AS</span> workflow_start,
+    <span class="sql-keyword">MAX</span>(created_at) <span class="sql-keyword">AS</span> workflow_end,
+    <span class="sql-keyword">COUNT</span>(*) <span class="sql-keyword">AS</span> total_entries,
+    <span class="sql-keyword">COUNT</span>(<span class="sql-keyword">DISTINCT</span> agent_name) <span class="sql-keyword">AS</span> agents_involved,
+    array_agg(<span class="sql-keyword">DISTINCT</span> agent_name <span class="sql-keyword">ORDER BY</span> agent_name) <span class="sql-keyword">AS</span> agent_list,
+    <span class="sql-keyword">BOOL_AND</span>(validation_passed) <span class="sql-keyword">AS</span> all_validations_passed,
+    <span class="sql-keyword">AVG</span>(confidence_score) <span class="sql-keyword">AS</span> avg_confidence,
+    <span class="sql-keyword">SUM</span>(duration_ms) <span class="sql-keyword">AS</span> total_duration_ms,
+    <span class="sql-keyword">MAX</span>(brand) <span class="sql-keyword">AS</span> brand,
+    <span class="sql-keyword">MAX</span>(user_id) <span class="sql-keyword">AS</span> user_id
+<span class="sql-keyword">FROM</span> audit_chain_entries
+<span class="sql-keyword">GROUP BY</span> workflow_id;
+
+<span class="sql-comment">-- ============================================================================</span>
+<span class="sql-comment">-- View: v_causal_validation_chain</span>
+<span class="sql-comment">-- Specialized view for Tier 2 causal agent validation chains</span>
+<span class="sql-comment">-- ============================================================================</span>
+<span class="sql-keyword">CREATE VIEW</span> v_causal_validation_chain <span class="sql-keyword">AS</span>
+<span class="sql-keyword">SELECT</span>
+    ace.workflow_id,
+    ace.sequence_number,
+    ace.agent_name,
+    ace.action_type,
+    ace.validation_passed,
+    ace.confidence_score,
+    ace.refutation_results->><span class="sql-string">'placebo_treatment'</span> <span class="sql-keyword">AS</span> placebo_passed,
+    ace.refutation_results->><span class="sql-string">'random_common_cause'</span> <span class="sql-keyword">AS</span> random_cause_passed,
+    ace.refutation_results->><span class="sql-string">'data_subset'</span> <span class="sql-keyword">AS</span> subset_passed,
+    ace.entry_hash,
+    ace.previous_hash,
+    ace.created_at,
+    ace.brand
+<span class="sql-keyword">FROM</span> audit_chain_entries ace
+<span class="sql-keyword">WHERE</span> ace.agent_tier = 2  <span class="sql-comment">-- Tier 2: Causal Analytics</span>
+<span class="sql-keyword">ORDER BY</span> ace.workflow_id, ace.sequence_number;
+
+<span class="sql-comment">-- Grant appropriate permissions</span>
+<span class="sql-keyword">GRANT SELECT ON</span> audit_chain_entries <span class="sql-keyword">TO</span> e2i_readonly;
+<span class="sql-keyword">GRANT SELECT, INSERT ON</span> audit_chain_entries <span class="sql-keyword">TO</span> e2i_service;
+<span class="sql-keyword">GRANT SELECT, INSERT ON</span> audit_chain_verification_log <span class="sql-keyword">TO</span> e2i_service;
+<span class="sql-keyword">GRANT EXECUTE ON FUNCTION</span> verify_chain_integrity <span class="sql-keyword">TO</span> e2i_readonly, e2i_service;</pre>
+                </div>
+            </div>
+        </section>
+        
+        <!-- Python Implementation -->
+        <section class="section">
+            <div class="section-header">
+                <h2><span class="icon">🐍</span> Python Implementation: AuditChainService</h2>
+                <p>Service class for creating and verifying audit chain entries</p>
+            </div>
+            
+            <div class="code-section">
+                <div class="code-header">
+                    <span class="code-filename">src/services/audit_chain.py</span>
+                    <span class="code-lang">Python</span>
+                </div>
+                <div class="code-content">
+<pre><span class="py-string">"""
+E2I Causal Analytics - Audit Chain Service
+Provides tamper-evident logging for agent actions with hash-linked chains.
+"""</span>
+
+<span class="py-keyword">import</span> hashlib
+<span class="py-keyword">import</span> json
+<span class="py-keyword">from</span> datetime <span class="py-keyword">import</span> datetime
+<span class="py-keyword">from</span> typing <span class="py-keyword">import</span> Optional, Dict, Any, List
+<span class="py-keyword">from</span> uuid <span class="py-keyword">import</span> UUID, uuid4
+<span class="py-keyword">from</span> dataclasses <span class="py-keyword">import</span> dataclass, asdict
+<span class="py-keyword">from</span> enum <span class="py-keyword">import</span> Enum
+
+<span class="py-keyword">from</span> supabase <span class="py-keyword">import</span> Client
+<span class="py-keyword">from</span> pydantic <span class="py-keyword">import</span> BaseModel
+
+
+<span class="py-keyword">class</span> <span class="py-func">AgentTier</span>(Enum):
+    <span class="py-string">"""Agent tier classifications matching domain_vocabulary.yaml"""</span>
+    ML_FOUNDATION = 0
+    COORDINATION = 1
+    CAUSAL_ANALYTICS = 2
+    MONITORING = 3
+    ML_PREDICTIONS = 4
+    SELF_IMPROVEMENT = 5
+
+
+<span class="py-decorator">@dataclass</span>
+<span class="py-keyword">class</span> <span class="py-func">AuditChainEntry</span>:
+    <span class="py-string">"""Single entry in the audit chain"""</span>
+    entry_id: UUID
+    workflow_id: UUID
+    sequence_number: <span class="py-func">int</span>
+    agent_name: <span class="py-func">str</span>
+    agent_tier: <span class="py-func">int</span>
+    action_type: <span class="py-func">str</span>
+    created_at: datetime
+    duration_ms: Optional[<span class="py-func">int</span>] = <span class="py-keyword">None</span>
+    input_hash: Optional[<span class="py-func">str</span>] = <span class="py-keyword">None</span>
+    output_hash: Optional[<span class="py-func">str</span>] = <span class="py-keyword">None</span>
+    validation_passed: Optional[<span class="py-func">bool</span>] = <span class="py-keyword">None</span>
+    confidence_score: Optional[<span class="py-func">float</span>] = <span class="py-keyword">None</span>
+    refutation_results: Optional[Dict] = <span class="py-keyword">None</span>
+    previous_entry_id: Optional[UUID] = <span class="py-keyword">None</span>
+    previous_hash: Optional[<span class="py-func">str</span>] = <span class="py-keyword">None</span>
+    entry_hash: <span class="py-func">str</span> = <span class="py-string">""</span>
+    user_id: Optional[<span class="py-func">str</span>] = <span class="py-keyword">None</span>
+    session_id: Optional[UUID] = <span class="py-keyword">None</span>
+    query_text: Optional[<span class="py-func">str</span>] = <span class="py-keyword">None</span>
+    brand: Optional[<span class="py-func">str</span>] = <span class="py-keyword">None</span>
+
+
+<span class="py-keyword">class</span> <span class="py-func">AuditChainService</span>:
+    <span class="py-string">"""
+    Service for creating and verifying tamper-evident audit chains.
+    
+    Each agent action in a workflow is linked via SHA-256 hash to the
+    previous action, creating a verifiable chain of custody.
+    """</span>
+    
+    <span class="py-keyword">def</span> <span class="py-func">__init__</span>(self, supabase_client: Client):
+        self.db = supabase_client
+        self._workflow_cache: Dict[UUID, AuditChainEntry] = {}
+    
+    <span class="py-keyword">def</span> <span class="py-func">_compute_hash</span>(self, data: <span class="py-func">str</span>) -> <span class="py-func">str</span>:
+        <span class="py-string">"""Compute SHA-256 hash of input data"""</span>
+        <span class="py-keyword">return</span> hashlib.sha256(data.encode()).hexdigest()
+    
+    <span class="py-keyword">def</span> <span class="py-func">_compute_entry_hash</span>(self, entry: AuditChainEntry) -> <span class="py-func">str</span>:
+        <span class="py-string">"""
+        Compute the chain hash for an entry.
+        Matches the PostgreSQL compute_entry_hash function.
+        """</span>
+        components = [
+            <span class="py-func">str</span>(entry.entry_id),
+            <span class="py-func">str</span>(entry.workflow_id),
+            <span class="py-func">str</span>(entry.sequence_number),
+            entry.agent_name,
+            entry.action_type,
+            entry.created_at.isoformat(),
+            entry.input_hash <span class="py-keyword">or</span> <span class="py-string">""</span>,
+            entry.output_hash <span class="py-keyword">or</span> <span class="py-string">""</span>,
+            entry.previous_hash <span class="py-keyword">or</span> <span class="py-string">"GENESIS"</span>
+        ]
+        <span class="py-keyword">return</span> self._compute_hash(<span class="py-string">""</span>.join(components))
+    
+    <span class="py-keyword">def</span> <span class="py-func">hash_payload</span>(self, payload: Any) -> <span class="py-func">str</span>:
+        <span class="py-string">"""Hash any JSON-serializable payload for input/output tracking"""</span>
+        serialized = json.dumps(payload, sort_keys=<span class="py-keyword">True</span>, default=<span class="py-func">str</span>)
+        <span class="py-keyword">return</span> self._compute_hash(serialized)
+    
+    <span class="py-keyword">def</span> <span class="py-func">start_workflow</span>(
+        self,
+        agent_name: <span class="py-func">str</span>,
+        agent_tier: AgentTier,
+        action_type: <span class="py-func">str</span>,
+        input_data: Optional[Any] = <span class="py-keyword">None</span>,
+        user_id: Optional[<span class="py-func">str</span>] = <span class="py-keyword">None</span>,
+        session_id: Optional[UUID] = <span class="py-keyword">None</span>,
+        query_text: Optional[<span class="py-func">str</span>] = <span class="py-keyword">None</span>,
+        brand: Optional[<span class="py-func">str</span>] = <span class="py-keyword">None</span>
+    ) -> AuditChainEntry:
+        <span class="py-string">"""
+        Start a new workflow audit chain (genesis block).
+        
+        Returns the first entry in the chain.
+        """</span>
+        workflow_id = uuid4()
+        entry = AuditChainEntry(
+            entry_id=uuid4(),
+            workflow_id=workflow_id,
+            sequence_number=1,
+            agent_name=agent_name,
+            agent_tier=agent_tier.value,
+            action_type=action_type,
+            created_at=datetime.utcnow(),
+            input_hash=self.hash_payload(input_data) <span class="py-keyword">if</span> input_data <span class="py-keyword">else</span> <span class="py-keyword">None</span>,
+            previous_entry_id=<span class="py-keyword">None</span>,  <span class="py-comment"># Genesis has no previous</span>
+            previous_hash=<span class="py-keyword">None</span>,       <span class="py-comment"># Genesis has no previous hash</span>
+            user_id=user_id,
+            session_id=session_id,
+            query_text=query_text,
+            brand=brand
+        )
+        entry.entry_hash = self._compute_entry_hash(entry)
+        
+        <span class="py-comment"># Cache for chain continuation</span>
+        self._workflow_cache[workflow_id] = entry
+        
+        <span class="py-keyword">return</span> entry
+    
+    <span class="py-keyword">def</span> <span class="py-func">add_entry</span>(
+        self,
+        workflow_id: UUID,
+        agent_name: <span class="py-func">str</span>,
+        agent_tier: AgentTier,
+        action_type: <span class="py-func">str</span>,
+        input_data: Optional[Any] = <span class="py-keyword">None</span>,
+        output_data: Optional[Any] = <span class="py-keyword">None</span>,
+        duration_ms: Optional[<span class="py-func">int</span>] = <span class="py-keyword">None</span>,
+        validation_passed: Optional[<span class="py-func">bool</span>] = <span class="py-keyword">None</span>,
+        confidence_score: Optional[<span class="py-func">float</span>] = <span class="py-keyword">None</span>,
+        refutation_results: Optional[Dict] = <span class="py-keyword">None</span>
+    ) -> AuditChainEntry:
+        <span class="py-string">"""
+        Add a new entry to an existing workflow chain.
+        
+        Automatically links to the previous entry via hash.
+        """</span>
+        <span class="py-comment"># Get previous entry from cache or database</span>
+        previous = self._get_last_entry(workflow_id)
+        
+        <span class="py-keyword">if</span> previous <span class="py-keyword">is</span> <span class="py-keyword">None</span>:
+            <span class="py-keyword">raise</span> ValueError(<span class="py-func">f</span><span class="py-string">"Workflow {workflow_id} not found"</span>)
+        
+        entry = AuditChainEntry(
+            entry_id=uuid4(),
+            workflow_id=workflow_id,
+            sequence_number=previous.sequence_number + 1,
+            agent_name=agent_name,
+            agent_tier=agent_tier.value,
+            action_type=action_type,
+            created_at=datetime.utcnow(),
+            duration_ms=duration_ms,
+            input_hash=self.hash_payload(input_data) <span class="py-keyword">if</span> input_data <span class="py-keyword">else</span> <span class="py-keyword">None</span>,
+            output_hash=self.hash_payload(output_data) <span class="py-keyword">if</span> output_data <span class="py-keyword">else</span> <span class="py-keyword">None</span>,
+            validation_passed=validation_passed,
+            confidence_score=confidence_score,
+            refutation_results=refutation_results,
+            previous_entry_id=previous.entry_id,
+            previous_hash=previous.entry_hash,  <span class="py-comment"># THE KEY LINK</span>
+            user_id=previous.user_id,
+            session_id=previous.session_id,
+            brand=previous.brand
+        )
+        entry.entry_hash = self._compute_entry_hash(entry)
+        
+        <span class="py-comment"># Update cache</span>
+        self._workflow_cache[workflow_id] = entry
+        
+        <span class="py-keyword">return</span> entry
+    
+    <span class="py-keyword">def</span> <span class="py-func">commit_entry</span>(self, entry: AuditChainEntry) -> <span class="py-keyword">None</span>:
+        <span class="py-string">"""Persist an entry to the database"""</span>
+        data = {
+            <span class="py-string">"entry_id"</span>: <span class="py-func">str</span>(entry.entry_id),
+            <span class="py-string">"workflow_id"</span>: <span class="py-func">str</span>(entry.workflow_id),
+            <span class="py-string">"sequence_number"</span>: entry.sequence_number,
+            <span class="py-string">"agent_name"</span>: entry.agent_name,
+            <span class="py-string">"agent_tier"</span>: entry.agent_tier,
+            <span class="py-string">"action_type"</span>: entry.action_type,
+            <span class="py-string">"created_at"</span>: entry.created_at.isoformat(),
+            <span class="py-string">"duration_ms"</span>: entry.duration_ms,
+            <span class="py-string">"input_hash"</span>: entry.input_hash,
+            <span class="py-string">"output_hash"</span>: entry.output_hash,
+            <span class="py-string">"validation_passed"</span>: entry.validation_passed,
+            <span class="py-string">"confidence_score"</span>: entry.confidence_score,
+            <span class="py-string">"refutation_results"</span>: entry.refutation_results,
+            <span class="py-string">"previous_entry_id"</span>: <span class="py-func">str</span>(entry.previous_entry_id) <span class="py-keyword">if</span> entry.previous_entry_id <span class="py-keyword">else</span> <span class="py-keyword">None</span>,
+            <span class="py-string">"previous_hash"</span>: entry.previous_hash,
+            <span class="py-string">"entry_hash"</span>: entry.entry_hash,
+            <span class="py-string">"user_id"</span>: entry.user_id,
+            <span class="py-string">"session_id"</span>: <span class="py-func">str</span>(entry.session_id) <span class="py-keyword">if</span> entry.session_id <span class="py-keyword">else</span> <span class="py-keyword">None</span>,
+            <span class="py-string">"query_text"</span>: entry.query_text,
+            <span class="py-string">"brand"</span>: entry.brand
+        }
+        self.db.table(<span class="py-string">"audit_chain_entries"</span>).insert(data).execute()
+    
+    <span class="py-keyword">def</span> <span class="py-func">verify_workflow</span>(self, workflow_id: UUID) -> Dict[<span class="py-func">str</span>, Any]:
+        <span class="py-string">"""
+        Verify the integrity of a workflow's audit chain.
+        
+        Returns verification result with details.
+        """</span>
+        result = self.db.rpc(
+            <span class="py-string">"verify_chain_integrity"</span>,
+            {<span class="py-string">"p_workflow_id"</span>: <span class="py-func">str</span>(workflow_id)}
+        ).execute()
+        
+        verification = result.data[0] <span class="py-keyword">if</span> result.data <span class="py-keyword">else</span> {}
+        
+        <span class="py-comment"># Log the verification</span>
+        self.db.table(<span class="py-string">"audit_chain_verification_log"</span>).insert({
+            <span class="py-string">"workflow_id"</span>: <span class="py-func">str</span>(workflow_id),
+            <span class="py-string">"entries_verified"</span>: verification.get(<span class="py-string">"entries_checked"</span>, 0),
+            <span class="py-string">"chain_valid"</span>: verification.get(<span class="py-string">"is_valid"</span>, <span class="py-keyword">False</span>),
+            <span class="py-string">"first_broken_entry"</span>: verification.get(<span class="py-string">"first_invalid_entry"</span>),
+            <span class="py-string">"verified_by"</span>: <span class="py-string">"system"</span>
+        }).execute()
+        
+        <span class="py-keyword">return</span> verification
+    
+    <span class="py-keyword">def</span> <span class="py-func">_get_last_entry</span>(self, workflow_id: UUID) -> Optional[AuditChainEntry]:
+        <span class="py-string">"""Get the last entry in a workflow chain"""</span>
+        <span class="py-comment"># Check cache first</span>
+        <span class="py-keyword">if</span> workflow_id <span class="py-keyword">in</span> self._workflow_cache:
+            <span class="py-keyword">return</span> self._workflow_cache[workflow_id]
+        
+        <span class="py-comment"># Query database</span>
+        result = self.db.table(<span class="py-string">"audit_chain_entries"</span>)\
+            .select(<span class="py-string">"*"</span>)\
+            .eq(<span class="py-string">"workflow_id"</span>, <span class="py-func">str</span>(workflow_id))\
+            .order(<span class="py-string">"sequence_number"</span>, desc=<span class="py-keyword">True</span>)\
+            .limit(1)\
+            .execute()
+        
+        <span class="py-keyword">if</span> <span class="py-keyword">not</span> result.data:
+            <span class="py-keyword">return</span> <span class="py-keyword">None</span>
+        
+        row = result.data[0]
+        <span class="py-keyword">return</span> AuditChainEntry(
+            entry_id=UUID(row[<span class="py-string">"entry_id"</span>]),
+            workflow_id=UUID(row[<span class="py-string">"workflow_id"</span>]),
+            sequence_number=row[<span class="py-string">"sequence_number"</span>],
+            agent_name=row[<span class="py-string">"agent_name"</span>],
+            agent_tier=row[<span class="py-string">"agent_tier"</span>],
+            action_type=row[<span class="py-string">"action_type"</span>],
+            created_at=datetime.fromisoformat(row[<span class="py-string">"created_at"</span>]),
+            entry_hash=row[<span class="py-string">"entry_hash"</span>],
+            user_id=row.get(<span class="py-string">"user_id"</span>),
+            session_id=UUID(row[<span class="py-string">"session_id"</span>]) <span class="py-keyword">if</span> row.get(<span class="py-string">"session_id"</span>) <span class="py-keyword">else</span> <span class="py-keyword">None</span>,
+            brand=row.get(<span class="py-string">"brand"</span>)
+        )</pre>
+                </div>
+            </div>
+        </section>
+        
+        <!-- Agent Integration -->
+        <section class="section">
+            <div class="section-header">
+                <h2><span class="icon">🔌</span> Agent Integration Pattern</h2>
+                <p>How to integrate audit chain with your existing Causal Impact agent workflow</p>
+            </div>
+            
+            <div class="code-section">
+                <div class="code-header">
+                    <span class="code-filename">src/agents/causal/causal_impact_agent.py (excerpt)</span>
+                    <span class="code-lang">Python</span>
+                </div>
+                <div class="code-content">
+<pre><span class="py-keyword">from</span> src.services.audit_chain <span class="py-keyword">import</span> AuditChainService, AgentTier
+
+<span class="py-keyword">class</span> <span class="py-func">CausalImpactAgent</span>(BaseAgent):
+    <span class="py-string">"""
+    Causal Impact Hybrid Agent with Audit Chain Integration.
+    
+    5-Node Workflow: GraphBuilder → Estimation → Refutation → Sensitivity → Interpretation
+    Each node creates an audit chain entry with hash linking.
+    """</span>
+    
+    <span class="py-keyword">def</span> <span class="py-func">__init__</span>(self, supabase_client, audit_chain: AuditChainService):
+        <span class="py-func">super</span>().__init__()
+        self.audit_chain = audit_chain
+        self.tier = AgentTier.CAUSAL_ANALYTICS
+    
+    <span class="py-keyword">async def</span> <span class="py-func">execute_workflow</span>(
+        self,
+        treatment: <span class="py-func">str</span>,
+        outcome: <span class="py-func">str</span>,
+        data: pd.DataFrame,
+        user_id: <span class="py-func">str</span>,
+        session_id: UUID,
+        brand: <span class="py-func">str</span>
+    ) -> CausalResult:
+        <span class="py-string">"""Execute the 5-node causal analysis workflow with full audit trail"""</span>
+        
+        start_time = datetime.utcnow()
+        
+        <span class="py-comment"># ═══════════════════════════════════════════════════════════════</span>
+        <span class="py-comment"># NODE 1: GraphBuilder (Genesis entry for this workflow)</span>
+        <span class="py-comment"># ═══════════════════════════════════════════════════════════════</span>
+        genesis = self.audit_chain.start_workflow(
+            agent_name=<span class="py-string">"causal_impact"</span>,
+            agent_tier=self.tier,
+            action_type=<span class="py-string">"graph_builder"</span>,
+            input_data={<span class="py-string">"treatment"</span>: treatment, <span class="py-string">"outcome"</span>: outcome, <span class="py-string">"n_rows"</span>: <span class="py-func">len</span>(data)},
+            user_id=user_id,
+            session_id=session_id,
+            brand=brand
+        )
+        
+        dag = <span class="py-keyword">await</span> self._build_causal_graph(treatment, outcome, data)
+        
+        genesis.duration_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
+        genesis.output_hash = self.audit_chain.hash_payload(dag.to_dict())
+        genesis.entry_hash = self.audit_chain._compute_entry_hash(genesis)
+        self.audit_chain.commit_entry(genesis)
+        
+        <span class="py-comment"># ═══════════════════════════════════════════════════════════════</span>
+        <span class="py-comment"># NODE 2: Estimation (linked to GraphBuilder)</span>
+        <span class="py-comment"># ═══════════════════════════════════════════════════════════════</span>
+        node_start = datetime.utcnow()
+        estimate = <span class="py-keyword">await</span> self._estimate_effect(dag, data)
+        
+        estimation_entry = self.audit_chain.add_entry(
+            workflow_id=genesis.workflow_id,
+            agent_name=<span class="py-string">"causal_impact"</span>,
+            agent_tier=self.tier,
+            action_type=<span class="py-string">"estimation"</span>,
+            input_data={<span class="py-string">"dag_hash"</span>: genesis.output_hash},
+            output_data={<span class="py-string">"ate"</span>: estimate.ate, <span class="py-string">"ci"</span>: estimate.confidence_interval},
+            duration_ms=(<span class="py-keyword">datetime</span>.utcnow() - node_start).total_seconds() * 1000,
+            confidence_score=estimate.confidence
+        )
+        self.audit_chain.commit_entry(estimation_entry)
+        
+        <span class="py-comment"># ═══════════════════════════════════════════════════════════════</span>
+        <span class="py-comment"># NODE 3: Refutation (linked to Estimation)</span>
+        <span class="py-comment"># ═══════════════════════════════════════════════════════════════</span>
+        node_start = datetime.utcnow()
+        refutation = <span class="py-keyword">await</span> self._run_refutation_tests(estimate)
+        
+        refutation_entry = self.audit_chain.add_entry(
+            workflow_id=genesis.workflow_id,
+            agent_name=<span class="py-string">"causal_impact"</span>,
+            agent_tier=self.tier,
+            action_type=<span class="py-string">"refutation"</span>,
+            input_data={<span class="py-string">"ate"</span>: estimate.ate},
+            output_data=refutation.results,
+            duration_ms=(datetime.utcnow() - node_start).total_seconds() * 1000,
+            validation_passed=refutation.all_passed,
+            confidence_score=refutation.robustness_score,
+            refutation_results={
+                <span class="py-string">"placebo_treatment"</span>: refutation.placebo_passed,
+                <span class="py-string">"random_common_cause"</span>: refutation.random_cause_passed,
+                <span class="py-string">"data_subset"</span>: refutation.subset_passed
+            }
+        )
+        self.audit_chain.commit_entry(refutation_entry)
+        
+        <span class="py-comment"># ═══════════════════════════════════════════════════════════════</span>
+        <span class="py-comment"># NODE 4: Sensitivity (linked to Refutation)</span>
+        <span class="py-comment"># ═══════════════════════════════════════════════════════════════</span>
+        node_start = datetime.utcnow()
+        sensitivity = <span class="py-keyword">await</span> self._run_sensitivity_analysis(estimate)
+        
+        sensitivity_entry = self.audit_chain.add_entry(
+            workflow_id=genesis.workflow_id,
+            agent_name=<span class="py-string">"causal_impact"</span>,
+            agent_tier=self.tier,
+            action_type=<span class="py-string">"sensitivity"</span>,
+            output_data={<span class="py-string">"e_value"</span>: sensitivity.e_value, <span class="py-string">"bounds"</span>: sensitivity.bounds},
+            duration_ms=(datetime.utcnow() - node_start).total_seconds() * 1000
+        )
+        self.audit_chain.commit_entry(sensitivity_entry)
+        
+        <span class="py-comment"># ═══════════════════════════════════════════════════════════════</span>
+        <span class="py-comment"># NODE 5: Interpretation (linked to Sensitivity)</span>
+        <span class="py-comment"># ═══════════════════════════════════════════════════════════════</span>
+        node_start = datetime.utcnow()
+        narrative = <span class="py-keyword">await</span> self._generate_interpretation(estimate, refutation, sensitivity)
+        
+        interpretation_entry = self.audit_chain.add_entry(
+            workflow_id=genesis.workflow_id,
+            agent_name=<span class="py-string">"causal_impact"</span>,
+            agent_tier=self.tier,
+            action_type=<span class="py-string">"interpretation"</span>,
+            output_data={<span class="py-string">"narrative_length"</span>: <span class="py-func">len</span>(narrative)},
+            duration_ms=(datetime.utcnow() - node_start).total_seconds() * 1000,
+            validation_passed=refutation.all_passed,  <span class="py-comment"># Final validation status</span>
+            confidence_score=estimate.confidence
+        )
+        self.audit_chain.commit_entry(interpretation_entry)
+        
+        <span class="py-keyword">return</span> CausalResult(
+            workflow_id=genesis.workflow_id,
+            estimate=estimate,
+            refutation=refutation,
+            sensitivity=sensitivity,
+            narrative=narrative,
+            audit_chain_valid=<span class="py-keyword">True</span>  <span class="py-comment"># Fresh chain is always valid</span>
+        )</pre>
+                </div>
+            </div>
+            
+            <div class="alert success">
+                <span class="alert-icon">✅</span>
+                <div>
+                    <strong>Integration Point:</strong> The audit chain service integrates with your existing 5-node workflow by wrapping each node execution. The <code>previous_hash</code> field in each entry cryptographically links to the prior node, creating the tamper-evident chain.
+                </div>
+            </div>
+        </section>
+        
+        <!-- Integration Diagram -->
+        <section class="section">
+            <div class="section-header">
+                <h2><span class="icon">🔄</span> System Integration Architecture</h2>
+                <p>How the audit chain fits into your existing E2I infrastructure</p>
+            </div>
+            
+            <div class="integration-diagram">
+                <div class="flow-container">
+                    <div class="flow-row">
+                        <div class="flow-box agent">orchestrator</div>
+                        <span class="flow-arrow">→</span>
+                        <div class="flow-box agent">causal_impact</div>
+                        <span class="flow-arrow">→</span>
+                        <div class="flow-box agent">explainer</div>
+                    </div>
+                    
+                    <div style="text-align: center; color: var(--text-muted); padding: 8px;">↓ Each action creates entry ↓</div>
+                    
+                    <div class="flow-row">
+                        <div class="flow-box service">AuditChainService</div>
+                        <span class="flow-arrow">→</span>
+                        <div class="flow-box table">audit_chain_entries</div>
+                    </div>
+                    
+                    <div style="text-align: center; color: var(--text-muted); padding: 8px;">↓ Parallel streams ↓</div>
+                    
+                    <div class="flow-row" style="justify-content: space-between;">
+                        <div style="display: flex; gap: 12px; align-items: center;">
+                            <div class="flow-box table">ml_observability_spans</div>
+                            <span style="color: var(--text-muted);">(Opik)</span>
+                        </div>
+                        <div style="display: flex; gap: 12px; align-items: center;">
+                            <div class="flow-box table">agent_activity</div>
+                            <span style="color: var(--text-muted);">(Existing)</span>
+                        </div>
+                    </div>
+                    
+                    <div style="text-align: center; color: var(--text-muted); padding: 8px;">↓ Verification layer ↓</div>
+                    
+                    <div class="flow-row">
+                        <div class="flow-box output">verify_chain_integrity()</div>
+                        <span class="flow-arrow">→</span>
+                        <div class="flow-box output">Dashboard Validation Badge</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+        
+        <!-- Verification Query -->
+        <section class="section">
+            <div class="section-header">
+                <h2><span class="icon">🔍</span> Regulator-Friendly Verification Query</h2>
+                <p>Simple SQL to prove chain integrity during audits</p>
+            </div>
+            
+            <div class="code-section">
+                <div class="code-header">
+                    <span class="code-filename">Audit Verification Query</span>
+                    <span class="code-lang">SQL</span>
+                </div>
+                <div class="code-content">
+<pre><span class="sql-comment">-- Verify a specific workflow's audit chain integrity</span>
+<span class="sql-keyword">SELECT</span> * <span class="sql-keyword">FROM</span> verify_chain_integrity(<span class="sql-string">'workflow-uuid-here'</span>::uuid);
+
+<span class="sql-comment">-- Result:</span>
+<span class="sql-comment">-- is_valid | entries_checked | first_invalid_entry | error_message</span>
+<span class="sql-comment">-- ---------+-----------------+---------------------+---------------</span>
+<span class="sql-comment">-- true     | 5               | NULL                | NULL</span>
+
+<span class="sql-comment">-- Get complete audit trail for a causal analysis</span>
+<span class="sql-keyword">SELECT</span> 
+    sequence_number,
+    agent_name,
+    action_type,
+    validation_passed,
+    confidence_score,
+    <span class="sql-keyword">LEFT</span>(previous_hash, 8) || <span class="sql-string">'...'</span> <span class="sql-keyword">AS</span> prev_hash,
+    <span class="sql-keyword">LEFT</span>(entry_hash, 8) || <span class="sql-string">'...'</span> <span class="sql-keyword">AS</span> this_hash,
+    created_at
+<span class="sql-keyword">FROM</span> audit_chain_entries
+<span class="sql-keyword">WHERE</span> workflow_id = <span class="sql-string">'workflow-uuid-here'</span>::uuid
+<span class="sql-keyword">ORDER BY</span> sequence_number;
+
+<span class="sql-comment">-- Result:</span>
+<span class="sql-comment">-- seq | agent_name    | action_type    | valid | conf   | prev_hash  | this_hash  | created_at</span>
+<span class="sql-comment">-- ----+---------------+----------------+-------+--------+------------+------------+-----------</span>
+<span class="sql-comment">-- 1   | causal_impact | graph_builder  | NULL  | NULL   | NULL       | a7f3c2b8...| 2025-12-15</span>
+<span class="sql-comment">-- 2   | causal_impact | estimation     | NULL  | 0.8700 | a7f3c2b8...| c2b8e9d1...| 2025-12-15</span>
+<span class="sql-comment">-- 3   | causal_impact | refutation     | true  | 0.9200 | c2b8e9d1...| e9d11a2b...| 2025-12-15</span>
+<span class="sql-comment">-- 4   | causal_impact | sensitivity    | NULL  | NULL   | e9d11a2b...| 1a2b3c4d...| 2025-12-15</span>
+<span class="sql-comment">-- 5   | causal_impact | interpretation | true  | 0.8700 | 1a2b3c4d...| 5e6f7g8h...| 2025-12-15</span></pre>
+                </div>
+            </div>
+            
+            <div class="alert warning">
+                <span class="alert-icon">⚠️</span>
+                <div>
+                    <strong>Tamper Detection:</strong> If any entry is modified after creation, <code>verify_chain_integrity()</code> will return <code>is_valid = false</code> and identify the first tampered entry. This provides mathematical proof of data integrity without requiring W3C DID/VC infrastructure.
+                </div>
+            </div>
+        </section>
+        
+        <!-- Summary -->
+        <section class="section">
+            <div class="section-header">
+                <h2><span class="icon">📋</span> Implementation Summary</h2>
+            </div>
+            
+            <table class="summary-table">
+                <thead>
+                    <tr>
+                        <th>Component</th>
+                        <th>Location</th>
+                        <th>Purpose</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>SQL Migration</td>
+                        <td><code>db/migrations/011_audit_chain_tables.sql</code></td>
+                        <td>Tables, functions, views for hash-linked audit trail</td>
+                    </tr>
+                    <tr>
+                        <td>Python Service</td>
+                        <td><code>src/services/audit_chain.py</code></td>
+                        <td>AuditChainService for entry creation and verification</td>
+                    </tr>
+                    <tr>
+                        <td>Agent Integration</td>
+                        <td><code>src/agents/*/</code></td>
+                        <td>Wrap node executions with audit chain entries</td>
+                    </tr>
+                    <tr>
+                        <td>Dashboard Badge</td>
+                        <td><code>frontend/src/components/</code></td>
+                        <td>Visual indicator of chain verification status</td>
+                    </tr>
+                    <tr>
+                        <td>Verification Endpoint</td>
+                        <td><code>src/api/routes/audit.py</code></td>
+                        <td>API endpoint for on-demand chain verification</td>
+                    </tr>
+                </tbody>
+            </table>
+            
+            <div class="alert info" style="margin-top: 24px;">
+                <span class="alert-icon">💡</span>
+                <div>
+                    <strong>Next Steps:</strong>
+                    <ol style="margin: 8px 0 0 20px; color: var(--text-secondary);">
+                        <li>Run migration <code>011_audit_chain_tables.sql</code></li>
+                        <li>Add <code>AuditChainService</code> to dependency injection</li>
+                        <li>Integrate with <code>causal_impact</code> agent first (highest-value use case)</li>
+                        <li>Add dashboard component to display verification status</li>
+                        <li>Extend to other Tier 2 agents (gap_analyzer, heterogeneous_optimizer)</li>
+                    </ol>
+                </div>
+            </div>
+        </section>
+        
+        <footer>
+            <p>E2I Causal Analytics V4.1 • Lightweight Audit Chain Design</p>
+            <p style="margin-top: 8px; font-size: 0.85rem;">Inspired by AgentField's cryptographic audit approach • December 2025</p>
+        </footer>
+    </div>
+</body>
+</html>

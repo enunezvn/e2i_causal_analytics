@@ -1,0 +1,42 @@
+# =============================================================================
+# E2I Causal Analytics - Feast Feature Store Dockerfile
+# =============================================================================
+# Feast provides online and offline feature serving for ML pipelines
+#
+# Online Store: Redis (fast retrieval for inference)
+# Offline Store: File-based (for training data)
+# =============================================================================
+
+FROM feastdev/feature-server:latest
+
+# Set working directory
+WORKDIR /feast
+
+# Install additional dependencies if needed
+RUN pip install --no-cache-dir \
+    redis \
+    pyarrow \
+    pandas
+
+# Create directories for feature store data
+RUN mkdir -p /feast/data \
+             /feast/registry \
+             /feast/feature_repo
+
+# Copy feature store configuration (if you have one)
+# COPY feast/feature_store.yaml /feast/feature_repo/
+
+# Set environment variables
+ENV FEAST_USAGE=false \
+    FEAST_TELEMETRY=false
+
+# Expose Feast server port
+EXPOSE 6566
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:6566/health || exit 1
+
+# Start Feast feature server
+# Note: You'll need to apply feature definitions first with 'feast apply'
+CMD ["feast", "serve", "--host", "0.0.0.0", "--port", "6566"]

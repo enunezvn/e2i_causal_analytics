@@ -1,0 +1,322 @@
+# =============================================================================
+# E2I Causal Analytics - Development Overrides
+# =============================================================================
+# This file extends docker-compose.yml with development-specific settings:
+#   - Bind mounts for hot-reloading
+#   - Debug logging
+#   - Development commands
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+#
+# Or with the Makefile:
+#   make dev
+# =============================================================================
+
+services:
+  # ===========================================================================
+  # API - Development Overrides
+  # ===========================================================================
+  api:
+    build:
+      target: development  # Use development stage of Dockerfile
+    container_name: e2i_api_dev
+    ports:
+      - "8000:8000"
+      - "5678:5678"  # debugpy port for VS Code debugging
+    volumes:
+      # -----------------------------------------------------------------------
+      # BIND MOUNTS - Hot-reloading for development
+      # -----------------------------------------------------------------------
+      - ../src:/app/src                    # Python source code
+      - ../config:/app/config              # YAML configurations
+      - ../tests:/app/tests                # Test files
+      
+      # Prevent bind mount from overwriting container's installed packages
+      - /app/src/__pycache__
+      - /app/.venv
+      
+      # -----------------------------------------------------------------------
+      # SHARED VOLUMES - Still needed for data exchange
+      # -----------------------------------------------------------------------
+      - ml_artifacts:/app/data/ml_artifacts
+      - causal_outputs:/app/data/causal_outputs
+      - agent_outputs:/app/data/agent_outputs
+      - experiment_designs:/app/data/experiment_designs
+      - feature_cache:/app/data/feature_cache:ro
+    environment:
+      - ENVIRONMENT=development
+      - LOG_LEVEL=DEBUG
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
+      
+      # Enable debugpy for VS Code remote debugging
+      - DEBUGPY_ENABLE=true
+      - DEBUGPY_PORT=5678
+    command: >
+      uvicorn src.api.main:app
+      --reload
+      --reload-dir /app/src
+      --host 0.0.0.0
+      --port 8000
+      --log-level debug
+    # Remove healthcheck timeout pressure in dev
+    healthcheck:
+      interval: 60s
+      timeout: 30s
+      start_period: 120s
+
+  # ===========================================================================
+  # Workers - Development Overrides
+  # ===========================================================================
+
+  worker_light:
+    build:
+      target: development
+    container_name: e2i_worker_light_dev
+    volumes:
+      - ../src:/app/src
+      - ../config:/app/config
+      - ../tests:/app/tests
+      - /app/src/__pycache__
+      - /app/.venv
+      - ml_artifacts:/app/data/ml_artifacts
+      - causal_outputs:/app/data/causal_outputs
+      - agent_outputs:/app/data/agent_outputs
+      - experiment_designs:/app/data/experiment_designs
+      - feature_cache:/app/data/feature_cache:ro
+    tmpfs:
+      - /app/tmp:size=512M,mode=1777
+    environment:
+      - ENVIRONMENT=development
+      - LOG_LEVEL=DEBUG
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
+      - WORKER_TYPE=light
+    command: >
+      celery -A src.workers.celery_app worker
+      --loglevel=DEBUG
+      --concurrency=2
+      --queues=default,quick,api
+      --pool=solo
+      --hostname=worker_light@%h
+    healthcheck:
+      test: ["CMD", "echo", "ok"]
+      interval: 120s
+
+  worker_medium:
+    build:
+      target: development
+    container_name: e2i_worker_medium_dev
+    volumes:
+      - ../src:/app/src
+      - ../config:/app/config
+      - ../tests:/app/tests
+      - /app/src/__pycache__
+      - /app/.venv
+      - ml_artifacts:/app/data/ml_artifacts
+      - causal_outputs:/app/data/causal_outputs
+      - agent_outputs:/app/data/agent_outputs
+      - experiment_designs:/app/data/experiment_designs
+      - feature_cache:/app/data/feature_cache:ro
+    tmpfs:
+      - /app/tmp:size=2G,mode=1777
+    environment:
+      - ENVIRONMENT=development
+      - LOG_LEVEL=DEBUG
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
+      - WORKER_TYPE=medium
+    command: >
+      celery -A src.workers.celery_app worker
+      --loglevel=DEBUG
+      --concurrency=1
+      --queues=analytics,reports,aggregations
+      --pool=solo
+      --hostname=worker_medium@%h
+    healthcheck:
+      test: ["CMD", "echo", "ok"]
+      interval: 120s
+
+  worker_heavy:
+    build:
+      target: development
+    container_name: e2i_worker_heavy_dev
+    volumes:
+      - ../src:/app/src
+      - ../config:/app/config
+      - ../tests:/app/tests
+      - /app/src/__pycache__
+      - /app/.venv
+      - ml_artifacts:/app/data/ml_artifacts
+      - causal_outputs:/app/data/causal_outputs
+      - agent_outputs:/app/data/agent_outputs
+      - experiment_designs:/app/data/experiment_designs
+      - feature_cache:/app/data/feature_cache:ro
+    tmpfs:
+      - /app/tmp:size=4G,mode=1777
+    environment:
+      - ENVIRONMENT=development
+      - LOG_LEVEL=DEBUG
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
+      - WORKER_TYPE=heavy
+      - OMP_NUM_THREADS=8
+      - OPENBLAS_NUM_THREADS=8
+    command: >
+      celery -A src.workers.celery_app worker
+      --loglevel=DEBUG
+      --concurrency=1
+      --queues=shap,causal,ml,twins
+      --pool=solo
+      --hostname=worker_heavy@%h
+    healthcheck:
+      test: ["CMD", "echo", "ok"]
+      interval: 120s
+    profiles:
+      - heavy  # Only start with --profile heavy
+
+  # ===========================================================================
+  # Scheduler - Development Overrides
+  # ===========================================================================
+  scheduler:
+    build:
+      target: development
+    container_name: e2i_scheduler_dev
+    volumes:
+      - ../src:/app/src
+      - ../config:/app/config
+      - /app/src/__pycache__
+    environment:
+      - ENVIRONMENT=development
+      - LOG_LEVEL=DEBUG
+
+  # ===========================================================================
+  # Frontend - Development Overrides (Vite Dev Server)
+  # ===========================================================================
+  frontend:
+    build:
+      target: development
+    container_name: e2i_frontend_dev
+    ports:
+      - "3001:5173"  # Vite dev server port
+    volumes:
+      # -----------------------------------------------------------------------
+      # BIND MOUNTS - React source for hot-reloading
+      # -----------------------------------------------------------------------
+      - ../frontend/src:/app/src
+      - ../frontend/public:/app/public
+      - ../frontend/index.html:/app/index.html
+      
+      # Keep node_modules in container (OS-specific binaries)
+      - /app/node_modules
+    environment:
+      - NODE_ENV=development
+      - VITE_API_URL=http://localhost:8000
+      - VITE_WS_URL=ws://localhost:8000
+    command: npm run dev -- --host 0.0.0.0 --port 5173
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5173"]
+      interval: 30s
+      start_period: 60s
+
+  # ===========================================================================
+  # MLOps Services - Development Overrides (Optional Debugging)
+  # ===========================================================================
+  
+  mlflow:
+    container_name: e2i_mlflow_dev
+    environment:
+      - MLFLOW_TRACKING_URI=sqlite:///mlflow/db/mlflow.db
+    # Expose artifact browser in dev
+    ports:
+      - "5000:5000"
+
+  opik:
+    container_name: e2i_opik_dev
+    environment:
+      - LOG_LEVEL=DEBUG
+
+  # ===========================================================================
+  # Infrastructure - No changes needed (Redis, FalkorDB)
+  # ===========================================================================
+  
+  redis:
+    container_name: e2i_redis_dev
+    # Optional: Enable Redis debugging
+    command: redis-server --appendonly yes --loglevel verbose
+
+  falkordb:
+    container_name: e2i_falkordb_dev
+
+# =============================================================================
+# DEVELOPMENT-ONLY SERVICES
+# =============================================================================
+
+  # ---------------------------------------------------------------------------
+  # Flower - Celery Monitoring Dashboard (Dev Only)
+  # ---------------------------------------------------------------------------
+  flower:
+    image: mher/flower:latest
+    container_name: e2i_flower_dev
+    ports:
+      - "5555:5555"
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - FLOWER_PORT=5555
+      - FLOWER_BASIC_AUTH=${FLOWER_USER:-admin}:${FLOWER_PASSWORD:-admin}
+    networks:
+      - e2i_network
+    depends_on:
+      redis:
+        condition: service_healthy
+    profiles:
+      - dev-tools
+
+  # ---------------------------------------------------------------------------
+  # Redis Commander - Redis GUI (Dev Only)
+  # ---------------------------------------------------------------------------
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: e2i_redis_commander_dev
+    ports:
+      - "8081:8081"
+    environment:
+      - REDIS_HOSTS=working:redis:6379:0,celery-broker:redis:6379:1,celery-results:redis:6379:2,semantic:falkordb:6379:0
+    networks:
+      - e2i_network
+    depends_on:
+      - redis
+      - falkordb
+    profiles:
+      - dev-tools
+
+  # ---------------------------------------------------------------------------
+  # Test Runner - Pytest in Container (Dev Only)
+  # ---------------------------------------------------------------------------
+  test:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: development
+    container_name: e2i_test_runner
+    volumes:
+      - ../src:/app/src
+      - ../tests:/app/tests
+      - ../config:/app/config
+      - /app/src/__pycache__
+    environment:
+      - ENVIRONMENT=test
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_KEY=${SUPABASE_KEY}
+      - REDIS_URL=redis://redis:6379/0
+      - FALKORDB_URL=redis://falkordb:6380/0
+      - PYTHONDONTWRITEBYTECODE=1
+    command: pytest tests/ -v --cov=src --cov-report=html
+    networks:
+      - e2i_network
+    depends_on:
+      - redis
+      - falkordb
+    profiles:
+      - testing

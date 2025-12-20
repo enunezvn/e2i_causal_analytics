@@ -1,0 +1,422 @@
+# E2I Filter → Query Flow Mapping Configuration
+# Version: 1.0
+# Purpose: Maps dashboard filter controls to NLP query pipeline and SQL generation
+
+---
+
+# Filter State Schema
+# Defines the structure of filter state maintained in frontend
+filter_state_schema:
+  brand:
+    type: string
+    nullable: true
+    default: null
+    values: ["all", "remibrutinib", "fabhalta", "kisqali"]
+    display_labels:
+      all: "All Brands"
+      remibrutinib: "Remibrutinib"
+      fabhalta: "Fabhalta"
+      kisqali: "Kisqali"
+
+  region:
+    type: string
+    nullable: true
+    default: null
+    values: ["all", "northeast", "south", "midwest", "west"]
+    display_labels:
+      all: "All Regions"
+      northeast: "Northeast"
+      south: "South"
+      midwest: "Midwest"
+      west: "West"
+
+  date_range:
+    type: object
+    properties:
+      start_date:
+        type: date
+        format: "YYYY-MM-DD"
+        default: "-90d"  # 90 days ago
+      end_date:
+        type: date
+        format: "YYYY-MM-DD"
+        default: "today"
+
+  specialty:
+    type: string
+    nullable: true
+    default: null
+    values: ["all", "allergy", "hematology", "oncology", "cardiology", "rheumatology", "immunology"]
+
+  hcp_segment:
+    type: string
+    nullable: true
+    default: null
+    values: ["all", "high_prescriber", "medium_prescriber", "low_prescriber", "non_prescriber"]
+
+---
+
+# Filter to Entity Mapping
+# Maps filter controls to ExtractedEntities for NLP pipeline
+filter_to_entity_mapping:
+  brand:
+    entity_type: brand
+    vocabulary_key: brands
+    extraction_confidence: 1.0  # User-selected = 100% confidence
+    sql_mappings:
+      - table: patient_journeys
+        column: brand
+        operator: "="
+      - table: treatment_events
+        column: brand
+        operator: "="
+      - table: ml_predictions
+        column: brand
+        operator: "="
+
+  region:
+    entity_type: region
+    vocabulary_key: regions
+    extraction_confidence: 1.0
+    sql_mappings:
+      - table: hcp_profiles
+        column: region
+        operator: "="
+      - table: agent_activities
+        column: region
+        operator: "="
+
+  date_range:
+    entity_type: temporal_range
+    vocabulary_key: null  # Not in vocabulary
+    extraction_confidence: 1.0
+    sql_mappings:
+      - table: treatment_events
+        column: event_date
+        operator: "BETWEEN"
+        params: ["start_date", "end_date"]
+      - table: agent_activities
+        column: execution_date
+        operator: "BETWEEN"
+        params: ["start_date", "end_date"]
+      - table: business_metrics
+        column: metric_date
+        operator: "BETWEEN"
+        params: ["start_date", "end_date"]
+
+  specialty:
+    entity_type: specialty
+    vocabulary_key: specialties
+    extraction_confidence: 1.0
+    sql_mappings:
+      - table: hcp_profiles
+        column: specialty
+        operator: "="
+
+  hcp_segment:
+    entity_type: hcp_segment
+    vocabulary_key: null
+    extraction_confidence: 1.0
+    sql_mappings:
+      - table: hcp_profiles
+        column: prescriber_tier
+        operator: "="
+        value_mapping:
+          high_prescriber: "tier_1"
+          medium_prescriber: "tier_2"
+          low_prescriber: "tier_3"
+          non_prescriber: "tier_4"
+
+---
+
+# Query Processing Modes
+query_modes:
+  with_nlp:
+    description: "User typed a natural language query with active filters"
+    pipeline: "inject_filters_into_extracted_entities"
+    process:
+      - step: 1
+        action: "Parse user query through NLP"
+        output: "ParsedQuery with ExtractedEntities"
+
+      - step: 2
+        action: "Inject filter state into ExtractedEntities"
+        logic: "merge_with_priority"
+        priority_rule: "filter_state_overrides_nlp_if_explicit"
+        example:
+          user_query: "Why did Kisqali adoption drop?"
+          nlp_extracted: {brand: "kisqali", intent: "causal_analysis"}
+          filter_state: {brand: "remibrutinib", region: "northeast"}
+          result: {brand: "remibrutinib", region: "northeast", intent: "causal_analysis"}
+          reasoning: "Explicit filter selection overrides NLP extraction"
+
+      - step: 3
+        action: "Route to orchestrator with merged entities"
+        output: "EnrichedQuery"
+
+  without_nlp:
+    description: "User changed filter without typing query (dashboard refresh)"
+    pipeline: "generate_sql_where_clause"
+    process:
+      - step: 1
+        action: "Read current filter state"
+        output: "FilterState object"
+
+      - step: 2
+        action: "Generate SQL WHERE clause from filters"
+        template: "WHERE {filter_conditions} AND {default_conditions}"
+        default_conditions:
+          - "ml_split = 'production'"
+          - "is_deleted = false"
+
+      - step: 3
+        action: "Execute direct database query"
+        output: "Filtered dataset"
+
+      - step: 4
+        action: "Refresh dashboard visualizations"
+        cache_behavior: "invalidate_affected_tabs"
+
+---
+
+# Filter Injection Rules
+filter_injection_rules:
+  merge_strategy:
+    type: "override"
+    description: "Filter state always overrides NLP-extracted entities"
+    rationale: "User's explicit filter selection is intentional and should take precedence"
+
+  null_handling:
+    null_filter_value: "ignore"
+    description: "Null/all filter values are ignored (not injected)"
+    example:
+      filter_state: {brand: "all", region: "northeast"}
+      injected_entities: {region: "northeast"}  # brand: "all" is ignored
+
+  conflict_resolution:
+    nlp_extracts_different_value:
+      action: "use_filter_value"
+      log_warning: true
+      warning_message: "Filter state ({filter_value}) overrides NLP extraction ({nlp_value})"
+
+  validation:
+    validate_against_vocabulary: true
+    invalid_value_handling: "reject_and_alert"
+    default_on_invalid: null
+
+---
+
+# SQL Generation Templates
+sql_generation:
+  where_clause_template: |
+    WHERE 1=1
+    {%- if brand and brand != 'all' %}
+      AND t.brand = '{{ brand }}'
+    {%- endif %}
+    {%- if region and region != 'all' %}
+      AND h.region = '{{ region }}'
+    {%- endif %}
+    {%- if date_range %}
+      AND t.event_date BETWEEN '{{ date_range.start_date }}' AND '{{ date_range.end_date }}'
+    {%- endif %}
+    {%- if specialty and specialty != 'all' %}
+      AND h.specialty = '{{ specialty }}'
+    {%- endif %}
+    {%- if hcp_segment and hcp_segment != 'all' %}
+      AND h.prescriber_tier = '{{ map_hcp_segment(hcp_segment) }}'
+    {%- endif %}
+      AND ml_split = 'production'
+      AND is_deleted = false
+
+  table_aliases:
+    patient_journeys: "p"
+    hcp_profiles: "h"
+    treatment_events: "t"
+    ml_predictions: "m"
+    agent_activities: "a"
+    business_metrics: "b"
+
+  join_requirements:
+    when_region_filter:
+      - "LEFT JOIN hcp_profiles h ON t.hcp_id = h.hcp_id"
+    when_specialty_filter:
+      - "LEFT JOIN hcp_profiles h ON t.hcp_id = h.hcp_id"
+    when_hcp_segment_filter:
+      - "LEFT JOIN hcp_profiles h ON t.hcp_id = h.hcp_id"
+
+---
+
+# Cache Invalidation Rules
+cache_invalidation:
+  on_filter_change:
+    invalidate_tabs:
+      - ai_agent_insights
+      - overview
+      - ws2_triggers
+      - ws3_impact
+      - causal_analysis
+
+    preserve_cache:
+      - kpi_dictionary  # Static content
+      - status_legend   # Static content
+      - methodology     # Static content
+
+    partial_invalidation:
+      ws1_data_quality:
+        condition: "region_filter_changed OR date_range_changed"
+      ws1_ml_model:
+        condition: "brand_filter_changed OR date_range_changed"
+
+  cache_key_format: "tab:{tab_id}:brand:{brand}:region:{region}:dates:{start}_{end}:version:{v}"
+
+---
+
+# Performance Optimization
+performance:
+  filter_debounce:
+    delay_ms: 300
+    description: "Wait 300ms after last filter change before triggering query"
+
+  progressive_loading:
+    enabled: true
+    priority_order:
+      - overview  # Load first
+      - ai_agent_insights
+      - causal_analysis
+      - ws3_impact
+      - ws2_triggers
+      - ws1_ml_model
+      - ws1_data_quality
+
+  query_timeout:
+    with_nlp: 30000  # 30 seconds
+    without_nlp: 10000  # 10 seconds
+
+  result_pagination:
+    default_page_size: 50
+    max_page_size: 200
+
+---
+
+# Error Handling
+error_handling:
+  invalid_filter_value:
+    action: "reset_to_default"
+    alert_user: true
+    log_error: true
+
+  query_timeout:
+    action: "return_cached_results_if_available"
+    alert_user: true
+    message: "Query timed out. Showing cached results."
+
+  database_error:
+    action: "show_error_message"
+    retry_attempts: 2
+    retry_delay_ms: 1000
+
+---
+
+# Logging & Monitoring
+logging:
+  log_filter_changes:
+    enabled: true
+    level: "info"
+    format: "User {user_id} changed filter {filter_name} from {old_value} to {new_value}"
+
+  log_query_performance:
+    enabled: true
+    level: "debug"
+    metrics:
+      - filter_to_sql_time_ms
+      - query_execution_time_ms
+      - cache_hit_rate
+      - result_size_bytes
+
+  analytics_events:
+    - event: "filter_changed"
+      properties: [filter_name, old_value, new_value, user_id, session_id]
+    - event: "dashboard_refreshed"
+      properties: [trigger_type, affected_tabs, cache_hits, cache_misses]
+
+---
+
+# Frontend Integration Guide
+frontend_integration:
+  state_management:
+    library: "Redux"
+    slice: "filterSlice"
+    actions:
+      - setFilter(filterName, value)
+      - resetFilters()
+      - loadFiltersFromURL()
+      - syncFiltersToURL()
+
+  api_endpoints:
+    query_with_filters:
+      method: "POST"
+      path: "/api/v1/query"
+      body:
+        {
+          "query": "string | null",
+          "filters": "FilterState",
+          "mode": "with_nlp | without_nlp"
+        }
+      response:
+        {
+          "results": "array",
+          "metadata": {
+            "filter_state": "FilterState",
+            "extracted_entities": "ExtractedEntities",
+            "cache_hit": "boolean",
+            "execution_time_ms": "number"
+          }
+        }
+
+  url_persistence:
+    enabled: true
+    format: "?brand=kisqali&region=northeast&start=2024-01-01&end=2024-03-31"
+    sync_on_change: true
+
+---
+
+# Testing Scenarios
+test_scenarios:
+  - scenario: "User selects brand filter only"
+    input:
+      filter_state: {brand: "kisqali", region: null, date_range: null}
+      user_query: null
+    expected_sql: "WHERE t.brand = 'kisqali' AND ml_split = 'production' AND is_deleted = false"
+
+  - scenario: "User types query with active filter"
+    input:
+      filter_state: {brand: "remibrutinib", region: "northeast"}
+      user_query: "Why did trigger acceptance drop?"
+    expected_entities:
+      brand: "remibrutinib"
+      region: "northeast"
+      intent: "causal_analysis"
+      metric: "trigger_acceptance"
+
+  - scenario: "User changes filter while viewing results"
+    input:
+      previous_filter: {brand: "kisqali"}
+      new_filter: {brand: "fabhalta"}
+      current_tab: "causal_analysis"
+    expected_behavior:
+      - invalidate_cache: ["causal_analysis", "ai_agent_insights", "ws3_impact"]
+      - requery_database: true
+      - update_visualizations: true
+
+---
+
+# Version History
+version_history:
+  - version: "1.0"
+    date: "2025-12-15"
+    changes:
+      - "Initial filter mapping configuration"
+      - "Support for brand, region, date_range, specialty, hcp_segment filters"
+      - "NLP injection and SQL generation modes"
+      - "Cache invalidation rules"
+      - "Performance optimization settings"

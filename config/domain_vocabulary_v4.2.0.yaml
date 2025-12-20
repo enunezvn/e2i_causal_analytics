@@ -1,0 +1,836 @@
+# =============================================================================
+# E2I Causal Analytics - Domain Vocabulary
+# =============================================================================
+# Version: 4.2.0
+# Date: 2024-12-17
+# Description: Fixed entity vocabularies for NLP processing, agent routing,
+#              and system-wide standardization. NO medical NER required.
+#
+# Changelog:
+#   v4.2.0 - Added Tool Composer & Orchestrator Classifier vocabularies
+#   v4.1.0 - Added causal validation ENUMs (v3.1.0 internal)
+#   v4.0.0 - Added ML Foundation and MLOps vocabularies
+#   v3.0.0 - Added KPI gap analysis vocabularies
+#   v2.0.0 - Initial causal analytics vocabularies
+#
+# Usage:
+#   - NLP entity extraction uses these fixed vocabularies
+#   - Agent routing maps intents to agent capabilities
+#   - Database ENUMs mirror these definitions
+#   - Frontend dropdowns/filters use these values
+# =============================================================================
+
+
+# =============================================================================
+# SECTION 1: CORE BUSINESS ENTITIES
+# =============================================================================
+
+brands:
+  description: "Pharmaceutical brands tracked by E2I"
+  values:
+    - Remibrutinib   # BTK inhibitor
+    - Fabhalta       # Factor B inhibitor  
+    - Kisqali        # CDK4/6 inhibitor
+
+regions:
+  description: "US geographic regions for territory analysis"
+  values:
+    - northeast
+    - south
+    - midwest
+    - west
+
+territories:
+  description: "Sales territory identifiers (pattern)"
+  pattern: "^[A-Z]{2}-[0-9]{3}$"  # e.g., NY-001, CA-042
+  examples:
+    - NY-001
+    - CA-042
+    - TX-015
+
+hcp_specialties:
+  description: "Healthcare provider specialties"
+  values:
+    - oncologist
+    - rheumatologist
+    - dermatologist
+    - nephrologist
+    - hematologist
+    - primary_care
+    - other
+
+hcp_segments:
+  description: "HCP segmentation categories"
+  values:
+    - high_volume
+    - medium_volume
+    - low_volume
+    - academic
+    - community
+    - key_opinion_leader
+
+patient_journey_stages:
+  description: "Patient journey milestones"
+  values:
+    - diagnosis
+    - treatment_naive
+    - first_line
+    - second_line
+    - maintenance
+    - discontinuation
+    - switch
+
+
+# =============================================================================
+# SECTION 2: AGENT ARCHITECTURE (18 Agents, 6 Tiers)
+# =============================================================================
+
+agent_tiers:
+  description: "Agent tier hierarchy"
+  values:
+    - tier_0_ml_foundation    # 7 agents - ML lifecycle
+    - tier_1_coordination     # 1 agent  - Orchestrator
+    - tier_2_causal           # 4 agents - Causal analytics
+    - tier_3_monitoring       # 2 agents - Drift & data quality
+    - tier_4_prediction       # 2 agents - ML predictions
+    - tier_5_self_improvement # 2 agents - Learning & feedback
+
+agents:
+  description: "All 18 agents with tier assignments"
+  
+  # Tier 0: ML Foundation (7 agents)
+  tier_0_ml_foundation:
+    - scope_definer
+    - data_preparer
+    - model_selector
+    - model_trainer
+    - model_evaluator
+    - model_deployer
+    - model_monitor
+  
+  # Tier 1: Coordination (1 agent)
+  tier_1_coordination:
+    - orchestrator
+  
+  # Tier 2: Causal Analytics (4 agents)
+  tier_2_causal:
+    - causal_impact
+    - heterogeneous_optimizer
+    - gap_analyzer
+    - experiment_designer
+  
+  # Tier 3: Monitoring (2 agents)
+  tier_3_monitoring:
+    - drift_monitor
+    - data_quality_monitor
+  
+  # Tier 4: Prediction (2 agents)
+  tier_4_prediction:
+    - prediction_synthesizer
+    - risk_assessor
+  
+  # Tier 5: Self-Improvement (2 agents)
+  tier_5_self_improvement:
+    - explainer
+    - feedback_learner
+
+agent_types:
+  description: "Agent behavioral categories"
+  values:
+    - standard    # Tool-heavy, SLA-bound (Orchestrator, Gap Analyzer)
+    - hybrid      # Computation + LLM interpretation (Causal Impact, Experiment Designer)
+    - deep        # Extended reasoning (Explainer, Feedback Learner)
+
+
+# =============================================================================
+# SECTION 3: TOOL COMPOSER & ORCHESTRATOR CLASSIFIER (V4.2 NEW)
+# =============================================================================
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Routing Patterns
+# ─────────────────────────────────────────────────────────────────────────────
+
+routing_patterns:
+  description: "Query routing patterns determined by Orchestrator classifier"
+  values:
+    - single_agent           # Route to single primary agent
+    - parallel_delegation    # Route to multiple independent agents
+    - tool_composer          # Use Tool Composer for dependent multi-domain
+    - clarification_needed   # Query too ambiguous, request clarification
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Query Domains
+# ─────────────────────────────────────────────────────────────────────────────
+
+query_domains:
+  description: "Agent capability domains for query classification"
+  values:
+    - causal_analysis     # Cause-effect relationships (Causal Impact)
+    - heterogeneity       # Segment variation (Heterogeneous Optimizer)
+    - gap_analysis        # Performance gaps (Gap Analyzer)
+    - experimentation     # Test design (Experiment Designer)
+    - prediction          # Future outcomes (Prediction Synthesizer)
+    - monitoring          # Data quality/drift (Drift Monitor)
+    - explanation         # Clarification requests (Explainer)
+
+domain_to_agent_mapping:
+  description: "Maps query domains to primary agents"
+  mapping:
+    causal_analysis: causal_impact
+    heterogeneity: heterogeneous_optimizer
+    gap_analysis: gap_analyzer
+    experimentation: experiment_designer
+    prediction: prediction_synthesizer
+    monitoring: drift_monitor
+    explanation: explainer
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Dependency Types
+# ─────────────────────────────────────────────────────────────────────────────
+
+dependency_types:
+  description: "Types of data dependencies between decomposed sub-questions"
+  values:
+    - reference_chain        # Pronoun/phrase references earlier result ("that", "those")
+    - conditional            # Conditional logic ("if X then Y")
+    - logical_sequence       # Natural ordering required (cause → effect → intervention)
+    - entity_transformation  # Entity filtered/transformed by earlier step
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tool Categories
+# ─────────────────────────────────────────────────────────────────────────────
+
+tool_categories:
+  description: "Tool capability categories mapping to agent domains"
+  values:
+    - causal        # Causal Impact Agent tools
+    - segmentation  # Heterogeneous Optimizer tools
+    - gap           # Gap Analyzer tools
+    - experiment    # Experiment Designer tools
+    - prediction    # Prediction Synthesizer tools
+    - monitoring    # Drift Monitor tools
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Composable Tools Registry
+# ─────────────────────────────────────────────────────────────────────────────
+
+composable_tools:
+  description: "Tools exposed by agents for Tool Composer"
+  
+  causal_impact:
+    - causal_effect_estimator
+    - refutation_runner
+    - sensitivity_analyzer
+  
+  heterogeneous_optimizer:
+    - cate_analyzer
+    - segment_ranker
+  
+  gap_analyzer:
+    - gap_calculator
+    - roi_estimator
+  
+  experiment_designer:
+    - power_calculator
+    - counterfactual_simulator
+  
+  prediction_synthesizer:
+    - risk_scorer
+    - propensity_estimator
+  
+  drift_monitor:
+    - psi_calculator
+    - distribution_comparator
+
+non_composable_agents:
+  description: "Agents that do not expose tools for composition"
+  values:
+    - orchestrator       # Router, not computation source
+    - explainer          # Pure LLM interpretation
+    - feedback_learner   # Writes to memory, no deterministic computation
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Composition Status
+# ─────────────────────────────────────────────────────────────────────────────
+
+composition_statuses:
+  description: "Status of a tool composition execution"
+  values:
+    - pending       # Composition queued
+    - decomposing   # Phase 1: Breaking down query
+    - planning      # Phase 2: Creating execution plan
+    - executing     # Phase 3: Running tools
+    - synthesizing  # Phase 4: Combining results
+    - completed     # Successfully finished
+    - failed        # Error during execution
+    - timeout       # Exceeded time limit
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Classification Features
+# ─────────────────────────────────────────────────────────────────────────────
+
+intent_keywords:
+  description: "Keywords used for query intent classification"
+  
+  causal:
+    - impact
+    - effect
+    - caused
+    - drove
+    - attributed
+    - due to
+    - resulted in
+    - led to
+    - influenced
+    - affected
+  
+  exploration:
+    - show
+    - list
+    - which
+    - what
+    - display
+    - find
+    - identify
+    - who
+    - where
+    - how many
+  
+  prediction:
+    - predict
+    - forecast
+    - will
+    - would
+    - expect
+    - likelihood
+    - probability
+    - risk
+    - chance
+    - future
+  
+  design:
+    - design
+    - create
+    - plan
+    - test
+    - experiment
+    - A/B
+    - trial
+    - validate
+    - hypothesis
+    - setup
+  
+  explanation:
+    - explain
+    - why
+    - how
+    - clarify
+    - simplify
+    - summarize
+    - elaborate
+    - describe
+    - understand
+    - mean
+  
+  monitoring:
+    - drift
+    - shift
+    - change
+    - anomaly
+    - data quality
+    - issue
+    - problem
+    - error
+    - missing
+    - outlier
+
+structural_markers:
+  description: "Structural patterns for query analysis"
+  
+  conditional:
+    - if
+    - would
+    - what if
+    - assuming
+    - suppose
+    - hypothetically
+    - in case
+    - should we
+    - could we
+  
+  comparison:
+    - vs
+    - versus
+    - compared to
+    - relative to
+    - against
+    - better than
+    - worse than
+    - difference between
+  
+  sequence:
+    - then
+    - after
+    - next
+    - followed by
+    - subsequently
+    - first
+    - second
+    - finally
+    - before
+  
+  connectors:
+    - and
+    - but
+    - also
+    - additionally
+    - moreover
+    - plus
+
+
+# =============================================================================
+# SECTION 4: CAUSAL VALIDATION (V4.1)
+# =============================================================================
+
+refutation_test_types:
+  description: "DoWhy refutation test types"
+  values:
+    - placebo_treatment     # Replace treatment with random
+    - random_common_cause   # Add random confounder
+    - data_subset           # Test on data subset
+    - bootstrap             # Bootstrap confidence
+    - sensitivity_e_value   # E-value sensitivity
+
+validation_statuses:
+  description: "Validation test outcome statuses"
+  values:
+    - passed
+    - failed
+    - warning
+    - skipped
+
+gate_decisions:
+  description: "Validation gate decisions for estimates"
+  values:
+    - proceed   # Estimate can be used
+    - review    # Requires expert review
+    - block     # Cannot use estimate
+
+expert_review_types:
+  description: "Types of expert reviews"
+  values:
+    - dag_approval
+    - methodology_review
+    - quarterly_audit
+    - ad_hoc_validation
+
+
+# =============================================================================
+# SECTION 5: ML FOUNDATION & MLOPS (V4.0)
+# =============================================================================
+
+model_stages:
+  description: "ML model lifecycle stages"
+  values:
+    - development
+    - staging
+    - shadow
+    - production
+    - deprecated
+    - archived
+
+mlops_tools:
+  description: "MLOps toolchain components"
+  values:
+    - mlflow              # Experiment tracking
+    - opik                # LLM observability
+    - great_expectations  # Data quality
+    - feature_store       # V4.2: Lightweight feature store (Supabase + Redis + MLflow)
+    - optuna              # Hyperparameter optimization
+    - shap                # Explainability
+    - bentoml             # Model serving
+
+split_types:
+  description: "ML data split types"
+  values:
+    - temporal            # Time-based splits
+    - patient_stratified  # Patient-level stratification
+    - geographic          # Region-based splits
+
+split_purposes:
+  description: "ML split usage purposes"
+  values:
+    - training
+    - validation
+    - testing
+    - holdout
+    - shadow
+
+# -----------------------------------------------------------------------------
+# Feature Store (V4.2)
+# -----------------------------------------------------------------------------
+
+feature_value_types:
+  description: "Feature value data types in feature store"
+  values:
+    - int64           # Integer values
+    - float64         # Float values
+    - string          # String values
+    - bool            # Boolean values
+    - timestamp       # Timestamp values
+    - array_int64     # Array of integers
+    - array_float64   # Array of floats
+    - array_string    # Array of strings
+
+feature_freshness_status:
+  description: "Feature freshness tracking statuses"
+  values:
+    - fresh    # Within SLA, safe to use
+    - stale    # Outside SLA but usable
+    - expired  # Too old, should not be used
+
+feature_store_providers:
+  description: "Feature store infrastructure providers"
+  values:
+    - supabase  # Offline storage (PostgreSQL)
+    - redis     # Online serving (cache)
+    - mlflow    # Feature tracking & versioning
+
+feature_groups:
+  description: "E2I feature group categories"
+  values:
+    - hcp_demographics      # HCP demographics (specialty, years_in_practice, etc.)
+    - hcp_targeting         # HCP targeting features (trx_30d, brand_affinity, etc.)
+    - brand_performance     # Brand metrics (nrx, market_share, growth_rate)
+    - causal_features       # Causal relationships (ATE, CATE by segment)
+    - patient_journey       # Patient journey features
+    - territory_performance # Territory-level features
+
+
+# =============================================================================
+# SECTION 6: MEMORY ARCHITECTURE
+# =============================================================================
+
+memory_types:
+  description: "Tri-memory architecture layers"
+  values:
+    - working     # Redis: Session state, active context
+    - episodic    # Supabase: Past queries, successful patterns
+    - procedural  # Supabase: Learned tool chains
+    - semantic    # FalkorDB: Entity graph, relationships
+
+memory_backends:
+  description: "Memory storage backends"
+  mapping:
+    working: redis
+    episodic: supabase_pgvector
+    procedural: supabase_pgvector
+    semantic: falkordb
+
+
+# =============================================================================
+# SECTION 7: VISUALIZATION & KPIs
+# =============================================================================
+
+chart_types:
+  description: "Supported visualization types"
+  values:
+    - line_chart
+    - bar_chart
+    - scatter_plot
+    - heatmap
+    - funnel_chart
+    - sankey_diagram
+    - dag_visualization
+    - forest_plot
+    - waterfall_chart
+
+kpi_categories:
+  description: "KPI classification categories"
+  values:
+    - patient_access
+    - hcp_engagement
+    - territory_performance
+    - causal_impact
+    - model_performance
+    - data_quality
+
+
+# =============================================================================
+# SECTION 8: TIME REFERENCES
+# =============================================================================
+
+time_periods:
+  description: "Standard time period references"
+  values:
+    - Q1
+    - Q2
+    - Q3
+    - Q4
+    - YTD
+    - MTD
+    - last_week
+    - last_month
+    - last_quarter
+    - last_year
+
+time_granularities:
+  description: "Time aggregation levels"
+  values:
+    - daily
+    - weekly
+    - monthly
+    - quarterly
+    - yearly
+
+
+# =============================================================================
+# SECTION 9: ENTITY PATTERNS (for NLP extraction)
+# =============================================================================
+
+entity_patterns:
+  description: "Regex patterns for entity extraction"
+  
+  hcp:
+    patterns:
+      - "\\bHCP[s]?\\b"
+      - "\\bphysician[s]?\\b"
+      - "\\bdoctor[s]?\\b"
+      - "\\boncologist[s]?\\b"
+      - "\\brheumatologist[s]?\\b"
+  
+  region:
+    patterns:
+      - "\\b(Northeast|Midwest|South|West|Southeast|Northwest)\\b"
+      - "\\bregion[s]?\\b"
+      - "\\bterritor(y|ies)\\b"
+  
+  drug:
+    patterns:
+      - "\\b(Kisqali|Fabhalta|Remibrutinib)\\b"
+      - "\\bbrand[s]?\\b"
+  
+  campaign:
+    patterns:
+      - "\\b(Q[1-4]\\s+)?campaign[s]?\\b"
+      - "\\bmessaging\\b"
+      - "\\bprogram[s]?\\b"
+      - "\\bintervention[s]?\\b"
+  
+  segment:
+    patterns:
+      - "\\bsegment[s]?\\b"
+      - "\\bcohort[s]?\\b"
+      - "\\bgroup[s]?\\b"
+  
+  time_period:
+    patterns:
+      - "\\bQ[1-4]\\b"
+      - "\\b20[0-9]{2}\\b"
+
+
+# =============================================================================
+# SECTION 10: ERROR HANDLING
+# =============================================================================
+
+error_categories:
+  description: "System error categories"
+  values:
+    - validation_error
+    - timeout_error
+    - rate_limit_error
+    - authentication_error
+    - data_not_found
+    - model_error
+    - tool_execution_error
+    - composition_error
+
+retry_strategies:
+  description: "Retry strategy configurations"
+  values:
+    - exponential_backoff
+    - linear_backoff
+    - immediate_retry
+    - no_retry
+
+fallback_chains:
+  description: "LLM fallback configurations"
+  default_chain:
+    - claude-sonnet-4-20250514
+    - claude-3-5-haiku-20241022
+    - template_response
+
+
+# =============================================================================
+# SECTION 11: DSPy INTEGRATION & MIPROV2 OPTIMIZATION
+# =============================================================================
+
+cognitive_phases:
+  description: "4-phase cognitive workflow phases from CognitiveRAG"
+  values:
+    - summarizer      # Phase 1: Context compression and evidence synthesis
+    - investigator    # Phase 2: Multi-hop retrieval across memory types
+    - agent           # Phase 3: Specialized agent execution
+    - reflector       # Phase 4: Learning and memory contribution
+
+dspy_optimization_phases:
+  description: "DSPy signature optimization targets for MIPROv2"
+  values:
+    - pattern_detection           # Feedback pattern identification
+    - recommendation_generation   # Improvement recommendation synthesis
+    - knowledge_update            # Knowledge base update decisions
+    - learning_summary            # Executive summary generation
+    - causal_impact               # Causal impact estimation
+    - gap_analysis                # KPI gap identification
+    - experiment_design           # Experiment parameter selection
+    - prediction_synthesis        # ML prediction aggregation
+
+training_signal_types:
+  description: "Types of training signals for DSPy optimization"
+  values:
+    - agent_training_signal    # Full agent execution context + outcomes
+    - learning_signal          # User feedback and corrections
+    - cognitive_context        # Enriched context from CognitiveRAG
+
+optimization_statuses:
+  description: "MIPROv2 optimization run statuses"
+  values:
+    - pending      # Queued for optimization
+    - running      # Optimization in progress
+    - completed    # Successfully optimized
+    - failed       # Optimization failed
+    - cancelled    # Manually cancelled
+
+quality_metrics:
+  description: "DSPy training signal quality dimensions"
+  feedback_learner:
+    - pattern_accuracy            # Validated accuracy of detected patterns
+    - recommendation_actionability # Percentage of recommendations implemented
+    - update_effectiveness        # Downstream metric improvement from updates
+  causal_impact:
+    - effect_accuracy             # Accuracy of effect estimation
+    - confidence_calibration      # Quality of confidence intervals
+    - counterfactual_validity     # Validity of counterfactual scenarios
+  experiment_designer:
+    - power_accuracy              # Accuracy of power calculations
+    - sample_size_efficiency      # Efficiency of sample size recommendations
+    - design_feasibility          # Practicality of experiment designs
+
+reward_weights:
+  description: "MIPROv2 reward computation weights by agent"
+  feedback_learner:
+    pattern_accuracy: 0.25
+    recommendation_actionability: 0.25
+    update_effectiveness: 0.25
+    efficiency: 0.15
+    coverage: 0.10
+  causal_impact:
+    effect_accuracy: 0.35
+    confidence_calibration: 0.25
+    counterfactual_validity: 0.20
+    latency_efficiency: 0.20
+
+dspy_signatures:
+  description: "DSPy signature definitions by agent"
+  feedback_learner:
+    - PatternDetectionSignature
+    - RecommendationGenerationSignature
+    - KnowledgeUpdateSignature
+    - LearningSummarySignature
+  causal_impact:
+    - CausalEffectSignature
+    - CounterfactualSignature
+    - ConfidenceIntervalSignature
+  experiment_designer:
+    - ExperimentDesignSignature
+    - PowerAnalysisSignature
+    - SampleSizeSignature
+
+cognitive_context_sources:
+  description: "Memory sources for cognitive context enrichment"
+  episodic:
+    description: "Long-term episodic experiences from Supabase pgvector"
+    ttl_days: 180
+    retrieval_method: "vector_similarity"
+  semantic:
+    description: "Knowledge graph from FalkorDB Graphity"
+    ttl_days: 365
+    retrieval_method: "graph_traversal"
+  procedural:
+    description: "Learned tool sequences and procedures"
+    ttl_days: 365
+    retrieval_method: "pattern_matching"
+  working:
+    description: "Current session context from Redis + LangGraph"
+    ttl_seconds: 3600
+    retrieval_method: "direct_access"
+
+memory_event_types:
+  description: "Event types for episodic memory storage"
+  values:
+    - user_query           # User natural language query
+    - agent_action         # Agent tool execution
+    - system_event         # System-level event
+    - feedback             # User feedback signal
+    - error                # Error occurrence
+    - causal_discovery     # Causal path discovery
+    - trigger_generated    # Trigger generation
+    - experiment_completed # Experiment completion
+    - optimization_run     # MIPROv2 optimization run
+    - prompt_update        # Prompt version update
+
+
+# =============================================================================
+# METADATA
+# =============================================================================
+
+_metadata:
+  version: "4.2.1"
+  last_updated: "2024-12-19"
+  maintainer: "E2I Platform Team"
+
+  version_history:
+    - version: "4.2.1"
+      date: "2024-12-19"
+      changes:
+        - "Added DSPy Integration section (SECTION 11)"
+        - "Added cognitive_phases for 4-phase cognitive workflow"
+        - "Added dspy_optimization_phases for MIPROv2 targets"
+        - "Added training_signal_types and optimization_statuses"
+        - "Added quality_metrics and reward_weights by agent"
+        - "Added dspy_signatures registry"
+        - "Added cognitive_context_sources for memory enrichment"
+        - "Added memory_event_types for episodic storage"
+
+    - version: "4.2.0"
+      date: "2024-12-17"
+      changes:
+        - "Added Tool Composer vocabularies (routing_patterns, dependency_types, tool_categories)"
+        - "Added composable_tools registry by agent"
+        - "Added composition_statuses for execution tracking"
+        - "Added intent_keywords for classification"
+        - "Added structural_markers for query analysis"
+        - "Added query_domains and domain_to_agent_mapping"
+    
+    - version: "4.1.0"
+      date: "2024-12-01"
+      changes:
+        - "Added refutation_test_types"
+        - "Added validation_statuses"
+        - "Added gate_decisions"
+        - "Added expert_review_types"
+    
+    - version: "4.0.0"
+      date: "2024-11-15"
+      changes:
+        - "Added ML Foundation agent tier"
+        - "Added MLOps tools vocabulary"
+        - "Added model_stages"
+        - "Added split_types and split_purposes"
+    
+    - version: "3.0.0"
+      date: "2024-10-01"
+      changes:
+        - "Initial 18-agent architecture"
+        - "Added memory_types"
+        - "Added KPI vocabularies"
