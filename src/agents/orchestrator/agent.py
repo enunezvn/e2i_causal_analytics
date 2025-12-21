@@ -82,6 +82,7 @@ class OrchestratorAgent:
             "fallback_used": False,
             "total_latency_ms": 0,
             "classification_latency_ms": 0,
+            "rag_latency_ms": 0,
             "routing_latency_ms": 0,
             "dispatch_latency_ms": 0,
             "synthesis_latency_ms": 0,
@@ -126,6 +127,8 @@ class OrchestratorAgent:
             # Agent execution details
             "agents_dispatched": agents_dispatched,
             "agent_results": state.get("agent_results", []),
+            # RAG context
+            "rag_context": state.get("rag_context"),
             # Metadata
             "citations": state.get("citations", []),
             "visualizations": state.get("visualizations", []),
@@ -136,6 +139,7 @@ class OrchestratorAgent:
             "timestamp": datetime.now(timezone.utc),
             # Additional metadata (not in contract but useful)
             "classification_latency_ms": state.get("classification_latency_ms", 0),
+            "rag_latency_ms": state.get("rag_latency_ms", 0),
             "routing_latency_ms": state.get("routing_latency_ms", 0),
             "dispatch_latency_ms": state.get("dispatch_latency_ms", 0),
             "synthesis_latency_ms": state.get("synthesis_latency_ms", 0),
