@@ -35,15 +35,7 @@ pytestmark = pytest.mark.skipif(
 # ============================================================================
 
 
-@pytest.fixture(scope="module")
-def event_loop():
-    """Create event loop for async tests."""
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    yield loop
-    loop.close()
-
-
-@pytest.fixture(scope="module")
+@pytest.fixture
 async def redis_client():
     """Create a real Redis client for testing."""
     url = os.environ.get("REDIS_URL", "redis://localhost:6379")
@@ -58,9 +50,12 @@ async def redis_client():
     yield client
 
     # Cleanup: delete all test keys
-    keys = await client.keys("e2i:test:*")
-    if keys:
-        await client.delete(*keys)
+    try:
+        keys = await client.keys("e2i:test:*")
+        if keys:
+            await client.delete(*keys)
+    except Exception:
+        pass  # Ignore cleanup errors
     await client.aclose()
 
 
@@ -80,9 +75,12 @@ async def working_memory(redis_client):
     yield wm
 
     # Cleanup sessions created during test
-    keys = await redis_client.keys("e2i:test:*")
-    if keys:
-        await redis_client.delete(*keys)
+    try:
+        keys = await redis_client.keys("e2i:test:*")
+        if keys:
+            await redis_client.delete(*keys)
+    except Exception:
+        pass  # Ignore cleanup errors
 
     reset_working_memory()
 
