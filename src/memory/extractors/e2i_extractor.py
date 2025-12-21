@@ -61,7 +61,7 @@ RELATIONSHIP_TRIGGERS = {
     E2IRelationshipType.TREATED_BY: [
         "treated by", "under care of", "patient of",
     ],
-    E2IRelationshipType.DISCOVERS: [
+    E2IRelationshipType.DISCOVERED: [
         "discovered", "found", "identified", "detected",
     ],
 }
