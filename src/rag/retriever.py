@@ -169,12 +169,12 @@ class GraphRetriever:
             except Exception as e:
                 logger.error(f"Graph traversal failed for {entity_id}: {e}")
 
-        # Deduplicate by source_id
+        # Deduplicate by id
         seen = set()
         unique_results = []
         for result in all_results:
-            if result.source_id not in seen:
-                seen.add(result.source_id)
+            if result.id not in seen:
+                seen.add(result.id)
                 unique_results.append(result)
 
         logger.debug(f"Graph retrieval returned {len(unique_results)} results")
@@ -306,7 +306,8 @@ class HybridRetriever:
 
         for results, weight in zip(result_lists, weights):
             for rank, result in enumerate(results, start=1):
-                key = f"{result.source}:{result.source_id}"
+                # Use only id for deduplication - same document from different sources should be boosted
+                key = result.id
                 rrf_score = weight / (k + rank)
                 scores[key] = scores.get(key, 0) + rrf_score
                 result_map[key] = result
@@ -321,11 +322,10 @@ class HybridRetriever:
                 result = result_map[key]
                 # Create new result with fused score
                 fused_result = RetrievalResult(
+                    id=result.id,
                     content=result.content,
                     source=result.source,
-                    source_id=result.source_id,
                     score=scores[key],
-                    retrieval_method=result.retrieval_method,
                     metadata={
                         **result.metadata,
                         "rrf_score": scores[key],

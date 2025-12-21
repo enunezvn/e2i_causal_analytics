@@ -18,6 +18,7 @@ from src.rag.retriever import (
     GRAPH_WEIGHT,
 )
 from src.rag.models.retrieval_models import RetrievalResult
+from src.rag.types import RetrievalSource
 
 
 # ============================================================================
@@ -40,20 +41,18 @@ def sample_dense_results():
     """Sample results from dense retrieval."""
     return [
         RetrievalResult(
+            id="mem_1",
             content="Dense result 1",
-            source="episodic_memories",
-            source_id="mem_1",
+            source=RetrievalSource.VECTOR,
             score=0.9,
-            retrieval_method="dense",
-            metadata={}
+            metadata={"retrieval_method": "dense", "source_name": "episodic_memories"}
         ),
         RetrievalResult(
+            id="mem_2",
             content="Dense result 2",
-            source="episodic_memories",
-            source_id="mem_2",
+            source=RetrievalSource.VECTOR,
             score=0.8,
-            retrieval_method="dense",
-            metadata={}
+            metadata={"retrieval_method": "dense", "source_name": "episodic_memories"}
         ),
     ]
 
@@ -63,12 +62,11 @@ def sample_sparse_results():
     """Sample results from sparse retrieval."""
     return [
         RetrievalResult(
+            id="path_1",
             content="Sparse result 1",
-            source="causal_paths",
-            source_id="path_1",
+            source=RetrievalSource.FULLTEXT,
             score=0.85,
-            retrieval_method="sparse",
-            metadata={}
+            metadata={"retrieval_method": "sparse", "source_name": "causal_paths"}
         ),
     ]
 
@@ -78,12 +76,11 @@ def sample_graph_results():
     """Sample results from graph retrieval."""
     return [
         RetrievalResult(
+            id="graph_1",
             content="Graph result 1",
-            source="semantic_graph",
-            source_id="graph_1",
+            source=RetrievalSource.GRAPH,
             score=0.75,
-            retrieval_method="graph",
-            metadata={}
+            metadata={"retrieval_method": "graph", "source_name": "semantic_graph"}
         ),
     ]
 
@@ -110,7 +107,7 @@ class TestDenseRetriever:
             results = await retriever.search("test query", k=10)
 
         assert len(results) == 2
-        assert results[0].retrieval_method == "dense"
+        assert results[0].metadata.get("retrieval_method") == "dense"
         mock_memory_connector.vector_search_by_text.assert_called_once()
 
     @pytest.mark.asyncio
@@ -162,7 +159,7 @@ class TestBM25Retriever:
             results = await retriever.search("causal path TRx", k=10)
 
         assert len(results) == 1
-        assert results[0].retrieval_method == "sparse"
+        assert results[0].metadata.get("retrieval_method") == "sparse"
 
     @pytest.mark.asyncio
     async def test_search_passes_parameters(self, mock_memory_connector):
@@ -215,7 +212,7 @@ class TestGraphRetriever:
             )
 
         assert len(results) == 1
-        assert results[0].retrieval_method == "graph"
+        assert results[0].metadata.get("retrieval_method") == "graph"
 
     def test_traverse_multiple_entities(self, mock_memory_connector, sample_graph_results):
         """traverse should handle multiple entities."""
@@ -232,15 +229,14 @@ class TestGraphRetriever:
         assert mock_memory_connector.graph_traverse.call_count == 3
 
     def test_traverse_deduplicates_results(self, mock_memory_connector):
-        """traverse should deduplicate results by source_id."""
+        """traverse should deduplicate results by id."""
         duplicate_results = [
             RetrievalResult(
+                id="same_id",
                 content="Same result",
-                source="graph",
-                source_id="same_id",
+                source=RetrievalSource.GRAPH,
                 score=0.8,
-                retrieval_method="graph",
-                metadata={}
+                metadata={"retrieval_method": "graph"}
             )
         ]
         mock_memory_connector.graph_traverse.return_value = duplicate_results
@@ -368,12 +364,12 @@ class TestReciprocalRankFusion:
         retriever = HybridRetriever()
 
         list1 = [
-            RetrievalResult(content="A", source="s", source_id="1", score=0.9, retrieval_method="dense", metadata={}),
-            RetrievalResult(content="B", source="s", source_id="2", score=0.8, retrieval_method="dense", metadata={}),
+            RetrievalResult(id="1", content="A", source=RetrievalSource.VECTOR, score=0.9, metadata={"retrieval_method": "dense"}),
+            RetrievalResult(id="2", content="B", source=RetrievalSource.VECTOR, score=0.8, metadata={"retrieval_method": "dense"}),
         ]
         list2 = [
-            RetrievalResult(content="B", source="s", source_id="2", score=0.95, retrieval_method="sparse", metadata={}),
-            RetrievalResult(content="C", source="s", source_id="3", score=0.85, retrieval_method="sparse", metadata={}),
+            RetrievalResult(id="2", content="B", source=RetrievalSource.FULLTEXT, score=0.95, metadata={"retrieval_method": "sparse"}),
+            RetrievalResult(id="3", content="C", source=RetrievalSource.FULLTEXT, score=0.85, metadata={"retrieval_method": "sparse"}),
         ]
 
         fused = retriever._reciprocal_rank_fusion(
@@ -382,7 +378,7 @@ class TestReciprocalRankFusion:
         )
 
         # B should be ranked higher (appears in both lists)
-        assert fused[0].source_id == "2"
+        assert fused[0].id == "2"
 
     def test_rrf_handles_empty_lists(self):
         """RRF should handle empty result lists."""
@@ -400,7 +396,7 @@ class TestReciprocalRankFusion:
         retriever = HybridRetriever()
 
         list1 = [
-            RetrievalResult(content="A", source="s", source_id="1", score=0.9, retrieval_method="dense", metadata={"original": "data"}),
+            RetrievalResult(id="1", content="A", source=RetrievalSource.VECTOR, score=0.9, metadata={"original": "data", "retrieval_method": "dense"}),
         ]
 
         fused = retriever._reciprocal_rank_fusion(

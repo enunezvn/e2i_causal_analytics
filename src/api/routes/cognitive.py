@@ -231,9 +231,9 @@ async def process_cognitive_query(
         evidence = [
             EvidenceItem(
                 content=r.content[:500],  # Truncate for response
-                source=r.source,
+                source=r.source.value if hasattr(r.source, 'value') else str(r.source),
                 relevance_score=r.score,
-                retrieval_method=r.retrieval_method
+                retrieval_method=r.metadata.get("retrieval_method", "unknown")
             )
             for r in memory_results[:5]  # Top 5 for response
         ] if request.include_evidence else None

@@ -15,6 +15,9 @@ import time
 from unittest.mock import Mock, MagicMock, AsyncMock, patch
 from typing import List, Dict, Any
 
+from src.rag.models.retrieval_models import RetrievalResult
+from src.rag.types import RetrievalSource
+
 
 # =============================================================================
 # HELPER FUNCTIONS
@@ -29,14 +32,28 @@ def create_retrieval_result(
     metadata: Dict[str, Any] = None
 ):
     """Create a RetrievalResult for testing."""
-    from src.rag.models.retrieval_models import RetrievalResult
+    # Map old source strings to RetrievalSource enum
+    source_map = {
+        "agent_activities": RetrievalSource.VECTOR,
+        "business_metrics": RetrievalSource.VECTOR,
+        "causal_paths": RetrievalSource.FULLTEXT,
+        "triggers": RetrievalSource.VECTOR,
+        "conversations": RetrievalSource.VECTOR,
+        "causal_graph": RetrievalSource.GRAPH,
+        "test": RetrievalSource.VECTOR,
+    }
+    source_enum = source_map.get(source, RetrievalSource.VECTOR)
+
+    result_metadata = metadata.copy() if metadata else {}
+    result_metadata["retrieval_method"] = retrieval_method
+    result_metadata["source_name"] = source
+
     return RetrievalResult(
+        id=source_id,
         content=content,
-        source=source,
-        source_id=source_id,
+        source=source_enum,
         score=score,
-        retrieval_method=retrieval_method,
-        metadata=metadata or {}
+        metadata=result_metadata
     )
 
 
@@ -275,9 +292,9 @@ class TestFullPipelineIntegration:
 
         reranked = reranker.rerank(mock_retrieval_results, query, top_k=3)
 
-        # All results should preserve source
+        # All results should preserve source_name in metadata
         for result in reranked:
-            assert result.source in ["business_metrics", "agent_activities", "causal_paths"]
+            assert result.metadata.get("source_name") in ["business_metrics", "agent_activities", "causal_paths"]
             assert hasattr(result, "metadata")
 
 
@@ -351,7 +368,7 @@ class TestMemoryRAGIntegration:
         reranked = reranker.rerank(memory_results, "TRx question", top_k=5)
 
         assert len(reranked) == 1
-        assert reranked[0].source == "conversations"
+        assert reranked[0].metadata.get("source_name") == "conversations"
 
     def test_semantic_memory_results_as_reranker_input(self):
         """Test that semantic memory results work with reranker."""
@@ -534,12 +551,13 @@ class TestComponentInteroperability:
             metadata={"brand": "Kisqali"}
         )
 
-        # Pydantic model should have model_dump()
-        result_dict = result.model_dump()
+        # Dataclass should have to_dict() method
+        result_dict = result.to_dict()
 
         assert result_dict["content"] == "Test content"
-        assert result_dict["source"] == "agent_activities"
+        assert result_dict["source"] == RetrievalSource.VECTOR.value
         assert result_dict["metadata"]["brand"] == "Kisqali"
+        assert result_dict["metadata"]["source_name"] == "agent_activities"
 
     def test_causal_rag_initialization_patterns(self):
         """Test various CausalRAG initialization patterns."""

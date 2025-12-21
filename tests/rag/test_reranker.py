@@ -15,6 +15,7 @@ import numpy as np
 
 from src.rag.reranker import CrossEncoderReranker, _MODEL_CACHE
 from src.rag.models.retrieval_models import RetrievalResult
+from src.rag.types import RetrievalSource
 
 
 @pytest.fixture
@@ -22,28 +23,25 @@ def sample_results():
     """Create sample retrieval results for testing."""
     return [
         RetrievalResult(
+            id="act_001",
             content="Kisqali shows strong TRx growth in Q4 2024",
-            source="agent_activities",
-            source_id="act_001",
+            source=RetrievalSource.VECTOR,
             score=0.8,
-            retrieval_method="dense",
-            metadata={"brand": "Kisqali"},
+            metadata={"brand": "Kisqali", "retrieval_method": "dense", "source_name": "agent_activities"},
         ),
         RetrievalResult(
+            id="met_002",
             content="Market share analysis for breast cancer treatments",
-            source="business_metrics",
-            source_id="met_002",
+            source=RetrievalSource.FULLTEXT,
             score=0.6,
-            retrieval_method="sparse",
-            metadata={"category": "oncology"},
+            metadata={"category": "oncology", "retrieval_method": "sparse", "source_name": "business_metrics"},
         ),
         RetrievalResult(
+            id="trg_003",
             content="HCP targeting recommendations for Fabhalta launch",
-            source="triggers",
-            source_id="trg_003",
+            source=RetrievalSource.GRAPH,
             score=0.7,
-            retrieval_method="graph",
-            metadata={"brand": "Fabhalta"},
+            metadata={"brand": "Fabhalta", "retrieval_method": "graph", "source_name": "triggers"},
         ),
     ]
 
@@ -101,9 +99,9 @@ class TestCrossEncoderReranker:
         assert len(reranked) == 3
         # Results should be sorted by score descending
         # Original order: [0.3, 0.9, 0.6] -> Sorted: [0.9, 0.6, 0.3]
-        assert reranked[0].source_id == "met_002"  # Score 0.9
-        assert reranked[1].source_id == "trg_003"  # Score 0.6
-        assert reranked[2].source_id == "act_001"  # Score 0.3
+        assert reranked[0].id == "met_002"  # Score 0.9
+        assert reranked[1].id == "trg_003"  # Score 0.6
+        assert reranked[2].id == "act_001"  # Score 0.3
 
     def test_rerank_top_k(self, sample_results, mock_cross_encoder):
         """Test that top_k limits output correctly."""
@@ -199,11 +197,11 @@ class TestCrossEncoderReranker:
             mock_cross_encoder.predict.return_value = np.array([0.5])
 
             result1 = RetrievalResult(
+                id="1",
                 content="test",
-                source="test",
-                source_id="1",
+                source=RetrievalSource.VECTOR,
                 score=0.5,
-                retrieval_method="dense",
+                metadata={"retrieval_method": "dense"},
             )
 
             reranker1 = CrossEncoderReranker()
@@ -235,18 +233,18 @@ class TestCrossEncoderReranker:
         mock_cross_encoder.predict.return_value = np.array([0.9])
 
         result = RetrievalResult(
+            id="1",
             content="Single result",
-            source="test",
-            source_id="1",
+            source=RetrievalSource.VECTOR,
             score=0.5,
-            retrieval_method="dense",
+            metadata={"retrieval_method": "dense"},
         )
 
         reranker = CrossEncoderReranker()
         reranked = reranker.rerank([result], "query", top_k=1)
 
         assert len(reranked) == 1
-        assert reranked[0].source_id == "1"
+        assert reranked[0].id == "1"
 
     def test_score_pair_method(self, mock_cross_encoder):
         """Test _score_pair convenience method."""
@@ -279,7 +277,7 @@ class TestRerankerPerformance:
         reranker = CrossEncoderReranker()
         reranked = reranker.rerank(sample_results, "query")
 
-        methods = [r.retrieval_method for r in reranked]
+        methods = [r.metadata.get("retrieval_method") for r in reranked]
         assert "dense" in methods
         assert "sparse" in methods
         assert "graph" in methods

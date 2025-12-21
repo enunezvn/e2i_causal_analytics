@@ -17,6 +17,7 @@ import time
 
 from src.rag.causal_rag import CausalRAG
 from src.rag.models.retrieval_models import RetrievalResult, RetrievalContext
+from src.rag.types import RetrievalSource
 
 
 # ============================================================================
@@ -46,20 +47,29 @@ class MockEntities:
 
 def create_retrieval_result(
     content: str = "Test content",
-    source: str = "test_table",
+    source: RetrievalSource = RetrievalSource.VECTOR,
     source_id: str = "test-123",
     score: float = 0.85,
     retrieval_method: str = "dense",
     metadata: Dict[str, Any] = None
 ) -> RetrievalResult:
     """Helper to create RetrievalResult instances."""
+    # Map retrieval_method to RetrievalSource if not already set
+    if source == RetrievalSource.VECTOR and retrieval_method != "dense":
+        source_map = {
+            "dense": RetrievalSource.VECTOR,
+            "sparse": RetrievalSource.FULLTEXT,
+            "bm25": RetrievalSource.FULLTEXT,
+            "graph": RetrievalSource.GRAPH,
+        }
+        source = source_map.get(retrieval_method, RetrievalSource.VECTOR)
+
     return RetrievalResult(
+        id=source_id,
         content=content,
         source=source,
-        source_id=source_id,
         score=score,
-        retrieval_method=retrieval_method,
-        metadata=metadata or {}
+        metadata={**(metadata or {}), "retrieval_method": retrieval_method}
     )
 
 
@@ -70,14 +80,14 @@ def mock_vector_retriever():
     retriever.search.return_value = [
         create_retrieval_result(
             content="Vector result 1",
-            source="embeddings",
+            source=RetrievalSource.VECTOR,
             source_id="vec-1",
             score=0.9,
             retrieval_method="dense"
         ),
         create_retrieval_result(
             content="Vector result 2",
-            source="embeddings",
+            source=RetrievalSource.VECTOR,
             source_id="vec-2",
             score=0.8,
             retrieval_method="dense"
@@ -93,7 +103,7 @@ def mock_graph_retriever():
     retriever.traverse.return_value = [
         create_retrieval_result(
             content="Causal path: Marketing -> HCP engagement -> Adoption",
-            source="causal_paths",
+            source=RetrievalSource.GRAPH,
             source_id="graph-1",
             score=0.85,
             retrieval_method="graph"
@@ -109,7 +119,7 @@ def mock_kpi_retriever():
     retriever.query.return_value = [
         create_retrieval_result(
             content="TRx increased 15% in Northeast region",
-            source="kpi_snapshots",
+            source=RetrievalSource.FULLTEXT,
             source_id="kpi-1",
             score=0.95,
             retrieval_method="structured"
