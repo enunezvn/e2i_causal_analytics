@@ -89,13 +89,13 @@ class MemoryConnector:
                 similarity = row.get("similarity", 0)
                 if similarity >= min_similarity:
                     result_metadata = row.get("metadata", {}).copy() if row.get("metadata") else {}
-                    result_metadata["retrieval_method"] = "dense"
                     result_metadata["source_name"] = row.get("source_table", "unknown")
                     results.append(RetrievalResult(
-                        id=row.get("id", ""),
+                        source_id=row.get("id", ""),
                         content=row.get("content", ""),
                         source=RetrievalSource.VECTOR,
                         score=float(similarity),
+                        retrieval_method="dense",
                         metadata=result_metadata
                     ))
 
@@ -190,13 +190,13 @@ class MemoryConnector:
                 normalized_score = rank / max_rank if max_rank > 0 else 0.0
 
                 result_metadata = row.get("metadata", {}).copy() if row.get("metadata") else {}
-                result_metadata["retrieval_method"] = "sparse"
                 result_metadata["source_name"] = row.get("source_table", "unknown")
                 results.append(RetrievalResult(
-                    id=row.get("id", ""),
+                    source_id=row.get("id", ""),
                     content=row.get("content", ""),
                     source=RetrievalSource.FULLTEXT,
                     score=normalized_score,
+                    retrieval_method="sparse",
                     metadata=result_metadata
                 ))
 
@@ -295,12 +295,12 @@ class MemoryConnector:
             content = " → ".join(str(node) for node in path_nodes)
 
             results.append(RetrievalResult(
-                id=chain.get("start_entity_id", f"chain_{i}"),
+                source_id=chain.get("start_entity_id", f"chain_{i}"),
                 content=content or f"Causal chain {i+1}",
                 source=RetrievalSource.GRAPH,
                 score=chain.get("confidence", 0.8),
+                retrieval_method="graph",
                 metadata={
-                    "retrieval_method": "graph",
                     "source_name": "semantic_graph",
                     "path_length": chain.get("path_length", len(path_nodes)),
                     "relationships": chain.get("relationships", []),
@@ -318,12 +318,12 @@ class MemoryConnector:
         center = network.get("center_node", {})
         if center:
             results.append(RetrievalResult(
-                id=center.get("id", ""),
+                source_id=center.get("id", ""),
                 content=f"{network_type.upper()} center: {center.get('id', 'unknown')}",
                 source=RetrievalSource.GRAPH,
                 score=1.0,  # Center node has highest relevance
+                retrieval_method="graph",
                 metadata={
-                    "retrieval_method": "graph",
                     "source_name": "semantic_graph",
                     "node_type": "center",
                     "properties": center.get("properties", {})
@@ -338,12 +338,12 @@ class MemoryConnector:
             score = max(0.5, 1.0 - (depth * 0.2))
 
             results.append(RetrievalResult(
-                id=conn.get("node_id", f"conn_{i}"),
+                source_id=conn.get("node_id", f"conn_{i}"),
                 content=f"Connected {conn.get('node_type', 'entity')}: {conn.get('node_id', '')}",
                 source=RetrievalSource.GRAPH,
                 score=score,
+                retrieval_method="graph",
                 metadata={
-                    "retrieval_method": "graph",
                     "source_name": "semantic_graph",
                     "node_type": conn.get("node_type"),
                     "relationship": conn.get("relationship"),
@@ -363,12 +363,12 @@ class MemoryConnector:
             content = " → ".join(str(n) for n in nodes)
 
             results.append(RetrievalResult(
-                id=path.get("path_id", f"path_{i}"),
+                source_id=path.get("path_id", f"path_{i}"),
                 content=content or f"Path {i+1}",
                 source=RetrievalSource.GRAPH,
                 score=path.get("confidence", 0.7),
+                retrieval_method="graph",
                 metadata={
-                    "retrieval_method": "graph",
                     "source_name": "semantic_graph",
                     "path_length": path.get("length", len(nodes)),
                     "relationships": path.get("relationships", []),

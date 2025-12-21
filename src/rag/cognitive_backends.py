@@ -76,7 +76,7 @@ class EpisodicMemoryBackend:
                 {
                     "content": r.content,
                     "source": r.source,
-                    "source_id": r.id,
+                    "source_id": r.source_id,
                     "score": r.score,
                     "metadata": r.metadata
                 }
@@ -173,7 +173,7 @@ class SemanticMemoryBackend:
                 {
                     "content": r.content,
                     "source": r.source,
-                    "source_id": r.id,
+                    "source_id": r.source_id,
                     "score": r.score,
                     "metadata": r.metadata
                 }
