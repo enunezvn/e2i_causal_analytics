@@ -69,7 +69,8 @@ mlartifacts/
 *.pkl
 *.joblib
 data/cache/
-models/
+/models/
+!src/api/models/
 
 # Logs
 *.log
@@ -94,3 +95,6 @@ Thumbs.db
 
 # Claude Code
 .claude/settings.local.json
+
+# Auto Claude data directory
+.auto-claude/
