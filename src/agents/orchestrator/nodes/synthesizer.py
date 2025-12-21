@@ -51,6 +51,7 @@ class SynthesizerNode:
         synthesis_time = int((time.time() - start_time) * 1000)
         total_latency = (
             state.get("classification_latency_ms", 0)
+            + state.get("rag_latency_ms", 0)
             + state.get("routing_latency_ms", 0)
             + state.get("dispatch_latency_ms", 0)
             + synthesis_time
