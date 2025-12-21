@@ -51,6 +51,7 @@ from src.api.models.graph import (
     AddEpisodeResponse,
     SearchGraphResponse,
     GraphStatsResponse,
+    NodeNetworkResponse,
     GraphStreamMessage,
     GraphSubscription,
 )
@@ -283,6 +284,92 @@ async def get_node(node_id: str) -> GraphNode:
     except Exception as e:
         logger.error(f"Failed to get node {node_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get node: {str(e)}")
+
+
+@router.get("/nodes/{node_id}/network", response_model=NodeNetworkResponse)
+async def get_node_network(
+    node_id: str,
+    max_depth: int = Query(2, ge=1, le=5, description="Maximum traversal depth")
+) -> NodeNetworkResponse:
+    """
+    Get the relationship network around a node.
+
+    Returns all connected nodes within max_depth hops, grouped by type.
+    Supports Patient and HCP nodes with specialized network discovery.
+    """
+    start_time = time.time()
+
+    try:
+        semantic = await _get_semantic_memory()
+        if not semantic:
+            raise HTTPException(status_code=503, detail="Graph service unavailable")
+
+        # Get the node to determine its type
+        node_data = semantic.get_node(node_id)
+        if not node_data:
+            raise HTTPException(status_code=404, detail=f"Node {node_id} not found")
+
+        node_type_str = node_data.get("type", node_data.get("entity_type", ""))
+
+        # Map to EntityType enum
+        try:
+            node_type = EntityType(node_type_str)
+        except ValueError:
+            node_type = EntityType.AGENT  # fallback
+
+        # Call appropriate network method based on node type
+        if node_type == EntityType.PATIENT:
+            network = semantic.get_patient_network(node_id, max_depth=max_depth)
+            connected_nodes = {
+                "hcps": network.get("hcps", []),
+                "treatments": network.get("treatments", []),
+                "triggers": network.get("triggers", []),
+                "causal_paths": network.get("causal_paths", []),
+                "brands": network.get("brands", [])
+            }
+        elif node_type == EntityType.HCP:
+            network = semantic.get_hcp_influence_network(node_id, max_depth=max_depth)
+            connected_nodes = {
+                "influenced_hcps": network.get("influenced_hcps", []),
+                "patients": network.get("patients", []),
+                "brands_prescribed": network.get("brands_prescribed", [])
+            }
+        else:
+            # Generic traversal for other node types
+            subgraph = semantic.traverse_from_node(
+                start_node_id=node_id,
+                max_depth=max_depth
+            )
+            # Group nodes by type from traversal results
+            connected_nodes = {}
+            for node in subgraph.get("nodes", []):
+                n_type = node.get("type", node.get("entity_type", "other"))
+                if n_type not in connected_nodes:
+                    connected_nodes[n_type] = []
+                connected_nodes[n_type].append({
+                    "id": node.get("id"),
+                    "properties": {k: v for k, v in node.items() if k not in ["id", "type", "entity_type"]}
+                })
+
+        # Calculate total connections
+        total_connections = sum(len(nodes) for nodes in connected_nodes.values())
+
+        latency_ms = (time.time() - start_time) * 1000
+
+        return NodeNetworkResponse(
+            node_id=node_id,
+            node_type=node_type,
+            connected_nodes=connected_nodes,
+            total_connections=total_connections,
+            max_depth=max_depth,
+            query_latency_ms=latency_ms
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get network for node {node_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get node network: {str(e)}")
 
 
 # =============================================================================
