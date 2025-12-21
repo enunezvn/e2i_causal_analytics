@@ -99,7 +99,7 @@ memory_backends:
       # Graphity integration for automatic graph building
       graphity:
         enabled: true
-        model: "claude-3-5-sonnet-20241022"
+        model: "claude-3-7-sonnet-latest"  # 64K max tokens for Graphiti operations
         extraction_prompt_template: "graphity_extraction"
         entity_types:
           - Patient
@@ -188,7 +188,7 @@ embeddings:
 llm:
   local_pilot:
     provider: "anthropic"
-    model: "claude-3-5-sonnet-20241022"
+    model: "claude-3-5-haiku-latest"
     max_tokens: 4096
     temperature: 0.3
     
