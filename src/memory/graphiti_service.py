@@ -783,6 +783,25 @@ def reset_graphiti_service() -> None:
     """Reset the Graphiti service singleton (for testing)."""
     global _graphiti_service
     if _graphiti_service is not None:
-        asyncio.create_task(_graphiti_service.close())
+        # Try to close properly, handling both sync and async contexts
+        try:
+            loop = asyncio.get_running_loop()
+            # We're in an async context - schedule close as a task
+            loop.create_task(_graphiti_service.close())
+        except RuntimeError:
+            # No running loop - run close synchronously
+            try:
+                asyncio.run(_graphiti_service.close())
+            except Exception as e:
+                logger.warning(f"Failed to close graphiti service: {e}")
+    _graphiti_service = None
+    logger.info("Graphiti service reset")
+
+
+async def reset_graphiti_service_async() -> None:
+    """Async version of reset for use in async contexts."""
+    global _graphiti_service
+    if _graphiti_service is not None:
+        await _graphiti_service.close()
     _graphiti_service = None
     logger.info("Graphiti service reset")

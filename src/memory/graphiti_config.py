@@ -85,7 +85,7 @@ class GraphitiConfig:
     Provides typed access to entity and relationship configurations.
     """
     enabled: bool = True
-    model: str = "claude-3-7-sonnet-latest"  # 64K max tokens for Graphiti operations
+    model: str = "claude-3-5-sonnet-latest"  # Sonnet for Graphiti operations
     graph_name: str = "e2i_semantic"
 
     # Entity configurations
@@ -102,7 +102,7 @@ class GraphitiConfig:
 
     # Connection settings
     falkordb_host: str = "localhost"
-    falkordb_port: int = 6379
+    falkordb_port: int = 6380  # External port in docker-compose
 
     # Cache settings
     cache_enabled: bool = True

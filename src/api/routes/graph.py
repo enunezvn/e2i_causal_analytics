@@ -539,7 +539,8 @@ async def query_causal_chains(request: CausalChainRequest) -> CausalChainRespons
         graphiti = await _get_graphiti_service()
         if graphiti:
             # Use Graphiti service for causal chain queries
-            result = await graphiti.get_causal_chains(
+            # Returns List[Dict] with nodes/edges per chain
+            chains_data = await graphiti.get_causal_chains(
                 kpi_name=request.kpi_name,
                 max_depth=request.max_chain_length,
                 min_confidence=request.min_confidence
@@ -547,14 +548,14 @@ async def query_causal_chains(request: CausalChainRequest) -> CausalChainRespons
 
             # Convert to GraphPath objects
             chains = []
-            for chain in result.chains:
+            for chain in chains_data:
                 nodes = [_convert_to_graph_node(n) for n in chain.get("nodes", [])]
-                rels = [_convert_to_graph_relationship(r) for r in chain.get("relationships", [])]
+                rels = [_convert_to_graph_relationship(r) for r in chain.get("edges", [])]
                 chains.append(GraphPath(
                     nodes=nodes,
                     relationships=rels,
                     total_confidence=chain.get("confidence"),
-                    path_length=len(rels)
+                    path_length=chain.get("length", len(rels))
                 ))
 
             strongest = None
@@ -567,7 +568,7 @@ async def query_causal_chains(request: CausalChainRequest) -> CausalChainRespons
                 chains=chains,
                 total_chains=len(chains),
                 strongest_chain=strongest,
-                aggregate_effect=result.aggregate_effect,
+                aggregate_effect=None,  # Not provided by graphiti service
                 query_latency_ms=latency_ms
             )
 
