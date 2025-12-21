@@ -166,7 +166,7 @@ class QueryDecomposer:
             return json.loads(response)
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse JSON: {response[:200]}...")
-            raise DecompositionError(f"Invalid JSON in LLM response: {e}")
+            raise DecompositionError(f"Invalid JSON in LLM response: {e}") from e
 
     def _build_sub_questions(self, parsed: Dict[str, Any]) -> List[SubQuestion]:
         """Build SubQuestion objects from parsed response"""

@@ -329,7 +329,7 @@ async def process_cognitive_query(
 
     except Exception as e:
         logger.error(f"Cognitive query processing failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Query processing failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Query processing failed: {str(e)}") from e
 
 
 @router.get("/session/{session_id}", response_model=SessionResponse)
@@ -398,7 +398,7 @@ async def get_session(session_id: str) -> SessionResponse:
         raise
     except Exception as e:
         logger.error(f"Failed to retrieve session: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to retrieve session: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve session: {str(e)}") from e
 
 
 @router.post("/session", response_model=CreateSessionResponse)
@@ -437,7 +437,7 @@ async def create_session(request: CreateSessionRequest) -> CreateSessionResponse
 
     except Exception as e:
         logger.error(f"Failed to create session: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to create session: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to create session: {str(e)}") from e
 
 
 @router.delete("/session/{session_id}")
@@ -457,7 +457,7 @@ async def delete_session(session_id: str) -> Dict[str, Any]:
 
     except Exception as e:
         logger.error(f"Failed to delete session: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to delete session: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete session: {str(e)}") from e
 
 
 # =============================================================================
@@ -678,10 +678,10 @@ async def cognitive_rag_search(request: CognitiveRAGRequest) -> CognitiveRAGResp
         logger.error(f"Cognitive RAG import error: {e}")
         raise HTTPException(
             status_code=503, detail=f"Cognitive RAG dependencies not available: {str(e)}"
-        )
+        ) from e
     except ValueError as e:
         logger.error(f"Cognitive RAG configuration error: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         logger.error(f"Cognitive RAG search failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Cognitive RAG search failed: {str(e)[:200]}")
+        raise HTTPException(status_code=500, detail=f"Cognitive RAG search failed: {str(e)[:200]}") from e

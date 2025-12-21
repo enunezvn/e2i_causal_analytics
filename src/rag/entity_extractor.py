@@ -311,7 +311,7 @@ class EntityExtractor:
             raise EntityExtractionError(
                 message="Failed to extract entities from query",
                 details={"query": query[:100], "error": str(e)},
-            )
+            ) from e
 
     def _extract_brands(self, query: str) -> List[str]:
         """Extract brand names from query."""

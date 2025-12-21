@@ -150,10 +150,10 @@ class E2IGraphitiService:
             raise ServiceConnectionError(
                 "Graphiti",
                 "graphiti-core package is not installed. Run: pip install graphiti-core[falkordb,anthropic]",
-            )
+            ) from e
         except Exception as e:
             logger.error(f"Failed to initialize Graphiti service: {e}")
-            raise ServiceConnectionError("Graphiti", f"Failed to initialize: {e}", e)
+            raise ServiceConnectionError("Graphiti", f"Failed to initialize: {e}", e) from e
 
     async def _init_graphiti(self) -> None:
         """Initialize the Graphiti client with FalkorDB backend."""

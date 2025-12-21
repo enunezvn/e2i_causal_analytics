@@ -82,10 +82,10 @@ class OpenAIEmbeddingService(EmbeddingService):
                         "OpenAI", "OPENAI_API_KEY environment variable is not set"
                     )
                 self._client = openai.OpenAI(api_key=api_key)
-            except ImportError:
+            except ImportError as e:
                 raise ServiceConnectionError(
                     "OpenAI", "openai package is not installed. Run: pip install openai"
-                )
+                ) from e
         return self._client
 
     async def embed(self, text: str) -> List[float]:
@@ -101,7 +101,7 @@ class OpenAIEmbeddingService(EmbeddingService):
             self._cache[cache_key] = embedding
             return embedding
         except Exception as e:
-            raise ServiceConnectionError("OpenAI", f"Failed to generate embedding: {e}", e)
+            raise ServiceConnectionError("OpenAI", f"Failed to generate embedding: {e}", e) from e
 
     async def embed_batch(self, texts: List[str]) -> List[List[float]]:
         """Generate embeddings for multiple texts."""
@@ -110,7 +110,7 @@ class OpenAIEmbeddingService(EmbeddingService):
             response = client.embeddings.create(model=self.model, input=texts)
             return [item.embedding for item in response.data]
         except Exception as e:
-            raise ServiceConnectionError("OpenAI", f"Failed to generate batch embeddings: {e}", e)
+            raise ServiceConnectionError("OpenAI", f"Failed to generate batch embeddings: {e}", e) from e
 
 
 class BedrockEmbeddingService(EmbeddingService):
@@ -127,12 +127,12 @@ class BedrockEmbeddingService(EmbeddingService):
                 import boto3
 
                 self._client = boto3.client("bedrock-runtime", region_name=self.region)
-            except ImportError:
+            except ImportError as e:
                 raise ServiceConnectionError(
                     "Bedrock", "boto3 package is not installed. Run: pip install boto3"
-                )
+                ) from e
             except Exception as e:
-                raise ServiceConnectionError("Bedrock", f"Failed to create Bedrock client: {e}", e)
+                raise ServiceConnectionError("Bedrock", f"Failed to create Bedrock client: {e}", e) from e
         return self._client
 
     async def embed(self, text: str) -> List[float]:
@@ -143,7 +143,7 @@ class BedrockEmbeddingService(EmbeddingService):
             result = json.loads(response["body"].read())
             return result["embedding"]
         except Exception as e:
-            raise ServiceConnectionError("Bedrock", f"Failed to generate embedding: {e}", e)
+            raise ServiceConnectionError("Bedrock", f"Failed to generate embedding: {e}", e) from e
 
     async def embed_batch(self, texts: List[str]) -> List[List[float]]:
         """Generate embeddings for multiple texts (sequential for Bedrock)."""
@@ -193,10 +193,10 @@ class AnthropicLLMService(LLMService):
                         "Anthropic", "ANTHROPIC_API_KEY environment variable is not set"
                     )
                 self._client = anthropic.Anthropic(api_key=api_key)
-            except ImportError:
+            except ImportError as e:
                 raise ServiceConnectionError(
                     "Anthropic", "anthropic package is not installed. Run: pip install anthropic"
-                )
+                ) from e
         return self._client
 
     async def complete(self, prompt: str, max_tokens: Optional[int] = None) -> str:
@@ -211,7 +211,7 @@ class AnthropicLLMService(LLMService):
             )
             return response.content[0].text
         except Exception as e:
-            raise ServiceConnectionError("Anthropic", f"Failed to generate completion: {e}", e)
+            raise ServiceConnectionError("Anthropic", f"Failed to generate completion: {e}", e) from e
 
 
 class BedrockLLMService(LLMService):
@@ -234,12 +234,12 @@ class BedrockLLMService(LLMService):
                 import boto3
 
                 self._client = boto3.client("bedrock-runtime", region_name=self.region)
-            except ImportError:
+            except ImportError as e:
                 raise ServiceConnectionError(
                     "Bedrock", "boto3 package is not installed. Run: pip install boto3"
-                )
+                ) from e
             except Exception as e:
-                raise ServiceConnectionError("Bedrock", f"Failed to create Bedrock client: {e}", e)
+                raise ServiceConnectionError("Bedrock", f"Failed to create Bedrock client: {e}", e) from e
         return self._client
 
     async def complete(self, prompt: str, max_tokens: Optional[int] = None) -> str:
@@ -259,7 +259,7 @@ class BedrockLLMService(LLMService):
             result = json.loads(response["body"].read())
             return result["content"][0]["text"]
         except Exception as e:
-            raise ServiceConnectionError("Bedrock", f"Failed to generate completion: {e}", e)
+            raise ServiceConnectionError("Bedrock", f"Failed to generate completion: {e}", e) from e
 
 
 # ============================================================================
@@ -289,10 +289,10 @@ def get_redis_client():
 
     try:
         import redis.asyncio as redis
-    except ImportError:
+    except ImportError as e:
         raise ServiceConnectionError(
             "Redis", "redis package is not installed. Run: pip install redis"
-        )
+        ) from e
 
     url = os.environ.get("REDIS_URL", "redis://localhost:6382")
     logger.info(f"Creating Redis client for: {url.split('@')[-1]}")  # Hide auth in logs
@@ -301,7 +301,7 @@ def get_redis_client():
         _redis_client = redis.from_url(url, decode_responses=True)
         return _redis_client
     except Exception as e:
-        raise ServiceConnectionError("Redis", f"Failed to create client: {e}", e)
+        raise ServiceConnectionError("Redis", f"Failed to create client: {e}", e) from e
 
 
 _supabase_client = None
@@ -326,10 +326,10 @@ def get_supabase_client():
 
     try:
         from supabase import create_client
-    except ImportError:
+    except ImportError as e:
         raise ServiceConnectionError(
             "Supabase", "supabase package is not installed. Run: pip install supabase"
-        )
+        ) from e
 
     url = os.environ.get("SUPABASE_URL")
     key = os.environ.get("SUPABASE_ANON_KEY")
@@ -347,7 +347,7 @@ def get_supabase_client():
         _supabase_client = create_client(url, key)
         return _supabase_client
     except Exception as e:
-        raise ServiceConnectionError("Supabase", f"Failed to create client: {e}", e)
+        raise ServiceConnectionError("Supabase", f"Failed to create client: {e}", e) from e
 
 
 _falkordb_client = None
@@ -372,10 +372,10 @@ def get_falkordb_client():
 
     try:
         from falkordb import FalkorDB
-    except ImportError:
+    except ImportError as e:
         raise ServiceConnectionError(
             "FalkorDB", "falkordb package is not installed. Run: pip install falkordb"
-        )
+        ) from e
 
     host = os.environ.get("FALKORDB_HOST", "localhost")
     port = int(os.environ.get("FALKORDB_PORT", "6381"))  # 6381 external (e2i), 6379 internal
@@ -386,7 +386,7 @@ def get_falkordb_client():
         _falkordb_client = FalkorDB(host=host, port=port)
         return _falkordb_client
     except Exception as e:
-        raise ServiceConnectionError("FalkorDB", f"Failed to create client: {e}", e)
+        raise ServiceConnectionError("FalkorDB", f"Failed to create client: {e}", e) from e
 
 
 # ============================================================================
@@ -475,9 +475,9 @@ async def get_graphiti_service():
 
         return await _get_graphiti_service()
     except ImportError as e:
-        raise ServiceConnectionError("Graphiti", f"Failed to import graphiti_service: {e}")
+        raise ServiceConnectionError("Graphiti", f"Failed to import graphiti_service: {e}") from e
     except Exception as e:
-        raise ServiceConnectionError("Graphiti", f"Failed to get Graphiti service: {e}", e)
+        raise ServiceConnectionError("Graphiti", f"Failed to get Graphiti service: {e}", e) from e
 
 
 # ============================================================================
