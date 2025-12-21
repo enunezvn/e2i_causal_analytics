@@ -220,7 +220,7 @@ class ToolPlanner:
             return json.loads(response)
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse planning JSON: {response[:200]}...")
-            raise PlanningError(f"Invalid JSON in LLM response: {e}")
+            raise PlanningError(f"Invalid JSON in LLM response: {e}") from e
 
     def _build_tool_mappings(self, parsed: Dict[str, Any]) -> List[ToolMapping]:
         """Build ToolMapping objects from parsed response"""

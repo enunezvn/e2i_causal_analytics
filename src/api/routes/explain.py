@@ -444,7 +444,7 @@ async def explain_prediction(
 
     except Exception as e:
         logger.error(f"Explanation failed for patient {request.patient_id}: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Explanation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Explanation failed: {str(e)}") from e
 
 
 @router.post(

@@ -283,7 +283,7 @@ async def list_nodes(
 
     except Exception as e:
         logger.error(f"Failed to list nodes: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to list nodes: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to list nodes: {str(e)}") from e
 
 
 @router.get("/nodes/{node_id}", response_model=GraphNode)
@@ -308,7 +308,7 @@ async def get_node(node_id: str) -> GraphNode:
         raise
     except Exception as e:
         logger.error(f"Failed to get node {node_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to get node: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get node: {str(e)}") from e
 
 
 @router.get("/nodes/{node_id}/network", response_model=NodeNetworkResponse)
@@ -394,7 +394,7 @@ async def get_node_network(
         raise
     except Exception as e:
         logger.error(f"Failed to get network for node {node_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to get node network: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get node network: {str(e)}") from e
 
 
 # =============================================================================
@@ -468,7 +468,7 @@ async def list_relationships(
 
     except Exception as e:
         logger.error(f"Failed to list relationships: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to list relationships: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to list relationships: {str(e)}") from e
 
 
 # =============================================================================
@@ -552,7 +552,7 @@ async def traverse_graph(request: TraverseRequest) -> TraverseResponse:
         raise
     except Exception as e:
         logger.error(f"Graph traversal failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Traversal failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Traversal failed: {str(e)}") from e
 
 
 # =============================================================================
@@ -655,7 +655,7 @@ async def query_causal_chains(request: CausalChainRequest) -> CausalChainRespons
         raise
     except Exception as e:
         logger.error(f"Causal chain query failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Causal chain query failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Causal chain query failed: {str(e)}") from e
 
 
 # =============================================================================
@@ -715,7 +715,7 @@ async def execute_cypher_query(request: CypherQueryRequest) -> CypherQueryRespon
         raise
     except Exception as e:
         logger.error(f"Cypher query failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Query execution failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Query execution failed: {str(e)}") from e
 
 
 # =============================================================================
@@ -801,7 +801,7 @@ async def add_episode(request: AddEpisodeRequest) -> AddEpisodeResponse:
         raise
     except Exception as e:
         logger.error(f"Failed to add episode: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to add episode: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to add episode: {str(e)}") from e
 
 
 # =============================================================================
@@ -878,7 +878,7 @@ async def search_graph(request: SearchGraphRequest) -> SearchGraphResponse:
         raise
     except Exception as e:
         logger.error(f"Graph search failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}") from e
 
 
 # =============================================================================
@@ -936,7 +936,7 @@ async def get_graph_stats() -> GraphStatsResponse:
 
     except Exception as e:
         logger.error(f"Failed to get graph stats: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to get stats: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get stats: {str(e)}") from e
 
 
 # =============================================================================

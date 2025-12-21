@@ -286,7 +286,7 @@ class OpenAIEmbeddingClient:
                     model=self._model,
                     batch_size=len(texts),
                     original_error=e,
-                )
+                ) from e
 
             except Exception as e:
                 last_error = e
@@ -297,7 +297,7 @@ class OpenAIEmbeddingClient:
                     model=self._model,
                     batch_size=len(texts),
                     original_error=e,
-                )
+                ) from e
 
         # All retries exhausted
         self._usage_stats.record_failure()
@@ -307,7 +307,7 @@ class OpenAIEmbeddingClient:
             batch_size=len(texts),
             details={"last_error": str(last_error)},
             original_error=last_error,
-        )
+        ) from last_error
 
     # =========================================================================
     # ASYNCHRONOUS INTERFACE
@@ -440,7 +440,7 @@ class OpenAIEmbeddingClient:
                     model=self._model,
                     batch_size=len(texts),
                     original_error=e,
-                )
+                ) from e
 
             except Exception as e:
                 last_error = e
@@ -451,7 +451,7 @@ class OpenAIEmbeddingClient:
                     model=self._model,
                     batch_size=len(texts),
                     original_error=e,
-                )
+                ) from e
 
         # All retries exhausted
         self._usage_stats.record_failure()
@@ -461,7 +461,7 @@ class OpenAIEmbeddingClient:
             batch_size=len(texts),
             details={"last_error": str(last_error)},
             original_error=last_error,
-        )
+        ) from last_error
 
     # =========================================================================
     # UTILITY METHODS

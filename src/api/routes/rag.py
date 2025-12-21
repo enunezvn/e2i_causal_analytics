@@ -497,15 +497,15 @@ async def search(
         raise HTTPException(
             status_code=503,
             detail=f"Backend temporarily unavailable: {e.backend}. Retry after {e.reset_time_seconds:.0f}s",
-        )
+        ) from e
     except BackendTimeoutError as e:
-        raise HTTPException(status_code=504, detail=f"Search timed out: {str(e)}")
+        raise HTTPException(status_code=504, detail=f"Search timed out: {str(e)}") from e
     except RAGError as e:
         logger.error(f"RAG error during search: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
     except Exception as e:
         logger.error(f"Unexpected error during search: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}") from e
 
 
 @router.get(
@@ -575,10 +575,10 @@ async def get_causal_subgraph(
 
     except RAGError as e:
         logger.error(f"Graph error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
     except Exception as e:
         logger.error(f"Unexpected error getting subgraph: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Graph query failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Graph query failed: {str(e)}") from e
 
 
 @router.get(
@@ -626,10 +626,10 @@ async def get_causal_path(
 
     except RAGError as e:
         logger.error(f"Path finding error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
     except Exception as e:
         logger.error(f"Unexpected error finding path: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Path query failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Path query failed: {str(e)}") from e
 
 
 @router.get(
@@ -665,7 +665,7 @@ async def extract_entities(
 
     except Exception as e:
         logger.error(f"Entity extraction error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Entity extraction failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Entity extraction failed: {str(e)}") from e
 
 
 @router.get(

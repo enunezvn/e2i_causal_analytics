@@ -125,14 +125,14 @@ class FulltextBackend:
 
             return results
 
-        except asyncio.TimeoutError:
+        except asyncio.TimeoutError as e:
             self._last_latency_ms = self.config.fulltext_timeout_ms
             logger.warning(f"Full-text search timeout after {self.config.fulltext_timeout_ms}ms")
             raise FulltextSearchError(
                 message=f"Full-text search timeout after {self.config.fulltext_timeout_ms}ms",
                 backend="supabase_fulltext",
                 details={"timeout_ms": self.config.fulltext_timeout_ms},
-            )
+            ) from e
 
         except Exception as e:
             self._last_latency_ms = (time.time() - start_time) * 1000
@@ -141,7 +141,7 @@ class FulltextBackend:
                 message=f"Full-text search failed: {e}",
                 backend="supabase_fulltext",
                 original_error=e,
-            )
+            ) from e
 
     def _execute_rpc(self, search_query: str, match_count: int, filters: Dict[str, Any]) -> Any:
         """

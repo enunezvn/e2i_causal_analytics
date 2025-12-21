@@ -117,21 +117,21 @@ class VectorBackend:
 
             return results
 
-        except asyncio.TimeoutError:
+        except asyncio.TimeoutError as e:
             self._last_latency_ms = self.config.vector_timeout_ms
             logger.warning(f"Vector search timeout after {self.config.vector_timeout_ms}ms")
             raise VectorSearchError(
                 message=f"Vector search timeout after {self.config.vector_timeout_ms}ms",
                 backend="supabase_vector",
                 details={"timeout_ms": self.config.vector_timeout_ms},
-            )
+            ) from e
 
         except Exception as e:
             self._last_latency_ms = (time.time() - start_time) * 1000
             logger.error(f"Vector search error: {e}")
             raise VectorSearchError(
                 message=f"Vector search failed: {e}", backend="supabase_vector", original_error=e
-            )
+            ) from e
 
     def _execute_rpc(
         self, embedding: List[float], match_count: int, filters: Dict[str, Any]
