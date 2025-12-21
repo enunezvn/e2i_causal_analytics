@@ -102,7 +102,7 @@ class GraphitiConfig:
 
     # Connection settings
     falkordb_host: str = "localhost"
-    falkordb_port: int = 6380  # External port in docker-compose
+    falkordb_port: int = 6381  # e2i external port (6379=redis, 6380=auto-claude)
 
     # Cache settings
     cache_enabled: bool = True
@@ -329,7 +329,7 @@ def load_graphiti_config(config_path: Optional[Path] = None) -> GraphitiConfig:
         episode_batch_size=reflector_config.get("graphity_batch_size", 5),
         min_confidence_for_extraction=reflector_config.get("min_confidence_for_learning", 0.6),
         falkordb_host=os.environ.get("FALKORDB_HOST", "localhost"),
-        falkordb_port=int(os.environ.get("FALKORDB_PORT", "6379")),
+        falkordb_port=int(os.environ.get("FALKORDB_PORT", "6381")),
         cache_enabled=cache_config.get("enabled", True),
         cache_ttl_minutes=raw_config.get("performance", {}).get("cache", {}).get("semantic_cache_ttl_minutes", 5),
     )
