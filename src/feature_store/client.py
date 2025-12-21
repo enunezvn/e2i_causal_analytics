@@ -43,7 +43,7 @@ class FeatureStoreClient:
         fs = FeatureStoreClient(
             supabase_url="https://your-project.supabase.co",
             supabase_key="your-anon-key",
-            redis_url="redis://localhost:6379"
+            redis_url="redis://localhost:6382"
         )
 
         # Get features for an entity

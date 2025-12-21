@@ -128,7 +128,7 @@ echo ""
 # ------------------------------------------------------------------------------
 echo -e "${BLUE}[5/7] Checking port availability...${NC}"
 
-PORTS=(8000 3000 5000 6379)
+PORTS=(8000 3000 5000 6382)
 PORT_NAMES=("FastAPI" "Frontend" "MLflow" "Redis")
 
 for i in "${!PORTS[@]}"; do

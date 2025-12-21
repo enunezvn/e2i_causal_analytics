@@ -7,7 +7,7 @@ Skip if Redis is not available.
 Run with: pytest tests/integration/test_memory/test_redis_integration.py -v
 
 Environment variables:
-    REDIS_URL: Redis connection URL (default: redis://localhost:6379)
+    REDIS_URL: Redis connection URL (default: redis://localhost:6382)
 """
 
 import os
@@ -38,7 +38,7 @@ pytestmark = pytest.mark.skipif(
 @pytest.fixture
 async def redis_client():
     """Create a real Redis client for testing."""
-    url = os.environ.get("REDIS_URL", "redis://localhost:6379")
+    url = os.environ.get("REDIS_URL", "redis://localhost:6382")
     client = redis.from_url(url, decode_responses=True)
 
     # Check if Redis is actually running

@@ -29,7 +29,7 @@ DEFAULT_CONFIG_PATH = Path(__file__).parent.parent.parent.parent / "config" / "0
 class WorkingMemoryConfig:
     """Configuration for Redis-backed working memory."""
     backend: str = "redis"
-    connection: str = "redis://localhost:6379"
+    connection: str = "redis://localhost:6382"
     checkpoint_prefix: str = "e2i:checkpoint:"
     session_prefix: str = "e2i:session:"
     evidence_prefix: str = "e2i:evidence:"

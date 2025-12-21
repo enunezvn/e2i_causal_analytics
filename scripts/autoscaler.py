@@ -105,12 +105,12 @@ class CeleryAutoscaler:
 
     def _connect_redis(self):
         """Connect to Redis broker."""
-        redis_url = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/1')
+        redis_url = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6382/1')
         # Parse redis://host:port/db
         parts = redis_url.replace('redis://', '').split('/')
         host_port = parts[0].split(':')
         host = host_port[0]
-        port = int(host_port[1]) if len(host_port) > 1 else 6379
+        port = int(host_port[1]) if len(host_port) > 1 else 6382
         db = int(parts[1]) if len(parts) > 1 else 1
 
         self.redis_client = redis.Redis(host=host, port=port, db=db, decode_responses=True)

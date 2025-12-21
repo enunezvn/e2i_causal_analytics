@@ -16,8 +16,8 @@ from kombu import Queue, Exchange
 celery_app = Celery('e2i_causal_analytics')
 
 # Redis connection from environment
-REDIS_URL = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/1')
-REDIS_BACKEND = os.getenv('CELERY_RESULT_BACKEND', 'redis://localhost:6379/2')
+REDIS_URL = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6382/1')
+REDIS_BACKEND = os.getenv('CELERY_RESULT_BACKEND', 'redis://localhost:6382/2')
 
 # =============================================================================
 # CELERY CONFIGURATION

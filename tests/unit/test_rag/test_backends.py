@@ -63,7 +63,7 @@ def falkordb_config():
     """Create FalkorDB configuration for tests."""
     return FalkorDBConfig(
         host="localhost",
-        port=6379,
+        port=6381,
         graph_name="test_graph",
         max_path_length=5,
     )

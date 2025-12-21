@@ -174,7 +174,7 @@ class FalkorDBConfig:
     Configuration for FalkorDB graph database connection.
     """
     host: str = "localhost"
-    port: int = 6379  # Default Redis port
+    port: int = 6381  # e2i FalkorDB external port (6379=redis internal, 6380=auto-claude, 6381=e2i)
     graph_name: str = "e2i_knowledge"
     password: Optional[str] = None
 
@@ -196,7 +196,7 @@ class FalkorDBConfig:
         """Create from environment variables."""
         return cls(
             host=os.getenv("FALKORDB_HOST", "localhost"),
-            port=int(os.getenv("FALKORDB_PORT", "6379")),
+            port=int(os.getenv("FALKORDB_PORT", "6381")),
             graph_name=os.getenv("FALKORDB_GRAPH", "e2i_knowledge"),
             password=os.getenv("FALKORDB_PASSWORD"),
             max_connections=int(os.getenv("FALKORDB_MAX_CONNECTIONS", "10")),
