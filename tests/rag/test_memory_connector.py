@@ -117,10 +117,10 @@ class TestVectorSearch:
             assert len(results) == 1
             assert isinstance(results[0], RetrievalResult)
             assert results[0].content == "Test content"
-            assert results[0].source == RetrievalSource.VECTOR
-            assert results[0].id == "mem-123"
+            assert results[0].source == RetrievalSource.VECTOR.value
+            assert results[0].source_id == "mem-123"
             assert results[0].score == 0.85
-            assert results[0].metadata["retrieval_method"] == "dense"
+            assert results[0].retrieval_method == "dense"
             assert results[0].metadata["source_name"] == "episodic_memories"
             assert results[0].metadata["brand"] == "Kisqali"
 
@@ -252,7 +252,7 @@ class TestFulltextSearch:
             )
 
             assert len(results) == 2
-            assert results[0].metadata["retrieval_method"] == "sparse"
+            assert results[0].retrieval_method == "sparse"
             # Score should be normalized
             assert results[0].score == 1.0  # Max score normalized to 1
             assert results[1].score == pytest.approx(0.666, rel=0.01)
@@ -361,8 +361,8 @@ class TestGraphTraverse:
             )
 
             assert len(results) == 1
-            assert results[0].metadata["retrieval_method"] == "graph"
-            assert results[0].source == RetrievalSource.GRAPH
+            assert results[0].retrieval_method == "graph"
+            assert results[0].source == RetrievalSource.GRAPH.value
             assert results[0].metadata["source_name"] == "semantic_graph"
             assert "Sales visit" in results[0].content
             assert results[0].score == 0.85
@@ -684,8 +684,8 @@ class TestEdgeCases:
             )
 
             assert len(results) == 1
-            assert results[0].source == RetrievalSource.VECTOR
-            assert results[0].id == "test-1"
+            assert results[0].source == RetrievalSource.VECTOR.value
+            assert results[0].source_id == "test-1"
             assert results[0].metadata["source_name"] == "unknown"
 
     def test_depth_score_calculation(self, memory_connector):

@@ -25,25 +25,28 @@ def sample_results():
     """Create sample retrieval results for testing."""
     return [
         RetrievalResult(
-            id="act_001",
+            source_id="act_001",
             content="Kisqali TRx increased 15% in Q4 2024 vs Q3",
             source=RetrievalSource.VECTOR,
             score=0.9,
-            metadata={"brand": "Kisqali", "timestamp": "2024-12-15T10:00:00Z", "retrieval_method": "dense", "source_name": "agent_activities"},
+            retrieval_method="dense",
+            metadata={"brand": "Kisqali", "timestamp": "2024-12-15T10:00:00Z", "source_name": "agent_activities"},
         ),
         RetrievalResult(
-            id="met_002",
+            source_id="met_002",
             content="Northeast region shows highest conversion rate at 32%",
             source=RetrievalSource.FULLTEXT,
             score=0.8,
-            metadata={"region": "Northeast", "retrieval_method": "sparse", "source_name": "business_metrics"},
+            retrieval_method="sparse",
+            metadata={"region": "Northeast", "source_name": "business_metrics"},
         ),
         RetrievalResult(
-            id="trg_003",
+            source_id="trg_003",
             content="Top HCPs in oncology segment driving adoption",
             source=RetrievalSource.GRAPH,
             score=0.7,
-            metadata={"category": "oncology", "retrieval_method": "graph", "source_name": "triggers"},
+            retrieval_method="graph",
+            metadata={"category": "oncology", "source_name": "triggers"},
         ),
     ]
 
@@ -327,11 +330,12 @@ class TestInsightEnricherExtractFreshness:
 
         results = [
             RetrievalResult(
-                id="1",
+                source_id="1",
                 content="Test",
                 source=RetrievalSource.VECTOR,
                 score=0.5,
-                metadata={"timestamp": "2024-12-15T10:00:00Z", "retrieval_method": "dense"},
+                retrieval_method="dense",
+                metadata={"timestamp": "2024-12-15T10:00:00Z"},
             )
         ]
 
@@ -347,18 +351,20 @@ class TestInsightEnricherExtractFreshness:
 
         results = [
             RetrievalResult(
-                id="1",
+                source_id="1",
                 content="Older",
                 source=RetrievalSource.VECTOR,
                 score=0.5,
-                metadata={"timestamp": "2024-12-10T10:00:00Z", "retrieval_method": "dense"},
+                retrieval_method="dense",
+                metadata={"timestamp": "2024-12-10T10:00:00Z"},
             ),
             RetrievalResult(
-                id="2",
+                source_id="2",
                 content="Newer",
                 source=RetrievalSource.VECTOR,
                 score=0.5,
-                metadata={"timestamp": "2024-12-20T10:00:00Z", "retrieval_method": "dense"},
+                retrieval_method="dense",
+                metadata={"timestamp": "2024-12-20T10:00:00Z"},
             ),
         ]
 
@@ -372,11 +378,12 @@ class TestInsightEnricherExtractFreshness:
 
         results = [
             RetrievalResult(
-                id="1",
+                source_id="1",
                 content="No timestamp",
                 source=RetrievalSource.VECTOR,
                 score=0.5,
-                metadata={"retrieval_method": "dense"},
+                retrieval_method="dense",
+                metadata={},
             )
         ]
 
@@ -400,11 +407,12 @@ class TestInsightEnricherCaching:
 
         results = [
             RetrievalResult(
-                id="unique_id_123",
+                source_id="unique_id_123",
                 content="Test",
                 source=RetrievalSource.VECTOR,
                 score=0.5,
-                metadata={"retrieval_method": "dense"},
+                retrieval_method="dense",
+                metadata={},
             )
         ]
 
