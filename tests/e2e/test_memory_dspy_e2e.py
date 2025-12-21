@@ -398,12 +398,14 @@ class TestTrainingSignalCollection:
             # Verify signals collected
             assert len(result.dspy_signals) >= 3  # summarizer, investigator, agent signals
 
-            # Check signal structure
+            # Check signal structure (new format for SignalCollectorAdapter)
             for signal in result.dspy_signals:
-                assert "phase" in signal
-                assert "input" in signal
-                assert "output" in signal
-                assert signal["phase"] in ["summarizer", "investigator", "agent"]
+                assert "type" in signal, "Signal must have 'type' field"
+                assert "query" in signal, "Signal must have 'query' field"
+                assert "response" in signal, "Signal must have 'response' field"
+                assert "reward" in signal, "Signal must have 'reward' field"
+                assert signal["type"] in ["summarizer", "investigator", "agent"]
+                assert 0.0 <= signal["reward"] <= 1.0, "Reward must be between 0 and 1"
 
     @pytest.mark.skipif(SKIP_SUPABASE, reason=SKIP_REASON_SUPABASE)
     def test_signals_persisted_to_database(self, supabase_client, clean_dspy_tables):
