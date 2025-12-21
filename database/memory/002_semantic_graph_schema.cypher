@@ -124,6 +124,35 @@
 //     avg_response_time_ms: FLOAT
 // })
 
+// --- GRAPHITI ENTITIES (Temporal Knowledge Graph) ---
+
+// Episode Node
+// Represents a knowledge episode (fact, observation, interaction) with temporal validity
+// CREATE (:Episode {
+//     episode_id: STRING,           -- Unique identifier
+//     content: STRING,              -- Episode text content
+//     content_summary: STRING,      -- Brief summary for display
+//     source: STRING,               -- Agent name or 'user'
+//     session_id: STRING,           -- Associated session ID
+//     group_id: STRING,             -- For grouping related episodes
+//     valid_at: DATETIME,           -- When this fact became true
+//     invalid_at: DATETIME,         -- When this fact became false (NULL if still valid)
+//     created_at: DATETIME,
+//     metadata: JSON                -- Additional structured data
+// })
+
+// Community Node
+// Represents a cluster of related entities in the graph
+// CREATE (:Community {
+//     community_id: STRING,         -- Unique identifier
+//     name: STRING,                 -- Community name
+//     summary: STRING,              -- Natural language summary of the community
+//     member_count: INTEGER,        -- Number of entities in community
+//     cohesion_score: FLOAT,        -- Measure of community tightness
+//     created_at: DATETIME,
+//     updated_at: DATETIME
+// })
+
 // --- TEMPORAL ENTITIES ---
 
 // TimePeriod Node
@@ -233,6 +262,38 @@
 // Agent generated Trigger
 // (:Agent)-[:GENERATED]->(:Trigger)
 
+// --- GRAPHITI RELATIONSHIPS ---
+
+// Episode mentions Entity
+// Used to connect knowledge episodes to the entities they reference
+// (:Episode)-[:MENTIONS {
+//     confidence: FLOAT,            -- Extraction confidence (0-1)
+//     mention_type: STRING,         -- subject, object, context
+//     extracted_at: DATETIME
+// }]->(:Entity)  // Can point to any entity type
+
+// Entity member of Community
+// Links entities to their detected communities
+// (:Entity)-[:MEMBER_OF {
+//     membership_score: FLOAT,      -- Strength of membership (0-1)
+//     joined_at: DATETIME,
+//     role: STRING                  -- hub, peripheral, bridge
+// }]->(:Community)
+
+// Episode relates to Episode
+// Temporal relationship between episodes
+// (:Episode)-[:FOLLOWS {
+//     time_gap_seconds: INTEGER,
+//     same_session: BOOLEAN
+// }]->(:Episode)
+
+// Episode invalidates Episode
+// When new information supersedes old
+// (:Episode)-[:INVALIDATES {
+//     invalidation_reason: STRING,
+//     invalidated_at: DATETIME
+// }]->(:Episode)
+
 // --- TEMPORAL RELATIONSHIPS ---
 
 // Entity measured in TimePeriod
@@ -260,9 +321,18 @@
 // CREATE INDEX ON :Agent(agent_name)
 // CREATE INDEX ON :TimePeriod(period_type, start_date)
 
+// Graphiti indexes
+// CREATE INDEX ON :Episode(episode_id)
+// CREATE INDEX ON :Episode(session_id)
+// CREATE INDEX ON :Episode(source)
+// CREATE INDEX ON :Episode(valid_at)
+// CREATE INDEX ON :Community(community_id)
+// CREATE INDEX ON :Community(name)
+
 // Full-text indexes for search
 // CREATE FULLTEXT INDEX patient_search FOR (n:Patient) ON EACH [n.patient_id, n.region]
 // CREATE FULLTEXT INDEX hcp_search FOR (n:HCP) ON EACH [n.name, n.specialty, n.region]
+// CREATE FULLTEXT INDEX episode_search FOR (n:Episode) ON EACH [n.content, n.content_summary]
 
 // ============================================================================
 // EXAMPLE QUERIES
@@ -295,6 +365,36 @@
 // WITH brand, h, t, a
 // MATCH (t)-[:CAUSES*1..3]->(impact:KPI)
 // RETURN a.agent_name, t.trigger_type, h.specialty, impact.kpi_name
+
+// --- GRAPHITI QUERIES ---
+
+// 6. Find all episodes from a specific session
+// MATCH (e:Episode {session_id: $session_id})
+// WHERE e.valid_at IS NOT NULL AND e.invalid_at IS NULL
+// RETURN e ORDER BY e.created_at DESC
+
+// 7. Get entities mentioned in recent episodes
+// MATCH (e:Episode)-[m:MENTIONS]->(entity)
+// WHERE e.created_at > datetime() - duration('P7D')
+// RETURN entity, COUNT(e) AS mention_count, AVG(m.confidence) AS avg_confidence
+// ORDER BY mention_count DESC
+
+// 8. Find related entities through shared community membership
+// MATCH (e1:Entity)-[:MEMBER_OF]->(c:Community)<-[:MEMBER_OF]-(e2:Entity)
+// WHERE e1 <> e2 AND e1.id = $entity_id
+// RETURN e2, c.name AS community, c.summary
+// ORDER BY c.cohesion_score DESC
+
+// 9. Trace knowledge evolution (fact supersession)
+// MATCH path = (old:Episode)<-[:INVALIDATES*1..3]-(new:Episode)
+// WHERE old.episode_id = $episode_id
+// RETURN path, [e IN nodes(path) | e.content_summary] AS evolution
+
+// 10. Find agent-generated knowledge about a topic
+// MATCH (a:Agent)-[:GENERATED|DISCOVERED]->(artifact)
+// MATCH (e:Episode)-[:MENTIONS]->(artifact)
+// WHERE e.content CONTAINS $keyword
+// RETURN a.agent_name, artifact, e.content_summary
 
 // ============================================================================
 // NETWORKX EQUIVALENT STRUCTURE (for local pilot)
