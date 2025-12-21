@@ -29,6 +29,21 @@ from src.rag.reranker import CrossEncoderReranker
 from src.rag.query_optimizer import QueryOptimizer
 from src.rag.insight_enricher import InsightEnricher
 from src.rag.chunk_processor import ChunkProcessor
+from src.rag.entity_extractor import EntityExtractor
+from src.rag.health_monitor import HealthMonitor
+from src.rag.search_logger import SearchLogger
+from src.rag.config import RAGConfig
+
+# Types
+from src.rag.types import (
+    RetrievalResult,
+    RetrievalSource,
+    ExtractedEntities,
+    BackendStatus,
+    BackendHealth,
+    SearchStats,
+    GraphPath,
+)
 
 # Cognitive RAG exports
 from src.rag.cognitive_rag_dspy import (
@@ -55,6 +70,18 @@ __all__ = [
     "QueryOptimizer",
     "InsightEnricher",
     "ChunkProcessor",
+    "EntityExtractor",
+    "HealthMonitor",
+    "SearchLogger",
+    "RAGConfig",
+    # Types
+    "RetrievalResult",
+    "RetrievalSource",
+    "ExtractedEntities",
+    "BackendStatus",
+    "BackendHealth",
+    "SearchStats",
+    "GraphPath",
     # Cognitive RAG
     "CognitiveState",
     "create_dspy_cognitive_workflow",

@@ -101,11 +101,10 @@ class CrossEncoderReranker:
         reranked = []
         for score, result in scored_results[:top_k]:
             reranked_result = RetrievalResult(
+                id=result.id,
                 content=result.content,
                 source=result.source,
-                source_id=result.source_id,
                 score=score,
-                retrieval_method=result.retrieval_method,
                 metadata={
                     **result.metadata,
                     "reranker_score": score,

@@ -152,7 +152,7 @@ class InsightEnricher:
     def _build_cache_key(self, query: str, retrieved: List) -> str:
         """Build cache key from query and retrieved content."""
         content_hash = hash(tuple(
-            r.source_id if hasattr(r, 'source_id') else str(r)
+            r.id if hasattr(r, 'id') else str(r)
             for r in retrieved[:10]
         ))
         return f"{hash(query)}:{content_hash}"

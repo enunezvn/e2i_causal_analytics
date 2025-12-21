@@ -276,10 +276,10 @@ async def search_memory(request: MemorySearchRequest) -> MemorySearchResponse:
         search_results = [
             MemorySearchResult(
                 content=r.content,
-                source=r.source,
-                source_id=r.source_id,
+                source=r.source.value if hasattr(r.source, 'value') else str(r.source),
+                source_id=r.id,
                 score=r.score,
-                retrieval_method=r.retrieval_method,
+                retrieval_method=r.metadata.get("retrieval_method", "unknown"),
                 metadata=r.metadata
             )
             for r in results
