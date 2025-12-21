@@ -133,7 +133,7 @@ services:
     container_name: e2i_falkordb
     restart: unless-stopped
     ports:
-      - "6380:6379"  # Different port to avoid Redis conflict
+      - "6381:6379"  # 6381 to avoid conflict with Redis (6379) and auto-claude-falkordb (6380)
     volumes:
       - falkordb_data:/data
     environment:
@@ -389,7 +389,7 @@ services:
       
       # Memory Systems
       - REDIS_URL=redis://redis:6379/0
-      - FALKORDB_URL=redis://falkordb:6380/0
+      - FALKORDB_URL=redis://falkordb:6379/0  # Internal port (6380 is external only)
       
       # MLOps Services
       - MLFLOW_TRACKING_URI=http://mlflow:5000
@@ -470,7 +470,7 @@ services:
       - SUPABASE_KEY=${SUPABASE_KEY}
       - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
       - REDIS_URL=redis://redis:6379/0
-      - FALKORDB_URL=redis://falkordb:6380/0
+      - FALKORDB_URL=redis://falkordb:6379/0  # Internal port
       - MLFLOW_TRACKING_URI=http://mlflow:5000
       - BENTOML_URL=http://bentoml:3000
       - FEAST_URL=http://feast:6566
@@ -538,7 +538,7 @@ services:
       - SUPABASE_KEY=${SUPABASE_KEY}
       - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
       - REDIS_URL=redis://redis:6379/0
-      - FALKORDB_URL=redis://falkordb:6380/0
+      - FALKORDB_URL=redis://falkordb:6379/0  # Internal port
       - MLFLOW_TRACKING_URI=http://mlflow:5000
       - BENTOML_URL=http://bentoml:3000
       - FEAST_URL=http://feast:6566
@@ -606,7 +606,7 @@ services:
       - SUPABASE_KEY=${SUPABASE_KEY}
       - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
       - REDIS_URL=redis://redis:6379/0
-      - FALKORDB_URL=redis://falkordb:6380/0
+      - FALKORDB_URL=redis://falkordb:6379/0  # Internal port
       - MLFLOW_TRACKING_URI=http://mlflow:5000
       - BENTOML_URL=http://bentoml:3000
       - FEAST_URL=http://feast:6566

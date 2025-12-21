@@ -272,10 +272,10 @@ def get_supabase_client():
 def get_falkordb_client():
     """Get FalkorDB client for semantic memory."""
     from falkordb import FalkorDB
-    
+
     host = os.environ.get("FALKORDB_HOST", "localhost")
-    port = int(os.environ.get("FALKORDB_PORT", "6380"))
-    
+    port = int(os.environ.get("FALKORDB_PORT", "6381"))  # e2i port (6380 used by auto-claude)
+
     return FalkorDB(host=host, port=port)
 
 

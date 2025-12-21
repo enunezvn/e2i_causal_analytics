@@ -398,7 +398,7 @@ def get_falkordb_client():
         )
 
     host = os.environ.get("FALKORDB_HOST", "localhost")
-    port = int(os.environ.get("FALKORDB_PORT", "6379"))
+    port = int(os.environ.get("FALKORDB_PORT", "6381"))  # 6381 external (e2i), 6379 internal
 
     logger.info(f"Creating FalkorDB client for: {host}:{port}")
 

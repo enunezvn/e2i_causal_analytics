@@ -33,7 +33,7 @@ def get_supabase_client():
 def get_falkordb_client():
     from falkordb import FalkorDB
     host = os.environ.get("FALKORDB_HOST", "localhost")
-    port = int(os.environ.get("FALKORDB_PORT", "6380"))
+    port = int(os.environ.get("FALKORDB_PORT", "6381"))  # e2i port
     return FalkorDB(host=host, port=port)
 
 

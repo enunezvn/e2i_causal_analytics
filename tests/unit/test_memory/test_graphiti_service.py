@@ -43,7 +43,7 @@ def mock_config():
         entity_types=list(E2IEntityType),
         relationship_types=list(E2IRelationshipType),
         falkordb_host="localhost",
-        falkordb_port=6380,
+        falkordb_port=6381,
     )
 
 
