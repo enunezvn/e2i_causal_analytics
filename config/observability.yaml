@@ -1,0 +1,337 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# E2I OBSERVABILITY CONFIGURATION
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Centralized configuration for the Observability Connector Agent and related
+# components including Opik SDK integration, span batching, circuit breaker,
+# metrics caching, and data retention.
+#
+# Version: 1.0.0
+# Last Updated: 2025-12-21
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OPIK SDK SETTINGS
+# ─────────────────────────────────────────────────────────────────────────────
+# Configuration for Opik observability platform integration
+# Docs: https://www.comet.com/docs/opik/
+
+opik:
+  enabled: true
+
+  # Connection settings
+  api_key_env: "OPIK_API_KEY"              # Environment variable name for API key
+  endpoint_env: "OPIK_ENDPOINT"            # Environment variable for custom endpoint
+  workspace: "default"                      # Opik workspace name
+  project_name: "e2i-causal-analytics"     # Project name in Opik dashboard
+
+  # Local mode (for development/testing without cloud)
+  use_local: false
+  local_port: 5173                         # Port for local Opik instance
+
+  # Auto-flush settings
+  flush_on_shutdown: true
+  flush_interval_seconds: 10               # Background flush interval
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SAMPLING SETTINGS
+# ─────────────────────────────────────────────────────────────────────────────
+# Control trace sampling to balance observability vs. overhead
+
+sampling:
+  # Default sample rate (0.0 = no sampling, 1.0 = sample all)
+  default_rate: 1.0
+
+  # Production sample rate (lower for high-volume production)
+  production_rate: 0.1
+
+  # Environment-based rate selection
+  # Uses production_rate when ENVIRONMENT=production, else default_rate
+  environment_aware: true
+
+  # Always sample traces that contain errors
+  always_sample_errors: true
+
+  # Always sample specific agents (by name)
+  always_sample_agents:
+    - orchestrator
+    - causal_impact
+
+  # Per-agent sample rate overrides
+  agent_overrides:
+    observability_connector: 0.01          # Low sampling for self-monitoring
+    drift_monitor: 0.5                     # Medium sampling for monitoring agents
+    health_score: 0.5
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BATCHING SETTINGS
+# ─────────────────────────────────────────────────────────────────────────────
+# Batch span emissions to reduce overhead
+
+batching:
+  enabled: true
+
+  # Size-based flush trigger
+  max_batch_size: 100                      # Max spans before auto-flush
+
+  # Time-based flush trigger (seconds)
+  max_wait_seconds: 5.0                    # Max time before auto-flush
+
+  # Flush behavior
+  flush_on_shutdown: true                  # Flush remaining on process exit
+
+  # Retry settings for failed batches
+  retry:
+    enabled: true
+    max_retries: 3
+    retry_delay_seconds: 1.0
+    exponential_backoff: true
+    max_delay_seconds: 10.0
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CIRCUIT BREAKER SETTINGS
+# ─────────────────────────────────────────────────────────────────────────────
+# Protect against cascading failures when Opik is unavailable
+
+circuit_breaker:
+  enabled: true
+
+  # Failure threshold before opening circuit
+  failure_threshold: 5                     # Consecutive failures to open
+
+  # Time before attempting recovery (seconds)
+  reset_timeout_seconds: 30.0
+
+  # Half-open state settings
+  half_open_max_calls: 3                   # Test calls in half-open state
+  success_threshold: 2                     # Successes needed to close circuit
+
+  # Fallback behavior when circuit is open
+  fallback:
+    log_to_database: true                  # Continue DB logging when Opik down
+    log_to_file: false                     # Optional file fallback
+    fallback_log_path: "logs/opik_fallback.jsonl"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# METRICS CACHE SETTINGS
+# ─────────────────────────────────────────────────────────────────────────────
+# Cache frequently accessed observability metrics
+
+cache:
+  # Backend selection: redis, memory
+  backend: "memory"                        # Default to memory for safety
+  fallback_to_memory: true                 # Fall back to memory if Redis fails
+
+  # Key configuration
+  key_prefix: "obs_metrics"                # Cache key prefix
+
+  # TTL settings by time window (seconds)
+  ttl:
+    "1h": 60                               # 1 minute TTL for 1-hour window
+    "24h": 300                             # 5 minutes TTL for 24-hour window
+    "7d": 600                              # 10 minutes TTL for 7-day window
+    default: 120                           # Default TTL for unknown windows
+
+  # Memory cache limits
+  memory:
+    max_entries: 1000                      # Max entries in memory cache
+    cleanup_interval_seconds: 60           # Expired entry cleanup interval
+
+  # Redis settings (when backend: redis)
+  redis:
+    url_env: "REDIS_URL"                   # Environment variable for Redis URL
+    db: 1                                  # Redis database number
+    connection_timeout_seconds: 5
+    socket_timeout_seconds: 5
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RETENTION SETTINGS
+# ─────────────────────────────────────────────────────────────────────────────
+# Data retention and cleanup configuration
+
+retention:
+  # Span retention (days)
+  span_ttl_days: 30                        # Delete spans older than 30 days
+
+  # Cleanup settings
+  cleanup:
+    enabled: true
+    batch_size: 1000                       # Rows per cleanup batch
+    schedule: "0 2 * * *"                  # Cron schedule (2 AM daily)
+    dry_run: false                         # Preview deletions without executing
+
+  # Archival settings (optional)
+  archive:
+    enabled: false
+    destination: "s3://bucket/observability/"
+    format: "parquet"                      # parquet, jsonl
+    compress: true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DATABASE SETTINGS
+# ─────────────────────────────────────────────────────────────────────────────
+# Supabase database configuration for span persistence
+
+database:
+  # Table names
+  spans_table: "ml_observability_spans"
+
+  # Views (for optimized queries)
+  latency_summary_view: "v_agent_latency_summary"
+
+  # Write settings
+  batch_insert: true
+  insert_batch_size: 100
+
+  # Connection pool
+  pool:
+    min_connections: 2
+    max_connections: 10
+    connection_timeout_seconds: 30
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SPAN SETTINGS
+# ─────────────────────────────────────────────────────────────────────────────
+# Default settings for span creation
+
+spans:
+  # Include detailed attributes
+  include_input: true                      # Log input data in spans
+  include_output: true                     # Log output data in spans
+
+  # Size limits to prevent bloat
+  max_input_size_bytes: 10240              # 10KB max input size
+  max_output_size_bytes: 10240             # 10KB max output size
+  max_metadata_size_bytes: 4096            # 4KB max metadata size
+  truncate_on_overflow: true               # Truncate instead of dropping
+
+  # Sensitive data handling
+  redact_patterns:
+    - "password"
+    - "api_key"
+    - "secret"
+    - "token"
+    - "authorization"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AGENT TIER CONFIGURATION
+# ─────────────────────────────────────────────────────────────────────────────
+# Tier-specific observability settings
+
+agent_tiers:
+  tier_0:                                  # ML Foundation
+    sample_rate: 0.5
+    detailed_logging: false
+    agents:
+      - scope_definer
+      - data_preparer
+      - feature_analyzer
+      - model_selector
+      - model_trainer
+      - model_deployer
+      - observability_connector
+
+  tier_1:                                  # Coordination
+    sample_rate: 1.0
+    detailed_logging: true
+    agents:
+      - orchestrator
+      - tool_composer
+
+  tier_2:                                  # Causal Analytics
+    sample_rate: 1.0
+    detailed_logging: true
+    agents:
+      - causal_impact
+      - gap_analyzer
+      - heterogeneous_optimizer
+
+  tier_3:                                  # Monitoring
+    sample_rate: 0.5
+    detailed_logging: false
+    agents:
+      - drift_monitor
+      - experiment_designer
+      - health_score
+
+  tier_4:                                  # ML Predictions
+    sample_rate: 0.8
+    detailed_logging: true
+    agents:
+      - prediction_synthesizer
+      - resource_optimizer
+
+  tier_5:                                  # Self-Improvement
+    sample_rate: 1.0
+    detailed_logging: true
+    agents:
+      - explainer
+      - feedback_learner
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LOGGING SETTINGS
+# ─────────────────────────────────────────────────────────────────────────────
+# Observability system logging configuration
+
+logging:
+  level: "INFO"                            # DEBUG, INFO, WARNING, ERROR
+
+  # Component-specific log levels
+  components:
+    opik_connector: "INFO"
+    batch_processor: "INFO"
+    circuit_breaker: "WARNING"
+    metrics_cache: "INFO"
+    span_repository: "INFO"
+
+  # Structured logging format
+  format: "json"                           # json, text
+  include_timestamp: true
+  include_trace_id: true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ENVIRONMENT OVERRIDES
+# ─────────────────────────────────────────────────────────────────────────────
+# Environment-specific configuration overrides
+
+environments:
+  development:
+    opik:
+      use_local: true
+      enabled: true
+    sampling:
+      default_rate: 1.0
+    cache:
+      backend: "memory"
+    logging:
+      level: "DEBUG"
+
+  staging:
+    opik:
+      enabled: true
+    sampling:
+      default_rate: 0.5
+    cache:
+      backend: "redis"
+    logging:
+      level: "INFO"
+
+  production:
+    opik:
+      enabled: true
+    sampling:
+      default_rate: 0.1
+      always_sample_errors: true
+    batching:
+      max_batch_size: 200
+      max_wait_seconds: 10.0
+    circuit_breaker:
+      failure_threshold: 3
+      reset_timeout_seconds: 60.0
+    cache:
+      backend: "redis"
+    retention:
+      span_ttl_days: 90
+    logging:
+      level: "WARNING"

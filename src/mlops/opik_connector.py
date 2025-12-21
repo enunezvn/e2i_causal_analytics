@@ -10,7 +10,7 @@ Features:
 - LLM call tracking with token usage
 - Metric and feedback logging
 - Graceful degradation when Opik is unavailable
-- Circuit breaker pattern (Phase 3)
+- Circuit breaker pattern for fault tolerance
 
 Usage:
     from src.mlops.opik_connector import OpikConnector
@@ -30,12 +30,19 @@ Usage:
         response = await client.messages.create(...)
         llm_span.log_tokens(response.usage.input_tokens, response.usage.output_tokens)
 
+    # Check circuit breaker status
+    if opik.circuit_breaker.is_closed:
+        # Opik is healthy, full functionality available
+        pass
+
 Author: E2I Causal Analytics Team
-Version: 4.2.0
+Version: 4.3.0 (Phase 3 - Circuit Breaker)
 """
 
 import logging
 import os
+import threading
+import time
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -62,6 +69,303 @@ class SpanStatus(str, Enum):
     COMPLETED = "completed"
     ERROR = "error"
     TIMEOUT = "timeout"
+
+
+class CircuitState(str, Enum):
+    """Circuit breaker states."""
+
+    CLOSED = "closed"  # Normal operation, requests allowed
+    OPEN = "open"  # Circuit tripped, requests blocked
+    HALF_OPEN = "half_open"  # Testing if service recovered
+
+
+@dataclass
+class CircuitBreakerConfig:
+    """Configuration for circuit breaker."""
+
+    failure_threshold: int = 5  # Consecutive failures before opening
+    reset_timeout_seconds: float = 30.0  # Time before trying half-open
+    half_open_max_calls: int = 3  # Max test calls in half-open state
+    success_threshold: int = 2  # Successes needed to close from half-open
+
+
+@dataclass
+class CircuitBreakerMetrics:
+    """Metrics for circuit breaker monitoring."""
+
+    total_calls: int = 0
+    successful_calls: int = 0
+    failed_calls: int = 0
+    rejected_calls: int = 0
+    state_changes: int = 0
+    last_failure_time: Optional[float] = None
+    last_success_time: Optional[float] = None
+    last_state_change_time: Optional[float] = None
+    time_in_open_state: float = 0.0
+    times_opened: int = 0
+
+    def record_success(self) -> None:
+        """Record a successful call."""
+        self.total_calls += 1
+        self.successful_calls += 1
+        self.last_success_time = time.time()
+
+    def record_failure(self) -> None:
+        """Record a failed call."""
+        self.total_calls += 1
+        self.failed_calls += 1
+        self.last_failure_time = time.time()
+
+    def record_rejected(self) -> None:
+        """Record a rejected call (circuit open)."""
+        self.rejected_calls += 1
+
+    def record_state_change(self, new_state: CircuitState) -> None:
+        """Record a state change."""
+        now = time.time()
+        self.state_changes += 1
+        if new_state == CircuitState.OPEN:
+            self.times_opened += 1
+        self.last_state_change_time = now
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert metrics to dictionary."""
+        return {
+            "total_calls": self.total_calls,
+            "successful_calls": self.successful_calls,
+            "failed_calls": self.failed_calls,
+            "rejected_calls": self.rejected_calls,
+            "state_changes": self.state_changes,
+            "times_opened": self.times_opened,
+            "success_rate": (
+                self.successful_calls / self.total_calls
+                if self.total_calls > 0
+                else 1.0
+            ),
+            "last_failure_time": self.last_failure_time,
+            "last_success_time": self.last_success_time,
+        }
+
+
+class CircuitBreaker:
+    """Circuit breaker for protecting external service calls.
+
+    Implements the circuit breaker pattern with three states:
+    - CLOSED: Normal operation, all requests pass through
+    - OPEN: Service is failing, requests are rejected immediately
+    - HALF_OPEN: Testing if service has recovered
+
+    Thread-safe implementation for concurrent access.
+
+    Example:
+        cb = CircuitBreaker()
+
+        if cb.allow_request():
+            try:
+                result = call_external_service()
+                cb.record_success()
+            except Exception:
+                cb.record_failure()
+        else:
+            # Circuit is open, use fallback
+            result = use_fallback()
+    """
+
+    def __init__(
+        self,
+        config: Optional[CircuitBreakerConfig] = None,
+        on_state_change: Optional[Callable[[CircuitState, CircuitState], None]] = None,
+    ):
+        """Initialize circuit breaker.
+
+        Args:
+            config: Circuit breaker configuration
+            on_state_change: Callback when state changes (old_state, new_state)
+        """
+        self._config = config or CircuitBreakerConfig()
+        self._on_state_change = on_state_change
+
+        # State management
+        self._state = CircuitState.CLOSED
+        self._consecutive_failures = 0
+        self._consecutive_successes = 0
+        self._last_failure_time: Optional[float] = None
+        self._half_open_calls = 0
+
+        # Thread safety
+        self._lock = threading.RLock()
+
+        # Metrics
+        self._metrics = CircuitBreakerMetrics()
+
+    @property
+    def state(self) -> CircuitState:
+        """Get current circuit state."""
+        with self._lock:
+            return self._state
+
+    @property
+    def is_closed(self) -> bool:
+        """Check if circuit is closed (normal operation)."""
+        return self.state == CircuitState.CLOSED
+
+    @property
+    def is_open(self) -> bool:
+        """Check if circuit is open (blocking requests)."""
+        return self.state == CircuitState.OPEN
+
+    @property
+    def is_half_open(self) -> bool:
+        """Check if circuit is half-open (testing recovery)."""
+        return self.state == CircuitState.HALF_OPEN
+
+    @property
+    def metrics(self) -> CircuitBreakerMetrics:
+        """Get circuit breaker metrics."""
+        return self._metrics
+
+    @property
+    def consecutive_failures(self) -> int:
+        """Get current consecutive failure count."""
+        with self._lock:
+            return self._consecutive_failures
+
+    def allow_request(self) -> bool:
+        """Check if a request should be allowed through.
+
+        Returns:
+            True if request should proceed, False if circuit is open
+        """
+        with self._lock:
+            if self._state == CircuitState.CLOSED:
+                return True
+
+            if self._state == CircuitState.OPEN:
+                # Check if reset timeout has elapsed
+                if self._should_attempt_reset():
+                    self._transition_to(CircuitState.HALF_OPEN)
+                    return True
+                self._metrics.record_rejected()
+                return False
+
+            if self._state == CircuitState.HALF_OPEN:
+                # Allow limited requests in half-open state
+                if self._half_open_calls < self._config.half_open_max_calls:
+                    self._half_open_calls += 1
+                    return True
+                return False
+
+            return False
+
+    def record_success(self) -> None:
+        """Record a successful operation."""
+        with self._lock:
+            self._metrics.record_success()
+            self._consecutive_failures = 0
+
+            if self._state == CircuitState.HALF_OPEN:
+                self._consecutive_successes += 1
+                if self._consecutive_successes >= self._config.success_threshold:
+                    self._transition_to(CircuitState.CLOSED)
+            elif self._state == CircuitState.CLOSED:
+                self._consecutive_successes += 1
+
+    def record_failure(self) -> None:
+        """Record a failed operation."""
+        with self._lock:
+            self._metrics.record_failure()
+            self._last_failure_time = time.time()
+            self._consecutive_failures += 1
+            self._consecutive_successes = 0
+
+            if self._state == CircuitState.HALF_OPEN:
+                # Any failure in half-open immediately opens circuit
+                self._transition_to(CircuitState.OPEN)
+            elif self._state == CircuitState.CLOSED:
+                if self._consecutive_failures >= self._config.failure_threshold:
+                    self._transition_to(CircuitState.OPEN)
+
+    def reset(self) -> None:
+        """Manually reset the circuit breaker to closed state."""
+        with self._lock:
+            old_state = self._state
+            self._state = CircuitState.CLOSED
+            self._consecutive_failures = 0
+            self._consecutive_successes = 0
+            self._half_open_calls = 0
+
+            if old_state != CircuitState.CLOSED:
+                self._metrics.record_state_change(CircuitState.CLOSED)
+                logger.info("Circuit breaker manually reset to CLOSED")
+                if self._on_state_change:
+                    self._on_state_change(old_state, CircuitState.CLOSED)
+
+    def force_open(self) -> None:
+        """Manually force the circuit to open state."""
+        with self._lock:
+            if self._state != CircuitState.OPEN:
+                self._transition_to(CircuitState.OPEN)
+                logger.warning("Circuit breaker manually forced to OPEN")
+
+    def get_status(self) -> Dict[str, Any]:
+        """Get comprehensive circuit breaker status."""
+        with self._lock:
+            return {
+                "state": self._state.value,
+                "is_closed": self._state == CircuitState.CLOSED,
+                "is_open": self._state == CircuitState.OPEN,
+                "is_half_open": self._state == CircuitState.HALF_OPEN,
+                "consecutive_failures": self._consecutive_failures,
+                "consecutive_successes": self._consecutive_successes,
+                "failure_threshold": self._config.failure_threshold,
+                "reset_timeout_seconds": self._config.reset_timeout_seconds,
+                "time_until_reset": self._time_until_reset(),
+                "metrics": self._metrics.to_dict(),
+            }
+
+    def _should_attempt_reset(self) -> bool:
+        """Check if enough time has passed to attempt reset."""
+        if self._last_failure_time is None:
+            return True
+        elapsed = time.time() - self._last_failure_time
+        return elapsed >= self._config.reset_timeout_seconds
+
+    def _time_until_reset(self) -> Optional[float]:
+        """Get time remaining until reset attempt (if circuit is open)."""
+        if self._state != CircuitState.OPEN:
+            return None
+        if self._last_failure_time is None:
+            return 0.0
+        elapsed = time.time() - self._last_failure_time
+        remaining = self._config.reset_timeout_seconds - elapsed
+        return max(0.0, remaining)
+
+    def _transition_to(self, new_state: CircuitState) -> None:
+        """Transition to a new state."""
+        old_state = self._state
+        if old_state == new_state:
+            return
+
+        self._state = new_state
+        self._metrics.record_state_change(new_state)
+
+        # Reset counters on state change
+        if new_state == CircuitState.HALF_OPEN:
+            self._half_open_calls = 0
+            self._consecutive_successes = 0
+        elif new_state == CircuitState.CLOSED:
+            self._consecutive_failures = 0
+            self._half_open_calls = 0
+
+        # Log state change
+        logger.info(f"Circuit breaker: {old_state.value} → {new_state.value}")
+
+        # Invoke callback
+        if self._on_state_change:
+            try:
+                self._on_state_change(old_state, new_state)
+            except Exception as e:
+                logger.warning(f"Circuit breaker callback failed: {e}")
 
 
 @dataclass
@@ -91,6 +395,43 @@ class OpikConfig:
             always_sample_errors=os.getenv("OPIK_ALWAYS_SAMPLE_ERRORS", "true").lower()
             == "true",
         )
+
+    @classmethod
+    def from_config_file(
+        cls, config_path: Optional[str] = None, environment: Optional[str] = None
+    ) -> "OpikConfig":
+        """Create config from observability.yaml file.
+
+        Args:
+            config_path: Path to config file (defaults to config/observability.yaml)
+            environment: Environment name for overrides
+
+        Returns:
+            OpikConfig instance
+        """
+        try:
+            # Lazy import to avoid circular dependencies
+            from src.agents.ml_foundation.observability_connector.config import (
+                get_observability_config,
+            )
+
+            obs_config = get_observability_config(config_path, environment)
+            opik_settings = obs_config.opik
+            sampling_settings = obs_config.sampling
+
+            return cls(
+                api_key=opik_settings.api_key,
+                workspace=opik_settings.workspace,
+                project_name=opik_settings.project_name,
+                url=opik_settings.endpoint,
+                use_local=opik_settings.use_local,
+                enabled=opik_settings.enabled,
+                sample_rate=sampling_settings.default_rate,
+                always_sample_errors=sampling_settings.always_sample_errors,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to load config from file: {e}, using env vars")
+            return cls.from_env()
 
 
 @dataclass
@@ -243,6 +584,11 @@ class OpikConnector:
     - LLM call tracking
     - Metric and feedback logging
     - Graceful degradation when Opik is unavailable
+    - Circuit breaker for fault tolerance
+
+    The circuit breaker protects against cascading failures when the Opik
+    service is unavailable. When the circuit opens, operations fall back
+    to database-only logging.
 
     Example:
         opik = OpikConnector()
@@ -250,6 +596,10 @@ class OpikConnector:
         async with opik.trace_agent("gap_analyzer", "analyze") as span:
             result = await do_analysis()
             span.set_attribute("items_analyzed", len(result))
+
+        # Check circuit breaker status
+        if opik.circuit_breaker.is_open:
+            logger.warning("Opik circuit is open, using fallback")
     """
 
     _instance: Optional["OpikConnector"] = None
@@ -261,11 +611,16 @@ class OpikConnector:
             cls._instance = super().__new__(cls)
         return cls._instance
 
-    def __init__(self, config: Optional[OpikConfig] = None) -> None:
+    def __init__(
+        self,
+        config: Optional[OpikConfig] = None,
+        circuit_breaker_config: Optional[CircuitBreakerConfig] = None,
+    ) -> None:
         """Initialize the Opik connector.
 
         Args:
             config: Optional configuration. If not provided, reads from environment.
+            circuit_breaker_config: Optional circuit breaker configuration.
         """
         if self._initialized:
             return
@@ -273,6 +628,12 @@ class OpikConnector:
         self.config = config or OpikConfig.from_env()
         self._opik_client = None
         self._active_traces: Dict[str, Any] = {}
+
+        # Initialize circuit breaker with callback for state changes
+        self._circuit_breaker = CircuitBreaker(
+            config=circuit_breaker_config or CircuitBreakerConfig(),
+            on_state_change=self._on_circuit_state_change,
+        )
 
         # Try to initialize Opik client
         if self.config.enabled:
@@ -287,6 +648,25 @@ class OpikConnector:
                 self._opik_client = None
 
         self._initialized = True
+
+    def _on_circuit_state_change(
+        self, old_state: CircuitState, new_state: CircuitState
+    ) -> None:
+        """Handle circuit breaker state changes."""
+        if new_state == CircuitState.OPEN:
+            logger.warning(
+                f"Opik circuit breaker OPENED after {self._circuit_breaker.consecutive_failures} failures. "
+                f"Falling back to database-only logging."
+            )
+        elif new_state == CircuitState.HALF_OPEN:
+            logger.info("Opik circuit breaker entering HALF-OPEN state, testing recovery...")
+        elif new_state == CircuitState.CLOSED:
+            logger.info("Opik circuit breaker CLOSED, resuming normal operation.")
+
+    @property
+    def circuit_breaker(self) -> CircuitBreaker:
+        """Get the circuit breaker instance."""
+        return self._circuit_breaker
 
     def _init_opik_client(self) -> None:
         """Initialize the Opik client with configuration."""
@@ -652,6 +1032,9 @@ class OpikConnector:
     ) -> None:
         """Log a custom metric.
 
+        Uses circuit breaker pattern to protect against Opik failures.
+        When circuit is open, metrics are silently dropped (logged to debug).
+
         Args:
             name: Metric name
             value: Metric value
@@ -659,6 +1042,14 @@ class OpikConnector:
             metadata: Additional metadata
         """
         if not self.is_enabled:
+            return
+
+        # Check circuit breaker
+        if not self._circuit_breaker.allow_request():
+            logger.debug(
+                f"Circuit open, dropping metric {name}={value} "
+                f"(will retry in {self._circuit_breaker._time_until_reset():.1f}s)"
+            )
             return
 
         try:
@@ -672,7 +1063,13 @@ class OpikConnector:
                         reason=metadata.get("reason") if metadata else None,
                     )
                     logger.debug(f"Logged metric {name}={value} to trace {trace_id}")
+
+            # Record success
+            self._circuit_breaker.record_success()
+
         except Exception as e:
+            # Record failure
+            self._circuit_breaker.record_failure()
             logger.warning(f"Failed to log metric: {e}")
 
     def log_feedback(
@@ -684,7 +1081,7 @@ class OpikConnector:
     ) -> None:
         """Log feedback for a trace.
 
-        Used for logging user ratings, quality scores, etc.
+        Uses circuit breaker pattern to protect against Opik failures.
 
         Args:
             trace_id: The trace to log feedback for
@@ -693,6 +1090,11 @@ class OpikConnector:
             reason: Optional reason for the score
         """
         if not self.is_enabled:
+            return
+
+        # Check circuit breaker
+        if not self._circuit_breaker.allow_request():
+            logger.debug(f"Circuit open, dropping feedback for trace {trace_id}")
             return
 
         try:
@@ -706,7 +1108,9 @@ class OpikConnector:
                 logger.debug(
                     f"Logged feedback {feedback_type}={score} to trace {trace_id}"
                 )
+            self._circuit_breaker.record_success()
         except Exception as e:
+            self._circuit_breaker.record_failure()
             logger.warning(f"Failed to log feedback: {e}")
 
     def flush(self) -> None:
@@ -762,6 +1166,22 @@ class OpikConnector:
             "feedback_learner": 5,
         }
         return tier_mapping.get(agent_name, 0)
+
+    def get_status(self) -> Dict[str, Any]:
+        """Get comprehensive status including circuit breaker state.
+
+        Returns:
+            Dictionary with connector and circuit breaker status
+        """
+        return {
+            "enabled": self.config.enabled,
+            "is_enabled": self.is_enabled,
+            "project_name": self.config.project_name,
+            "workspace": self.config.workspace,
+            "sample_rate": self.config.sample_rate,
+            "active_traces": len(self._active_traces),
+            "circuit_breaker": self._circuit_breaker.get_status(),
+        }
 
 
 # Convenience function for getting singleton instance
