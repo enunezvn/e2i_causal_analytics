@@ -1,13 +1,14 @@
 import { createBrowserRouter, RouterProvider, Outlet } from 'react-router-dom';
 import { routes } from './routes';
+import { Layout } from '@/components/layout/Layout';
 
 // Root layout component that wraps all routes
-// This will be enhanced later with Header, Sidebar, Footer in phase-2-5
+// Uses the Layout component with Header, Sidebar, and Footer
 function RootLayout() {
   return (
-    <div className="min-h-screen bg-background">
+    <Layout>
       <Outlet />
-    </div>
+    </Layout>
   );
 }
 
