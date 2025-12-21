@@ -16,6 +16,7 @@
 
 import { create } from 'zustand';
 import { devtools, persist } from 'zustand/middleware';
+import { useShallow } from 'zustand/react/shallow';
 
 /**
  * Theme options for the application
@@ -271,43 +272,54 @@ export const useUIStore = create<UIStore>()(
 
 /**
  * Selector hooks for common UI state slices
+ * Using useShallow to prevent infinite re-renders
  */
 export const useSidebarState = () =>
-  useUIStore((state) => ({
-    isOpen: state.sidebarOpen,
-    isCollapsed: state.sidebarCollapsed,
-    toggle: state.toggleSidebar,
-    setOpen: state.setSidebarOpen,
-    toggleCollapsed: state.toggleSidebarCollapsed,
-    setCollapsed: state.setSidebarCollapsed,
-  }));
+  useUIStore(
+    useShallow((state) => ({
+      isOpen: state.sidebarOpen,
+      isCollapsed: state.sidebarCollapsed,
+      toggle: state.toggleSidebar,
+      setOpen: state.setSidebarOpen,
+      toggleCollapsed: state.toggleSidebarCollapsed,
+      setCollapsed: state.setSidebarCollapsed,
+    }))
+  );
 
 export const useTheme = () =>
-  useUIStore((state) => ({
-    theme: state.theme,
-    setTheme: state.setTheme,
-  }));
+  useUIStore(
+    useShallow((state) => ({
+      theme: state.theme,
+      setTheme: state.setTheme,
+    }))
+  );
 
 export const useGlobalLoading = () =>
-  useUIStore((state) => ({
-    isLoading: state.globalLoading,
-    message: state.loadingMessage,
-    setLoading: state.setGlobalLoading,
-  }));
+  useUIStore(
+    useShallow((state) => ({
+      isLoading: state.globalLoading,
+      message: state.loadingMessage,
+      setLoading: state.setGlobalLoading,
+    }))
+  );
 
 export const useNotifications = () =>
-  useUIStore((state) => ({
-    notifications: state.notifications,
-    add: state.addNotification,
-    remove: state.removeNotification,
-    clear: state.clearNotifications,
-  }));
+  useUIStore(
+    useShallow((state) => ({
+      notifications: state.notifications,
+      add: state.addNotification,
+      remove: state.removeNotification,
+      clear: state.clearNotifications,
+    }))
+  );
 
 export const useBreadcrumbs = () =>
-  useUIStore((state) => ({
-    breadcrumbs: state.breadcrumbs,
-    set: state.setBreadcrumbs,
-    clear: state.clearBreadcrumbs,
-  }));
+  useUIStore(
+    useShallow((state) => ({
+      breadcrumbs: state.breadcrumbs,
+      set: state.setBreadcrumbs,
+      clear: state.clearBreadcrumbs,
+    }))
+  );
 
 export default useUIStore;
