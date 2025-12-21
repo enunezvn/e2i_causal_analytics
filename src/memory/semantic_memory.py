@@ -343,19 +343,24 @@ class FalkorDBSemanticMemory:
 
         Args:
             patient_id: Patient entity ID
-            max_depth: Maximum traversal depth
+            max_depth: Maximum traversal depth (1-5, clamped for safety)
 
         Returns:
             Dict with patient_id, hcps, treatments, triggers, causal_paths
         """
-        query = """
-        MATCH (p:Patient {id: $patient_id})-[r*1..$max_depth]-(connected)
-        RETURN p, r, connected
+        # Sanitize max_depth to prevent injection and limit traversal
+        safe_depth = max(1, min(5, int(max_depth)))
+
+        # FalkorDB doesn't support parameterized variable-length bounds,
+        # so we use string formatting with the sanitized value
+        query = f"""
+        MATCH (p:Patient {{id: $patient_id}})-[*1..{safe_depth}]-(connected)
+        RETURN DISTINCT connected
         """
 
         result = self.graph.query(
             query,
-            {"patient_id": patient_id, "max_depth": max_depth}
+            {"patient_id": patient_id}
         )
 
         network = {
@@ -368,7 +373,7 @@ class FalkorDBSemanticMemory:
         }
 
         for record in result.result_set:
-            connected = record[2]
+            connected = record[0]  # Now first element since we only return connected
             labels = connected.labels if hasattr(connected, 'labels') else []
 
             node_data = {
@@ -399,19 +404,23 @@ class FalkorDBSemanticMemory:
 
         Args:
             hcp_id: HCP entity ID
-            max_depth: Maximum traversal depth
+            max_depth: Maximum traversal depth (1-5, clamped for safety)
 
         Returns:
             Dict with hcp_id, influenced_hcps, patients, brands_prescribed
         """
-        query = """
-        MATCH (h:HCP {id: $hcp_id})-[r*1..$max_depth]-(connected)
-        RETURN h, r, connected, type(r) as rel_type
+        # Sanitize max_depth to prevent injection and limit traversal
+        safe_depth = max(1, min(5, int(max_depth)))
+
+        # FalkorDB doesn't support parameterized variable-length bounds
+        query = f"""
+        MATCH (h:HCP {{id: $hcp_id}})-[*1..{safe_depth}]-(connected)
+        RETURN DISTINCT connected
         """
 
         result = self.graph.query(
             query,
-            {"hcp_id": hcp_id, "max_depth": max_depth}
+            {"hcp_id": hcp_id}
         )
 
         network = {
@@ -422,13 +431,11 @@ class FalkorDBSemanticMemory:
         }
 
         for record in result.result_set:
-            connected = record[2]
-            rel_type = record[3] if len(record) > 3 else None
+            connected = record[0]  # First element since we only return connected
             labels = connected.labels if hasattr(connected, 'labels') else []
 
             node_data = {
                 "id": connected.properties.get("id"),
-                "relationship": rel_type,
                 "properties": dict(connected.properties)
             }
 
@@ -457,21 +464,25 @@ class FalkorDBSemanticMemory:
 
         Args:
             start_entity_id: Starting entity ID
-            max_depth: Maximum chain length
+            max_depth: Maximum chain length (1-5, clamped for safety)
 
         Returns:
             List of causal chains with nodes and relationships
         """
-        query = """
-        MATCH path = (s {id: $start_id})-[:CAUSES|IMPACTS*1..$max_depth]->(t)
+        # Sanitize max_depth to prevent injection and limit traversal
+        safe_depth = max(1, min(5, int(max_depth)))
+
+        # FalkorDB doesn't support parameterized variable-length bounds
+        query = f"""
+        MATCH path = (s {{id: $start_id}})-[:CAUSES|IMPACTS*1..{safe_depth}]->(t)
         RETURN
-            [n IN nodes(path) | {id: n.id, type: labels(n)[0]}] as nodes,
-            [r IN relationships(path) | {type: type(r), conf: r.confidence}] as rels
+            [n IN nodes(path) | {{id: n.id, type: labels(n)[0]}}] as nodes,
+            [r IN relationships(path) | {{type: type(r), conf: r.confidence}}] as rels
         """
 
         result = self.graph.query(
             query,
-            {"start_id": start_entity_id, "max_depth": max_depth}
+            {"start_id": start_entity_id}
         )
 
         chains = []
@@ -612,6 +623,214 @@ class FalkorDBSemanticMemory:
             "nodes_by_type": node_counts,
             "relationships_by_type": rel_counts
         }
+
+    # ========================================================================
+    # GRAPH API METHODS
+    # ========================================================================
+
+    def list_nodes(
+        self,
+        entity_types: Optional[List[str]] = None,
+        search: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        """
+        List nodes with filtering and pagination.
+
+        Args:
+            entity_types: Filter by node labels
+            search: Text search in node properties
+            limit: Maximum results
+            offset: Pagination offset
+
+        Returns:
+            List of node dictionaries
+        """
+        # Build WHERE clauses
+        where_parts = []
+        params = {}
+
+        if entity_types:
+            labels_match = " OR ".join([f"'{t}' IN labels(n)" for t in entity_types])
+            where_parts.append(f"({labels_match})")
+
+        if search:
+            where_parts.append("(n.name CONTAINS $search OR n.id CONTAINS $search)")
+            params["search"] = search
+
+        where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+
+        query = f"""
+        MATCH (n)
+        {where_clause}
+        RETURN n, labels(n)[0] as type
+        SKIP {offset}
+        LIMIT {limit}
+        """
+
+        result = self.graph.query(query, params)
+
+        nodes = []
+        for record in result.result_set:
+            node = record[0]
+            node_type = record[1]
+            node_dict = dict(node.properties)
+            node_dict["type"] = node_type
+            node_dict["id"] = node_dict.get("id", str(node.id))
+            nodes.append(node_dict)
+
+        return nodes
+
+    def count_nodes(
+        self,
+        entity_types: Optional[List[str]] = None,
+        search: Optional[str] = None
+    ) -> int:
+        """Count nodes matching filters."""
+        where_parts = []
+        params = {}
+
+        if entity_types:
+            labels_match = " OR ".join([f"'{t}' IN labels(n)" for t in entity_types])
+            where_parts.append(f"({labels_match})")
+
+        if search:
+            where_parts.append("(n.name CONTAINS $search OR n.id CONTAINS $search)")
+            params["search"] = search
+
+        where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+
+        query = f"""
+        MATCH (n)
+        {where_clause}
+        RETURN count(n) as count
+        """
+
+        result = self.graph.query(query, params)
+        return result.result_set[0][0] if result.result_set else 0
+
+    def list_relationships(
+        self,
+        relationship_types: Optional[List[str]] = None,
+        source_id: Optional[str] = None,
+        target_id: Optional[str] = None,
+        min_confidence: Optional[float] = None,
+        limit: int = 50,
+        offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        """
+        List relationships with filtering and pagination.
+
+        Args:
+            relationship_types: Filter by relationship types
+            source_id: Filter by source node ID
+            target_id: Filter by target node ID
+            min_confidence: Minimum confidence threshold
+            limit: Maximum results
+            offset: Pagination offset
+
+        Returns:
+            List of relationship dictionaries
+        """
+        where_parts = []
+        params = {}
+
+        if source_id:
+            where_parts.append("s.id = $source_id")
+            params["source_id"] = source_id
+
+        if target_id:
+            where_parts.append("t.id = $target_id")
+            params["target_id"] = target_id
+
+        if min_confidence is not None:
+            where_parts.append("r.confidence >= $min_confidence")
+            params["min_confidence"] = min_confidence
+
+        where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+
+        # Build relationship type pattern
+        if relationship_types:
+            rel_pattern = "|".join(relationship_types)
+            rel_match = f"-[r:{rel_pattern}]->"
+        else:
+            rel_match = "-[r]->"
+
+        query = f"""
+        MATCH (s){rel_match}(t)
+        {where_clause}
+        RETURN r, s.id as source_id, t.id as target_id, type(r) as rel_type
+        SKIP {offset}
+        LIMIT {limit}
+        """
+
+        result = self.graph.query(query, params)
+
+        relationships = []
+        for record in result.result_set:
+            rel = record[0]
+            rel_dict = dict(rel.properties) if rel.properties else {}
+            rel_dict["id"] = str(rel.id)
+            rel_dict["source_id"] = record[1]
+            rel_dict["target_id"] = record[2]
+            rel_dict["type"] = record[3]
+            relationships.append(rel_dict)
+
+        return relationships
+
+    def count_relationships(
+        self,
+        relationship_types: Optional[List[str]] = None,
+        source_id: Optional[str] = None,
+        target_id: Optional[str] = None
+    ) -> int:
+        """Count relationships matching filters."""
+        where_parts = []
+        params = {}
+
+        if source_id:
+            where_parts.append("s.id = $source_id")
+            params["source_id"] = source_id
+
+        if target_id:
+            where_parts.append("t.id = $target_id")
+            params["target_id"] = target_id
+
+        where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+
+        if relationship_types:
+            rel_pattern = "|".join(relationship_types)
+            rel_match = f"-[r:{rel_pattern}]->"
+        else:
+            rel_match = "-[r]->"
+
+        query = f"""
+        MATCH (s){rel_match}(t)
+        {where_clause}
+        RETURN count(r) as count
+        """
+
+        result = self.graph.query(query, params)
+        return result.result_set[0][0] if result.result_set else 0
+
+    def get_node(self, node_id: str) -> Optional[Dict[str, Any]]:
+        """Get a single node by ID."""
+        query = """
+        MATCH (n {id: $node_id})
+        RETURN n, labels(n)[0] as type
+        """
+        result = self.graph.query(query, {"node_id": node_id})
+
+        if result.result_set and len(result.result_set) > 0:
+            node = result.result_set[0][0]
+            node_type = result.result_set[0][1]
+            node_dict = dict(node.properties)
+            node_dict["type"] = node_type
+            node_dict["id"] = node_dict.get("id", str(node.id))
+            return node_dict
+
+        return None
 
 
 # ============================================================================
