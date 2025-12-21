@@ -1,0 +1,198 @@
+/**
+ * TanStack Query Client Configuration
+ * ====================================
+ *
+ * Centralized QueryClient configuration with sensible defaults for
+ * caching, stale time, and error handling.
+ *
+ * Usage:
+ *   import { queryClient } from '@/lib/query-client'
+ *   // Used in main.tsx with QueryClientProvider
+ */
+
+import { QueryClient } from '@tanstack/react-query';
+import { env } from '@/config/env';
+
+/**
+ * Default stale time for queries (5 minutes)
+ * Queries won't refetch if the data is fresher than this
+ */
+const DEFAULT_STALE_TIME = 5 * 60 * 1000;
+
+/**
+ * Default garbage collection time (10 minutes)
+ * Inactive queries are garbage collected after this time
+ */
+const DEFAULT_GC_TIME = 10 * 60 * 1000;
+
+/**
+ * Default retry configuration
+ * Retries failed queries up to 3 times with exponential backoff
+ */
+const DEFAULT_RETRY = 3;
+
+/**
+ * Custom retry delay function with exponential backoff
+ * @param attemptIndex - The current retry attempt (0-indexed)
+ * @returns Delay in milliseconds before next retry
+ */
+function getRetryDelay(attemptIndex: number): number {
+  // Exponential backoff: 1s, 2s, 4s, 8s...
+  const baseDelay = 1000;
+  const maxDelay = 30000;
+  const delay = Math.min(baseDelay * Math.pow(2, attemptIndex), maxDelay);
+  return delay;
+}
+
+/**
+ * Determine if a failed request should be retried
+ * @param failureCount - Number of failures so far
+ * @param error - The error that occurred
+ * @returns Whether to retry the request
+ */
+function shouldRetry(failureCount: number, error: unknown): boolean {
+  // Don't retry if we've hit the max retries
+  if (failureCount >= DEFAULT_RETRY) {
+    return false;
+  }
+
+  // Don't retry client errors (4xx) except 408 (Request Timeout) and 429 (Too Many Requests)
+  if (error instanceof Error && 'status' in error) {
+    const status = (error as { status: number }).status;
+    if (status >= 400 && status < 500 && status !== 408 && status !== 429) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
+ * Global error handler for mutations
+ * Logs errors in development mode
+ */
+function handleMutationError(error: unknown): void {
+  if (env.isDev) {
+    console.error('[Query] Mutation error:', error);
+  }
+}
+
+/**
+ * Create and configure the QueryClient instance
+ */
+function createQueryClient(): QueryClient {
+  return new QueryClient({
+    defaultOptions: {
+      queries: {
+        // Data freshness settings
+        staleTime: DEFAULT_STALE_TIME,
+        gcTime: DEFAULT_GC_TIME,
+
+        // Retry configuration
+        retry: shouldRetry,
+        retryDelay: getRetryDelay,
+
+        // Refetch behavior
+        refetchOnWindowFocus: env.isProd, // Only refetch on focus in production
+        refetchOnReconnect: true,
+        refetchOnMount: true,
+
+        // Network mode - online means queries will pause when offline
+        networkMode: 'online',
+      },
+      mutations: {
+        // Retry mutations only once
+        retry: 1,
+        retryDelay: getRetryDelay,
+
+        // Error handling
+        onError: handleMutationError,
+
+        // Network mode
+        networkMode: 'online',
+      },
+    },
+  });
+}
+
+/**
+ * Main QueryClient instance
+ * Pre-configured with optimal defaults for the application
+ */
+export const queryClient = createQueryClient();
+
+/**
+ * Query key factory for consistent key generation
+ * Use these helpers to create type-safe query keys
+ */
+export const queryKeys = {
+  /**
+   * Root key for all queries
+   */
+  all: ['e2i'] as const,
+
+  /**
+   * Graph-related queries
+   */
+  graph: {
+    all: () => [...queryKeys.all, 'graph'] as const,
+    nodes: () => [...queryKeys.graph.all(), 'nodes'] as const,
+    node: (id: string) => [...queryKeys.graph.all(), 'node', id] as const,
+    nodeNetwork: (id: string) =>
+      [...queryKeys.graph.all(), 'node', id, 'network'] as const,
+    relationships: () => [...queryKeys.graph.all(), 'relationships'] as const,
+    stats: () => [...queryKeys.graph.all(), 'stats'] as const,
+    search: (query: string) =>
+      [...queryKeys.graph.all(), 'search', query] as const,
+  },
+
+  /**
+   * Memory-related queries
+   */
+  memory: {
+    all: () => [...queryKeys.all, 'memory'] as const,
+    working: () => [...queryKeys.memory.all(), 'working'] as const,
+    semantic: () => [...queryKeys.memory.all(), 'semantic'] as const,
+    episodic: () => [...queryKeys.memory.all(), 'episodic'] as const,
+  },
+
+  /**
+   * Cognitive-related queries
+   */
+  cognitive: {
+    all: () => [...queryKeys.all, 'cognitive'] as const,
+    status: () => [...queryKeys.cognitive.all(), 'status'] as const,
+  },
+
+  /**
+   * Explain-related queries (XAI)
+   */
+  explain: {
+    all: () => [...queryKeys.all, 'explain'] as const,
+    model: () => [...queryKeys.explain.all(), 'model'] as const,
+    prediction: (predictionId: string) =>
+      [...queryKeys.explain.all(), 'prediction', predictionId] as const,
+    shap: (modelId: string) =>
+      [...queryKeys.explain.all(), 'shap', modelId] as const,
+  },
+
+  /**
+   * RAG-related queries
+   */
+  rag: {
+    all: () => [...queryKeys.all, 'rag'] as const,
+    documents: () => [...queryKeys.rag.all(), 'documents'] as const,
+    query: (queryText: string) =>
+      [...queryKeys.rag.all(), 'query', queryText] as const,
+  },
+
+  /**
+   * Health check queries
+   */
+  health: {
+    all: () => [...queryKeys.all, 'health'] as const,
+    api: () => [...queryKeys.health.all(), 'api'] as const,
+  },
+} as const;
+
+export default queryClient;
