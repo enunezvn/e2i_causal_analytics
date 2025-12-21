@@ -12,10 +12,10 @@ from typing import Any, Dict, Optional
 
 from langgraph.graph import END, StateGraph
 
-from .state import PredictionSynthesizerState
-from .nodes.model_orchestrator import ModelOrchestratorNode
-from .nodes.ensemble_combiner import EnsembleCombinerNode
 from .nodes.context_enricher import ContextEnricherNode
+from .nodes.ensemble_combiner import EnsembleCombinerNode
+from .nodes.model_orchestrator import ModelOrchestratorNode
+from .state import PredictionSynthesizerState
 
 logger = logging.getLogger(__name__)
 
@@ -102,8 +102,7 @@ async def _error_handler_node(
         **state,
         "prediction_summary": "Prediction could not be generated due to errors.",
         "total_latency_ms": (
-            state.get("orchestration_latency_ms", 0)
-            + state.get("ensemble_latency_ms", 0)
+            state.get("orchestration_latency_ms", 0) + state.get("ensemble_latency_ms", 0)
         ),
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "status": "failed",

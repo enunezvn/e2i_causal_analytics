@@ -9,12 +9,9 @@ import logging
 import os
 import time
 from dataclasses import asdict
-from typing import List, Dict, Any, Optional, Union
+from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
-
-from src.rag.models.retrieval_models import RetrievalResult, RetrievalContext
-from src.rag.models.insight_models import EnrichedInsight
+from src.rag.models.retrieval_models import RetrievalContext, RetrievalResult
 
 logger = logging.getLogger(__name__)
 
@@ -75,24 +72,23 @@ class CausalRAG:
         # 1. Semantic retrieval from vector store
         if self.vector_retriever:
             vector_results = self.vector_retriever.search(
-                query.text if hasattr(query, 'text') else str(query),
-                k=top_k
+                query.text if hasattr(query, "text") else str(query), k=top_k
             )
             all_results.extend(vector_results)
 
         # 2. Graph-based retrieval for causal queries
-        if self.graph_retriever and hasattr(query, 'intent'):
+        if self.graph_retriever and hasattr(query, "intent"):
             # Only use graph retrieval for causal intent queries
             if query.intent and query.intent.value == "causal":
                 graph_results = self.graph_retriever.traverse(
-                    entities=query.entities if hasattr(query, 'entities') else [],
-                    relationship="causal_path"
+                    entities=query.entities if hasattr(query, "entities") else [],
+                    relationship="causal_path",
                 )
                 all_results.extend(graph_results)
 
         # 3. Structured retrieval for KPI queries
-        if self.kpi_retriever and hasattr(query, 'entities'):
-            if hasattr(query.entities, 'kpis') and query.entities.kpis:
+        if self.kpi_retriever and hasattr(query, "entities"):
+            if hasattr(query.entities, "kpis") and query.entities.kpis:
                 kpi_results = self.kpi_retriever.query(query.entities.kpis)
                 all_results.extend(kpi_results)
 
@@ -115,6 +111,7 @@ class CausalRAG:
             RetrievalContext with results and metadata
         """
         import time
+
         start_time = time.time()
 
         results = self.retrieve(query, top_k, retrieval_config)
@@ -172,19 +169,18 @@ class CausalRAG:
         try:
             # Lazy import to avoid circular dependencies
             import dspy
-            from src.rag.cognitive_rag_dspy import (
-                create_dspy_cognitive_workflow,
-                CognitiveState,
-            )
+
             from src.rag.cognitive_backends import get_cognitive_memory_backends
+            from src.rag.cognitive_rag_dspy import (
+                CognitiveState,
+                create_dspy_cognitive_workflow,
+            )
 
             # Configure DSPy LM if not already configured
-            if not hasattr(dspy.settings, 'lm') or dspy.settings.lm is None:
+            if not hasattr(dspy.settings, "lm") or dspy.settings.lm is None:
                 api_key = os.environ.get("ANTHROPIC_API_KEY")
                 if not api_key:
-                    raise ValueError(
-                        "ANTHROPIC_API_KEY required for cognitive search"
-                    )
+                    raise ValueError("ANTHROPIC_API_KEY required for cognitive search")
                 lm = dspy.LM("anthropic/claude-sonnet-4-20250514")
                 dspy.configure(lm=lm)
                 logger.info("Configured DSPy LM for cognitive workflow")
@@ -206,15 +202,16 @@ class CausalRAG:
                 memory_writers=backends["writers"],
                 agent_registry=agent_registry or {},
                 signal_collector=backends["signal_collector"],
-                domain_vocabulary=domain_vocabulary.strip()
+                domain_vocabulary=domain_vocabulary.strip(),
             )
 
             # Initialize cognitive state
             import uuid
+
             initial_state = CognitiveState(
                 user_query=query,
                 conversation_id=conversation_id or str(uuid.uuid4()),
-                compressed_history=conversation_history or ""
+                compressed_history=conversation_history or "",
             )
 
             # Execute cognitive cycle
@@ -225,8 +222,10 @@ class CausalRAG:
             # Convert Evidence objects to dicts for serialization
             evidence_list = []
             for ev in result_state.evidence_board:
-                if hasattr(ev, '__dict__'):
-                    evidence_list.append(asdict(ev) if hasattr(ev, '__dataclass_fields__') else ev.__dict__)
+                if hasattr(ev, "__dict__"):
+                    evidence_list.append(
+                        asdict(ev) if hasattr(ev, "__dataclass_fields__") else ev.__dict__
+                    )
                 else:
                     evidence_list.append({"content": str(ev)})
 
@@ -246,9 +245,7 @@ class CausalRAG:
 
         except ImportError as e:
             logger.error(f"Cognitive search import error: {e}")
-            raise RuntimeError(
-                f"Cognitive search requires additional dependencies: {e}"
-            ) from e
+            raise RuntimeError(f"Cognitive search requires additional dependencies: {e}") from e
         except Exception as e:
             elapsed_ms = (time.time() - start_time) * 1000
             logger.error(f"Cognitive search failed: {e}")

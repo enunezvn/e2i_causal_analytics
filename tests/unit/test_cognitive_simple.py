@@ -4,27 +4,29 @@ This test uses inline implementations to avoid relative import issues.
 """
 
 import asyncio
-import os
 import json
+import os
 import uuid
 from datetime import datetime, timezone
-from typing import TypedDict, Annotated, Literal, Optional, List, Dict, Any
 from pathlib import Path
-import operator
+from typing import Any, Dict, List, Optional, TypedDict
 
 from dotenv import load_dotenv
+
 load_dotenv()
 
-from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
-from pydantic import BaseModel, Field
+from langgraph.graph import END, StateGraph
+from pydantic import BaseModel
 
 # ============================================================================
 # SERVICE CLIENTS
 # ============================================================================
 
+
 def get_supabase_client():
     from supabase import create_client
+
     url = os.environ.get("SUPABASE_URL")
     key = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ.get("SUPABASE_ANON_KEY")
     return create_client(url, key)
@@ -32,6 +34,7 @@ def get_supabase_client():
 
 def get_falkordb_client():
     from falkordb import FalkorDB
+
     host = os.environ.get("FALKORDB_HOST", "localhost")
     port = int(os.environ.get("FALKORDB_PORT", "6381"))  # e2i port
     return FalkorDB(host=host, port=port)
@@ -40,6 +43,7 @@ def get_falkordb_client():
 class AnthropicLLM:
     def __init__(self):
         import anthropic
+
         self.client = anthropic.Anthropic()
         self.model = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
 
@@ -48,7 +52,7 @@ class AnthropicLLM:
             model=self.model,
             max_tokens=max_tokens,
             temperature=0.3,
-            messages=[{"role": "user", "content": prompt}]
+            messages=[{"role": "user", "content": prompt}],
         )
         return response.content[0].text
 
@@ -56,20 +60,19 @@ class AnthropicLLM:
 class OpenAIEmbeddings:
     def __init__(self):
         import openai
+
         self.client = openai.OpenAI()
         self.model = "text-embedding-3-small"
 
     async def embed(self, text: str) -> List[float]:
-        response = self.client.embeddings.create(
-            model=self.model,
-            input=text
-        )
+        response = self.client.embeddings.create(model=self.model, input=text)
         return response.data[0].embedding
 
 
 # ============================================================================
 # STATE DEFINITIONS
 # ============================================================================
+
 
 class EvidenceItem(BaseModel):
     hop_number: int
@@ -117,6 +120,7 @@ class CognitiveState(TypedDict):
 # ============================================================================
 # COGNITIVE WORKFLOW PHASES
 # ============================================================================
+
 
 async def summarizer_node(state: CognitiveState) -> CognitiveState:
     """Phase 1: Input & Context Pruning"""
@@ -190,36 +194,44 @@ async def investigator_node(state: CognitiveState) -> CognitiveState:
         graph = client.select_graph("e2i_semantic")
 
         # Query for Kisqali relationships
-        result = graph.query("""
+        result = graph.query(
+            """
             MATCH (h:HCP)-[r:PRESCRIBES]->(b:Brand {name: 'Kisqali'})
             RETURN h.name as hcp, h.specialty as specialty, r.volume_monthly as volume, r.market_share as share
-        """)
+        """
+        )
 
         for record in result.result_set:
-            state["evidence_trail"].append({
-                "hop_number": 1,
-                "source": "semantic",
-                "query_type": "graph_traversal",
-                "content": f"HCP {record[0]} ({record[1]}) prescribes Kisqali: volume={record[2]}, share={record[3]}",
-                "relevance_score": 0.85,
-                "selected": True
-            })
+            state["evidence_trail"].append(
+                {
+                    "hop_number": 1,
+                    "source": "semantic",
+                    "query_type": "graph_traversal",
+                    "content": f"HCP {record[0]} ({record[1]}) prescribes Kisqali: volume={record[2]}, share={record[3]}",
+                    "relevance_score": 0.85,
+                    "selected": True,
+                }
+            )
 
         # Query HCP influence network
-        result = graph.query("""
+        result = graph.query(
+            """
             MATCH (h1:HCP)-[r:INFLUENCES]->(h2:HCP)
             RETURN h1.name, h2.name, r.influence_strength
-        """)
+        """
+        )
 
         for record in result.result_set:
-            state["evidence_trail"].append({
-                "hop_number": 1,
-                "source": "semantic",
-                "query_type": "influence_network",
-                "content": f"{record[0]} influences {record[1]} (strength: {record[2]})",
-                "relevance_score": 0.75,
-                "selected": True
-            })
+            state["evidence_trail"].append(
+                {
+                    "hop_number": 1,
+                    "source": "semantic",
+                    "query_type": "influence_network",
+                    "content": f"{record[0]} influences {record[1]} (strength: {record[2]})",
+                    "relevance_score": 0.75,
+                    "selected": True,
+                }
+            )
 
     except Exception as e:
         print(f"    Warning: FalkorDB query failed: {e}")
@@ -233,14 +245,16 @@ async def investigator_node(state: CognitiveState) -> CognitiveState:
         result = supabase.table("episodic_memories").select("*").limit(5).execute()
 
         for mem in result.data:
-            state["evidence_trail"].append({
-                "hop_number": 2,
-                "source": "episodic",
-                "query_type": "vector_search",
-                "content": mem.get("description", "No description"),
-                "relevance_score": 0.7,
-                "selected": True
-            })
+            state["evidence_trail"].append(
+                {
+                    "hop_number": 2,
+                    "source": "episodic",
+                    "query_type": "vector_search",
+                    "content": mem.get("description", "No description"),
+                    "relevance_score": 0.7,
+                    "selected": True,
+                }
+            )
     except Exception as e:
         print(f"    Warning: Supabase query failed: {e}")
 
@@ -267,15 +281,14 @@ async def agent_node(state: CognitiveState) -> CognitiveState:
         "causal_intents": ["causal_impact", "explainer"],
         "trend_intents": ["drift_monitor", "explainer"],
         "comparison_intents": ["gap_analyzer", "explainer"],
-        "exploration_intents": ["orchestrator"]
+        "exploration_intents": ["orchestrator"],
     }
     state["agents_to_invoke"] = intent_to_agents.get(state["detected_intent"], ["orchestrator"])
 
     # Build evidence context
-    evidence_context = "\n".join([
-        f"- [{e['source']}] {e['content']}"
-        for e in state["evidence_trail"] if e.get("selected")
-    ])
+    evidence_context = "\n".join(
+        [f"- [{e['source']}] {e['content']}" for e in state["evidence_trail"] if e.get("selected")]
+    )
 
     if not evidence_context:
         evidence_context = "No specific evidence collected from memory stores."
@@ -305,8 +318,7 @@ Response:"""
 
     # Mock agent outputs
     state["agent_outputs"] = {
-        agent: {"status": "completed", "confidence": 0.8}
-        for agent in state["agents_to_invoke"]
+        agent: {"status": "completed", "confidence": 0.8} for agent in state["agents_to_invoke"]
     }
 
     # Calculate confidence
@@ -352,11 +364,13 @@ Should this be remembered? Answer REMEMBER or SKIP with brief reason."""
 
     if state["worth_remembering"] and state["confidence_score"] > 0.6:
         # Record a procedural memory
-        state["new_procedures"].append({
-            "procedure_name": f"{state['detected_intent']}_procedure",
-            "tool_sequence": state["agents_to_invoke"],
-            "success_rate": state["confidence_score"]
-        })
+        state["new_procedures"].append(
+            {
+                "procedure_name": f"{state['detected_intent']}_procedure",
+                "tool_sequence": state["agents_to_invoke"],
+                "success_rate": state["confidence_score"],
+            }
+        )
 
         # Try to store episodic memory
         try:
@@ -369,8 +383,16 @@ Should this be remembered? Answer REMEMBER or SKIP with brief reason."""
                 "entities": json.dumps(state["detected_entities"]),
                 "outcome_type": "success" if state["confidence_score"] > 0.6 else "partial_success",
                 "importance_score": state["confidence_score"],
-                "brand": state["detected_entities"].get("brands", [""])[0] if state["detected_entities"].get("brands") else None,
-                "region": state["detected_entities"].get("regions", [""])[0] if state["detected_entities"].get("regions") else None
+                "brand": (
+                    state["detected_entities"].get("brands", [""])[0]
+                    if state["detected_entities"].get("brands")
+                    else None
+                ),
+                "region": (
+                    state["detected_entities"].get("regions", [""])[0]
+                    if state["detected_entities"].get("regions")
+                    else None
+                ),
             }
             supabase.table("episodic_memories").insert(episodic_entry).execute()
             print("    ✓ Episodic memory stored")
@@ -386,6 +408,7 @@ Should this be remembered? Answer REMEMBER or SKIP with brief reason."""
 # ============================================================================
 # WORKFLOW CONSTRUCTION
 # ============================================================================
+
 
 def create_cognitive_workflow():
     workflow = StateGraph(CognitiveState)
@@ -435,7 +458,7 @@ def get_initial_state(user_query: str, user_id: Optional[str] = None) -> Cogniti
         feedback_signals=[],
         phase_timings={},
         error=None,
-        phase_completed="init"
+        phase_completed="init",
     )
 
 
@@ -452,6 +475,7 @@ async def run_cognitive_cycle(user_query: str, user_id: Optional[str] = None):
 # ============================================================================
 # REPORT GENERATION
 # ============================================================================
+
 
 def generate_markdown_report(result: CognitiveState, output_path: Optional[str] = None) -> str:
     """Generate a comprehensive markdown report from the cognitive cycle results."""
@@ -473,7 +497,9 @@ def generate_markdown_report(result: CognitiveState, output_path: Optional[str] 
         evidence_rows.append(
             f"| {e.get('hop_number', '-')} | {e.get('source', '-')} | {e.get('query_type', '-')} | {e.get('content', '-')[:60]}... | {e.get('relevance_score', 0):.0%} |"
         )
-    evidence_table = "\n".join(evidence_rows) if evidence_rows else "| - | - | - | No evidence collected | - |"
+    evidence_table = (
+        "\n".join(evidence_rows) if evidence_rows else "| - | - | - | No evidence collected | - |"
+    )
 
     # Build agent outputs table
     agent_rows = []
@@ -607,40 +633,43 @@ def generate_markdown_report(result: CognitiveState, output_path: Optional[str] 
 # MAIN TEST
 # ============================================================================
 
+
 async def main():
-    print("="*70)
+    print("=" * 70)
     print("E2I COGNITIVE CYCLE TEST")
-    print("="*70)
+    print("=" * 70)
 
     test_query = "Why did Kisqali adoption increase in the Northeast last quarter?"
     print(f"\nQuery: {test_query}\n")
-    print("-"*70)
+    print("-" * 70)
 
     result = await run_cognitive_cycle(test_query, "test_analyst")
 
-    print("\n" + "="*70)
+    print("\n" + "=" * 70)
     print("RESULTS")
-    print("="*70)
+    print("=" * 70)
     print(f"\nIntent: {result['detected_intent']}")
     print(f"Entities: {result['detected_entities']}")
     print(f"Evidence Items: {len(result['evidence_trail'])}")
     print(f"Agents Used: {result['agents_to_invoke']}")
-    print(f"Confidence: {result['confidence_score']:.0%}" if result['confidence_score'] else "N/A")
+    print(f"Confidence: {result['confidence_score']:.0%}" if result["confidence_score"] else "N/A")
     print(f"Worth Remembering: {result['worth_remembering']}")
     print(f"\n{'='*70}")
     print("RESPONSE")
-    print("="*70)
-    print(result['synthesized_response'])
+    print("=" * 70)
+    print(result["synthesized_response"])
 
     # Generate markdown report
-    print("\n" + "="*70)
+    print("\n" + "=" * 70)
     print("GENERATING REPORT")
-    print("="*70)
+    print("=" * 70)
 
-    report_filename = f"cognitive_cycle_report_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.md"
-    report = generate_markdown_report(result, report_filename)
+    report_filename = (
+        f"cognitive_cycle_report_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.md"
+    )
+    generate_markdown_report(result, report_filename)
 
-    print(f"\n✅ Cognitive cycle complete!")
+    print("\n✅ Cognitive cycle complete!")
 
 
 if __name__ == "__main__":

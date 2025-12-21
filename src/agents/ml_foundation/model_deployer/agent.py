@@ -20,7 +20,8 @@ Integration:
 - Database: ml_deployments, ml_model_registry
 """
 
-from typing import Dict, Any
+from typing import Any, Dict
+
 from .graph import create_model_deployer_graph
 from .state import ModelDeployerState
 
@@ -119,7 +120,9 @@ class ModelDeployerAgent:
             overall_status = "completed" if promotion_successful else "failed"
         else:
             # Full deployment
-            overall_status = "completed" if (promotion_successful and deployment_successful) else "partial"
+            overall_status = (
+                "completed" if (promotion_successful and deployment_successful) else "partial"
+            )
 
         # Build output
         output = {
@@ -184,11 +187,7 @@ class ModelDeployerAgent:
             "description": state.get("promotion_reason", "Automated deployment"),
         }
 
-    async def _store_to_database(
-        self,
-        output: Dict[str, Any],
-        state: Dict[str, Any]
-    ) -> None:
+    async def _store_to_database(self, output: Dict[str, Any], state: Dict[str, Any]) -> None:
         """Store deployment to ml_deployments and update ml_model_registry.
 
         Args:

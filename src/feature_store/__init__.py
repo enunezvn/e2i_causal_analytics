@@ -9,8 +9,8 @@ A lightweight feature store implementation using:
 
 from .client import FeatureStoreClient
 from .models import (
-    FeatureGroup,
     Feature,
+    FeatureGroup,
     FeatureValue,
     FeatureValueType,
     FreshnessStatus,

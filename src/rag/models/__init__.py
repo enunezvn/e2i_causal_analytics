@@ -7,15 +7,15 @@ Provides data models for:
 - Chunks for indexing
 """
 
+from src.rag.models.insight_models import (
+    Chunk,
+    EnrichedInsight,
+)
 from src.rag.models.retrieval_models import (
-    RetrievalResult,
-    RetrievalContext,
     RAGQuery,
     RAGResponse,
-)
-from src.rag.models.insight_models import (
-    EnrichedInsight,
-    Chunk,
+    RetrievalContext,
+    RetrievalResult,
 )
 
 __all__ = [

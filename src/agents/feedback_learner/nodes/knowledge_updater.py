@@ -85,9 +85,7 @@ class KnowledgeUpdaterNode:
                 "status": "failed",
             }
 
-    def _generate_updates(
-        self, recommendations: List[Dict[str, Any]]
-    ) -> List[KnowledgeUpdate]:
+    def _generate_updates(self, recommendations: List[Dict[str, Any]]) -> List[KnowledgeUpdate]:
         """Generate knowledge updates from recommendations."""
         updates: List[KnowledgeUpdate] = []
         now = datetime.now(timezone.utc).isoformat()

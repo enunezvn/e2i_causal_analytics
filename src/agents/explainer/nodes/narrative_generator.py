@@ -89,7 +89,7 @@ class NarrativeGeneratorNode:
     def _generate_narrative(self, state: ExplainerState) -> Dict[str, Any]:
         """Generate full narrative explanation."""
         insights = state.get("extracted_insights") or []
-        structure = state.get("narrative_structure") or []
+        state.get("narrative_structure") or []
         themes = state.get("key_themes") or []
         expertise = state.get("user_expertise", "analyst")
 
@@ -233,7 +233,7 @@ class NarrativeGeneratorNode:
         themes = state.get("key_themes") or []
 
         # Title slide content
-        title_content = f"**Analysis Results**\n\n"
+        title_content = "**Analysis Results**\n\n"
         title_content += "Key Themes:\n"
         for theme in themes:
             title_content += f"- {theme}\n"
@@ -263,9 +263,7 @@ class NarrativeGeneratorNode:
                 )
             )
 
-        combined = "\n\n---\n\n".join(
-            f"### {s['title']}\n\n{s['content']}" for s in sections
-        )
+        combined = "\n\n---\n\n".join(f"### {s['title']}\n\n{s['content']}" for s in sections)
 
         return {
             "executive_summary": title_content,
@@ -320,9 +318,7 @@ class NarrativeGeneratorNode:
 
         return summary
 
-    def _format_insights_section(
-        self, insights: List[Insight], expertise: str
-    ) -> str:
+    def _format_insights_section(self, insights: List[Insight], expertise: str) -> str:
         """Format insights for a section."""
         lines = []
 
@@ -346,12 +342,8 @@ class NarrativeGeneratorNode:
     def _create_next_steps(self, insights: List[Insight], expertise: str) -> str:
         """Create next steps section."""
         # Filter to actionable insights
-        immediate = [
-            i for i in insights if i.get("actionability") == "immediate"
-        ]
-        short_term = [
-            i for i in insights if i.get("actionability") == "short_term"
-        ]
+        immediate = [i for i in insights if i.get("actionability") == "immediate"]
+        short_term = [i for i in insights if i.get("actionability") == "short_term"]
 
         steps = []
 
@@ -367,7 +359,9 @@ class NarrativeGeneratorNode:
                 steps.append(f"- {i['statement']}")
 
         if not steps:
-            steps.append("Review the findings above and determine appropriate actions based on your strategic priorities.")
+            steps.append(
+                "Review the findings above and determine appropriate actions based on your strategic priorities."
+            )
 
         return "\n".join(steps)
 
@@ -386,37 +380,47 @@ class NarrativeGeneratorNode:
             analysis_type = ctx.get("analysis_type", "")
 
             if "causal" in analysis_type.lower():
-                suggestions.append({
-                    "type": "effect_plot",
-                    "title": "Causal Effect Estimate",
-                    "description": "Bar chart showing treatment effect with confidence interval",
-                })
+                suggestions.append(
+                    {
+                        "type": "effect_plot",
+                        "title": "Causal Effect Estimate",
+                        "description": "Bar chart showing treatment effect with confidence interval",
+                    }
+                )
             elif "roi" in analysis_type.lower() or "gap" in analysis_type.lower():
-                suggestions.append({
-                    "type": "opportunity_matrix",
-                    "title": "ROI Opportunity Matrix",
-                    "description": "Scatter plot of ROI potential vs. implementation effort",
-                })
+                suggestions.append(
+                    {
+                        "type": "opportunity_matrix",
+                        "title": "ROI Opportunity Matrix",
+                        "description": "Scatter plot of ROI potential vs. implementation effort",
+                    }
+                )
             elif "segment" in analysis_type.lower() or "heterogeneous" in analysis_type.lower():
-                suggestions.append({
-                    "type": "segment_effects",
-                    "title": "Effects by Segment",
-                    "description": "Grouped bar chart showing effects by segment",
-                })
+                suggestions.append(
+                    {
+                        "type": "segment_effects",
+                        "title": "Effects by Segment",
+                        "description": "Grouped bar chart showing effects by segment",
+                    }
+                )
             elif "trend" in analysis_type.lower() or "time" in analysis_type.lower():
-                suggestions.append({
-                    "type": "trend_line",
-                    "title": "Trend Analysis",
-                    "description": "Line chart showing trend over time",
-                })
+                suggestions.append(
+                    {
+                        "type": "trend_line",
+                        "title": "Trend Analysis",
+                        "description": "Line chart showing trend over time",
+                    }
+                )
 
         # Default suggestion if none matched
         if not suggestions:
-            suggestions.append({
-                "type": "summary_table",
-                "title": "Key Metrics Summary",
-                "description": "Table summarizing key metrics from the analysis",
-            })
+            suggestions.append(
+                {
+                    "type": "summary_table",
+                    "title": "Key Metrics Summary",
+                    "description": "Table summarizing key metrics from the analysis",
+                }
+            )
 
         return suggestions[:3]  # Return top 3 suggestions
 
@@ -439,9 +443,7 @@ class NarrativeGeneratorNode:
             follow_ups.append("What resources are needed to implement these changes?")
 
         if has_warning:
-            follow_ups.append(
-                "What additional data would strengthen confidence in these results?"
-            )
+            follow_ups.append("What additional data would strengthen confidence in these results?")
 
         if has_opportunity:
             follow_ups.append("What's the expected ROI for pursuing these opportunities?")

@@ -8,13 +8,14 @@ Hybrid pipeline:
   Node 3 (WITH LLM): NL Interpretation
 """
 
-from langgraph.graph import StateGraph, END
-from .state import FeatureAnalyzerState
+from langgraph.graph import END, StateGraph
+
 from .nodes import (
     compute_shap,
     detect_interactions,
     narrate_importance,
 )
+from .state import FeatureAnalyzerState
 
 
 def create_feature_analyzer_graph() -> StateGraph:
@@ -50,10 +51,7 @@ def create_feature_analyzer_graph() -> StateGraph:
     workflow.add_conditional_edges(
         "compute_shap",
         _should_continue_after_shap,
-        {
-            "detect_interactions": "detect_interactions",
-            "end": END
-        }
+        {"detect_interactions": "detect_interactions", "end": END},
     )
 
     # Continue to interpretation after interaction detection

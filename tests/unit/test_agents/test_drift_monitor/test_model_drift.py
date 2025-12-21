@@ -3,8 +3,9 @@
 Tests prediction score drift, prediction class drift, and edge cases.
 """
 
-import pytest
 import numpy as np
+import pytest
+
 from src.agents.drift_monitor.nodes.model_drift import ModelDriftNode
 from src.agents.drift_monitor.state import DriftMonitorState
 

@@ -27,9 +27,9 @@ Usage:
     checkpointer = get_langgraph_checkpointer()
 """
 
-import os
 import json
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -99,7 +99,9 @@ class RedisWorkingMemory:
                 self._checkpointer = RedisSaver.from_conn_string(redis_url)
                 logger.info("LangGraph RedisSaver checkpointer initialized")
             except ImportError:
-                logger.warning("langgraph-checkpoint-redis not installed, using memory checkpointer")
+                logger.warning(
+                    "langgraph-checkpoint-redis not installed, using memory checkpointer"
+                )
                 from langgraph.checkpoint.memory import MemorySaver
 
                 self._checkpointer = MemorySaver()
@@ -110,9 +112,7 @@ class RedisWorkingMemory:
     # ========================================================================
 
     async def create_session(
-        self,
-        user_id: Optional[str] = None,
-        initial_context: Optional[Dict[str, Any]] = None
+        self, user_id: Optional[str] = None, initial_context: Optional[Dict[str, Any]] = None
     ) -> str:
         """
         Create a new working memory session.
@@ -244,7 +244,7 @@ class RedisWorkingMemory:
         brand: Optional[str] = None,
         region: Optional[str] = None,
         patient_ids: Optional[List[str]] = None,
-        hcp_ids: Optional[List[str]] = None
+        hcp_ids: Optional[List[str]] = None,
     ) -> None:
         """
         Set E2I entity context for the session.
@@ -300,11 +300,7 @@ class RedisWorkingMemory:
     # ========================================================================
 
     async def add_message(
-        self,
-        session_id: str,
-        role: str,
-        content: str,
-        metadata: Optional[Dict[str, Any]] = None
+        self, session_id: str, role: str, content: str, metadata: Optional[Dict[str, Any]] = None
     ) -> None:
         """
         Add message to conversation history.
@@ -322,7 +318,7 @@ class RedisWorkingMemory:
             "role": role,
             "content": content,
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "metadata": json.dumps(metadata or {})
+            "metadata": json.dumps(metadata or {}),
         }
 
         await redis.rpush(messages_key, json.dumps(message))
@@ -336,9 +332,7 @@ class RedisWorkingMemory:
         await redis.hincrby(session_key, "message_count", 1)
 
     async def get_messages(
-        self,
-        session_id: str,
-        limit: Optional[int] = None
+        self, session_id: str, limit: Optional[int] = None
     ) -> List[Dict[str, Any]]:
         """
         Get recent messages from conversation.
@@ -387,11 +381,7 @@ class RedisWorkingMemory:
     # EVIDENCE BOARD (for multi-hop investigation)
     # ========================================================================
 
-    async def append_evidence(
-        self,
-        session_id: str,
-        evidence: Dict[str, Any]
-    ) -> None:
+    async def append_evidence(self, session_id: str, evidence: Dict[str, Any]) -> None:
         """
         Append evidence item to evidence board.
 
@@ -451,14 +441,16 @@ class RedisWorkingMemory:
         if not evidence:
             return {"count": 0, "sources": [], "max_relevance": 0.0}
 
-        sources = list(set(e.get("source", "unknown") for e in evidence))
+        sources = list({e.get("source", "unknown") for e in evidence})
         relevance_scores = [e.get("relevance", 0.0) for e in evidence]
 
         return {
             "count": len(evidence),
             "sources": sources,
             "max_relevance": max(relevance_scores) if relevance_scores else 0.0,
-            "avg_relevance": sum(relevance_scores) / len(relevance_scores) if relevance_scores else 0.0,
+            "avg_relevance": (
+                sum(relevance_scores) / len(relevance_scores) if relevance_scores else 0.0
+            ),
         }
 
     # ========================================================================

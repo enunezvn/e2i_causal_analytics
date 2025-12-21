@@ -11,30 +11,31 @@ Tests cover:
 Part of Phase 1, Checkpoint 1.2 validation.
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-import asyncio
 
+import pytest
+
+from src.rag.config import EmbeddingConfig
 from src.rag.embeddings import (
-    OpenAIEmbeddingClient,
     EmbeddingUsageStats,
+    OpenAIEmbeddingClient,
     get_embedding,
 )
-from src.rag.config import EmbeddingConfig
-from src.rag.exceptions import EmbeddingError, ConfigurationError
-
+from src.rag.exceptions import ConfigurationError, EmbeddingError
 
 # =============================================================================
 # Fixtures
 # =============================================================================
 
+
 @pytest.fixture
 def mock_embedding_response():
     """Create a mock OpenAI embedding response."""
+
     def create_response(texts, dimension=1536):
         """Factory for creating mock responses."""
         mock_data = []
-        for i, text in enumerate(texts if isinstance(texts, list) else [texts]):
+        for i, _text in enumerate(texts if isinstance(texts, list) else [texts]):
             mock_embedding = MagicMock()
             mock_embedding.embedding = [0.1 * (i + 1)] * dimension
             mock_data.append(mock_embedding)
@@ -58,15 +59,17 @@ def embedding_config():
         model_provider="openai",
         api_key="test-api-key",
         embedding_dimension=1536,
-        batch_size=10
+        batch_size=10,
     )
 
 
 @pytest.fixture
 def embedding_client(embedding_config):
     """Create test embedding client with mocked OpenAI clients."""
-    with patch("src.rag.embeddings.OpenAI") as mock_sync, \
-         patch("src.rag.embeddings.AsyncOpenAI") as mock_async:
+    with (
+        patch("src.rag.embeddings.OpenAI") as mock_sync,
+        patch("src.rag.embeddings.AsyncOpenAI") as mock_async,
+    ):
 
         client = OpenAIEmbeddingClient(embedding_config)
         client._mock_sync = mock_sync
@@ -77,6 +80,7 @@ def embedding_client(embedding_config):
 # =============================================================================
 # EmbeddingUsageStats Tests
 # =============================================================================
+
 
 class TestEmbeddingUsageStats:
     """Tests for usage statistics tracking."""
@@ -170,13 +174,13 @@ class TestEmbeddingUsageStats:
 # OpenAIEmbeddingClient Initialization Tests
 # =============================================================================
 
+
 class TestOpenAIEmbeddingClientInit:
     """Tests for client initialization."""
 
     def test_init_with_config(self, embedding_config):
         """Test initialization with config object."""
-        with patch("src.rag.embeddings.OpenAI"), \
-             patch("src.rag.embeddings.AsyncOpenAI"):
+        with patch("src.rag.embeddings.OpenAI"), patch("src.rag.embeddings.AsyncOpenAI"):
 
             client = OpenAIEmbeddingClient(embedding_config)
 
@@ -186,18 +190,12 @@ class TestOpenAIEmbeddingClientInit:
 
     def test_init_with_explicit_params(self):
         """Test initialization with explicit parameters override config."""
-        config = EmbeddingConfig(
-            model_name="text-embedding-3-small",
-            api_key="config-key"
-        )
+        config = EmbeddingConfig(model_name="text-embedding-3-small", api_key="config-key")
 
-        with patch("src.rag.embeddings.OpenAI"), \
-             patch("src.rag.embeddings.AsyncOpenAI"):
+        with patch("src.rag.embeddings.OpenAI"), patch("src.rag.embeddings.AsyncOpenAI"):
 
             client = OpenAIEmbeddingClient(
-                config=config,
-                api_key="override-key",
-                model="text-embedding-3-large"
+                config=config, api_key="override-key", model="text-embedding-3-large"
             )
 
             assert client._api_key == "override-key"
@@ -207,10 +205,7 @@ class TestOpenAIEmbeddingClientInit:
         """Test initialization without API key raises error."""
         # Patch os.getenv to return None for OPENAI_API_KEY
         with patch("src.rag.config.os.getenv", return_value=None):
-            config = EmbeddingConfig(
-                model_name="text-embedding-3-small",
-                api_key=None
-            )
+            config = EmbeddingConfig(model_name="text-embedding-3-small", api_key=None)
 
             with pytest.raises(ConfigurationError) as exc_info:
                 OpenAIEmbeddingClient(config)
@@ -230,13 +225,16 @@ class TestOpenAIEmbeddingClientInit:
 # Synchronous Encoding Tests
 # =============================================================================
 
+
 class TestSyncEncoding:
     """Tests for synchronous embedding generation."""
 
     def test_encode_single_text(self, embedding_config, mock_embedding_response):
         """Test encoding a single text."""
-        with patch("src.rag.embeddings.OpenAI") as mock_openai, \
-             patch("src.rag.embeddings.AsyncOpenAI"):
+        with (
+            patch("src.rag.embeddings.OpenAI") as mock_openai,
+            patch("src.rag.embeddings.AsyncOpenAI"),
+        ):
 
             mock_client = MagicMock()
             mock_client.embeddings.create.return_value = mock_embedding_response(["test"])
@@ -253,8 +251,10 @@ class TestSyncEncoding:
         """Test encoding multiple texts."""
         texts = ["First text", "Second text", "Third text"]
 
-        with patch("src.rag.embeddings.OpenAI") as mock_openai, \
-             patch("src.rag.embeddings.AsyncOpenAI"):
+        with (
+            patch("src.rag.embeddings.OpenAI") as mock_openai,
+            patch("src.rag.embeddings.AsyncOpenAI"),
+        ):
 
             mock_client = MagicMock()
             mock_client.embeddings.create.return_value = mock_embedding_response(texts)
@@ -271,8 +271,10 @@ class TestSyncEncoding:
         """Test batch encoding splits into correct batches."""
         texts = [f"Text {i}" for i in range(25)]  # 3 batches with batch_size=10
 
-        with patch("src.rag.embeddings.OpenAI") as mock_openai, \
-             patch("src.rag.embeddings.AsyncOpenAI"):
+        with (
+            patch("src.rag.embeddings.OpenAI") as mock_openai,
+            patch("src.rag.embeddings.AsyncOpenAI"),
+        ):
 
             mock_client = MagicMock()
             # Return different responses for each batch
@@ -291,11 +293,15 @@ class TestSyncEncoding:
 
     def test_encode_with_custom_dimensions(self, embedding_config, mock_embedding_response):
         """Test encoding with custom dimensions."""
-        with patch("src.rag.embeddings.OpenAI") as mock_openai, \
-             patch("src.rag.embeddings.AsyncOpenAI"):
+        with (
+            patch("src.rag.embeddings.OpenAI") as mock_openai,
+            patch("src.rag.embeddings.AsyncOpenAI"),
+        ):
 
             mock_client = MagicMock()
-            mock_client.embeddings.create.return_value = mock_embedding_response(["test"], dimension=512)
+            mock_client.embeddings.create.return_value = mock_embedding_response(
+                ["test"], dimension=512
+            )
             mock_openai.return_value = mock_client
 
             client = OpenAIEmbeddingClient(embedding_config)
@@ -310,14 +316,17 @@ class TestSyncEncoding:
 # Asynchronous Encoding Tests
 # =============================================================================
 
+
 class TestAsyncEncoding:
     """Tests for asynchronous embedding generation."""
 
     @pytest.mark.asyncio
     async def test_encode_async_single_text(self, embedding_config, mock_embedding_response):
         """Test async encoding a single text."""
-        with patch("src.rag.embeddings.OpenAI"), \
-             patch("src.rag.embeddings.AsyncOpenAI") as mock_async_openai:
+        with (
+            patch("src.rag.embeddings.OpenAI"),
+            patch("src.rag.embeddings.AsyncOpenAI") as mock_async_openai,
+        ):
 
             mock_client = AsyncMock()
             mock_client.embeddings.create.return_value = mock_embedding_response(["test"])
@@ -334,8 +343,10 @@ class TestAsyncEncoding:
         """Test async encoding multiple texts."""
         texts = ["First", "Second", "Third"]
 
-        with patch("src.rag.embeddings.OpenAI"), \
-             patch("src.rag.embeddings.AsyncOpenAI") as mock_async_openai:
+        with (
+            patch("src.rag.embeddings.OpenAI"),
+            patch("src.rag.embeddings.AsyncOpenAI") as mock_async_openai,
+        ):
 
             mock_client = AsyncMock()
             mock_client.embeddings.create.return_value = mock_embedding_response(texts)
@@ -351,8 +362,10 @@ class TestAsyncEncoding:
         """Test async batch encoding with concurrency."""
         texts = [f"Text {i}" for i in range(25)]
 
-        with patch("src.rag.embeddings.OpenAI"), \
-             patch("src.rag.embeddings.AsyncOpenAI") as mock_async_openai:
+        with (
+            patch("src.rag.embeddings.OpenAI"),
+            patch("src.rag.embeddings.AsyncOpenAI") as mock_async_openai,
+        ):
 
             mock_client = AsyncMock()
             # Side effect to return correct number of embeddings per batch
@@ -360,7 +373,7 @@ class TestAsyncEncoding:
             mock_client.embeddings.create.side_effect = [
                 mock_embedding_response(["test"] * 10),  # First batch of 10
                 mock_embedding_response(["test"] * 10),  # Second batch of 10
-                mock_embedding_response(["test"] * 5),   # Third batch of 5
+                mock_embedding_response(["test"] * 5),  # Third batch of 5
             ]
             mock_async_openai.return_value = mock_client
 
@@ -374,6 +387,7 @@ class TestAsyncEncoding:
 # Retry Logic Tests
 # =============================================================================
 
+
 class TestRetryLogic:
     """Tests for retry logic on rate limits."""
 
@@ -381,19 +395,19 @@ class TestRetryLogic:
         """Test retry on rate limit error."""
         import openai
 
-        with patch("src.rag.embeddings.OpenAI") as mock_openai, \
-             patch("src.rag.embeddings.AsyncOpenAI"), \
-             patch("time.sleep"):  # Skip actual sleep
+        with (
+            patch("src.rag.embeddings.OpenAI") as mock_openai,
+            patch("src.rag.embeddings.AsyncOpenAI"),
+            patch("time.sleep"),
+        ):  # Skip actual sleep
 
             mock_client = MagicMock()
             # First call raises rate limit, second succeeds
             mock_client.embeddings.create.side_effect = [
                 openai.RateLimitError(
-                    message="Rate limit exceeded",
-                    response=MagicMock(status_code=429),
-                    body={}
+                    message="Rate limit exceeded", response=MagicMock(status_code=429), body={}
                 ),
-                mock_embedding_response(["test"])
+                mock_embedding_response(["test"]),
             ]
             mock_openai.return_value = mock_client
 
@@ -407,16 +421,16 @@ class TestRetryLogic:
         """Test error raised when max retries exceeded."""
         import openai
 
-        with patch("src.rag.embeddings.OpenAI") as mock_openai, \
-             patch("src.rag.embeddings.AsyncOpenAI"), \
-             patch("time.sleep"):
+        with (
+            patch("src.rag.embeddings.OpenAI") as mock_openai,
+            patch("src.rag.embeddings.AsyncOpenAI"),
+            patch("time.sleep"),
+        ):
 
             mock_client = MagicMock()
             # All calls raise rate limit
             mock_client.embeddings.create.side_effect = openai.RateLimitError(
-                message="Rate limit exceeded",
-                response=MagicMock(status_code=429),
-                body={}
+                message="Rate limit exceeded", response=MagicMock(status_code=429), body={}
             )
             mock_openai.return_value = mock_client
 
@@ -432,14 +446,14 @@ class TestRetryLogic:
         """Test API errors (non-rate-limit) are not retried."""
         import openai
 
-        with patch("src.rag.embeddings.OpenAI") as mock_openai, \
-             patch("src.rag.embeddings.AsyncOpenAI"):
+        with (
+            patch("src.rag.embeddings.OpenAI") as mock_openai,
+            patch("src.rag.embeddings.AsyncOpenAI"),
+        ):
 
             mock_client = MagicMock()
             mock_client.embeddings.create.side_effect = openai.APIError(
-                message="API error",
-                request=MagicMock(),
-                body={}
+                message="API error", request=MagicMock(), body={}
             )
             mock_openai.return_value = mock_client
 
@@ -455,13 +469,16 @@ class TestRetryLogic:
 # Usage Statistics Tests
 # =============================================================================
 
+
 class TestUsageStatistics:
     """Tests for usage tracking."""
 
     def test_stats_after_successful_call(self, embedding_config, mock_embedding_response):
         """Test usage stats updated after successful call."""
-        with patch("src.rag.embeddings.OpenAI") as mock_openai, \
-             patch("src.rag.embeddings.AsyncOpenAI"):
+        with (
+            patch("src.rag.embeddings.OpenAI") as mock_openai,
+            patch("src.rag.embeddings.AsyncOpenAI"),
+        ):
 
             mock_client = MagicMock()
             mock_client.embeddings.create.return_value = mock_embedding_response(["test"])
@@ -480,8 +497,10 @@ class TestUsageStatistics:
 
     def test_reset_usage_stats(self, embedding_config, mock_embedding_response):
         """Test resetting usage statistics."""
-        with patch("src.rag.embeddings.OpenAI") as mock_openai, \
-             patch("src.rag.embeddings.AsyncOpenAI"):
+        with (
+            patch("src.rag.embeddings.OpenAI") as mock_openai,
+            patch("src.rag.embeddings.AsyncOpenAI"),
+        ):
 
             mock_client = MagicMock()
             mock_client.embeddings.create.return_value = mock_embedding_response(["test"])
@@ -501,23 +520,24 @@ class TestUsageStatistics:
 # Convenience Function Tests
 # =============================================================================
 
+
 class TestConvenienceFunction:
     """Tests for get_embedding convenience function."""
 
     @pytest.mark.asyncio
     async def test_get_embedding_basic(self, mock_embedding_response):
         """Test basic usage of get_embedding function."""
-        with patch("src.rag.embeddings.OpenAI"), \
-             patch("src.rag.embeddings.AsyncOpenAI") as mock_async_openai:
+        with (
+            patch("src.rag.embeddings.OpenAI"),
+            patch("src.rag.embeddings.AsyncOpenAI") as mock_async_openai,
+        ):
 
             mock_client = AsyncMock()
             mock_client.embeddings.create.return_value = mock_embedding_response(["test"])
             mock_async_openai.return_value = mock_client
 
             result = await get_embedding(
-                "Hello world",
-                model="text-embedding-3-small",
-                api_key="test-key"
+                "Hello world", model="text-embedding-3-small", api_key="test-key"
             )
 
             assert isinstance(result, list)
@@ -527,6 +547,7 @@ class TestConvenienceFunction:
 # =============================================================================
 # Embedding Dimension Tests
 # =============================================================================
+
 
 class TestEmbeddingDimensions:
     """Tests for embedding dimension handling."""
@@ -544,13 +565,16 @@ class TestEmbeddingDimensions:
 # Edge Cases
 # =============================================================================
 
+
 class TestEdgeCases:
     """Tests for edge cases."""
 
     def test_empty_text_list(self, embedding_config, mock_embedding_response):
         """Test encoding empty list."""
-        with patch("src.rag.embeddings.OpenAI") as mock_openai, \
-             patch("src.rag.embeddings.AsyncOpenAI"):
+        with (
+            patch("src.rag.embeddings.OpenAI") as mock_openai,
+            patch("src.rag.embeddings.AsyncOpenAI"),
+        ):
 
             mock_client = MagicMock()
             mock_client.embeddings.create.return_value = mock_embedding_response([])
@@ -563,8 +587,10 @@ class TestEdgeCases:
 
     def test_batch_with_single_item(self, embedding_config, mock_embedding_response):
         """Test batch encoding with single item."""
-        with patch("src.rag.embeddings.OpenAI") as mock_openai, \
-             patch("src.rag.embeddings.AsyncOpenAI"):
+        with (
+            patch("src.rag.embeddings.OpenAI") as mock_openai,
+            patch("src.rag.embeddings.AsyncOpenAI"),
+        ):
 
             mock_client = MagicMock()
             mock_client.embeddings.create.return_value = mock_embedding_response(["single"])

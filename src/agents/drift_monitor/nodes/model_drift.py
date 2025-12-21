@@ -25,7 +25,9 @@ from src.agents.drift_monitor.state import DriftMonitorState, DriftResult, Error
 class MockDataConnector:
     """Mock data connector for testing predictions."""
 
-    async def query_predictions(self, model_id: str, time_window: str, filters: dict[str, Any] | None = None) -> dict[str, np.ndarray]:
+    async def query_predictions(
+        self, model_id: str, time_window: str, filters: dict[str, Any] | None = None
+    ) -> dict[str, np.ndarray]:
         """Mock query that returns synthetic prediction data."""
         np.random.seed(42)
         n_samples = 1000
@@ -39,10 +41,7 @@ class MockDataConnector:
             scores = np.random.beta(2, 3, n_samples)  # More predictions toward higher values
             classes = (scores > 0.5).astype(int)
 
-        return {
-            "prediction_scores": scores,
-            "prediction_classes": classes
-        }
+        return {"prediction_scores": scores, "prediction_classes": classes}
 
 
 class ModelDriftNode:
@@ -76,13 +75,17 @@ class ModelDriftNode:
         # Check if model drift detection is enabled
         if not state.get("check_model_drift", True):
             state["model_drift_results"] = []
-            state["warnings"] = state.get("warnings", []) + ["Model drift detection skipped (disabled)"]
+            state["warnings"] = state.get("warnings", []) + [
+                "Model drift detection skipped (disabled)"
+            ]
             return state
 
         # Skip if no model_id provided
         if not state.get("model_id"):
             state["model_drift_results"] = []
-            state["warnings"] = state.get("warnings", []) + ["Model drift detection skipped (no model_id provided)"]
+            state["warnings"] = state.get("warnings", []) + [
+                "Model drift detection skipped (no model_id provided)"
+            ]
             return state
 
         # Skip if status is failed
@@ -95,13 +98,13 @@ class ModelDriftNode:
             baseline_preds = await self.data_connector.query_predictions(
                 state["model_id"],
                 state["time_window"],
-                {"period": "baseline", "brand": state.get("brand")}
+                {"period": "baseline", "brand": state.get("brand")},
             )
 
             current_preds = await self.data_connector.query_predictions(
                 state["model_id"],
                 state["time_window"],
-                {"period": "current", "brand": state.get("brand")}
+                {"period": "current", "brand": state.get("brand")},
             )
 
             # Detect drift
@@ -112,7 +115,7 @@ class ModelDriftNode:
                 baseline_preds["prediction_scores"],
                 current_preds["prediction_scores"],
                 state["significance_level"],
-                state["psi_threshold"]
+                state["psi_threshold"],
             )
             if score_drift:
                 drift_results.append(score_drift)
@@ -121,7 +124,7 @@ class ModelDriftNode:
             class_drift = self._detect_class_drift(
                 baseline_preds["prediction_classes"],
                 current_preds["prediction_classes"],
-                state["significance_level"]
+                state["significance_level"],
             )
             if class_drift:
                 drift_results.append(class_drift)
@@ -137,7 +140,7 @@ class ModelDriftNode:
             error: ErrorDetails = {
                 "node": "model_drift",
                 "error": str(e),
-                "timestamp": datetime.now(timezone.utc).isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             }
             state["errors"] = state.get("errors", []) + [error]
             state["status"] = "failed"
@@ -150,7 +153,7 @@ class ModelDriftNode:
         baseline_scores: np.ndarray,
         current_scores: np.ndarray,
         significance: float,
-        psi_threshold: float
+        psi_threshold: float,
     ) -> DriftResult | None:
         """Detect drift in prediction score distribution.
 
@@ -188,16 +191,13 @@ class ModelDriftNode:
             "drift_detected": drift_detected,
             "severity": severity,
             "baseline_period": "baseline",
-            "current_period": "current"
+            "current_period": "current",
         }
 
         return result
 
     def _detect_class_drift(
-        self,
-        baseline_classes: np.ndarray,
-        current_classes: np.ndarray,
-        significance: float
+        self, baseline_classes: np.ndarray, current_classes: np.ndarray, significance: float
     ) -> DriftResult | None:
         """Detect drift in prediction class distribution.
 
@@ -247,7 +247,7 @@ class ModelDriftNode:
             "drift_detected": drift_detected,
             "severity": severity,
             "baseline_period": "baseline",
-            "current_period": "current"
+            "current_period": "current",
         }
 
         return result
@@ -283,11 +283,7 @@ class ModelDriftNode:
         return float(psi)
 
     def _determine_severity(
-        self,
-        psi: float,
-        p_value: float,
-        significance: float,
-        psi_threshold: float
+        self, psi: float, p_value: float, significance: float, psi_threshold: float
     ) -> tuple[str, bool]:
         """Determine drift severity.
 

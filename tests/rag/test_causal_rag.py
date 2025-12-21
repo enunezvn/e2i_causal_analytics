@@ -9,16 +9,16 @@ Tests cover:
 - Error handling paths
 """
 
-import pytest
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
-from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional
 import time
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
+import pytest
 
 from src.rag.causal_rag import CausalRAG
-from src.rag.models.retrieval_models import RetrievalResult, RetrievalContext
+from src.rag.models.retrieval_models import RetrievalContext, RetrievalResult
 from src.rag.types import RetrievalSource
-
 
 # ============================================================================
 # Test Fixtures
@@ -28,6 +28,7 @@ from src.rag.types import RetrievalSource
 @dataclass
 class MockParsedQuery:
     """Mock ParsedQuery from NLP layer."""
+
     text: str = "Why did Kisqali adoption increase?"
     intent: Optional[Mock] = None
     entities: Optional[Mock] = None
@@ -36,12 +37,14 @@ class MockParsedQuery:
 @dataclass
 class MockIntent:
     """Mock intent with value attribute."""
+
     value: str = "causal"
 
 
 @dataclass
 class MockEntities:
     """Mock entities with kpis attribute."""
+
     kpis: List[str] = field(default_factory=lambda: ["TRx", "market_share"])
 
 
@@ -51,7 +54,7 @@ def create_retrieval_result(
     source_id: str = "test-123",
     score: float = 0.85,
     retrieval_method: str = "dense",
-    metadata: Dict[str, Any] = None
+    metadata: Dict[str, Any] = None,
 ) -> RetrievalResult:
     """Helper to create RetrievalResult instances."""
     # Map retrieval_method to RetrievalSource if not already set
@@ -70,7 +73,7 @@ def create_retrieval_result(
         source=source,
         score=score,
         retrieval_method=retrieval_method,
-        metadata=metadata or {}
+        metadata=metadata or {},
     )
 
 
@@ -84,14 +87,14 @@ def mock_vector_retriever():
             source=RetrievalSource.VECTOR,
             source_id="vec-1",
             score=0.9,
-            retrieval_method="dense"
+            retrieval_method="dense",
         ),
         create_retrieval_result(
             content="Vector result 2",
             source=RetrievalSource.VECTOR,
             source_id="vec-2",
             score=0.8,
-            retrieval_method="dense"
+            retrieval_method="dense",
         ),
     ]
     return retriever
@@ -107,7 +110,7 @@ def mock_graph_retriever():
             source=RetrievalSource.GRAPH,
             source_id="graph-1",
             score=0.85,
-            retrieval_method="graph"
+            retrieval_method="graph",
         ),
     ]
     return retriever
@@ -123,7 +126,7 @@ def mock_kpi_retriever():
             source=RetrievalSource.FULLTEXT,
             source_id="kpi-1",
             score=0.95,
-            retrieval_method="structured"
+            retrieval_method="structured",
         ),
     ]
     return retriever
@@ -133,10 +136,12 @@ def mock_kpi_retriever():
 def mock_reranker():
     """Create mock reranker."""
     reranker = Mock()
+
     # Reranker returns sorted results
     def rerank_fn(results, query, top_k=10):
         sorted_results = sorted(results, key=lambda x: x.score, reverse=True)
         return sorted_results[:top_k]
+
     reranker.rerank.side_effect = rerank_fn
     return reranker
 
@@ -148,7 +153,7 @@ def causal_rag(mock_vector_retriever, mock_graph_retriever, mock_kpi_retriever, 
         vector_retriever=mock_vector_retriever,
         graph_retriever=mock_graph_retriever,
         kpi_retriever=mock_kpi_retriever,
-        reranker=mock_reranker
+        reranker=mock_reranker,
     )
 
 
@@ -176,15 +181,14 @@ class TestCausalRAGInit:
     """Tests for CausalRAG initialization."""
 
     def test_init_with_all_components(
-        self, mock_vector_retriever, mock_graph_retriever,
-        mock_kpi_retriever, mock_reranker
+        self, mock_vector_retriever, mock_graph_retriever, mock_kpi_retriever, mock_reranker
     ):
         """Test initialization with all components."""
         rag = CausalRAG(
             vector_retriever=mock_vector_retriever,
             graph_retriever=mock_graph_retriever,
             kpi_retriever=mock_kpi_retriever,
-            reranker=mock_reranker
+            reranker=mock_reranker,
         )
 
         assert rag.vector_retriever == mock_vector_retriever
@@ -266,8 +270,7 @@ class TestRetrieve:
     ):
         """Test that graph retriever is used for causal intent."""
         rag = CausalRAG(
-            vector_retriever=mock_vector_retriever,
-            graph_retriever=mock_graph_retriever
+            vector_retriever=mock_vector_retriever, graph_retriever=mock_graph_retriever
         )
 
         results = rag.retrieve(causal_query, top_k=10)
@@ -283,8 +286,7 @@ class TestRetrieve:
         simple_query.intent = MockIntent(value="descriptive")
 
         rag = CausalRAG(
-            vector_retriever=mock_vector_retriever,
-            graph_retriever=mock_graph_retriever
+            vector_retriever=mock_vector_retriever, graph_retriever=mock_graph_retriever
         )
 
         rag.retrieve(simple_query, top_k=10)
@@ -298,22 +300,16 @@ class TestRetrieve:
         simple_query.intent = None
 
         rag = CausalRAG(
-            vector_retriever=mock_vector_retriever,
-            graph_retriever=mock_graph_retriever
+            vector_retriever=mock_vector_retriever, graph_retriever=mock_graph_retriever
         )
 
         rag.retrieve(simple_query, top_k=10)
 
         mock_graph_retriever.traverse.assert_not_called()
 
-    def test_retrieve_kpi_with_kpis(
-        self, mock_vector_retriever, mock_kpi_retriever, causal_query
-    ):
+    def test_retrieve_kpi_with_kpis(self, mock_vector_retriever, mock_kpi_retriever, causal_query):
         """Test KPI retrieval when query has KPIs."""
-        rag = CausalRAG(
-            vector_retriever=mock_vector_retriever,
-            kpi_retriever=mock_kpi_retriever
-        )
+        rag = CausalRAG(vector_retriever=mock_vector_retriever, kpi_retriever=mock_kpi_retriever)
 
         results = rag.retrieve(causal_query, top_k=10)
 
@@ -326,10 +322,7 @@ class TestRetrieve:
         """Test KPI retrieval skipped when no KPIs in query."""
         simple_query.entities = MockEntities(kpis=[])
 
-        rag = CausalRAG(
-            vector_retriever=mock_vector_retriever,
-            kpi_retriever=mock_kpi_retriever
-        )
+        rag = CausalRAG(vector_retriever=mock_vector_retriever, kpi_retriever=mock_kpi_retriever)
 
         rag.retrieve(simple_query, top_k=10)
 
@@ -341,10 +334,7 @@ class TestRetrieve:
         """Test KPI retrieval skipped when query has no entities."""
         simple_query.entities = None
 
-        rag = CausalRAG(
-            vector_retriever=mock_vector_retriever,
-            kpi_retriever=mock_kpi_retriever
-        )
+        rag = CausalRAG(vector_retriever=mock_vector_retriever, kpi_retriever=mock_kpi_retriever)
 
         rag.retrieve(simple_query, top_k=10)
 
@@ -363,8 +353,7 @@ class TestRetrieve:
     ):
         """Test retrieve without reranker returns raw results."""
         rag = CausalRAG(
-            vector_retriever=mock_vector_retriever,
-            graph_retriever=mock_graph_retriever
+            vector_retriever=mock_vector_retriever, graph_retriever=mock_graph_retriever
         )
 
         results = rag.retrieve(causal_query, top_k=10)
@@ -376,8 +365,7 @@ class TestRetrieve:
         """Test that top_k limits results."""
         # Mock returns 5 results
         mock_vector_retriever.search.return_value = [
-            create_retrieval_result(source_id=f"vec-{i}", score=0.9 - i*0.1)
-            for i in range(5)
+            create_retrieval_result(source_id=f"vec-{i}", score=0.9 - i * 0.1) for i in range(5)
         ]
 
         rag = CausalRAG(vector_retriever=mock_vector_retriever)
@@ -426,9 +414,7 @@ class TestRetrieve:
         # Config is accepted but may not be used by all retrievers
         assert results is not None
 
-    def test_retrieve_graph_entities_extraction(
-        self, mock_graph_retriever, causal_query
-    ):
+    def test_retrieve_graph_entities_extraction(self, mock_graph_retriever, causal_query):
         """Test that graph retriever receives entities from query."""
         rag = CausalRAG(graph_retriever=mock_graph_retriever)
 
@@ -447,9 +433,7 @@ class TestRetrieveAsync:
     """Tests for the retrieve_async() method."""
 
     @pytest.mark.asyncio
-    async def test_retrieve_async_returns_context(
-        self, mock_vector_retriever, simple_query
-    ):
+    async def test_retrieve_async_returns_context(self, mock_vector_retriever, simple_query):
         """Test that retrieve_async returns RetrievalContext."""
         rag = CausalRAG(vector_retriever=mock_vector_retriever)
 
@@ -470,23 +454,17 @@ class TestRetrieveAsync:
         assert isinstance(context.retrieval_time_ms, float)
 
     @pytest.mark.asyncio
-    async def test_retrieve_async_with_config(
-        self, mock_vector_retriever, simple_query
-    ):
+    async def test_retrieve_async_with_config(self, mock_vector_retriever, simple_query):
         """Test retrieve_async with custom config."""
         rag = CausalRAG(vector_retriever=mock_vector_retriever)
 
         config = {"enable_sparse": True}
-        context = await rag.retrieve_async(
-            simple_query, top_k=5, retrieval_config=config
-        )
+        context = await rag.retrieve_async(simple_query, top_k=5, retrieval_config=config)
 
         assert isinstance(context, RetrievalContext)
 
     @pytest.mark.asyncio
-    async def test_retrieve_async_empty_results(
-        self, mock_vector_retriever, simple_query
-    ):
+    async def test_retrieve_async_empty_results(self, mock_vector_retriever, simple_query):
         """Test retrieve_async with empty results."""
         mock_vector_retriever.search.return_value = []
         rag = CausalRAG(vector_retriever=mock_vector_retriever)
@@ -525,6 +503,7 @@ class TestCognitiveSearch:
     async def test_cognitive_search_success(self, mock_cognitive_state):
         """Test successful cognitive search."""
         import sys
+
         rag = CausalRAG()
 
         # Create mock dspy module
@@ -540,28 +519,25 @@ class TestCognitiveSearch:
         # Mock CognitiveState
         mock_cog_state_class = Mock(return_value=mock_cognitive_state)
 
-        with patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'}):
-            with patch.dict(sys.modules, {'dspy': mock_dspy}):
+        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}):
+            with patch.dict(sys.modules, {"dspy": mock_dspy}):
                 with patch(
-                    'src.rag.cognitive_rag_dspy.create_dspy_cognitive_workflow',
-                    return_value=mock_workflow
+                    "src.rag.cognitive_rag_dspy.create_dspy_cognitive_workflow",
+                    return_value=mock_workflow,
                 ):
-                    with patch(
-                        'src.rag.cognitive_rag_dspy.CognitiveState',
-                        mock_cog_state_class
-                    ):
+                    with patch("src.rag.cognitive_rag_dspy.CognitiveState", mock_cog_state_class):
                         with patch(
-                            'src.rag.cognitive_backends.get_cognitive_memory_backends'
+                            "src.rag.cognitive_backends.get_cognitive_memory_backends"
                         ) as mock_backends:
                             mock_backends.return_value = {
                                 "readers": {},
                                 "writers": {},
-                                "signal_collector": Mock()
+                                "signal_collector": Mock(),
                             }
 
                             result = await rag.cognitive_search(
                                 query="Why did Kisqali adoption increase?",
-                                conversation_id="test-123"
+                                conversation_id="test-123",
                             )
 
         assert result["response"] == mock_cognitive_state.response
@@ -573,10 +549,11 @@ class TestCognitiveSearch:
     async def test_cognitive_search_import_error(self):
         """Test cognitive search with import error - raises RuntimeError."""
         import sys
+
         rag = CausalRAG()
 
         # Mock dspy to cause ImportError when accessed
-        with patch.dict(sys.modules, {'dspy': None}):
+        with patch.dict(sys.modules, {"dspy": None}):
             # When dspy can't be imported, cognitive_search raises RuntimeError
             with pytest.raises(RuntimeError) as exc_info:
                 await rag.cognitive_search(query="Test query")
@@ -587,8 +564,9 @@ class TestCognitiveSearch:
     @pytest.mark.asyncio
     async def test_cognitive_search_missing_api_key(self):
         """Test cognitive search without API key."""
-        import sys
         import os
+        import sys
+
         rag = CausalRAG()
 
         # Create mock dspy module
@@ -596,22 +574,23 @@ class TestCognitiveSearch:
         mock_dspy.settings.lm = None
 
         # Remove ANTHROPIC_API_KEY
-        original_key = os.environ.pop('ANTHROPIC_API_KEY', None)
+        original_key = os.environ.pop("ANTHROPIC_API_KEY", None)
 
         try:
-            with patch.dict(sys.modules, {'dspy': mock_dspy}):
+            with patch.dict(sys.modules, {"dspy": mock_dspy}):
                 result = await rag.cognitive_search(query="Test query")
 
                 # Should return error response due to missing API key
                 assert "error" in result or "Unable to complete" in result.get("response", "")
         finally:
             if original_key:
-                os.environ['ANTHROPIC_API_KEY'] = original_key
+                os.environ["ANTHROPIC_API_KEY"] = original_key
 
     @pytest.mark.asyncio
     async def test_cognitive_search_general_exception(self):
         """Test cognitive search with general exception."""
         import sys
+
         rag = CausalRAG()
 
         # Create mock dspy module
@@ -620,10 +599,10 @@ class TestCognitiveSearch:
         mock_dspy.LM.return_value = Mock()
         mock_dspy.configure = Mock()
 
-        with patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'}):
-            with patch.dict(sys.modules, {'dspy': mock_dspy}):
+        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}):
+            with patch.dict(sys.modules, {"dspy": mock_dspy}):
                 with patch(
-                    'src.rag.cognitive_backends.get_cognitive_memory_backends'
+                    "src.rag.cognitive_backends.get_cognitive_memory_backends"
                 ) as mock_backends:
                     mock_backends.side_effect = Exception("Backend connection failed")
 
@@ -637,6 +616,7 @@ class TestCognitiveSearch:
     async def test_cognitive_search_with_history(self, mock_cognitive_state):
         """Test cognitive search with conversation history."""
         import sys
+
         rag = CausalRAG()
 
         # Create mock dspy module
@@ -649,30 +629,28 @@ class TestCognitiveSearch:
         mock_workflow = AsyncMock()
         mock_workflow.ainvoke.return_value = mock_cognitive_state
 
-        with patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'}):
-            with patch.dict(sys.modules, {'dspy': mock_dspy}):
+        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}):
+            with patch.dict(sys.modules, {"dspy": mock_dspy}):
                 with patch(
-                    'src.rag.cognitive_rag_dspy.create_dspy_cognitive_workflow',
-                    return_value=mock_workflow
+                    "src.rag.cognitive_rag_dspy.create_dspy_cognitive_workflow",
+                    return_value=mock_workflow,
                 ):
-                    with patch(
-                        'src.rag.cognitive_rag_dspy.CognitiveState'
-                    ) as mock_cog_state:
+                    with patch("src.rag.cognitive_rag_dspy.CognitiveState") as mock_cog_state:
                         mock_cog_state.return_value = mock_cognitive_state
 
                         with patch(
-                            'src.rag.cognitive_backends.get_cognitive_memory_backends'
+                            "src.rag.cognitive_backends.get_cognitive_memory_backends"
                         ) as mock_backends:
                             mock_backends.return_value = {
                                 "readers": {},
                                 "writers": {},
-                                "signal_collector": Mock()
+                                "signal_collector": Mock(),
                             }
 
                             result = await rag.cognitive_search(
                                 query="Why did adoption increase?",
                                 conversation_id="session-456",
-                                conversation_history="User asked about Kisqali trends."
+                                conversation_history="User asked about Kisqali trends.",
                             )
 
         assert result["response"] is not None
@@ -681,11 +659,12 @@ class TestCognitiveSearch:
     async def test_cognitive_search_with_agent_registry(self, mock_cognitive_state):
         """Test cognitive search with custom agent registry."""
         import sys
+
         rag = CausalRAG()
 
         agent_registry = {
             "explainer": {"name": "Explainer Agent"},
-            "causal_impact": {"name": "Causal Impact Agent"}
+            "causal_impact": {"name": "Causal Impact Agent"},
         }
 
         # Create mock dspy module
@@ -698,29 +677,26 @@ class TestCognitiveSearch:
         mock_workflow = AsyncMock()
         mock_workflow.ainvoke.return_value = mock_cognitive_state
 
-        with patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'}):
-            with patch.dict(sys.modules, {'dspy': mock_dspy}):
+        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}):
+            with patch.dict(sys.modules, {"dspy": mock_dspy}):
                 with patch(
-                    'src.rag.cognitive_rag_dspy.create_dspy_cognitive_workflow',
-                    return_value=mock_workflow
+                    "src.rag.cognitive_rag_dspy.create_dspy_cognitive_workflow",
+                    return_value=mock_workflow,
                 ) as mock_create_workflow:
-                    with patch(
-                        'src.rag.cognitive_rag_dspy.CognitiveState'
-                    ) as mock_cog_state:
+                    with patch("src.rag.cognitive_rag_dspy.CognitiveState") as mock_cog_state:
                         mock_cog_state.return_value = mock_cognitive_state
 
                         with patch(
-                            'src.rag.cognitive_backends.get_cognitive_memory_backends'
+                            "src.rag.cognitive_backends.get_cognitive_memory_backends"
                         ) as mock_backends:
                             mock_backends.return_value = {
                                 "readers": {},
                                 "writers": {},
-                                "signal_collector": Mock()
+                                "signal_collector": Mock(),
                             }
 
-                            result = await rag.cognitive_search(
-                                query="Test query",
-                                agent_registry=agent_registry
+                            await rag.cognitive_search(
+                                query="Test query", agent_registry=agent_registry
                             )
 
                             # Verify agent registry was passed
@@ -731,6 +707,7 @@ class TestCognitiveSearch:
     async def test_cognitive_search_evidence_serialization(self):
         """Test that evidence objects are properly serialized."""
         import sys
+
         rag = CausalRAG()
 
         # Create mock evidence with dataclass
@@ -744,7 +721,7 @@ class TestCognitiveSearch:
         mock_state.response = "Test response"
         mock_state.evidence_board = [
             MockEvidence(content="Evidence 1", source="vector", score=0.9),
-            {"content": "Evidence 2", "source": "graph"}  # dict-like evidence
+            {"content": "Evidence 2", "source": "graph"},  # dict-like evidence
         ]
         mock_state.hop_count = 1
         mock_state.visualization_config = {}
@@ -765,24 +742,22 @@ class TestCognitiveSearch:
         mock_workflow = AsyncMock()
         mock_workflow.ainvoke.return_value = mock_state
 
-        with patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'}):
-            with patch.dict(sys.modules, {'dspy': mock_dspy}):
+        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}):
+            with patch.dict(sys.modules, {"dspy": mock_dspy}):
                 with patch(
-                    'src.rag.cognitive_rag_dspy.create_dspy_cognitive_workflow',
-                    return_value=mock_workflow
+                    "src.rag.cognitive_rag_dspy.create_dspy_cognitive_workflow",
+                    return_value=mock_workflow,
                 ):
-                    with patch(
-                        'src.rag.cognitive_rag_dspy.CognitiveState'
-                    ) as mock_cog_state:
+                    with patch("src.rag.cognitive_rag_dspy.CognitiveState") as mock_cog_state:
                         mock_cog_state.return_value = mock_state
 
                         with patch(
-                            'src.rag.cognitive_backends.get_cognitive_memory_backends'
+                            "src.rag.cognitive_backends.get_cognitive_memory_backends"
                         ) as mock_backends:
                             mock_backends.return_value = {
                                 "readers": {},
                                 "writers": {},
-                                "signal_collector": Mock()
+                                "signal_collector": Mock(),
                             }
 
                             result = await rag.cognitive_search(query="Test")
@@ -795,6 +770,7 @@ class TestCognitiveSearch:
     async def test_cognitive_search_latency_tracking(self, mock_cognitive_state):
         """Test that latency is properly tracked."""
         import sys
+
         rag = CausalRAG()
 
         # Create mock dspy module
@@ -807,24 +783,22 @@ class TestCognitiveSearch:
         mock_workflow = AsyncMock()
         mock_workflow.ainvoke.return_value = mock_cognitive_state
 
-        with patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'}):
-            with patch.dict(sys.modules, {'dspy': mock_dspy}):
+        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}):
+            with patch.dict(sys.modules, {"dspy": mock_dspy}):
                 with patch(
-                    'src.rag.cognitive_rag_dspy.create_dspy_cognitive_workflow',
-                    return_value=mock_workflow
+                    "src.rag.cognitive_rag_dspy.create_dspy_cognitive_workflow",
+                    return_value=mock_workflow,
                 ):
-                    with patch(
-                        'src.rag.cognitive_rag_dspy.CognitiveState'
-                    ) as mock_cog_state:
+                    with patch("src.rag.cognitive_rag_dspy.CognitiveState") as mock_cog_state:
                         mock_cog_state.return_value = mock_cognitive_state
 
                         with patch(
-                            'src.rag.cognitive_backends.get_cognitive_memory_backends'
+                            "src.rag.cognitive_backends.get_cognitive_memory_backends"
                         ) as mock_backends:
                             mock_backends.return_value = {
                                 "readers": {},
                                 "writers": {},
-                                "signal_collector": Mock()
+                                "signal_collector": Mock(),
                             }
 
                             result = await rag.cognitive_search(query="Test")
@@ -845,10 +819,7 @@ class TestEdgeCases:
     def test_retrieve_with_none_values(self):
         """Test retrieve handles None values gracefully."""
         rag = CausalRAG(
-            vector_retriever=None,
-            graph_retriever=None,
-            kpi_retriever=None,
-            reranker=None
+            vector_retriever=None, graph_retriever=None, kpi_retriever=None, reranker=None
         )
 
         results = rag.retrieve(MockParsedQuery(), top_k=10)
@@ -860,15 +831,14 @@ class TestEdgeCases:
         rag = CausalRAG(vector_retriever=mock_vector_retriever)
         query = MockParsedQuery(text="")
 
-        results = rag.retrieve(query)
+        rag.retrieve(query)
 
         mock_vector_retriever.search.assert_called_once()
 
     def test_retrieve_large_top_k(self, mock_vector_retriever, simple_query):
         """Test retrieve with large top_k."""
         mock_vector_retriever.search.return_value = [
-            create_retrieval_result(source_id=f"vec-{i}")
-            for i in range(3)
+            create_retrieval_result(source_id=f"vec-{i}") for i in range(3)
         ]
 
         rag = CausalRAG(vector_retriever=mock_vector_retriever)
@@ -881,8 +851,7 @@ class TestEdgeCases:
     def test_retrieve_top_k_one(self, mock_vector_retriever, simple_query):
         """Test retrieve with top_k=1."""
         mock_vector_retriever.search.return_value = [
-            create_retrieval_result(source_id=f"vec-{i}", score=0.9 - i*0.1)
-            for i in range(5)
+            create_retrieval_result(source_id=f"vec-{i}", score=0.9 - i * 0.1) for i in range(5)
         ]
 
         rag = CausalRAG(vector_retriever=mock_vector_retriever)
@@ -899,27 +868,23 @@ class TestEdgeCases:
             pass
 
         query = QueryNoText()
-        results = rag.retrieve(query)
+        rag.retrieve(query)
 
         # Should fall back to str(query)
         mock_vector_retriever.search.assert_called_once()
 
-    def test_retrieve_entities_without_kpis_attr(
-        self, mock_vector_retriever, mock_kpi_retriever
-    ):
+    def test_retrieve_entities_without_kpis_attr(self, mock_vector_retriever, mock_kpi_retriever):
         """Test retrieve when entities have no kpis attribute."""
+
         class EntitiesNoKpis:
             brands = ["Kisqali"]
 
         query = MockParsedQuery()
         query.entities = EntitiesNoKpis()
 
-        rag = CausalRAG(
-            vector_retriever=mock_vector_retriever,
-            kpi_retriever=mock_kpi_retriever
-        )
+        rag = CausalRAG(vector_retriever=mock_vector_retriever, kpi_retriever=mock_kpi_retriever)
 
-        results = rag.retrieve(query)
+        rag.retrieve(query)
 
         # KPI retriever should not be called
         mock_kpi_retriever.query.assert_not_called()
@@ -930,12 +895,9 @@ class TestEdgeCases:
         """Test reranker is not called when results are empty."""
         mock_vector_retriever.search.return_value = []
 
-        rag = CausalRAG(
-            vector_retriever=mock_vector_retriever,
-            reranker=mock_reranker
-        )
+        rag = CausalRAG(vector_retriever=mock_vector_retriever, reranker=mock_reranker)
 
-        results = rag.retrieve(simple_query)
+        rag.retrieve(simple_query)
 
         mock_reranker.rerank.assert_not_called()
 
@@ -968,7 +930,7 @@ class TestIntegration:
                 source="embeddings",
                 source_id="v1",
                 score=0.88,
-                retrieval_method="dense"
+                retrieval_method="dense",
             )
         ]
 
@@ -979,7 +941,7 @@ class TestIntegration:
                 source="causal_paths",
                 source_id="g1",
                 score=0.92,
-                retrieval_method="graph"
+                retrieval_method="graph",
             )
         ]
 
@@ -990,7 +952,7 @@ class TestIntegration:
                 source="kpi_snapshots",
                 source_id="k1",
                 score=1.0,
-                retrieval_method="structured"
+                retrieval_method="structured",
             )
         ]
 
@@ -1003,7 +965,7 @@ class TestIntegration:
             vector_retriever=vector_ret,
             graph_retriever=graph_ret,
             kpi_retriever=kpi_ret,
-            reranker=reranker
+            reranker=reranker,
         )
 
         query = MockParsedQuery(text="Why did Kisqali adoption increase?")
@@ -1026,9 +988,7 @@ class TestIntegration:
     async def test_full_async_pipeline(self):
         """Test complete async retrieval pipeline."""
         vector_ret = Mock()
-        vector_ret.search.return_value = [
-            create_retrieval_result(score=0.9)
-        ]
+        vector_ret.search.return_value = [create_retrieval_result(score=0.9)]
 
         rag = CausalRAG(vector_retriever=vector_ret)
 
@@ -1053,8 +1013,7 @@ class TestConfigAndDefaults:
     def test_default_top_k(self, mock_vector_retriever, simple_query):
         """Test default top_k value."""
         mock_vector_retriever.search.return_value = [
-            create_retrieval_result(source_id=f"v{i}")
-            for i in range(15)
+            create_retrieval_result(source_id=f"v{i}") for i in range(15)
         ]
 
         rag = CausalRAG(vector_retriever=mock_vector_retriever)
@@ -1063,17 +1022,11 @@ class TestConfigAndDefaults:
 
         assert len(results) == 10  # Default top_k is 10
 
-    def test_retrieval_config_accepted(
-        self, mock_vector_retriever, simple_query
-    ):
+    def test_retrieval_config_accepted(self, mock_vector_retriever, simple_query):
         """Test that retrieval_config is accepted."""
         rag = CausalRAG(vector_retriever=mock_vector_retriever)
 
-        config = {
-            "enable_sparse": True,
-            "sparse_weight": 0.3,
-            "enable_graph": False
-        }
+        config = {"enable_sparse": True, "sparse_weight": 0.3, "enable_graph": False}
 
         # Should not raise
         results = rag.retrieve(simple_query, retrieval_config=config)

@@ -15,35 +15,33 @@ Reference: docs/E2I_Causal_Validation_Protocol.html
 
 from __future__ import annotations
 
-import hashlib
-import json
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
-    from .refutation_runner import RefutationSuite, GateDecision
+    from .refutation_runner import RefutationSuite
 
 
 class ValidationOutcomeType(str, Enum):
     """Type of validation outcome for pattern classification."""
 
-    PASSED = "passed"                    # All tests passed, proceed
+    PASSED = "passed"  # All tests passed, proceed
     FAILED_CRITICAL = "failed_critical"  # Critical test failed (placebo/sensitivity)
     FAILED_MULTIPLE = "failed_multiple"  # Multiple tests failed
-    NEEDS_REVIEW = "needs_review"        # Borderline results, expert review needed
-    BLOCKED = "blocked"                  # Blocked by gate decision
+    NEEDS_REVIEW = "needs_review"  # Borderline results, expert review needed
+    BLOCKED = "blocked"  # Blocked by gate decision
 
 
 class FailureCategory(str, Enum):
     """Category of validation failure for learning."""
 
-    INSUFFICIENT_SAMPLE = "insufficient_sample"      # Data subset/bootstrap failed
+    INSUFFICIENT_SAMPLE = "insufficient_sample"  # Data subset/bootstrap failed
     UNOBSERVED_CONFOUNDING = "unobserved_confounding"  # Sensitivity analysis failed
-    SPURIOUS_CORRELATION = "spurious_correlation"    # Placebo treatment detected effect
+    SPURIOUS_CORRELATION = "spurious_correlation"  # Placebo treatment detected effect
     MODEL_MISSPECIFICATION = "model_misspecification"  # Random common cause failed
-    EFFECT_INSTABILITY = "effect_instability"        # Bootstrap variance too high
+    EFFECT_INSTABILITY = "effect_instability"  # Bootstrap variance too high
     UNKNOWN = "unknown"
 
 
@@ -219,7 +217,7 @@ def extract_failure_patterns(
     Returns:
         List of ValidationFailurePattern objects
     """
-    from .refutation_runner import RefutationStatus, RefutationTestType
+    from .refutation_runner import RefutationStatus
 
     patterns = []
 
@@ -230,16 +228,18 @@ def extract_failure_patterns(
         # Categorize the failure
         category, severity, recommendation = _categorize_failure(test)
 
-        patterns.append(ValidationFailurePattern(
-            category=category,
-            test_name=test.test_name.value,
-            description=_describe_failure(test),
-            severity=severity,
-            original_effect=test.original_effect,
-            refuted_effect=test.refuted_effect,
-            delta_percent=test.delta_percent,
-            recommendation=recommendation,
-        ))
+        patterns.append(
+            ValidationFailurePattern(
+                category=category,
+                test_name=test.test_name.value,
+                description=_describe_failure(test),
+                severity=severity,
+                original_effect=test.original_effect,
+                refuted_effect=test.refuted_effect,
+                delta_percent=test.delta_percent,
+                recommendation=recommendation,
+            )
+        )
 
     return patterns
 
@@ -257,7 +257,7 @@ def _categorize_failure(test) -> tuple:
             FailureCategory.SPURIOUS_CORRELATION,
             "critical" if delta > 50 else "high",
             "Detected effect on placebo treatment. Check for spurious correlations "
-            "or confounding variables not included in the model."
+            "or confounding variables not included in the model.",
         )
 
     elif test_name == RefutationTestType.SENSITIVITY_E_VALUE:
@@ -265,7 +265,7 @@ def _categorize_failure(test) -> tuple:
             FailureCategory.UNOBSERVED_CONFOUNDING,
             "critical" if test.details.get("e_value", 0) < 1.5 else "high",
             "Effect is sensitive to unobserved confounding. Consider collecting "
-            "additional covariates or using instrumental variables."
+            "additional covariates or using instrumental variables.",
         )
 
     elif test_name == RefutationTestType.RANDOM_COMMON_CAUSE:
@@ -273,7 +273,7 @@ def _categorize_failure(test) -> tuple:
             FailureCategory.MODEL_MISSPECIFICATION,
             "high" if delta > 30 else "medium",
             "Effect is sensitive to random common causes. Review the causal DAG "
-            "for missing confounders or incorrect causal assumptions."
+            "for missing confounders or incorrect causal assumptions.",
         )
 
     elif test_name == RefutationTestType.DATA_SUBSET:
@@ -281,7 +281,7 @@ def _categorize_failure(test) -> tuple:
             FailureCategory.INSUFFICIENT_SAMPLE,
             "medium",
             "Effect is unstable across data subsets. Consider increasing sample size "
-            "or stratifying analysis by key segments."
+            "or stratifying analysis by key segments.",
         )
 
     elif test_name == RefutationTestType.BOOTSTRAP:
@@ -289,13 +289,13 @@ def _categorize_failure(test) -> tuple:
             FailureCategory.EFFECT_INSTABILITY,
             "medium" if delta > 20 else "low",
             "High variance in bootstrap estimates. Increase sample size or "
-            "investigate heterogeneous treatment effects."
+            "investigate heterogeneous treatment effects.",
         )
 
     return (
         FailureCategory.UNKNOWN,
         "medium",
-        "Unknown failure pattern. Review test results manually."
+        "Unknown failure pattern. Review test results manually.",
     )
 
 
@@ -345,8 +345,9 @@ def create_validation_outcome(
     Returns:
         ValidationOutcome for Feedback Learner consumption
     """
-    from .refutation_runner import GateDecision
     import uuid
+
+    from .refutation_runner import GateDecision
 
     # Determine outcome type based on gate decision and test results
     if suite.gate_decision == GateDecision.PROCEED:

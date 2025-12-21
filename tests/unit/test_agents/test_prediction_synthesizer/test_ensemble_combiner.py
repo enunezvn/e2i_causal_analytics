@@ -3,6 +3,7 @@ E2I Prediction Synthesizer Agent - Ensemble Combiner Node Tests
 """
 
 import pytest
+
 from src.agents.prediction_synthesizer.nodes.ensemble_combiner import (
     EnsembleCombinerNode,
 )

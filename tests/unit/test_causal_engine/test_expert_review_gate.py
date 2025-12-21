@@ -4,9 +4,10 @@ Version: 4.3
 Tests the expert review gate workflow decisions.
 """
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock
 from datetime import date, timedelta
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from src.causal_engine import (
     ExpertReviewGate,
@@ -33,12 +34,14 @@ class TestExpertReviewGate:
     @pytest.mark.asyncio
     async def test_check_approval_approved_dag(self, gate, mock_repo):
         """Test check_approval returns PROCEED for approved DAG."""
-        mock_repo.get_dag_approval = AsyncMock(return_value={
-            "review_id": "rev-123",
-            "approved_at": "2024-01-01T00:00:00Z",
-            "valid_until": (date.today() + timedelta(days=60)).isoformat(),
-            "reviewer_name": "Dr. Expert",
-        })
+        mock_repo.get_dag_approval = AsyncMock(
+            return_value={
+                "review_id": "rev-123",
+                "approved_at": "2024-01-01T00:00:00Z",
+                "valid_until": (date.today() + timedelta(days=60)).isoformat(),
+                "reviewer_name": "Dr. Expert",
+            }
+        )
 
         result = await gate.check_approval("abc123")
 
@@ -50,12 +53,14 @@ class TestExpertReviewGate:
     @pytest.mark.asyncio
     async def test_check_approval_expiring_dag(self, gate, mock_repo):
         """Test check_approval returns RENEWAL_REQUIRED for expiring DAG."""
-        mock_repo.get_dag_approval = AsyncMock(return_value={
-            "review_id": "rev-123",
-            "approved_at": "2024-01-01T00:00:00Z",
-            "valid_until": (date.today() + timedelta(days=7)).isoformat(),
-            "reviewer_name": "Dr. Expert",
-        })
+        mock_repo.get_dag_approval = AsyncMock(
+            return_value={
+                "review_id": "rev-123",
+                "approved_at": "2024-01-01T00:00:00Z",
+                "valid_until": (date.today() + timedelta(days=7)).isoformat(),
+                "reviewer_name": "Dr. Expert",
+            }
+        )
 
         result = await gate.check_approval("abc123")
 
@@ -69,9 +74,11 @@ class TestExpertReviewGate:
     async def test_check_approval_pending_review(self, gate, mock_repo):
         """Test check_approval returns PENDING_REVIEW for DAG with pending review."""
         mock_repo.get_dag_approval = AsyncMock(return_value=None)
-        mock_repo.get_reviews_for_dag = AsyncMock(return_value=[
-            {"review_id": "rev-pending", "approval_status": "pending"},
-        ])
+        mock_repo.get_reviews_for_dag = AsyncMock(
+            return_value=[
+                {"review_id": "rev-pending", "approval_status": "pending"},
+            ]
+        )
 
         result = await gate.check_approval("abc123")
 
@@ -125,10 +132,12 @@ class TestExpertReviewGate:
     @pytest.mark.asyncio
     async def test_check_approval_with_brand_filter(self, gate, mock_repo):
         """Test check_approval passes brand filter."""
-        mock_repo.get_dag_approval = AsyncMock(return_value={
-            "review_id": "rev-123",
-            "valid_until": (date.today() + timedelta(days=60)).isoformat(),
-        })
+        mock_repo.get_dag_approval = AsyncMock(
+            return_value={
+                "review_id": "rev-123",
+                "valid_until": (date.today() + timedelta(days=60)).isoformat(),
+            }
+        )
 
         await gate.check_approval("abc123", brand="TestBrand")
 
@@ -146,10 +155,12 @@ class TestExpertReviewGateCanProceed:
     @pytest.mark.asyncio
     async def test_can_proceed_approved(self, mock_repo):
         """Test can_proceed returns True for approved DAG."""
-        mock_repo.get_dag_approval = AsyncMock(return_value={
-            "review_id": "rev-123",
-            "valid_until": (date.today() + timedelta(days=60)).isoformat(),
-        })
+        mock_repo.get_dag_approval = AsyncMock(
+            return_value={
+                "review_id": "rev-123",
+                "valid_until": (date.today() + timedelta(days=60)).isoformat(),
+            }
+        )
 
         gate = ExpertReviewGate(repository=mock_repo)
         result = await gate.can_proceed("abc123")
@@ -159,10 +170,12 @@ class TestExpertReviewGateCanProceed:
     @pytest.mark.asyncio
     async def test_can_proceed_expiring_allowed(self, mock_repo):
         """Test can_proceed with expiring approval allowed."""
-        mock_repo.get_dag_approval = AsyncMock(return_value={
-            "review_id": "rev-123",
-            "valid_until": (date.today() + timedelta(days=7)).isoformat(),
-        })
+        mock_repo.get_dag_approval = AsyncMock(
+            return_value={
+                "review_id": "rev-123",
+                "valid_until": (date.today() + timedelta(days=7)).isoformat(),
+            }
+        )
 
         gate = ExpertReviewGate(repository=mock_repo)
         result = await gate.can_proceed("abc123", allow_expiring=True)
@@ -172,10 +185,12 @@ class TestExpertReviewGateCanProceed:
     @pytest.mark.asyncio
     async def test_can_proceed_expiring_not_allowed(self, mock_repo):
         """Test can_proceed with expiring approval not allowed."""
-        mock_repo.get_dag_approval = AsyncMock(return_value={
-            "review_id": "rev-123",
-            "valid_until": (date.today() + timedelta(days=7)).isoformat(),
-        })
+        mock_repo.get_dag_approval = AsyncMock(
+            return_value={
+                "review_id": "rev-123",
+                "valid_until": (date.today() + timedelta(days=7)).isoformat(),
+            }
+        )
 
         gate = ExpertReviewGate(repository=mock_repo)
         result = await gate.can_proceed("abc123", allow_expiring=False)
@@ -187,9 +202,11 @@ class TestExpertReviewGateCanProceed:
     async def test_can_proceed_pending_allowed(self, mock_repo):
         """Test can_proceed with pending review allowed."""
         mock_repo.get_dag_approval = AsyncMock(return_value=None)
-        mock_repo.get_reviews_for_dag = AsyncMock(return_value=[
-            {"review_id": "rev-pending", "approval_status": "pending"},
-        ])
+        mock_repo.get_reviews_for_dag = AsyncMock(
+            return_value=[
+                {"review_id": "rev-pending", "approval_status": "pending"},
+            ]
+        )
 
         gate = ExpertReviewGate(repository=mock_repo)
         result = await gate.can_proceed("abc123", allow_pending=True)
@@ -219,9 +236,11 @@ class TestExpertReviewGateRenewal:
     @pytest.mark.asyncio
     async def test_request_renewal(self, mock_repo):
         """Test request_renewal creates renewal review."""
-        mock_repo.get_dag_approval = AsyncMock(return_value={
-            "review_id": "rev-old",
-        })
+        mock_repo.get_dag_approval = AsyncMock(
+            return_value={
+                "review_id": "rev-old",
+            }
+        )
         mock_repo.renew_review = AsyncMock(return_value="rev-new")
 
         gate = ExpertReviewGate(repository=mock_repo)
@@ -271,10 +290,12 @@ class TestExpertReviewGateStatus:
     @pytest.mark.asyncio
     async def test_get_pending_review_count(self, mock_repo):
         """Test get_pending_review_count."""
-        mock_repo.get_pending_reviews = AsyncMock(return_value=[
-            {"review_id": "rev-1"},
-            {"review_id": "rev-2"},
-        ])
+        mock_repo.get_pending_reviews = AsyncMock(
+            return_value=[
+                {"review_id": "rev-1"},
+                {"review_id": "rev-2"},
+            ]
+        )
 
         gate = ExpertReviewGate(repository=mock_repo)
         count = await gate.get_pending_review_count()
@@ -284,9 +305,11 @@ class TestExpertReviewGateStatus:
     @pytest.mark.asyncio
     async def test_get_expiring_dag_count(self, mock_repo):
         """Test get_expiring_dag_count."""
-        mock_repo.get_expiring_reviews = AsyncMock(return_value=[
-            {"review_id": "rev-1"},
-        ])
+        mock_repo.get_expiring_reviews = AsyncMock(
+            return_value=[
+                {"review_id": "rev-1"},
+            ]
+        )
 
         gate = ExpertReviewGate(repository=mock_repo)
         count = await gate.get_expiring_dag_count(days=14)
@@ -297,13 +320,15 @@ class TestExpertReviewGateStatus:
     @pytest.mark.asyncio
     async def test_get_gate_status_healthy(self, mock_repo):
         """Test get_gate_status for healthy gate."""
-        mock_repo.get_review_summary = AsyncMock(return_value={
-            "pending": 2,
-            "approved": 10,
-            "rejected": 1,
-            "expired": 0,
-            "expiring_soon": 1,
-        })
+        mock_repo.get_review_summary = AsyncMock(
+            return_value={
+                "pending": 2,
+                "approved": 10,
+                "rejected": 1,
+                "expired": 0,
+                "expiring_soon": 1,
+            }
+        )
 
         gate = ExpertReviewGate(repository=mock_repo)
         status = await gate.get_gate_status()
@@ -316,13 +341,15 @@ class TestExpertReviewGateStatus:
     @pytest.mark.asyncio
     async def test_get_gate_status_unhealthy(self, mock_repo):
         """Test get_gate_status for unhealthy gate."""
-        mock_repo.get_review_summary = AsyncMock(return_value={
-            "pending": 10,  # Too many pending
-            "approved": 5,
-            "rejected": 0,
-            "expired": 2,
-            "expiring_soon": 5,  # Too many expiring
-        })
+        mock_repo.get_review_summary = AsyncMock(
+            return_value={
+                "pending": 10,  # Too many pending
+                "approved": 5,
+                "rejected": 0,
+                "expired": 2,
+                "expiring_soon": 5,  # Too many expiring
+            }
+        )
 
         gate = ExpertReviewGate(repository=mock_repo)
         status = await gate.get_gate_status()
@@ -389,10 +416,12 @@ class TestCheckDagApprovalFunction:
     async def test_standalone_function(self):
         """Test check_dag_approval standalone function."""
         mock_repo = MagicMock()
-        mock_repo.get_dag_approval = AsyncMock(return_value={
-            "review_id": "rev-123",
-            "valid_until": (date.today() + timedelta(days=60)).isoformat(),
-        })
+        mock_repo.get_dag_approval = AsyncMock(
+            return_value={
+                "review_id": "rev-123",
+                "valid_until": (date.today() + timedelta(days=60)).isoformat(),
+            }
+        )
 
         result = await check_dag_approval("abc123", repository=mock_repo)
 

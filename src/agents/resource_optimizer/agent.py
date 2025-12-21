@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from .graph import build_resource_optimizer_graph, build_simple_optimizer_graph
 from .state import (
     AllocationResult,
     AllocationTarget,
@@ -19,7 +20,6 @@ from .state import (
     ResourceOptimizerState,
     ScenarioResult,
 )
-from .graph import build_resource_optimizer_graph, build_simple_optimizer_graph
 
 logger = logging.getLogger(__name__)
 
@@ -36,9 +36,9 @@ class ResourceOptimizerInput(BaseModel):
     resource_type: str = "budget"  # budget, rep_time, samples, calls
     allocation_targets: List[AllocationTarget] = Field(default_factory=list)
     constraints: List[Constraint] = Field(default_factory=list)
-    objective: Literal[
-        "maximize_outcome", "maximize_roi", "minimize_cost", "balance"
-    ] = "maximize_outcome"
+    objective: Literal["maximize_outcome", "maximize_roi", "minimize_cost", "balance"] = (
+        "maximize_outcome"
+    )
     solver_type: Literal["linear", "milp", "nonlinear"] = "linear"
     run_scenarios: bool = False
     scenario_count: int = 3
@@ -234,9 +234,7 @@ class ResourceOptimizerAgent:
             recommendations.append("Review constraints for feasibility")
             recommendations.append("Check allocation targets for validity")
         elif output.projected_roi and output.projected_roi < 1.0:
-            recommendations.append(
-                "ROI below 1.0 - consider revising allocation strategy"
-            )
+            recommendations.append("ROI below 1.0 - consider revising allocation strategy")
 
         recommendations.extend(output.recommendations[:2])
 

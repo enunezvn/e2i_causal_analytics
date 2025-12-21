@@ -9,12 +9,13 @@ Tests cover:
 - Edge cases
 """
 
-import pytest
-from unittest.mock import Mock, patch, AsyncMock, MagicMock
-from datetime import datetime
 import json
+from datetime import datetime
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
-from src.rag.insight_enricher import InsightEnricher, _RESPONSE_CACHE
+import pytest
+
+from src.rag.insight_enricher import _RESPONSE_CACHE, InsightEnricher
 from src.rag.models.insight_models import EnrichedInsight
 from src.rag.models.retrieval_models import RetrievalResult
 from src.rag.types import RetrievalSource
@@ -30,7 +31,11 @@ def sample_results():
             source=RetrievalSource.VECTOR,
             score=0.9,
             retrieval_method="dense",
-            metadata={"brand": "Kisqali", "timestamp": "2024-12-15T10:00:00Z", "source_name": "agent_activities"},
+            metadata={
+                "brand": "Kisqali",
+                "timestamp": "2024-12-15T10:00:00Z",
+                "source_name": "agent_activities",
+            },
         ),
         RetrievalResult(
             source_id="met_002",
@@ -56,15 +61,19 @@ def mock_anthropic_response():
     """Create mock Anthropic API response."""
     mock_message = MagicMock()
     mock_message.content = [
-        MagicMock(text=json.dumps({
-            "summary": "Kisqali TRx grew 15% in Q4 2024. Northeast region leads with 32% conversion.",
-            "key_findings": [
-                "TRx increased 15% quarter-over-quarter",
-                "Northeast region has highest conversion at 32%",
-                "Top oncology HCPs are key adoption drivers"
-            ],
-            "confidence": 0.85
-        }))
+        MagicMock(
+            text=json.dumps(
+                {
+                    "summary": "Kisqali TRx grew 15% in Q4 2024. Northeast region leads with 32% conversion.",
+                    "key_findings": [
+                        "TRx increased 15% quarter-over-quarter",
+                        "Northeast region has highest conversion at 32%",
+                        "Top oncology HCPs are key adoption drivers",
+                    ],
+                    "confidence": 0.85,
+                }
+            )
+        )
     ]
     mock_message.usage = MagicMock(output_tokens=150)
     return mock_message
@@ -123,7 +132,7 @@ class TestInsightEnricherEnrich:
         """Test basic enrichment flow."""
         enricher = InsightEnricher(cache_enabled=False)
 
-        with patch.object(enricher, '_client', create=True) as mock_client:
+        with patch.object(enricher, "_client", create=True) as mock_client:
             mock_client.messages.create = AsyncMock(return_value=mock_anthropic_response)
             enricher._client = mock_client
 
@@ -142,7 +151,7 @@ class TestInsightEnricherEnrich:
         query = Mock()
         query.text = "parsed query text"
 
-        with patch.object(enricher, '_client', create=True) as mock_client:
+        with patch.object(enricher, "_client", create=True) as mock_client:
             mock_client.messages.create = AsyncMock(return_value=mock_anthropic_response)
             enricher._client = mock_client
 
@@ -155,7 +164,7 @@ class TestInsightEnricherEnrich:
         """Test that results are cached when cache_enabled is True."""
         enricher = InsightEnricher(cache_enabled=True)
 
-        with patch.object(enricher, '_client', create=True) as mock_client:
+        with patch.object(enricher, "_client", create=True) as mock_client:
             mock_client.messages.create = AsyncMock(return_value=mock_anthropic_response)
             enricher._client = mock_client
 
@@ -174,7 +183,7 @@ class TestInsightEnricherEnrich:
         """Test graceful fallback on API error."""
         enricher = InsightEnricher(cache_enabled=False)
 
-        with patch.object(enricher, '_generate', AsyncMock(side_effect=Exception("API Error"))):
+        with patch.object(enricher, "_generate", AsyncMock(side_effect=Exception("API Error"))):
             result = await enricher.enrich(sample_results, "test query")
 
             assert "Unable to synthesize" in result.summary
@@ -189,11 +198,13 @@ class TestInsightEnricherParseResponse:
         """Test parsing valid JSON response."""
         enricher = InsightEnricher()
 
-        response = json.dumps({
-            "summary": "Test summary",
-            "key_findings": ["Finding 1", "Finding 2"],
-            "confidence": 0.9
-        })
+        response = json.dumps(
+            {
+                "summary": "Test summary",
+                "key_findings": ["Finding 1", "Finding 2"],
+                "confidence": 0.9,
+            }
+        )
 
         result = enricher._parse_response(response, sample_results)
 
@@ -241,20 +252,12 @@ class TestInsightEnricherParseResponse:
         enricher = InsightEnricher()
 
         # Confidence > 1
-        response = json.dumps({
-            "summary": "Test",
-            "key_findings": [],
-            "confidence": 1.5
-        })
+        response = json.dumps({"summary": "Test", "key_findings": [], "confidence": 1.5})
         result = enricher._parse_response(response, sample_results)
         assert result.confidence == 1.0
 
         # Confidence < 0
-        response = json.dumps({
-            "summary": "Test",
-            "key_findings": [],
-            "confidence": -0.5
-        })
+        response = json.dumps({"summary": "Test", "key_findings": [], "confidence": -0.5})
         result = enricher._parse_response(response, sample_results)
         assert result.confidence == 0.0
 
@@ -262,11 +265,9 @@ class TestInsightEnricherParseResponse:
         """Test handling of non-list key_findings."""
         enricher = InsightEnricher()
 
-        response = json.dumps({
-            "summary": "Test",
-            "key_findings": "Single finding as string",
-            "confidence": 0.7
-        })
+        response = json.dumps(
+            {"summary": "Test", "key_findings": "Single finding as string", "confidence": 0.7}
+        )
 
         result = enricher._parse_response(response, sample_results)
 
@@ -281,11 +282,7 @@ class TestInsightEnricherBuildPrompt:
         """Test that prompt includes the query."""
         enricher = InsightEnricher()
 
-        prompt = enricher._build_prompt(
-            "What is TRx for Kisqali?",
-            "Context here",
-            5
-        )
+        prompt = enricher._build_prompt("What is TRx for Kisqali?", "Context here", 5)
 
         assert "What is TRx for Kisqali?" in prompt
 
@@ -293,11 +290,7 @@ class TestInsightEnricherBuildPrompt:
         """Test that prompt includes the context."""
         enricher = InsightEnricher()
 
-        prompt = enricher._build_prompt(
-            "Query",
-            "This is the retrieved context",
-            5
-        )
+        prompt = enricher._build_prompt("Query", "This is the retrieved context", 5)
 
         assert "This is the retrieved context" in prompt
 

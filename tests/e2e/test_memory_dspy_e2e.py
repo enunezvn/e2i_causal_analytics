@@ -21,7 +21,6 @@ import os
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import dspy
@@ -32,26 +31,14 @@ from supabase import create_client
 
 from src.rag.cognitive_rag_dspy import (
     AgentModule,
-    AgentRoutingSignature,
     CognitiveRAGOptimizer,
     CognitiveState,
-    EntityExtractionSignature,
     Evidence,
-    EvidenceRelevanceSignature,
-    EvidenceSynthesisSignature,
-    HopDecisionSignature,
-    IntentClassificationSignature,
-    InvestigationPlanSignature,
     InvestigatorModule,
     MemoryType,
-    MemoryWorthinessSignature,
-    ProcedureLearningSignature,
-    QueryRewriteSignature,
     ReflectorModule,
     SummarizerModule,
-    VisualizationConfigSignature,
     create_dspy_cognitive_workflow,
-    create_production_cognitive_workflow,
 )
 from src.rag.memory_adapters import (
     EpisodicMemoryAdapter,
@@ -60,7 +47,6 @@ from src.rag.memory_adapters import (
     SignalCollectorAdapter,
     create_memory_adapters,
 )
-
 
 # =============================================================================
 # CONFIGURATION
@@ -195,19 +181,28 @@ def mock_lm():
 def mock_memory_backends():
     """Mock memory backends for testing."""
     episodic = AsyncMock()
-    episodic.vector_search = AsyncMock(return_value=[
-        {"content": "Kisqali adoption increased 15% in Q3 due to HCP targeting", "score": 0.9}
-    ])
+    episodic.vector_search = AsyncMock(
+        return_value=[
+            {"content": "Kisqali adoption increased 15% in Q3 due to HCP targeting", "score": 0.9}
+        ]
+    )
 
     semantic = AsyncMock()
-    semantic.graph_query = AsyncMock(return_value=[
-        {"content": "HCP_ENGAGEMENT CAUSES TRx_INCREASE with confidence 0.85", "score": 0.8}
-    ])
+    semantic.graph_query = AsyncMock(
+        return_value=[
+            {"content": "HCP_ENGAGEMENT CAUSES TRx_INCREASE with confidence 0.85", "score": 0.8}
+        ]
+    )
 
     procedural = AsyncMock()
-    procedural.procedure_search = AsyncMock(return_value=[
-        {"content": "For adoption analysis: query episodic → check semantic → synthesize", "score": 0.7}
-    ])
+    procedural.procedure_search = AsyncMock(
+        return_value=[
+            {
+                "content": "For adoption analysis: query episodic → check semantic → synthesize",
+                "score": 0.7,
+            }
+        ]
+    )
 
     return {
         "episodic": episodic,
@@ -319,9 +314,7 @@ class TestDSPySignatureInvocation:
                 assert result.response is not None or result.visualization_config is not None
                 assert result.routed_agents is not None
 
-    def test_reflector_signatures_invoked(
-        self, mock_lm, mock_signal_collector, cognitive_state
-    ):
+    def test_reflector_signatures_invoked(self, mock_lm, mock_signal_collector, cognitive_state):
         """Test Phase 4 signatures: MemoryWorthiness, ProcedureLearning."""
         # Prepare state with response
         cognitive_state.response = "Kisqali adoption increased due to HCP engagement"
@@ -363,9 +356,7 @@ class TestDSPySignatureInvocation:
 class TestTrainingSignalCollection:
     """Verify training signals are collected and persisted correctly."""
 
-    def test_signals_collected_in_phase4(
-        self, mock_lm, mock_signal_collector, cognitive_state
-    ):
+    def test_signals_collected_in_phase4(self, mock_lm, mock_signal_collector, cognitive_state):
         """Run cognitive cycle and verify signals appear in state.dspy_signals."""
         cognitive_state.response = "Analysis complete"
         cognitive_state.detected_intent = "CAUSAL_ANALYSIS"
@@ -391,9 +382,7 @@ class TestTrainingSignalCollection:
         with patch.object(dspy, "Predict", return_value=mock_lm):
             module = ReflectorModule(mock_writers, mock_signal_collector)
 
-            result = asyncio.get_event_loop().run_until_complete(
-                module.forward(cognitive_state)
-            )
+            result = asyncio.get_event_loop().run_until_complete(module.forward(cognitive_state))
 
             # Verify signals collected
             assert len(result.dspy_signals) >= 3  # summarizer, investigator, agent signals
@@ -426,9 +415,9 @@ class TestTrainingSignalCollection:
             "is_training_example": True,
         }
 
-        response = supabase_client.table("dspy_agent_training_signals").insert(
-            signal_data
-        ).execute()
+        response = (
+            supabase_client.table("dspy_agent_training_signals").insert(signal_data).execute()
+        )
 
         assert len(response.data) > 0
         inserted = response.data[0]
@@ -445,21 +434,42 @@ class TestTrainingSignalCollection:
 
         # Insert signals with different rewards
         signals = [
-            {"source_agent": "causal_impact", "batch_id": f"{test_prefix}_b1",
-             "input_context": {}, "output": {}, "quality_metrics": {}, "reward": 0.95},
-            {"source_agent": "gap_analyzer", "batch_id": f"{test_prefix}_b2",
-             "input_context": {}, "output": {}, "quality_metrics": {}, "reward": 0.65},
-            {"source_agent": "explainer", "batch_id": f"{test_prefix}_b3",
-             "input_context": {}, "output": {}, "quality_metrics": {}, "reward": 0.30},
+            {
+                "source_agent": "causal_impact",
+                "batch_id": f"{test_prefix}_b1",
+                "input_context": {},
+                "output": {},
+                "quality_metrics": {},
+                "reward": 0.95,
+            },
+            {
+                "source_agent": "gap_analyzer",
+                "batch_id": f"{test_prefix}_b2",
+                "input_context": {},
+                "output": {},
+                "quality_metrics": {},
+                "reward": 0.65,
+            },
+            {
+                "source_agent": "explainer",
+                "batch_id": f"{test_prefix}_b3",
+                "input_context": {},
+                "output": {},
+                "quality_metrics": {},
+                "reward": 0.30,
+            },
         ]
 
         for signal in signals:
             supabase_client.table("dspy_agent_training_signals").insert(signal).execute()
 
         # Query and verify rewards
-        response = supabase_client.table("dspy_agent_training_signals").select(
-            "reward"
-        ).ilike("batch_id", f"{test_prefix}%").execute()
+        response = (
+            supabase_client.table("dspy_agent_training_signals")
+            .select("reward")
+            .ilike("batch_id", f"{test_prefix}%")
+            .execute()
+        )
 
         rewards = [r["reward"] for r in response.data if r["reward"] is not None]
 
@@ -477,28 +487,31 @@ class TestMIPROOptimizationTrigger:
     """Verify MIPROv2 optimization triggers at correct thresholds."""
 
     @pytest.mark.skipif(SKIP_SUPABASE, reason=SKIP_REASON_SUPABASE)
-    def test_optimization_not_triggered_under_threshold(
-        self, supabase_client, clean_dspy_tables
-    ):
+    def test_optimization_not_triggered_under_threshold(self, supabase_client, clean_dspy_tables):
         """Test that optimization doesn't run with <50 signals."""
         test_prefix = clean_dspy_tables
 
         # Insert only 10 signals (below 50 threshold)
         for i in range(10):
-            supabase_client.table("dspy_agent_training_signals").insert({
-                "source_agent": f"{test_prefix}_agent",
-                "batch_id": f"{test_prefix}_batch_{i}",
-                "input_context": {"query": f"test query {i}"},
-                "output": {"response": f"response {i}"},
-                "quality_metrics": {},
-                "reward": 0.7,
-                "is_training_example": True,
-            }).execute()
+            supabase_client.table("dspy_agent_training_signals").insert(
+                {
+                    "source_agent": f"{test_prefix}_agent",
+                    "batch_id": f"{test_prefix}_batch_{i}",
+                    "input_context": {"query": f"test query {i}"},
+                    "output": {"response": f"response {i}"},
+                    "quality_metrics": {},
+                    "reward": 0.7,
+                    "is_training_example": True,
+                }
+            ).execute()
 
         # Check signal count
-        response = supabase_client.table("dspy_agent_training_signals").select(
-            "signal_id", count="exact"
-        ).ilike("source_agent", f"{test_prefix}%").execute()
+        response = (
+            supabase_client.table("dspy_agent_training_signals")
+            .select("signal_id", count="exact")
+            .ilike("source_agent", f"{test_prefix}%")
+            .execute()
+        )
 
         assert response.count == 10
         assert response.count < 50  # Below threshold
@@ -511,24 +524,29 @@ class TestMIPROOptimizationTrigger:
         # Insert 50 signals (at threshold)
         signals = []
         for i in range(50):
-            signals.append({
-                "source_agent": f"{test_prefix}_optimizable",
-                "batch_id": f"{test_prefix}_opt_{i}",
-                "input_context": {"query": f"query {i}"},
-                "output": {"response": f"response {i}"},
-                "quality_metrics": {"accuracy": 0.8},
-                "reward": 0.75,
-                "is_training_example": True,
-                "excluded_from_training": False,
-            })
+            signals.append(
+                {
+                    "source_agent": f"{test_prefix}_optimizable",
+                    "batch_id": f"{test_prefix}_opt_{i}",
+                    "input_context": {"query": f"query {i}"},
+                    "output": {"response": f"response {i}"},
+                    "quality_metrics": {"accuracy": 0.8},
+                    "reward": 0.75,
+                    "is_training_example": True,
+                    "excluded_from_training": False,
+                }
+            )
 
         # Batch insert
         supabase_client.table("dspy_agent_training_signals").insert(signals).execute()
 
         # Verify count meets threshold
-        response = supabase_client.table("dspy_agent_training_signals").select(
-            "signal_id", count="exact"
-        ).eq("source_agent", f"{test_prefix}_optimizable").execute()
+        response = (
+            supabase_client.table("dspy_agent_training_signals")
+            .select("signal_id", count="exact")
+            .eq("source_agent", f"{test_prefix}_optimizable")
+            .execute()
+        )
 
         assert response.count >= 50  # At or above threshold for optimization
 
@@ -560,9 +578,7 @@ class TestMIPROOptimizationTrigger:
             "deployed": False,
         }
 
-        response = supabase_client.table("dspy_optimization_runs").insert(
-            run_data
-        ).execute()
+        response = supabase_client.table("dspy_optimization_runs").insert(run_data).execute()
 
         assert len(response.data) > 0
         run = response.data[0]
@@ -614,7 +630,7 @@ class TestOptimizedPromptLoading:
         # Query active prompt using database function
         response = supabase_client.rpc(
             "get_active_prompt",
-            {"p_agent": f"{test_prefix}_agent", "p_signature": "CausalSignature"}
+            {"p_agent": f"{test_prefix}_agent", "p_signature": "CausalSignature"},
         ).execute()
 
         assert len(response.data) > 0
@@ -630,19 +646,21 @@ class TestOptimizedPromptLoading:
         test_prefix = clean_dspy_tables
 
         # Insert only inactive prompts
-        supabase_client.table("dspy_prompt_versions").insert({
-            "agent_name": f"{test_prefix}_fallback",
-            "signature_name": "TestSignature",
-            "version_number": 1,
-            "is_active": False,
-            "prompt_template": "Inactive prompt",
-            "created_by": "baseline",
-        }).execute()
+        supabase_client.table("dspy_prompt_versions").insert(
+            {
+                "agent_name": f"{test_prefix}_fallback",
+                "signature_name": "TestSignature",
+                "version_number": 1,
+                "is_active": False,
+                "prompt_template": "Inactive prompt",
+                "created_by": "baseline",
+            }
+        ).execute()
 
         # Query should return empty (no active prompt)
         response = supabase_client.rpc(
             "get_active_prompt",
-            {"p_agent": f"{test_prefix}_fallback", "p_signature": "TestSignature"}
+            {"p_agent": f"{test_prefix}_fallback", "p_signature": "TestSignature"},
         ).execute()
 
         # No active prompt should be found
@@ -749,9 +767,7 @@ class TestFullCognitiveWithDSPy:
 class TestDSPyPerformance:
     """Performance benchmark tests for DSPy integration."""
 
-    def test_signal_collection_under_100ms(
-        self, mock_lm, mock_signal_collector, cognitive_state
-    ):
+    def test_signal_collection_under_100ms(self, mock_lm, mock_signal_collector, cognitive_state):
         """Benchmark Phase 4 signal collection latency."""
         cognitive_state.response = "Test response"
         cognitive_state.detected_intent = "CAUSAL_ANALYSIS"
@@ -779,9 +795,7 @@ class TestDSPyPerformance:
 
             # Measure signal collection time
             start = time.time()
-            asyncio.get_event_loop().run_until_complete(
-                module.forward(cognitive_state)
-            )
+            asyncio.get_event_loop().run_until_complete(module.forward(cognitive_state))
             elapsed_ms = (time.time() - start) * 1000
 
             # With mocks, should be well under 100ms
@@ -828,7 +842,6 @@ class TestMemoryAdaptersIntegration:
     @pytest.mark.skipif(SKIP_SUPABASE, reason=SKIP_REASON_SUPABASE)
     def test_signal_collector_adapter_flush(self, supabase_client, clean_dspy_tables):
         """Test SignalCollectorAdapter buffer flush to database."""
-        test_prefix = clean_dspy_tables
 
         adapter = SignalCollectorAdapter(supabase_client, buffer_size=5)
 
@@ -844,7 +857,7 @@ class TestMemoryAdaptersIntegration:
         assert len(adapter._signal_buffer) == 3
 
         # Flush manually
-        flushed = asyncio.get_event_loop().run_until_complete(adapter.flush())
+        asyncio.get_event_loop().run_until_complete(adapter.flush())
 
         # Buffer should be empty after flush
         assert len(adapter._signal_buffer) == 0

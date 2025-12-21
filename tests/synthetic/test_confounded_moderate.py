@@ -16,13 +16,12 @@ Reference: docs/E2I_Causal_Validation_Protocol.html
 """
 
 import pytest
-import numpy as np
 
 from tests.synthetic.conftest import (
     SyntheticDataset,
-    generate_confounded_moderate,
-    estimate_ate_naive,
     estimate_ate_adjusted,
+    estimate_ate_naive,
+    generate_confounded_moderate,
 )
 
 
@@ -51,9 +50,7 @@ class TestConfoundedModerateBenchmark:
             f"true ATE {dataset.true_ate:.4f}. DGP may lack confounding."
         )
 
-    def test_adjusted_estimate_accurate(
-        self, confounded_moderate_dataset: SyntheticDataset
-    ):
+    def test_adjusted_estimate_accurate(self, confounded_moderate_dataset: SyntheticDataset):
         """CI/CD test: Adjusted estimate should recover true effect.
 
         This is the main benchmark test - can we recover the true effect
@@ -76,9 +73,7 @@ class TestConfoundedModerateBenchmark:
             f"tolerance: {dataset.tolerance:.4f})"
         )
 
-    def test_adjustment_reduces_bias(
-        self, confounded_moderate_dataset: SyntheticDataset
-    ):
+    def test_adjustment_reduces_bias(self, confounded_moderate_dataset: SyntheticDataset):
         """CI/CD test: Adjustment should substantially reduce bias."""
         dataset = confounded_moderate_dataset
 
@@ -104,9 +99,7 @@ class TestConfoundedModerateBenchmark:
             f"Naive error: {naive_error:.4f}, Adjusted error: {adjusted_error:.4f}"
         )
 
-    def test_confounder_treatment_correlation(
-        self, confounded_moderate_dataset: SyntheticDataset
-    ):
+    def test_confounder_treatment_correlation(self, confounded_moderate_dataset: SyntheticDataset):
         """Verify confounder is correlated with treatment."""
         dataset = confounded_moderate_dataset
         data = dataset.data
@@ -115,13 +108,9 @@ class TestConfoundedModerateBenchmark:
         correlation = data["C"].corr(data["T"])
 
         # Should have positive correlation (higher C → higher P(T=1))
-        assert correlation > 0.15, (
-            f"Confounder-treatment correlation {correlation:.4f} is too weak"
-        )
+        assert correlation > 0.15, f"Confounder-treatment correlation {correlation:.4f} is too weak"
 
-    def test_confounder_outcome_correlation(
-        self, confounded_moderate_dataset: SyntheticDataset
-    ):
+    def test_confounder_outcome_correlation(self, confounded_moderate_dataset: SyntheticDataset):
         """Verify confounder is correlated with outcome (controlling for T)."""
         dataset = confounded_moderate_dataset
         data = dataset.data
@@ -178,9 +167,7 @@ class TestConfoundedModerateBenchmark:
 class TestConfoundedModerateDatasetProperties:
     """Test properties of the confounded moderate dataset."""
 
-    def test_dataset_structure(
-        self, confounded_moderate_dataset: SyntheticDataset
-    ):
+    def test_dataset_structure(self, confounded_moderate_dataset: SyntheticDataset):
         """Verify dataset has expected structure."""
         dataset = confounded_moderate_dataset
 
@@ -191,9 +178,7 @@ class TestConfoundedModerateDatasetProperties:
         assert dataset.dgp_name == "confounded_moderate"
         assert dataset.confounder_cols == ["C"]
 
-    def test_confounder_distribution(
-        self, confounded_moderate_dataset: SyntheticDataset
-    ):
+    def test_confounder_distribution(self, confounded_moderate_dataset: SyntheticDataset):
         """Verify confounder has expected distribution (N(0,1))."""
         dataset = confounded_moderate_dataset
         C = dataset.data["C"]
@@ -240,9 +225,9 @@ class TestConfoundingBiasDirection:
         )
 
         # Naive should overestimate (positive bias)
-        assert naive_ate > dataset.true_ate, (
-            f"Expected upward bias: naive {naive_ate:.4f} > true {dataset.true_ate:.4f}"
-        )
+        assert (
+            naive_ate > dataset.true_ate
+        ), f"Expected upward bias: naive {naive_ate:.4f} > true {dataset.true_ate:.4f}"
 
     def test_bias_magnitude_scales_with_confounding(self):
         """Stronger confounding should create larger bias."""

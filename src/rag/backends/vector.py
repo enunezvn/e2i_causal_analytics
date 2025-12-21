@@ -16,8 +16,8 @@ import time
 from typing import Any, Dict, List, Optional
 
 from src.rag.config import HybridSearchConfig
-from src.rag.types import RetrievalResult, RetrievalSource
 from src.rag.exceptions import VectorSearchError
+from src.rag.types import RetrievalResult, RetrievalSource
 
 logger = logging.getLogger(__name__)
 
@@ -45,11 +45,7 @@ class VectorBackend:
         ```
     """
 
-    def __init__(
-        self,
-        supabase_client: Any,
-        config: Optional[HybridSearchConfig] = None
-    ):
+    def __init__(self, supabase_client: Any, config: Optional[HybridSearchConfig] = None):
         """
         Initialize the vector backend.
 
@@ -65,7 +61,7 @@ class VectorBackend:
         self,
         embedding: List[float],
         filters: Optional[Dict[str, Any]] = None,
-        top_k: Optional[int] = None
+        top_k: Optional[int] = None,
     ) -> List[RetrievalResult]:
         """
         Execute vector similarity search.
@@ -88,13 +84,8 @@ class VectorBackend:
         try:
             # Execute RPC call with timeout
             response = await asyncio.wait_for(
-                asyncio.to_thread(
-                    self._execute_rpc,
-                    embedding,
-                    top_k,
-                    filters or {}
-                ),
-                timeout=timeout_seconds
+                asyncio.to_thread(self._execute_rpc, embedding, top_k, filters or {}),
+                timeout=timeout_seconds,
             )
 
             self._last_latency_ms = (time.time() - start_time) * 1000
@@ -107,15 +98,17 @@ class VectorBackend:
                 if similarity < self.config.vector_min_similarity:
                     continue
 
-                results.append(RetrievalResult(
-                    id=str(row["id"]),
-                    content=row.get("content", ""),
-                    source=RetrievalSource.VECTOR,
-                    score=similarity,
-                    metadata=row.get("metadata", {}),
-                    query_latency_ms=self._last_latency_ms,
-                    raw_score=similarity
-                ))
+                results.append(
+                    RetrievalResult(
+                        id=str(row["id"]),
+                        content=row.get("content", ""),
+                        source=RetrievalSource.VECTOR,
+                        score=similarity,
+                        metadata=row.get("metadata", {}),
+                        query_latency_ms=self._last_latency_ms,
+                        raw_score=similarity,
+                    )
+                )
 
             logger.debug(
                 f"Vector search returned {len(results)} results "
@@ -126,29 +119,22 @@ class VectorBackend:
 
         except asyncio.TimeoutError:
             self._last_latency_ms = self.config.vector_timeout_ms
-            logger.warning(
-                f"Vector search timeout after {self.config.vector_timeout_ms}ms"
-            )
+            logger.warning(f"Vector search timeout after {self.config.vector_timeout_ms}ms")
             raise VectorSearchError(
                 message=f"Vector search timeout after {self.config.vector_timeout_ms}ms",
                 backend="supabase_vector",
-                details={"timeout_ms": self.config.vector_timeout_ms}
+                details={"timeout_ms": self.config.vector_timeout_ms},
             )
 
         except Exception as e:
             self._last_latency_ms = (time.time() - start_time) * 1000
             logger.error(f"Vector search error: {e}")
             raise VectorSearchError(
-                message=f"Vector search failed: {e}",
-                backend="supabase_vector",
-                original_error=e
+                message=f"Vector search failed: {e}", backend="supabase_vector", original_error=e
             )
 
     def _execute_rpc(
-        self,
-        embedding: List[float],
-        match_count: int,
-        filters: Dict[str, Any]
+        self, embedding: List[float], match_count: int, filters: Dict[str, Any]
     ) -> Any:
         """
         Execute the Supabase RPC call synchronously.
@@ -157,11 +143,7 @@ class VectorBackend:
         """
         return self.client.rpc(
             "rag_vector_search",
-            {
-                "query_embedding": embedding,
-                "match_count": match_count,
-                "filters": filters
-            }
+            {"query_embedding": embedding, "match_count": match_count, "filters": filters},
         ).execute()
 
     async def health_check(self) -> Dict[str, Any]:
@@ -175,37 +157,20 @@ class VectorBackend:
             # Use a zero vector for health check (should be fast)
             start_time = time.time()
 
-            response = await asyncio.wait_for(
-                asyncio.to_thread(
-                    self._execute_rpc,
-                    [0.0] * 1536,  # Zero vector
-                    1,
-                    {}
-                ),
-                timeout=5.0
+            await asyncio.wait_for(
+                asyncio.to_thread(self._execute_rpc, [0.0] * 1536, 1, {}),  # Zero vector
+                timeout=5.0,
             )
 
             latency_ms = (time.time() - start_time) * 1000
 
-            return {
-                "status": "healthy",
-                "latency_ms": latency_ms,
-                "error": None
-            }
+            return {"status": "healthy", "latency_ms": latency_ms, "error": None}
 
         except asyncio.TimeoutError:
-            return {
-                "status": "unhealthy",
-                "latency_ms": 5000,
-                "error": "Health check timeout"
-            }
+            return {"status": "unhealthy", "latency_ms": 5000, "error": "Health check timeout"}
 
         except Exception as e:
-            return {
-                "status": "unhealthy",
-                "latency_ms": 0,
-                "error": str(e)
-            }
+            return {"status": "unhealthy", "latency_ms": 0, "error": str(e)}
 
     @property
     def last_latency_ms(self) -> float:

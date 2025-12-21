@@ -1,8 +1,10 @@
 """Tests for dispatcher node."""
 
 import asyncio
-import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
 from src.agents.orchestrator.nodes.dispatcher import (
     DispatcherNode,
     dispatch_to_agents,
@@ -527,9 +529,7 @@ class TestParallelExecution:
         mock_agent2 = MagicMock()
         mock_agent2.analyze = partial(track_execution, "agent2")
 
-        dispatcher = DispatcherNode(
-            agent_registry={"agent1": mock_agent1, "agent2": mock_agent2}
-        )
+        dispatcher = DispatcherNode(agent_registry={"agent1": mock_agent1, "agent2": mock_agent2})
 
         state = {
             "query": "test",
@@ -560,8 +560,8 @@ class TestParallelExecution:
         # Verify they overlapped (parallel execution)
         # If sequential, agent2 would start after agent1 ends
         # If parallel, agent2 starts before agent1 ends
-        agent1_start, agent1_end = execution_times[0][1], execution_times[0][2]
-        agent2_start, agent2_end = execution_times[1][1], execution_times[1][2]
+        _agent1_start, agent1_end = execution_times[0][1], execution_times[0][2]
+        agent2_start, _agent2_end = execution_times[1][1], execution_times[1][2]
 
         # Agent2 should start before Agent1 finishes (parallel)
         assert agent2_start < agent1_end

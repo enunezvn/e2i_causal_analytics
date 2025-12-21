@@ -32,19 +32,17 @@ Changes from v1.2:
 Requires: 001_agentic_memory_schema_v1.3.sql + 001b_add_foreign_keys_v3.sql
 """
 
-import os
 import json
 import logging
-from pathlib import Path
-from typing import List, Dict, Any, Optional, Tuple, Union
-from datetime import datetime, timedelta
-from dataclasses import dataclass, field, asdict
-from enum import Enum
+import os
 import uuid
-import asyncio
+from dataclasses import asdict, dataclass
+from datetime import datetime, timedelta
+from enum import Enum
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
-from pydantic import BaseModel, Field
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -52,6 +50,7 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 # CONFIGURATION LOADER
 # ============================================================================
+
 
 def load_config() -> Dict[str, Any]:
     """Load memory configuration from YAML."""
@@ -68,8 +67,10 @@ ENVIRONMENT = CONFIG.get("environment", "local_pilot")
 # E2I DATA LAYER ENTITY TYPES
 # ============================================================================
 
+
 class E2IEntityType(str, Enum):
     """E2I data layer entity types for foreign key references."""
+
     PATIENT = "patient"
     HCP = "hcp"
     TREATMENT = "treatment"
@@ -82,6 +83,7 @@ class E2IEntityType(str, Enum):
 
 class E2IBrand(str, Enum):
     """E2I brand values."""
+
     REMIBRUTINIB = "Remibrutinib"
     FABHALTA = "Fabhalta"
     KISQALI = "Kisqali"
@@ -90,6 +92,7 @@ class E2IBrand(str, Enum):
 
 class E2IRegion(str, Enum):
     """E2I region values."""
+
     NORTHEAST = "northeast"
     SOUTH = "south"
     MIDWEST = "midwest"
@@ -99,6 +102,7 @@ class E2IRegion(str, Enum):
 
 class E2IAgentName(str, Enum):
     """E2I 11-agent architecture names."""
+
     # Tier 1: Coordination
     ORCHESTRATOR = "orchestrator"
     # Tier 2: Causal Analytics
@@ -123,9 +127,11 @@ class E2IAgentName(str, Enum):
 # DATA CLASSES FOR E2I ENTITY CONTEXT
 # ============================================================================
 
+
 @dataclass
 class E2IEntityContext:
     """Context about linked E2I entities for a memory."""
+
     patient: Optional[Dict[str, Any]] = None
     hcp: Optional[Dict[str, Any]] = None
     trigger: Optional[Dict[str, Any]] = None
@@ -139,6 +145,7 @@ class E2IEntityContext:
 @dataclass
 class E2IEntityReferences:
     """Foreign key references to E2I data layer entities."""
+
     patient_journey_id: Optional[str] = None
     patient_id: Optional[str] = None  # Denormalized
     hcp_id: Optional[str] = None
@@ -152,9 +159,10 @@ class E2IEntityReferences:
     region: Optional[str] = None
 
 
-@dataclass 
+@dataclass
 class EpisodicMemoryInput:
     """Input for creating an episodic memory with E2I integration."""
+
     event_type: str
     description: str
     event_subtype: Optional[str] = None
@@ -172,6 +180,7 @@ class EpisodicMemoryInput:
 @dataclass
 class EpisodicSearchFilters:
     """Filters for episodic memory search with E2I entity support."""
+
     event_type: Optional[str] = None
     agent_name: Optional[str] = None
     brand: Optional[str] = None
@@ -190,6 +199,7 @@ class EnrichedEpisodicMemory:
     v1.3: Episodic memory with full E2I entity context attached.
     Returned by get_enriched_episodic_memory().
     """
+
     memory_id: str
     event_type: str
     event_subtype: Optional[str]
@@ -213,6 +223,7 @@ class AgentActivityContext:
     v1.3: Full context for an agent activity.
     Returned by get_agent_activity_with_context().
     """
+
     activity_id: str
     agent_name: str
     action_type: str
@@ -231,6 +242,7 @@ class AgentActivityContext:
 # ============================================================================
 # SERVICE FACTORIES
 # ============================================================================
+
 
 def get_embedding_service():
     """Get embedding service based on environment."""
@@ -251,21 +263,21 @@ def get_llm_service():
 def get_redis_client():
     """Get Redis client for working memory."""
     import redis.asyncio as redis
-    
+
     url = os.environ.get("REDIS_URL", "redis://localhost:6382")
     return redis.from_url(url, decode_responses=True)
 
 
 def get_supabase_client():
     """Get Supabase client for episodic/procedural memory."""
-    from supabase import create_client, Client
-    
+    from supabase import create_client
+
     url = os.environ.get("SUPABASE_URL")
     key = os.environ.get("SUPABASE_ANON_KEY")
-    
+
     if not url or not key:
         raise ValueError("SUPABASE_URL and SUPABASE_ANON_KEY must be set")
-    
+
     return create_client(url, key)
 
 
@@ -283,52 +295,48 @@ def get_falkordb_client():
 # EMBEDDING SERVICES
 # ============================================================================
 
+
 class OpenAIEmbeddingService:
     """OpenAI embeddings for local pilot."""
-    
+
     def __init__(self):
         import openai
+
         self.client = openai.OpenAI()
         self.model = CONFIG["embeddings"]["local_pilot"]["model"]
         self._cache = {}
-    
+
     async def embed(self, text: str) -> List[float]:
         """Generate embedding for text."""
         cache_key = hash(text)
         if cache_key in self._cache:
             return self._cache[cache_key]
-        
-        response = self.client.embeddings.create(
-            model=self.model,
-            input=text
-        )
-        
+
+        response = self.client.embeddings.create(model=self.model, input=text)
+
         embedding = response.data[0].embedding
         self._cache[cache_key] = embedding
-        
+
         return embedding
-    
+
     async def embed_batch(self, texts: List[str]) -> List[List[float]]:
         """Generate embeddings for multiple texts."""
-        response = self.client.embeddings.create(
-            model=self.model,
-            input=texts
-        )
+        response = self.client.embeddings.create(model=self.model, input=texts)
         return [item.embedding for item in response.data]
 
 
 class BedrockEmbeddingService:
     """AWS Bedrock embeddings for production."""
-    
+
     def __init__(self):
         import boto3
+
         self.client = boto3.client("bedrock-runtime")
         self.model = CONFIG["embeddings"]["aws_production"]["model"]
-    
+
     async def embed(self, text: str) -> List[float]:
         response = self.client.invoke_model(
-            modelId=self.model,
-            body=json.dumps({"inputText": text})
+            modelId=self.model, body=json.dumps({"inputText": text})
         )
         result = json.loads(response["body"].read())
         return result["embedding"]
@@ -338,43 +346,48 @@ class BedrockEmbeddingService:
 # LLM SERVICES
 # ============================================================================
 
+
 class AnthropicLLMService:
     """Anthropic Claude for local pilot."""
-    
+
     def __init__(self):
         import anthropic
+
         self.client = anthropic.Anthropic()
         self.model = CONFIG["llm"]["local_pilot"]["model"]
         self.max_tokens = CONFIG["llm"]["local_pilot"]["max_tokens"]
         self.temperature = CONFIG["llm"]["local_pilot"]["temperature"]
-    
+
     async def complete(self, prompt: str, max_tokens: Optional[int] = None) -> str:
         response = self.client.messages.create(
             model=self.model,
             max_tokens=max_tokens or self.max_tokens,
             temperature=self.temperature,
-            messages=[{"role": "user", "content": prompt}]
+            messages=[{"role": "user", "content": prompt}],
         )
         return response.content[0].text
 
 
 class BedrockLLMService:
     """AWS Bedrock Claude for production."""
-    
+
     def __init__(self):
         import boto3
+
         self.client = boto3.client("bedrock-runtime")
         self.model = CONFIG["llm"]["aws_production"]["model"]
         self.max_tokens = CONFIG["llm"]["aws_production"]["max_tokens"]
-    
+
     async def complete(self, prompt: str, max_tokens: Optional[int] = None) -> str:
         response = self.client.invoke_model(
             modelId=self.model,
-            body=json.dumps({
-                "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": max_tokens or self.max_tokens,
-                "messages": [{"role": "user", "content": prompt}]
-            })
+            body=json.dumps(
+                {
+                    "anthropic_version": "bedrock-2023-05-31",
+                    "max_tokens": max_tokens or self.max_tokens,
+                    "messages": [{"role": "user", "content": prompt}],
+                }
+            ),
         )
         result = json.loads(response["body"].read())
         return result["content"][0]["text"]
@@ -384,41 +397,41 @@ class BedrockLLMService:
 # SHORT-TERM / WORKING MEMORY (Redis + LangGraph MemorySaver)
 # ============================================================================
 
+
 class RedisWorkingMemory:
     """
     Redis-based working memory with LangGraph MemorySaver integration.
     """
-    
+
     def __init__(self):
         self.config = CONFIG["memory_backends"]["working"]["local_pilot"]
         self._client = None
         self._checkpointer = None
-    
+
     async def get_client(self):
         """Lazy Redis client initialization."""
         if self._client is None:
             self._client = get_redis_client()
         return self._client
-    
+
     def get_langgraph_checkpointer(self):
         """Get LangGraph checkpointer backed by Redis."""
         if self._checkpointer is None:
             from langgraph.checkpoint.redis import RedisSaver
+
             redis_url = os.environ.get("REDIS_URL", "redis://localhost:6382")
             self._checkpointer = RedisSaver.from_conn_string(redis_url)
         return self._checkpointer
-    
+
     async def create_session(
-        self,
-        user_id: Optional[str] = None,
-        initial_context: Optional[Dict[str, Any]] = None
+        self, user_id: Optional[str] = None, initial_context: Optional[Dict[str, Any]] = None
     ) -> str:
         """Create new working memory session."""
         redis = await self.get_client()
         session_id = str(uuid.uuid4())
-        
+
         session_key = f"{self.config['session_prefix']}{session_id}"
-        
+
         session_data = {
             "session_id": session_id,
             "user_id": user_id or "anonymous",
@@ -426,27 +439,33 @@ class RedisWorkingMemory:
             "last_activity_at": datetime.now(timezone.utc).isoformat(),
             "message_count": "0",
             "current_phase": "init",
-            "user_preferences": json.dumps(initial_context.get("preferences", {}) if initial_context else {}),
-            "active_filters": json.dumps(initial_context.get("filters", {}) if initial_context else {}),
+            "user_preferences": json.dumps(
+                initial_context.get("preferences", {}) if initial_context else {}
+            ),
+            "active_filters": json.dumps(
+                initial_context.get("filters", {}) if initial_context else {}
+            ),
             # E2I context
             "active_brand": initial_context.get("brand") if initial_context else None,
             "active_region": initial_context.get("region") if initial_context else None,
         }
-        
-        await redis.hset(session_key, mapping={k: v for k, v in session_data.items() if v is not None})
+
+        await redis.hset(
+            session_key, mapping={k: v for k, v in session_data.items() if v is not None}
+        )
         await redis.expire(session_key, self.config["ttl_seconds"])
-        
+
         return session_id
-    
+
     async def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
         """Get session data."""
         redis = await self.get_client()
         session_key = f"{self.config['session_prefix']}{session_id}"
-        
+
         data = await redis.hgetall(session_key)
         if not data:
             return None
-        
+
         # Deserialize JSON fields
         if data.get("user_preferences"):
             data["user_preferences"] = json.loads(data["user_preferences"])
@@ -454,36 +473,36 @@ class RedisWorkingMemory:
             data["active_filters"] = json.loads(data["active_filters"])
         if data.get("message_count"):
             data["message_count"] = int(data["message_count"])
-        
+
         return data
-    
+
     async def update_session(self, session_id: str, updates: Dict[str, Any]):
         """Update session fields."""
         redis = await self.get_client()
         session_key = f"{self.config['session_prefix']}{session_id}"
-        
+
         # Serialize complex fields
         for key in ["user_preferences", "active_filters", "active_entities"]:
             if key in updates and isinstance(updates[key], dict):
                 updates[key] = json.dumps(updates[key])
-        
+
         # Convert non-string values
         for key, value in updates.items():
             if isinstance(value, (int, float)):
                 updates[key] = str(value)
-        
+
         updates["last_activity_at"] = datetime.now(timezone.utc).isoformat()
-        
+
         await redis.hset(session_key, mapping=updates)
         await redis.expire(session_key, self.config["ttl_seconds"])
-    
+
     async def set_e2i_context(
-        self, 
-        session_id: str, 
+        self,
+        session_id: str,
         brand: Optional[str] = None,
         region: Optional[str] = None,
         patient_ids: Optional[List[str]] = None,
-        hcp_ids: Optional[List[str]] = None
+        hcp_ids: Optional[List[str]] = None,
     ):
         """Set E2I entity context for the session."""
         updates = {}
@@ -495,83 +514,81 @@ class RedisWorkingMemory:
             updates["active_patient_ids"] = json.dumps(patient_ids)
         if hcp_ids:
             updates["active_hcp_ids"] = json.dumps(hcp_ids)
-        
+
         if updates:
             await self.update_session(session_id, updates)
-    
+
     async def get_e2i_context(self, session_id: str) -> Dict[str, Any]:
         """Get E2I entity context from session."""
         session = await self.get_session(session_id)
         if not session:
             return {}
-        
+
         context = {
             "brand": session.get("active_brand"),
             "region": session.get("active_region"),
         }
-        
+
         if session.get("active_patient_ids"):
             context["patient_ids"] = json.loads(session["active_patient_ids"])
         if session.get("active_hcp_ids"):
             context["hcp_ids"] = json.loads(session["active_hcp_ids"])
-        
+
         return context
-    
+
     async def add_message(
-        self,
-        session_id: str,
-        role: str,
-        content: str,
-        metadata: Optional[Dict[str, Any]] = None
+        self, session_id: str, role: str, content: str, metadata: Optional[Dict[str, Any]] = None
     ):
         """Add message to conversation history."""
         redis = await self.get_client()
         messages_key = f"{self.config['session_prefix']}{session_id}:messages"
-        
+
         message = {
             "role": role,
             "content": content,
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "metadata": json.dumps(metadata or {})
+            "metadata": json.dumps(metadata or {}),
         }
-        
+
         await redis.rpush(messages_key, json.dumps(message))
         await redis.expire(messages_key, self.config["ttl_seconds"])
-        
+
         max_messages = self.config["context_window_messages"]
         await redis.ltrim(messages_key, -max_messages, -1)
-        
+
         session_key = f"{self.config['session_prefix']}{session_id}"
         await redis.hincrby(session_key, "message_count", 1)
-    
-    async def get_messages(self, session_id: str, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+
+    async def get_messages(
+        self, session_id: str, limit: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
         """Get recent messages from conversation."""
         redis = await self.get_client()
         messages_key = f"{self.config['session_prefix']}{session_id}:messages"
-        
+
         if limit:
             messages = await redis.lrange(messages_key, -limit, -1)
         else:
             messages = await redis.lrange(messages_key, 0, -1)
-        
+
         return [json.loads(m) for m in messages]
-    
+
     async def append_evidence(self, session_id: str, evidence: Dict[str, Any]):
         """Append evidence item to evidence board."""
         redis = await self.get_client()
         evidence_key = f"{self.config['evidence_prefix']}{session_id}"
-        
+
         await redis.rpush(evidence_key, json.dumps(evidence))
         await redis.expire(evidence_key, self.config["ttl_seconds"])
-    
+
     async def get_evidence_trail(self, session_id: str) -> List[Dict[str, Any]]:
         """Get all evidence from current investigation."""
         redis = await self.get_client()
         evidence_key = f"{self.config['evidence_prefix']}{session_id}"
-        
+
         evidence = await redis.lrange(evidence_key, 0, -1)
         return [json.loads(e) for e in evidence]
-    
+
     async def clear_evidence(self, session_id: str):
         """Clear evidence board."""
         redis = await self.get_client()
@@ -601,28 +618,29 @@ def get_langgraph_checkpointer():
 # EPISODIC MEMORY (Supabase + pgvector) with E2I Integration
 # ============================================================================
 
+
 async def search_episodic_memory(
     embedding: List[float],
     filters: Optional[EpisodicSearchFilters] = None,
     limit: int = 10,
     min_similarity: float = 0.5,
-    include_entity_context: bool = False
+    include_entity_context: bool = False,
 ) -> List[Dict[str, Any]]:
     """
     Search episodic memories by embedding similarity with E2I entity filters.
-    
+
     Args:
         embedding: Query embedding vector
         filters: EpisodicSearchFilters with E2I entity support
         limit: Maximum results to return
         min_similarity: Minimum cosine similarity threshold
         include_entity_context: If True, fetch linked E2I entity details
-    
+
     Returns:
         List of matching episodic memories with similarity scores
     """
     client = get_supabase_client()
-    
+
     # Build filter params for RPC call
     filter_params = {
         "query_embedding": embedding,
@@ -633,9 +651,9 @@ async def search_episodic_memory(
         "filter_brand": None,
         "filter_region": None,
         "filter_patient_id": None,
-        "filter_hcp_id": None
+        "filter_hcp_id": None,
     }
-    
+
     if filters:
         filter_params["filter_event_type"] = filters.event_type
         filter_params["filter_agent"] = filters.agent_name
@@ -643,16 +661,16 @@ async def search_episodic_memory(
         filter_params["filter_region"] = filters.region
         filter_params["filter_patient_id"] = filters.patient_id
         filter_params["filter_hcp_id"] = filters.hcp_id
-    
+
     result = client.rpc("search_episodic_memory", filter_params).execute()
     memories = result.data or []
-    
+
     # Optionally enrich with E2I entity context
     if include_entity_context and memories:
         for memory in memories:
             context = await get_memory_entity_context(memory["memory_id"])
             memory["e2i_context"] = context
-    
+
     return memories
 
 
@@ -660,22 +678,22 @@ async def search_episodic_by_e2i_entity(
     entity_type: E2IEntityType,
     entity_id: str,
     limit: int = 20,
-    event_types: Optional[List[str]] = None
+    event_types: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Search episodic memories linked to a specific E2I entity.
-    
+
     Args:
         entity_type: Type of E2I entity (patient, hcp, trigger, etc.)
         entity_id: ID of the entity
         limit: Maximum results
         event_types: Optional filter by event types
-    
+
     Returns:
         List of episodic memories linked to this entity
     """
     client = get_supabase_client()
-    
+
     # Map entity type to column name
     column_map = {
         E2IEntityType.PATIENT: "patient_journey_id",
@@ -685,22 +703,24 @@ async def search_episodic_by_e2i_entity(
         E2IEntityType.CAUSAL_PATH: "causal_path_id",
         E2IEntityType.EXPERIMENT: "experiment_id",
         E2IEntityType.TREATMENT: "treatment_event_id",
-        E2IEntityType.AGENT_ACTIVITY: "agent_activity_id"
+        E2IEntityType.AGENT_ACTIVITY: "agent_activity_id",
     }
-    
+
     column = column_map.get(entity_type)
     if not column:
         raise ValueError(f"Unknown entity type: {entity_type}")
-    
-    query = client.table("episodic_memories") \
-        .select("*") \
-        .eq(column, entity_id) \
-        .order("occurred_at", desc=True) \
+
+    query = (
+        client.table("episodic_memories")
+        .select("*")
+        .eq(column, entity_id)
+        .order("occurred_at", desc=True)
         .limit(limit)
-    
+    )
+
     if event_types:
         query = query.in_("event_type", event_types)
-    
+
     result = query.execute()
     return result.data or []
 
@@ -709,24 +729,24 @@ async def insert_episodic_memory(
     memory: EpisodicMemoryInput,
     embedding: List[float],
     session_id: Optional[str] = None,
-    cycle_id: Optional[str] = None
+    cycle_id: Optional[str] = None,
 ) -> str:
     """
     Insert new episodic memory with E2I entity references.
-    
+
     Args:
         memory: EpisodicMemoryInput with E2I entity references
         embedding: Pre-computed embedding vector
         session_id: Optional session ID
         cycle_id: Optional cognitive cycle ID
-    
+
     Returns:
         ID of inserted memory
     """
     client = get_supabase_client()
-    
+
     memory_id = str(uuid.uuid4())
-    
+
     record = {
         "memory_id": memory_id,
         "session_id": session_id,
@@ -742,9 +762,9 @@ async def insert_episodic_memory(
         "agent_name": memory.agent_name,
         "importance_score": memory.importance_score,
         "embedding": embedding,
-        "occurred_at": datetime.now(timezone.utc).isoformat()
+        "occurred_at": datetime.now(timezone.utc).isoformat(),
     }
-    
+
     # Add E2I entity references if provided
     if memory.e2i_refs:
         refs = memory.e2i_refs
@@ -770,12 +790,12 @@ async def insert_episodic_memory(
             record["brand"] = refs.brand
         if refs.region:
             record["region"] = refs.region
-    
+
     client.table("episodic_memories").insert(record).execute()
-    
+
     # v1.3: Track memory statistics
     await _increment_memory_stats("episodic", memory.event_type)
-    
+
     return memory_id
 
 
@@ -783,28 +803,28 @@ async def get_memory_entity_context(memory_id: str) -> E2IEntityContext:
     """
     Get linked E2I entity details for a memory.
     Uses the get_memory_entity_context database function from 001b.
-    
+
     Args:
         memory_id: UUID of the episodic memory
-    
+
     Returns:
         E2IEntityContext with details of linked entities
     """
     client = get_supabase_client()
-    
+
     try:
         result = client.rpc("get_memory_entity_context", {"p_memory_id": memory_id}).execute()
-        
+
         context = E2IEntityContext()
-        
+
         for row in result.data or []:
             entity_type = row.get("entity_type")
             details = {
                 "id": row.get("entity_id"),
                 "name": row.get("entity_name"),
-                **row.get("entity_details", {})
+                **row.get("entity_details", {}),
             }
-            
+
             if entity_type == "patient":
                 context.patient = details
             elif entity_type == "hcp":
@@ -819,7 +839,7 @@ async def get_memory_entity_context(memory_id: str) -> E2IEntityContext:
                 context.prediction = details
             elif entity_type == "agent_activity":
                 context.agent_activity = details
-        
+
         return context
     except Exception as e:
         logger.warning(f"get_memory_entity_context failed (001b may not be installed): {e}")
@@ -831,36 +851,35 @@ async def get_memory_entity_context(memory_id: str) -> E2IEntityContext:
 # These leverage the 001b foreign key functions for richer context
 # ============================================================================
 
+
 async def get_enriched_episodic_memory(memory_id: str) -> Optional[EnrichedEpisodicMemory]:
     """
     v1.3: Get episodic memory with full E2I data layer context attached.
-    
+
     This function retrieves the memory and uses the get_memory_entity_context()
     RPC from 001b to attach patient, HCP, trigger, and causal path details.
-    
+
     Args:
         memory_id: UUID of the episodic memory
-    
+
     Returns:
         EnrichedEpisodicMemory with all linked entity context, or None if not found
     """
     client = get_supabase_client()
-    
+
     # Fetch the base memory
-    result = client.table("episodic_memories") \
-        .select("*") \
-        .eq("memory_id", memory_id) \
-        .single() \
-        .execute()
-    
+    result = (
+        client.table("episodic_memories").select("*").eq("memory_id", memory_id).single().execute()
+    )
+
     if not result.data:
         return None
-    
+
     memory = result.data
-    
+
     # Fetch entity context using 001b function
     context = await get_memory_entity_context(memory_id)
-    
+
     return EnrichedEpisodicMemory(
         memory_id=memory["memory_id"],
         event_type=memory["event_type"],
@@ -875,7 +894,7 @@ async def get_enriched_episodic_memory(memory_id: str) -> Optional[EnrichedEpiso
         trigger_context=asdict(context)["trigger"] if context.trigger else None,
         causal_path_context=asdict(context)["causal_path"] if context.causal_path else None,
         treatment_context=asdict(context)["treatment"] if context.treatment else None,
-        prediction_context=asdict(context)["prediction"] if context.prediction else None
+        prediction_context=asdict(context)["prediction"] if context.prediction else None,
     )
 
 
@@ -883,23 +902,23 @@ async def get_agent_activity_with_context(activity_id: str) -> Optional[AgentAct
     """
     v1.3: Get agent activity with full E2I context.
     Uses the get_agent_activity_context() function from 001b.
-    
+
     Args:
         activity_id: ID of the agent activity
-    
+
     Returns:
         AgentActivityContext with linked triggers, causal paths, predictions
     """
     client = get_supabase_client()
-    
+
     try:
         result = client.rpc("get_agent_activity_context", {"p_activity_id": activity_id}).execute()
-        
+
         if not result.data or len(result.data) == 0:
             return None
-        
+
         data = result.data[0]
-        
+
         return AgentActivityContext(
             activity_id=data["activity_id"],
             agent_name=data["agent_name"],
@@ -911,7 +930,7 @@ async def get_agent_activity_with_context(activity_id: str) -> Optional[AgentAct
             causal_paths=data.get("causal_paths"),
             predictions=data.get("predictions"),
             duration_ms=data.get("duration_ms"),
-            tokens_used=data.get("tokens_used")
+            tokens_used=data.get("tokens_used"),
         )
     except Exception as e:
         logger.warning(f"get_agent_activity_context failed (001b may not be installed): {e}")
@@ -921,34 +940,28 @@ async def get_agent_activity_with_context(activity_id: str) -> Optional[AgentAct
 async def get_causal_path_context(path_id: str) -> Optional[Dict[str, Any]]:
     """
     v1.3: Get full context for a causal path including linked memories.
-    
+
     Args:
         path_id: ID of the causal path
-    
+
     Returns:
         Dict with causal path details, discovery agent, and related memories
     """
     client = get_supabase_client()
-    
+
     # Get causal path details
-    path_result = client.table("causal_paths") \
-        .select("*") \
-        .eq("path_id", path_id) \
-        .single() \
-        .execute()
-    
+    path_result = client.table("causal_paths").select("*").eq("path_id", path_id).single().execute()
+
     if not path_result.data:
         return None
-    
+
     path = path_result.data
-    
+
     # Get related episodic memories
     memories = await search_episodic_by_e2i_entity(
-        entity_type=E2IEntityType.CAUSAL_PATH,
-        entity_id=path_id,
-        limit=10
+        entity_type=E2IEntityType.CAUSAL_PATH, entity_id=path_id, limit=10
     )
-    
+
     return {
         "path_id": path_id,
         "source_entity": path.get("source_entity"),
@@ -957,7 +970,7 @@ async def get_causal_path_context(path_id: str) -> Optional[Dict[str, Any]]:
         "confidence": path.get("confidence"),
         "method_used": path.get("method_used"),
         "discovery_date": path.get("created_at"),
-        "related_memories": memories
+        "related_memories": memories,
     }
 
 
@@ -965,52 +978,54 @@ async def sync_treatment_relationships_to_cache() -> int:
     """
     v1.3: Sync HCP-Patient treatment relationships to semantic_memory_cache.
     Uses the sync_hcp_patient_relationships_to_cache() function from 001b.
-    
+
     This should be called periodically to keep the cache updated with
     the latest treatment relationships from the data layer.
-    
+
     Returns:
         Count of synced relationships
     """
     client = get_supabase_client()
-    
+
     try:
         result = client.rpc("sync_hcp_patient_relationships_to_cache", {}).execute()
-        
+
         count = result.data if isinstance(result.data, int) else 0
         logger.info(f"Synced {count} treatment relationships to semantic cache")
-        
+
         return count
     except Exception as e:
-        logger.warning(f"sync_hcp_patient_relationships_to_cache failed (001b may not be installed): {e}")
+        logger.warning(
+            f"sync_hcp_patient_relationships_to_cache failed (001b may not be installed): {e}"
+        )
         return 0
 
 
 async def bulk_insert_episodic_memories(
     memories: List[Tuple[EpisodicMemoryInput, List[float]]],
     session_id: Optional[str] = None,
-    cycle_id: Optional[str] = None
+    cycle_id: Optional[str] = None,
 ) -> List[str]:
     """
     v1.3: Bulk insert multiple episodic memories for performance.
-    
+
     Args:
         memories: List of (EpisodicMemoryInput, embedding) tuples
         session_id: Optional session ID for all memories
         cycle_id: Optional cycle ID for all memories
-    
+
     Returns:
         List of inserted memory IDs
     """
     client = get_supabase_client()
-    
+
     records = []
     memory_ids = []
-    
+
     for memory, embedding in memories:
         memory_id = str(uuid.uuid4())
         memory_ids.append(memory_id)
-        
+
         record = {
             "memory_id": memory_id,
             "session_id": session_id,
@@ -1026,9 +1041,9 @@ async def bulk_insert_episodic_memories(
             "agent_name": memory.agent_name,
             "importance_score": memory.importance_score,
             "embedding": embedding,
-            "occurred_at": datetime.now(timezone.utc).isoformat()
+            "occurred_at": datetime.now(timezone.utc).isoformat(),
         }
-        
+
         if memory.e2i_refs:
             refs = memory.e2i_refs
             if refs.patient_journey_id:
@@ -1041,14 +1056,14 @@ async def bulk_insert_episodic_memories(
                 record["brand"] = refs.brand
             if refs.region:
                 record["region"] = refs.region
-        
+
         records.append(record)
-    
+
     # Bulk insert
     client.table("episodic_memories").insert(records).execute()
-    
+
     logger.info(f"Bulk inserted {len(records)} episodic memories")
-    
+
     return memory_ids
 
 
@@ -1058,65 +1073,57 @@ async def get_recent_experiences(
     brand: Optional[str] = None,
     region: Optional[str] = None,
     days_back: int = 7,
-    limit: int = 20
+    limit: int = 20,
 ) -> List[Dict[str, Any]]:
     """
     Get recent experiences filtered by E2I context.
     """
     client = get_supabase_client()
-    
+
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days_back)).isoformat()
-    
-    query = client.table("episodic_memories") \
-        .select("*") \
-        .gte("occurred_at", cutoff) \
-        .order("occurred_at", desc=True) \
+
+    query = (
+        client.table("episodic_memories")
+        .select("*")
+        .gte("occurred_at", cutoff)
+        .order("occurred_at", desc=True)
         .limit(limit)
-    
+    )
+
     if event_types:
         query = query.in_("event_type", event_types)
     if brand:
         query = query.eq("brand", brand)
     if region:
         query = query.eq("region", region)
-    
+
     result = query.execute()
     return result.data or []
 
 
 async def get_patient_interaction_history(
-    patient_journey_id: str,
-    limit: int = 50
+    patient_journey_id: str, limit: int = 50
 ) -> List[Dict[str, Any]]:
     """
     Get all episodic memories related to a specific patient.
     Useful for building patient context in agent responses.
     """
     return await search_episodic_by_e2i_entity(
-        entity_type=E2IEntityType.PATIENT,
-        entity_id=patient_journey_id,
-        limit=limit
+        entity_type=E2IEntityType.PATIENT, entity_id=patient_journey_id, limit=limit
     )
 
 
-async def get_hcp_interaction_history(
-    hcp_id: str,
-    limit: int = 50
-) -> List[Dict[str, Any]]:
+async def get_hcp_interaction_history(hcp_id: str, limit: int = 50) -> List[Dict[str, Any]]:
     """
     Get all episodic memories related to a specific HCP.
     Useful for building HCP context in agent responses.
     """
     return await search_episodic_by_e2i_entity(
-        entity_type=E2IEntityType.HCP,
-        entity_id=hcp_id,
-        limit=limit
+        entity_type=E2IEntityType.HCP, entity_id=hcp_id, limit=limit
     )
 
 
-async def get_trigger_feedback_history(
-    trigger_id: str
-) -> List[Dict[str, Any]]:
+async def get_trigger_feedback_history(trigger_id: str) -> List[Dict[str, Any]]:
     """
     Get all feedback and interactions related to a specific trigger.
     Useful for evaluating trigger effectiveness.
@@ -1124,7 +1131,7 @@ async def get_trigger_feedback_history(
     return await search_episodic_by_e2i_entity(
         entity_type=E2IEntityType.TRIGGER,
         entity_id=trigger_id,
-        event_types=["feedback", "user_query"]
+        event_types=["feedback", "user_query"],
     )
 
 
@@ -1132,37 +1139,38 @@ async def get_trigger_feedback_history(
 # SEMANTIC MEMORY (FalkorDB + Graphity) with E2I Integration
 # ============================================================================
 
+
 class FalkorDBSemanticMemory:
     """
     FalkorDB-based semantic memory with Graphity integration and E2I entity support.
     """
-    
+
     def __init__(self):
         self.config = CONFIG["memory_backends"]["semantic"]["local_pilot"]
         self._client = None
         self._graph = None
-    
+
     @property
     def client(self):
         if self._client is None:
             self._client = get_falkordb_client()
         return self._client
-    
+
     @property
     def graph(self):
         if self._graph is None:
             self._graph = self.client.select_graph(self.config["graph_name"])
         return self._graph
-    
+
     def add_e2i_entity(
         self,
         entity_type: E2IEntityType,
         entity_id: str,
-        properties: Optional[Dict[str, Any]] = None
+        properties: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """
         Add an E2I entity to the semantic graph.
-        
+
         Args:
             entity_type: E2I entity type (patient, hcp, trigger, etc.)
             entity_id: ID from E2I data layer
@@ -1176,29 +1184,29 @@ class FalkorDBSemanticMemory:
             E2IEntityType.CAUSAL_PATH: "CausalPath",
             E2IEntityType.PREDICTION: "Prediction",
             E2IEntityType.TREATMENT: "Treatment",
-            E2IEntityType.EXPERIMENT: "Experiment"
+            E2IEntityType.EXPERIMENT: "Experiment",
         }
-        
+
         label = label_map.get(entity_type, "Entity")
         props = properties or {}
         props["e2i_entity_type"] = entity_type.value
         props["updated_at"] = datetime.now(timezone.utc).isoformat()
-        
+
         prop_items = [f"{k}: ${k}" for k in props.keys()]
         prop_string = ", ".join(prop_items)
-        
+
         query = f"""
         MERGE (e:{label} {{id: $entity_id}})
         ON CREATE SET e += {{{prop_string}}}
         ON MATCH SET e += {{{prop_string}}}
         RETURN e
         """
-        
+
         params = {"entity_id": entity_id, **props}
         self.graph.query(query, params)
-        
+
         return True
-    
+
     def add_e2i_relationship(
         self,
         source_type: E2IEntityType,
@@ -1206,11 +1214,11 @@ class FalkorDBSemanticMemory:
         target_type: E2IEntityType,
         target_id: str,
         rel_type: str,
-        properties: Optional[Dict[str, Any]] = None
+        properties: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """
         Add a relationship between E2I entities.
-        
+
         Common relationship types:
         - TREATED_BY: Patient → HCP
         - PRESCRIBED: Patient → Brand
@@ -1222,25 +1230,25 @@ class FalkorDBSemanticMemory:
         # Ensure entities exist
         self.add_e2i_entity(source_type, source_id)
         self.add_e2i_entity(target_type, target_id)
-        
+
         # Map types to labels
         label_map = {
             E2IEntityType.PATIENT: "Patient",
             E2IEntityType.HCP: "HCP",
             E2IEntityType.TRIGGER: "Trigger",
             E2IEntityType.CAUSAL_PATH: "CausalPath",
-            E2IEntityType.PREDICTION: "Prediction"
+            E2IEntityType.PREDICTION: "Prediction",
         }
-        
+
         source_label = label_map.get(source_type, "Entity")
         target_label = label_map.get(target_type, "Entity")
-        
+
         props = properties or {}
         props["updated_at"] = datetime.now(timezone.utc).isoformat()
-        
+
         prop_items = [f"{k}: ${k}" for k in props.keys()]
         prop_string = ", ".join(prop_items) if prop_items else ""
-        
+
         query = f"""
         MATCH (s:{source_label} {{id: $source_id}})
         MATCH (t:{target_label} {{id: $target_id}})
@@ -1248,17 +1256,13 @@ class FalkorDBSemanticMemory:
         SET r += {{{prop_string}}}
         RETURN r
         """
-        
+
         params = {"source_id": source_id, "target_id": target_id, **props}
         self.graph.query(query, params)
-        
+
         return True
-    
-    def get_patient_network(
-        self,
-        patient_id: str,
-        max_depth: int = 2
-    ) -> Dict[str, Any]:
+
+    def get_patient_network(self, patient_id: str, max_depth: int = 2) -> Dict[str, Any]:
         """
         Get the relationship network around a patient.
         Returns: HCPs, treatments, triggers associated with patient.
@@ -1267,26 +1271,26 @@ class FalkorDBSemanticMemory:
         MATCH (p:Patient {id: $patient_id})-[r*1..$max_depth]-(connected)
         RETURN p, r, connected
         """
-        
+
         result = self.graph.query(query, {"patient_id": patient_id, "max_depth": max_depth})
-        
+
         network = {
             "patient_id": patient_id,
             "hcps": [],
             "treatments": [],
             "triggers": [],
-            "causal_paths": []
+            "causal_paths": [],
         }
-        
+
         for record in result.result_set:
             connected = record[2]
-            labels = connected.labels if hasattr(connected, 'labels') else []
-            
+            labels = connected.labels if hasattr(connected, "labels") else []
+
             node_data = {
                 "id": connected.properties.get("id"),
-                "properties": dict(connected.properties)
+                "properties": dict(connected.properties),
             }
-            
+
             if "HCP" in labels:
                 network["hcps"].append(node_data)
             elif "Treatment" in labels:
@@ -1295,14 +1299,10 @@ class FalkorDBSemanticMemory:
                 network["triggers"].append(node_data)
             elif "CausalPath" in labels:
                 network["causal_paths"].append(node_data)
-        
+
         return network
-    
-    def get_hcp_influence_network(
-        self,
-        hcp_id: str,
-        max_depth: int = 2
-    ) -> Dict[str, Any]:
+
+    def get_hcp_influence_network(self, hcp_id: str, max_depth: int = 2) -> Dict[str, Any]:
         """
         Get the influence network around an HCP.
         Returns: Connected HCPs, patients, brands prescribed.
@@ -1311,67 +1311,56 @@ class FalkorDBSemanticMemory:
         MATCH (h:HCP {id: $hcp_id})-[r*1..$max_depth]-(connected)
         RETURN h, r, connected, type(r) as rel_type
         """
-        
+
         result = self.graph.query(query, {"hcp_id": hcp_id, "max_depth": max_depth})
-        
-        network = {
-            "hcp_id": hcp_id,
-            "influenced_hcps": [],
-            "patients": [],
-            "brands_prescribed": []
-        }
-        
+
+        network = {"hcp_id": hcp_id, "influenced_hcps": [], "patients": [], "brands_prescribed": []}
+
         for record in result.result_set:
             connected = record[2]
             rel_type = record[3] if len(record) > 3 else None
-            labels = connected.labels if hasattr(connected, 'labels') else []
-            
+            labels = connected.labels if hasattr(connected, "labels") else []
+
             node_data = {
                 "id": connected.properties.get("id"),
                 "relationship": rel_type,
-                "properties": dict(connected.properties)
+                "properties": dict(connected.properties),
             }
-            
+
             if "HCP" in labels:
                 network["influenced_hcps"].append(node_data)
             elif "Patient" in labels:
                 network["patients"].append(node_data)
             elif "Brand" in labels:
                 network["brands_prescribed"].append(node_data)
-        
+
         return network
-    
+
     def traverse_causal_chain(
-        self,
-        start_entity_id: str,
-        max_depth: int = 3
+        self, start_entity_id: str, max_depth: int = 3
     ) -> List[Dict[str, Any]]:
         """
         Traverse causal relationships from a starting entity.
         """
         query = """
         MATCH path = (s {id: $start_id})-[:CAUSES|IMPACTS*1..$max_depth]->(t)
-        RETURN 
+        RETURN
             [n IN nodes(path) | {id: n.id, type: labels(n)[0]}] as nodes,
             [r IN relationships(path) | {type: type(r), conf: r.confidence}] as rels
         """
-        
+
         result = self.graph.query(query, {"start_id": start_entity_id, "max_depth": max_depth})
-        
+
         chains = []
         for record in result.result_set:
-            chains.append({
-                "nodes": record[0],
-                "relationships": record[1],
-                "path_length": len(record[1])
-            })
-        
+            chains.append(
+                {"nodes": record[0], "relationships": record[1], "path_length": len(record[1])}
+            )
+
         return chains
-    
+
     def find_causal_paths_for_kpi(
-        self,
-        kpi_name: str,
-        min_confidence: float = 0.5
+        self, kpi_name: str, min_confidence: float = 0.5
     ) -> List[Dict[str, Any]]:
         """
         Find all causal paths that impact a specific KPI.
@@ -1380,19 +1369,19 @@ class FalkorDBSemanticMemory:
         query = """
         MATCH (cp:CausalPath)-[r:IMPACTS]->(k:KPI {name: $kpi_name})
         WHERE r.confidence >= $min_confidence
-        RETURN cp.id as path_id, cp.effect_size as effect_size, 
+        RETURN cp.id as path_id, cp.effect_size as effect_size,
                r.confidence as confidence, cp.method_used as method
         ORDER BY r.confidence DESC
         """
-        
+
         result = self.graph.query(query, {"kpi_name": kpi_name, "min_confidence": min_confidence})
-        
+
         return [
             {
                 "path_id": record[0],
                 "effect_size": record[1],
                 "confidence": record[2],
-                "method": record[3]
+                "method": record[3],
             }
             for record in result.result_set
         ]
@@ -1413,11 +1402,11 @@ def get_semantic_memory() -> FalkorDBSemanticMemory:
 async def query_semantic_graph(query: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Query the semantic graph (used by investigator node)."""
     semantic = get_semantic_memory()
-    
+
     start_nodes = query.get("start_nodes", [])
-    rel_types = query.get("relationship_types")
+    query.get("relationship_types")
     max_depth = query.get("max_depth", 2)
-    
+
     results = []
     for node_id in start_nodes:
         # Check if this is an E2I entity query
@@ -1430,29 +1419,29 @@ async def query_semantic_graph(query: Dict[str, Any]) -> List[Dict[str, Any]]:
         elif query.get("follow_causal"):
             chains = semantic.traverse_causal_chain(node_id, max_depth)
             results.extend([{"type": "causal_chain", "data": chain} for chain in chains])
-    
+
     return results
 
 
 async def sync_to_semantic_graph(triplet: Dict[str, Any]) -> bool:
     """Add a triplet to the semantic graph."""
     semantic = get_semantic_memory()
-    
+
     # Map subject/object to E2I types if applicable
     subject_type = triplet.get("subject_type", "Entity")
     object_type = triplet.get("object_type", "Entity")
-    
+
     # Try to map to E2I entity types
     e2i_type_map = {
         "Patient": E2IEntityType.PATIENT,
         "HCP": E2IEntityType.HCP,
         "Trigger": E2IEntityType.TRIGGER,
-        "CausalPath": E2IEntityType.CAUSAL_PATH
+        "CausalPath": E2IEntityType.CAUSAL_PATH,
     }
-    
+
     source_e2i_type = e2i_type_map.get(subject_type)
     target_e2i_type = e2i_type_map.get(object_type)
-    
+
     if source_e2i_type and target_e2i_type:
         return semantic.add_e2i_relationship(
             source_type=source_e2i_type,
@@ -1460,13 +1449,13 @@ async def sync_to_semantic_graph(triplet: Dict[str, Any]) -> bool:
             target_type=target_e2i_type,
             target_id=triplet["object"],
             rel_type=triplet["predicate"],
-            properties={"confidence": triplet.get("confidence", 0.8)}
+            properties={"confidence": triplet.get("confidence", 0.8)},
         )
-    
+
     # Fall back to generic entity handling
     semantic.add_e2i_entity(E2IEntityType.PATIENT, triplet["subject"])  # Generic
     semantic.add_e2i_entity(E2IEntityType.PATIENT, triplet["object"])
-    
+
     return True
 
 
@@ -1476,9 +1465,9 @@ async def sync_data_layer_to_semantic_cache():
     Calls the sync_hcp_patient_relationships_to_cache database function.
     """
     client = get_supabase_client()
-    
+
     result = client.rpc("sync_hcp_patient_relationships_to_cache", {}).execute()
-    
+
     return result.data
 
 
@@ -1486,27 +1475,28 @@ async def sync_data_layer_to_semantic_cache():
 # GRAPHITY EXTRACTOR with E2I Context
 # ============================================================================
 
+
 class GraphityExtractor:
     """
     Graphity-style extraction with E2I entity awareness.
     """
-    
+
     def __init__(self):
         self.config = CONFIG["memory_backends"]["semantic"]["local_pilot"]["graphity"]
         self.llm = get_llm_service()
         self.semantic_memory = get_semantic_memory()
         self.entity_types = self.config["entity_types"]
         self.relationship_types = self.config["relationship_types"]
-    
+
     async def extract_and_store(
         self,
         text: str,
         context: Optional[Dict[str, Any]] = None,
-        known_e2i_entities: Optional[Dict[str, str]] = None
+        known_e2i_entities: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """
         Extract entities and relationships, linking to known E2I entities.
-        
+
         Args:
             text: Text to extract from
             context: Optional context
@@ -1516,56 +1506,56 @@ class GraphityExtractor:
         extraction_prompt = self._build_extraction_prompt(text, context, known_e2i_entities)
         response = await self.llm.complete(extraction_prompt)
         entities, relationships = self._parse_extraction(response)
-        
+
         # Link to known E2I entities
         if known_e2i_entities:
             for entity in entities:
                 entity_name = entity.get("properties", {}).get("name", entity.get("id"))
                 if entity_name in known_e2i_entities:
                     entity["e2i_id"] = known_e2i_entities[entity_name]
-        
+
         # Store in graph
         stored_entities = 0
         stored_relationships = 0
-        
+
         for entity in entities:
             try:
                 e2i_type = self._map_to_e2i_type(entity["type"])
                 entity_id = entity.get("e2i_id", entity["id"])
-                
+
                 self.semantic_memory.add_e2i_entity(
                     entity_type=e2i_type,
                     entity_id=entity_id,
-                    properties=entity.get("properties", {})
+                    properties=entity.get("properties", {}),
                 )
                 stored_entities += 1
             except Exception as e:
                 logger.error(f"Error storing entity: {e}")
-        
+
         for rel in relationships:
             try:
                 source_e2i_type = self._map_to_e2i_type(rel["subject_type"])
                 target_e2i_type = self._map_to_e2i_type(rel["object_type"])
-                
+
                 self.semantic_memory.add_e2i_relationship(
                     source_type=source_e2i_type,
                     source_id=rel["subject"],
                     target_type=target_e2i_type,
                     target_id=rel["object"],
                     rel_type=rel["predicate"],
-                    properties={"confidence": rel.get("confidence", 0.8)}
+                    properties={"confidence": rel.get("confidence", 0.8)},
                 )
                 stored_relationships += 1
             except Exception as e:
                 logger.error(f"Error storing relationship: {e}")
-        
+
         return {
             "entities_extracted": len(entities),
             "entities_stored": stored_entities,
             "relationships_extracted": len(relationships),
-            "relationships_stored": stored_relationships
+            "relationships_stored": stored_relationships,
         }
-    
+
     def _map_to_e2i_type(self, type_str: str) -> E2IEntityType:
         """Map extracted type string to E2IEntityType."""
         type_map = {
@@ -1575,27 +1565,27 @@ class GraphityExtractor:
             "CausalPath": E2IEntityType.CAUSAL_PATH,
             "Prediction": E2IEntityType.PREDICTION,
             "Treatment": E2IEntityType.TREATMENT,
-            "Experiment": E2IEntityType.EXPERIMENT
+            "Experiment": E2IEntityType.EXPERIMENT,
         }
         return type_map.get(type_str, E2IEntityType.PATIENT)  # Default
-    
+
     def _build_extraction_prompt(
         self,
         text: str,
         context: Optional[Dict[str, Any]] = None,
-        known_entities: Optional[Dict[str, str]] = None
+        known_entities: Optional[Dict[str, str]] = None,
     ) -> str:
         entity_types_str = ", ".join(self.entity_types)
         rel_types_str = ", ".join(self.relationship_types)
-        
+
         known_str = ""
         if known_entities:
             known_str = f"\nKnown E2I entities to link: {json.dumps(known_entities)}"
-        
+
         context_str = ""
         if context:
             context_str = f"\nContext: {json.dumps(context)}"
-        
+
         return f"""Extract entities and relationships from the following text.
 This is for the E2I Causal Analytics system.
 
@@ -1618,7 +1608,7 @@ Return JSON:
 }}
 
 JSON:"""
-    
+
     def _parse_extraction(self, llm_response: str) -> Tuple[List[Dict], List[Dict]]:
         try:
             cleaned = llm_response.strip()
@@ -1626,12 +1616,16 @@ JSON:"""
                 cleaned = cleaned.split("```")[1]
                 if cleaned.startswith("json"):
                     cleaned = cleaned[4:]
-            
+
             data = json.loads(cleaned)
-            
+
             entities = [e for e in data.get("entities", []) if e.get("type") in self.entity_types]
-            relationships = [r for r in data.get("relationships", []) if r.get("predicate") in self.relationship_types]
-            
+            relationships = [
+                r
+                for r in data.get("relationships", [])
+                if r.get("predicate") in self.relationship_types
+            ]
+
             return entities, relationships
         except json.JSONDecodeError:
             return [], []
@@ -1652,9 +1646,11 @@ def get_graphity_extractor() -> GraphityExtractor:
 # PROCEDURAL MEMORY with E2I Context
 # ============================================================================
 
+
 @dataclass
 class ProceduralMemoryInput:
     """Input for creating a procedural memory."""
+
     procedure_name: str
     tool_sequence: List[Dict[str, Any]]
     procedure_type: str = "tool_sequence"
@@ -1673,13 +1669,13 @@ async def find_relevant_procedures(
     intent: Optional[str] = None,
     brand: Optional[str] = None,
     limit: int = 5,
-    min_similarity: float = 0.6
+    min_similarity: float = 0.6,
 ) -> List[Dict[str, Any]]:
     """
     Find relevant procedures (few-shot examples) with E2I context matching.
     """
     client = get_supabase_client()
-    
+
     result = client.rpc(
         "find_relevant_procedures",
         {
@@ -1688,46 +1684,41 @@ async def find_relevant_procedures(
             "match_count": limit,
             "filter_type": procedure_type,
             "filter_intent": intent,
-            "filter_brand": brand
-        }
+            "filter_brand": brand,
+        },
     ).execute()
-    
+
     return result.data or []
 
 
 async def insert_procedural_memory(
-    procedure: ProceduralMemoryInput,
-    trigger_embedding: List[float]
+    procedure: ProceduralMemoryInput, trigger_embedding: List[float]
 ) -> str:
     """
     Insert or update procedural memory with E2I context.
     """
     client = get_supabase_client()
-    
+
     # Check for existing similar procedure
     existing = await find_relevant_procedures(
-        trigger_embedding,
-        procedure.procedure_type,
-        limit=1,
-        min_similarity=0.9
+        trigger_embedding, procedure.procedure_type, limit=1, min_similarity=0.9
     )
-    
+
     if existing:
         procedure_id = existing[0]["procedure_id"]
-        
-        client.table("procedural_memories") \
-            .update({
+
+        client.table("procedural_memories").update(
+            {
                 "usage_count": existing[0].get("usage_count", 0) + 1,
                 "success_count": existing[0].get("success_count", 0) + 1,
-                "updated_at": datetime.now(timezone.utc).isoformat()
-            }) \
-            .eq("procedure_id", procedure_id) \
-            .execute()
-        
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        ).eq("procedure_id", procedure_id).execute()
+
         return procedure_id
-    
+
     procedure_id = str(uuid.uuid4())
-    
+
     record = {
         "procedure_id": procedure_id,
         "procedure_name": procedure.procedure_name,
@@ -1744,14 +1735,14 @@ async def insert_procedural_memory(
         "success_count": 1,
         "is_active": True,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "updated_at": datetime.now(timezone.utc).isoformat()
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
-    
+
     client.table("procedural_memories").insert(record).execute()
-    
+
     # v1.3: Track memory statistics
     await _increment_memory_stats("procedural", procedure.procedure_type)
-    
+
     return procedure_id
 
 
@@ -1759,7 +1750,7 @@ async def get_few_shot_examples(
     query_embedding: List[float],
     intent: Optional[str] = None,
     brand: Optional[str] = None,
-    max_examples: int = 5
+    max_examples: int = 5,
 ) -> List[Dict[str, Any]]:
     """
     Get few-shot examples for in-context learning with E2I context.
@@ -1769,22 +1760,28 @@ async def get_few_shot_examples(
         intent=intent,
         brand=brand,
         limit=max_examples,
-        min_similarity=0.6
+        min_similarity=0.6,
     )
-    
+
     examples = []
     for proc in procedures:
-        tool_sequence = json.loads(proc["tool_sequence"]) if isinstance(proc["tool_sequence"], str) else proc["tool_sequence"]
-        
-        examples.append({
-            "trigger": proc.get("trigger_pattern", ""),
-            "intent": proc.get("detected_intent"),
-            "solution": tool_sequence,
-            "success_rate": proc.get("success_rate", 0),
-            "applicable_brands": proc.get("applicable_brands", []),
-            "applicable_regions": proc.get("applicable_regions", [])
-        })
-    
+        tool_sequence = (
+            json.loads(proc["tool_sequence"])
+            if isinstance(proc["tool_sequence"], str)
+            else proc["tool_sequence"]
+        )
+
+        examples.append(
+            {
+                "trigger": proc.get("trigger_pattern", ""),
+                "intent": proc.get("detected_intent"),
+                "solution": tool_sequence,
+                "success_rate": proc.get("success_rate", 0),
+                "applicable_brands": proc.get("applicable_brands", []),
+                "applicable_regions": proc.get("applicable_regions", []),
+            }
+        )
+
     return examples
 
 
@@ -1792,9 +1789,11 @@ async def get_few_shot_examples(
 # LEARNING SIGNALS with E2I Context
 # ============================================================================
 
+
 @dataclass
 class LearningSignalInput:
     """Input for recording a learning signal."""
+
     signal_type: str  # thumbs_up, thumbs_down, correction, rating
     signal_value: Optional[float] = None
     signal_details: Optional[Dict[str, Any]] = None
@@ -1816,13 +1815,11 @@ class LearningSignalInput:
 
 
 async def record_learning_signal(
-    signal: LearningSignalInput,
-    cycle_id: Optional[str] = None,
-    session_id: Optional[str] = None
+    signal: LearningSignalInput, cycle_id: Optional[str] = None, session_id: Optional[str] = None
 ):
     """Record a learning signal with E2I context."""
     client = get_supabase_client()
-    
+
     record = {
         "signal_id": str(uuid.uuid4()),
         "cycle_id": cycle_id,
@@ -1845,38 +1842,37 @@ async def record_learning_signal(
         "dspy_metric_value": signal.dspy_metric_value,
         "training_input": signal.training_input,
         "training_output": signal.training_output,
-        "created_at": datetime.now(timezone.utc).isoformat()
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
-    
+
     # Remove None values
     record = {k: v for k, v in record.items() if v is not None}
-    
+
     client.table("learning_signals").insert(record).execute()
 
 
 async def get_training_examples_for_agent(
-    agent_name: str,
-    brand: Optional[str] = None,
-    min_score: float = 0.7,
-    limit: int = 100
+    agent_name: str, brand: Optional[str] = None, min_score: float = 0.7, limit: int = 100
 ) -> List[Dict[str, Any]]:
     """
     Get high-quality training examples for a specific agent.
     Used for DSPy optimization.
     """
     client = get_supabase_client()
-    
-    query = client.table("learning_signals") \
-        .select("*") \
-        .eq("rated_agent", agent_name) \
-        .eq("is_training_example", True) \
-        .gte("dspy_metric_value", min_score) \
-        .order("dspy_metric_value", desc=True) \
+
+    query = (
+        client.table("learning_signals")
+        .select("*")
+        .eq("rated_agent", agent_name)
+        .eq("is_training_example", True)
+        .gte("dspy_metric_value", min_score)
+        .order("dspy_metric_value", desc=True)
         .limit(limit)
-    
+    )
+
     if brand:
         query = query.eq("brand", brand)
-    
+
     result = query.execute()
     return result.data or []
 
@@ -1887,27 +1883,31 @@ async def get_feedback_summary_for_trigger(trigger_id: str) -> Dict[str, Any]:
     Useful for evaluating trigger effectiveness.
     """
     client = get_supabase_client()
-    
-    result = client.table("learning_signals") \
-        .select("signal_type, signal_value") \
-        .eq("related_trigger_id", trigger_id) \
+
+    result = (
+        client.table("learning_signals")
+        .select("signal_type, signal_value")
+        .eq("related_trigger_id", trigger_id)
         .execute()
-    
+    )
+
     signals = result.data or []
-    
+
     summary = {
         "trigger_id": trigger_id,
         "total_feedback": len(signals),
         "thumbs_up": sum(1 for s in signals if s["signal_type"] == "thumbs_up"),
         "thumbs_down": sum(1 for s in signals if s["signal_type"] == "thumbs_down"),
         "avg_rating": None,
-        "corrections_count": sum(1 for s in signals if s["signal_type"] == "correction")
+        "corrections_count": sum(1 for s in signals if s["signal_type"] == "correction"),
     }
-    
-    ratings = [s["signal_value"] for s in signals if s["signal_type"] == "rating" and s["signal_value"]]
+
+    ratings = [
+        s["signal_value"] for s in signals if s["signal_type"] == "rating" and s["signal_value"]
+    ]
     if ratings:
         summary["avg_rating"] = sum(ratings) / len(ratings)
-    
+
     return summary
 
 
@@ -1915,66 +1915,66 @@ async def get_feedback_summary_for_trigger(trigger_id: str) -> Dict[str, Any]:
 # v1.3: MEMORY STATISTICS TRACKING
 # ============================================================================
 
-async def _increment_memory_stats(
-    memory_type: str,
-    subtype: Optional[str] = None
-):
+
+async def _increment_memory_stats(memory_type: str, subtype: Optional[str] = None):
     """
     v1.3: Track memory usage statistics for monitoring.
-    
+
     Args:
         memory_type: episodic, procedural, semantic
         subtype: Event type or procedure type
     """
     client = get_supabase_client()
-    
+
     today = datetime.now(timezone.utc).date().isoformat()
-    
+
     try:
         # Upsert stats record
-        client.table("memory_statistics") \
-            .upsert({
+        client.table("memory_statistics").upsert(
+            {
                 "stat_date": today,
                 "memory_type": memory_type,
                 "subtype": subtype or "general",
                 "count": 1,
-                "updated_at": datetime.now(timezone.utc).isoformat()
-            }, on_conflict="stat_date,memory_type,subtype") \
-            .execute()
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+            on_conflict="stat_date,memory_type,subtype",
+        ).execute()
     except Exception as e:
         # Stats are non-critical, just log
         logger.debug(f"Failed to update memory stats: {e}")
 
 
 async def get_memory_statistics(
-    days_back: int = 30,
-    memory_type: Optional[str] = None
+    days_back: int = 30, memory_type: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     v1.3: Get memory usage statistics for monitoring.
-    
+
     Args:
         days_back: Number of days to look back
         memory_type: Optional filter by memory type
-    
+
     Returns:
         Dict with counts by type and trends
     """
     client = get_supabase_client()
-    
+
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days_back)).date().isoformat()
-    
-    query = client.table("memory_statistics") \
-        .select("*") \
-        .gte("stat_date", cutoff) \
+
+    query = (
+        client.table("memory_statistics")
+        .select("*")
+        .gte("stat_date", cutoff)
         .order("stat_date", desc=True)
-    
+    )
+
     if memory_type:
         query = query.eq("memory_type", memory_type)
-    
+
     result = query.execute()
     stats = result.data or []
-    
+
     # Aggregate by type
     totals = {}
     for stat in stats:
@@ -1982,12 +1982,8 @@ async def get_memory_statistics(
         if mt not in totals:
             totals[mt] = 0
         totals[mt] += stat.get("count", 0)
-    
-    return {
-        "period_days": days_back,
-        "totals_by_type": totals,
-        "daily_breakdown": stats
-    }
+
+    return {"period_days": days_back, "totals_by_type": totals, "daily_breakdown": stats}
 
 
 # ============================================================================
@@ -1997,10 +1993,9 @@ async def get_memory_statistics(
 __all__ = [
     # Entity types
     "E2IEntityType",
-    "E2IBrand", 
+    "E2IBrand",
     "E2IRegion",
     "E2IAgentName",
-    
     # Data classes
     "E2IEntityContext",
     "E2IEntityReferences",
@@ -2010,7 +2005,6 @@ __all__ = [
     "AgentActivityContext",
     "ProceduralMemoryInput",
     "LearningSignalInput",
-    
     # Service factories
     "get_embedding_service",
     "get_llm_service",
@@ -2020,7 +2014,6 @@ __all__ = [
     "get_langgraph_checkpointer",
     "get_semantic_memory",
     "get_graphity_extractor",
-    
     # Episodic memory
     "search_episodic_memory",
     "search_episodic_by_e2i_entity",
@@ -2032,27 +2025,22 @@ __all__ = [
     "get_hcp_interaction_history",
     "get_trigger_feedback_history",
     "bulk_insert_episodic_memories",  # v1.3
-    
     # Semantic memory
     "query_semantic_graph",
     "sync_to_semantic_graph",
     "sync_data_layer_to_semantic_cache",
     "sync_treatment_relationships_to_cache",  # v1.3
-    
     # Agent activity (v1.3)
     "get_agent_activity_with_context",
     "get_causal_path_context",
-    
     # Procedural memory
     "find_relevant_procedures",
     "insert_procedural_memory",
     "get_few_shot_examples",
-    
     # Learning signals
     "record_learning_signal",
     "get_training_examples_for_agent",
     "get_feedback_summary_for_trigger",
-    
     # Statistics (v1.3)
     "get_memory_statistics",
 ]

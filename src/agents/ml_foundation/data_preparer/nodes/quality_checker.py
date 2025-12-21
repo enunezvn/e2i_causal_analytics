@@ -3,10 +3,10 @@
 This node runs Great Expectations validation and generates a QC report.
 """
 
+import logging
 import uuid
 from datetime import datetime
-from typing import Dict, Any, List
-import logging
+from typing import Any, Dict, List
 
 from ..state import DataPreparerState
 
@@ -144,9 +144,7 @@ async def run_quality_checks(state: DataPreparerState) -> Dict[str, Any]:
         }
 
 
-def compute_dimension_score(
-    dimension: str, expectation_results: List[Dict[str, Any]]
-) -> float:
+def compute_dimension_score(dimension: str, expectation_results: List[Dict[str, Any]]) -> float:
     """Compute score for a specific quality dimension.
 
     Args:

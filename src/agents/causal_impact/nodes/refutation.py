@@ -11,8 +11,8 @@ Phase 4 Integration:
 - Creates failure patterns for ExperimentKnowledgeStore queries
 """
 
-import time
 import logging
+import time
 from typing import Any, Dict, Optional
 
 from src.agents.causal_impact.state import (
@@ -20,10 +20,10 @@ from src.agents.causal_impact.state import (
     RefutationResults,
 )
 from src.causal_engine import (
+    DOWHY_AVAILABLE,
+    GateDecision,
     RefutationRunner,
     RefutationSuite,
-    GateDecision,
-    DOWHY_AVAILABLE,
     # Phase 4: ValidationOutcome for Feedback Learner integration
     create_validation_outcome,
     log_validation_outcome,
@@ -134,9 +134,7 @@ class RefutationNode:
                         f"Persisted {len(validation_ids)} validation records for estimate {query_id}"
                     )
                 except Exception as persist_error:
-                    logger.warning(
-                        f"Failed to persist validation results: {persist_error}"
-                    )
+                    logger.warning(f"Failed to persist validation results: {persist_error}")
 
             # Phase 4: Log ValidationOutcome for Feedback Learner integration
             validation_outcome_id = None
@@ -231,11 +229,7 @@ class RefutationNode:
         Returns:
             Formatted error message
         """
-        failed_tests = [
-            t.test_name.value
-            for t in suite.tests
-            if t.status.value == "failed"
-        ]
+        failed_tests = [t.test_name.value for t in suite.tests if t.status.value == "failed"]
 
         if failed_tests:
             tests_str = ", ".join(failed_tests)

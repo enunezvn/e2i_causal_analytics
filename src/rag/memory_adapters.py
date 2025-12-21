@@ -28,9 +28,7 @@ logger = logging.getLogger(__name__)
 class EpisodicMemoryProtocol(Protocol):
     """Protocol for episodic memory access (vector search)."""
 
-    async def vector_search(
-        self, query: str, limit: int = 10
-    ) -> List[Dict[str, Any]]:
+    async def vector_search(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
         """Search episodic memory by semantic similarity."""
         ...
 
@@ -39,9 +37,7 @@ class EpisodicMemoryProtocol(Protocol):
 class SemanticMemoryProtocol(Protocol):
     """Protocol for semantic memory access (graph queries)."""
 
-    async def graph_query(
-        self, query: str, max_depth: int = 2
-    ) -> List[Dict[str, Any]]:
+    async def graph_query(self, query: str, max_depth: int = 2) -> List[Dict[str, Any]]:
         """Query semantic graph for related concepts."""
         ...
 
@@ -50,9 +46,7 @@ class SemanticMemoryProtocol(Protocol):
 class ProceduralMemoryProtocol(Protocol):
     """Protocol for procedural memory access."""
 
-    async def procedure_search(
-        self, query: str, limit: int = 5
-    ) -> List[Dict[str, Any]]:
+    async def procedure_search(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
         """Search for relevant procedures/patterns."""
         ...
 
@@ -100,9 +94,7 @@ class EpisodicMemoryAdapter:
         self._connector = memory_connector
         self._embedding_model = embedding_model
 
-    async def vector_search(
-        self, query: str, limit: int = 10
-    ) -> List[Dict[str, Any]]:
+    async def vector_search(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
         """
         Search episodic memory using vector similarity.
 
@@ -146,41 +138,43 @@ class EpisodicMemoryAdapter:
         elif hasattr(self._embedding_model, "encode"):
             # Synchronous model (e.g., sentence-transformers)
             loop = asyncio.get_event_loop()
-            return await loop.run_in_executor(
-                None, self._embedding_model.encode, text
-            )
+            return await loop.run_in_executor(None, self._embedding_model.encode, text)
         else:
             raise ValueError("Embedding model must have 'embed' or 'encode' method")
 
-    def _transform_results(
-        self, results: List[Any]
-    ) -> List[Dict[str, Any]]:
+    def _transform_results(self, results: List[Any]) -> List[Dict[str, Any]]:
         """Transform MemoryConnector results to expected format."""
         transformed = []
         for result in results:
             if hasattr(result, "content"):
                 # RetrievalResult or similar object
-                transformed.append({
-                    "content": result.content,
-                    "source": getattr(result, "source", "episodic"),
-                    "source_id": getattr(result, "source_id", None),
-                    "score": getattr(result, "score", 0.0),
-                    "metadata": getattr(result, "metadata", {}),
-                })
+                transformed.append(
+                    {
+                        "content": result.content,
+                        "source": getattr(result, "source", "episodic"),
+                        "source_id": getattr(result, "source_id", None),
+                        "score": getattr(result, "score", 0.0),
+                        "metadata": getattr(result, "metadata", {}),
+                    }
+                )
             elif isinstance(result, dict):
-                transformed.append({
-                    "content": result.get("content", str(result)),
-                    "source": result.get("source", "episodic"),
-                    "source_id": result.get("source_id"),
-                    "score": result.get("score", 0.0),
-                    "metadata": result.get("metadata", {}),
-                })
+                transformed.append(
+                    {
+                        "content": result.get("content", str(result)),
+                        "source": result.get("source", "episodic"),
+                        "source_id": result.get("source_id"),
+                        "score": result.get("score", 0.0),
+                        "metadata": result.get("metadata", {}),
+                    }
+                )
             else:
-                transformed.append({
-                    "content": str(result),
-                    "source": "episodic",
-                    "score": 0.0,
-                })
+                transformed.append(
+                    {
+                        "content": str(result),
+                        "source": "episodic",
+                        "score": 0.0,
+                    }
+                )
 
         return transformed
 
@@ -219,9 +213,7 @@ class SemanticMemoryAdapter:
         self._falkordb = falkordb_memory
         self._connector = memory_connector
 
-    async def graph_query(
-        self, query: str, max_depth: int = 2
-    ) -> List[Dict[str, Any]]:
+    async def graph_query(self, query: str, max_depth: int = 2) -> List[Dict[str, Any]]:
         """
         Query semantic graph for related concepts.
 
@@ -255,9 +247,7 @@ class SemanticMemoryAdapter:
 
         return results
 
-    async def _query_falkordb(
-        self, query: str, max_depth: int
-    ) -> List[Dict[str, Any]]:
+    async def _query_falkordb(self, query: str, max_depth: int) -> List[Dict[str, Any]]:
         """Query FalkorDB semantic graph."""
         # Extract entities from query for targeted graph search
         entities = self._extract_entities(query)
@@ -284,9 +274,7 @@ class SemanticMemoryAdapter:
 
         return all_results
 
-    async def _query_connector_graph(
-        self, query: str, max_depth: int
-    ) -> List[Dict[str, Any]]:
+    async def _query_connector_graph(self, query: str, max_depth: int) -> List[Dict[str, Any]]:
         """Query graph via MemoryConnector's graph_traverse."""
         # Extract starting entities
         entities = self._extract_entities(query)
@@ -330,9 +318,7 @@ class SemanticMemoryAdapter:
 
         return found
 
-    def _transform_graph_results(
-        self, results: List[Any]
-    ) -> List[Dict[str, Any]]:
+    def _transform_graph_results(self, results: List[Any]) -> List[Dict[str, Any]]:
         """Transform graph results to expected format."""
         transformed = []
 
@@ -340,25 +326,31 @@ class SemanticMemoryAdapter:
             if isinstance(result, dict):
                 # Build content description from graph structure
                 content = self._build_content_from_graph_node(result)
-                transformed.append({
-                    "content": content,
-                    "source": "semantic_graph",
-                    "relationship": result.get("relationship"),
-                    "metadata": result,
-                })
+                transformed.append(
+                    {
+                        "content": content,
+                        "source": "semantic_graph",
+                        "relationship": result.get("relationship"),
+                        "metadata": result,
+                    }
+                )
             elif hasattr(result, "to_dict"):
                 node_dict = result.to_dict()
                 content = self._build_content_from_graph_node(node_dict)
-                transformed.append({
-                    "content": content,
-                    "source": "semantic_graph",
-                    "metadata": node_dict,
-                })
+                transformed.append(
+                    {
+                        "content": content,
+                        "source": "semantic_graph",
+                        "metadata": node_dict,
+                    }
+                )
             else:
-                transformed.append({
-                    "content": str(result),
-                    "source": "semantic_graph",
-                })
+                transformed.append(
+                    {
+                        "content": str(result),
+                        "source": "semantic_graph",
+                    }
+                )
 
         return transformed
 
@@ -380,13 +372,18 @@ class SemanticMemoryAdapter:
         if "target" in node:
             target = node["target"]
             if isinstance(target, dict):
-                parts.append(f"TO {target.get('type', 'Entity')} '{target.get('name', target.get('id'))}'")
+                parts.append(
+                    f"TO {target.get('type', 'Entity')} '{target.get('name', target.get('id'))}'"
+                )
             else:
                 parts.append(f"TO {target}")
 
         # Properties
-        props = {k: v for k, v in node.items()
-                 if k not in ("type", "id", "name", "relationship", "target")}
+        props = {
+            k: v
+            for k, v in node.items()
+            if k not in ("type", "id", "name", "relationship", "target")
+        }
         if props:
             prop_str = ", ".join(f"{k}={v}" for k, v in list(props.items())[:3])
             parts.append(f"[{prop_str}]")
@@ -427,9 +424,7 @@ class ProceduralMemoryAdapter:
         self._client = supabase_client
         self._embedding_model = embedding_model
 
-    async def procedure_search(
-        self, query: str, limit: int = 5
-    ) -> List[Dict[str, Any]]:
+    async def procedure_search(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
         """
         Search for relevant procedures/patterns.
 
@@ -460,18 +455,15 @@ class ProceduralMemoryAdapter:
             logger.error(f"Procedural memory search failed: {e}")
             return self._get_fallback_procedures(query)
 
-    async def _execute_procedure_search(
-        self, query: str, limit: int
-    ) -> List[Any]:
+    async def _execute_procedure_search(self, query: str, limit: int) -> List[Any]:
         """Execute procedure search via Supabase."""
         # Try RPC function first
         try:
             response = await asyncio.get_event_loop().run_in_executor(
                 None,
                 lambda: self._client.rpc(
-                    "search_procedural_memory",
-                    {"query_text": query, "limit_count": limit}
-                ).execute()
+                    "search_procedural_memory", {"query_text": query, "limit_count": limit}
+                ).execute(),
             )
             return response.data if response.data else []
         except Exception as e:
@@ -481,19 +473,14 @@ class ProceduralMemoryAdapter:
         try:
             response = await asyncio.get_event_loop().run_in_executor(
                 None,
-                lambda: self._client.table("procedural_memory")
-                    .select("*")
-                    .limit(limit)
-                    .execute()
+                lambda: self._client.table("procedural_memory").select("*").limit(limit).execute(),
             )
             return response.data if response.data else []
         except Exception as e:
             logger.warning(f"Direct table query failed: {e}")
             return []
 
-    def _transform_procedure_results(
-        self, procedures: List[Any]
-    ) -> List[Dict[str, Any]]:
+    def _transform_procedure_results(self, procedures: List[Any]) -> List[Dict[str, Any]]:
         """Transform procedure results to expected format."""
         transformed = []
 
@@ -501,18 +488,22 @@ class ProceduralMemoryAdapter:
             if isinstance(proc, dict):
                 # Build procedural content
                 content = self._build_procedure_content(proc)
-                transformed.append({
-                    "content": content,
-                    "source": "procedural",
-                    "procedure_type": proc.get("procedure_type"),
-                    "success_rate": proc.get("success_rate", 0.0),
-                    "metadata": proc,
-                })
+                transformed.append(
+                    {
+                        "content": content,
+                        "source": "procedural",
+                        "procedure_type": proc.get("procedure_type"),
+                        "success_rate": proc.get("success_rate", 0.0),
+                        "metadata": proc,
+                    }
+                )
             else:
-                transformed.append({
-                    "content": str(proc),
-                    "source": "procedural",
-                })
+                transformed.append(
+                    {
+                        "content": str(proc),
+                        "source": "procedural",
+                    }
+                )
 
         return transformed
 
@@ -576,7 +567,10 @@ class ProceduralMemoryAdapter:
 
         for proc in fallback:
             proc_lower = proc["content"].lower()
-            if any(term in query_lower for term in ["adopt", "trx", "nrx", "prescri", "causal", "impact", "effect"]):
+            if any(
+                term in query_lower
+                for term in ["adopt", "trx", "nrx", "prescri", "causal", "impact", "effect"]
+            ):
                 if any(term in proc_lower for term in query_lower.split()):
                     relevant.append(proc)
 
@@ -649,7 +643,9 @@ class SignalCollectorAdapter:
             )
             self._signal_buffer.append(signal)
 
-        logger.info(f"Collected {len(signals)} training signals (buffer: {len(self._signal_buffer)})")
+        logger.info(
+            f"Collected {len(signals)} training signals (buffer: {len(self._signal_buffer)})"
+        )
 
         # Flush if buffer full
         if len(self._signal_buffer) >= self._buffer_size:
@@ -690,9 +686,13 @@ class SignalCollectorAdapter:
                     "output": {
                         "response": s.response[:1000] if s.response else "",
                     },
-                    "quality_metrics": {
-                        "feedback": s.feedback,
-                    } if s.feedback else {},
+                    "quality_metrics": (
+                        {
+                            "feedback": s.feedback,
+                        }
+                        if s.feedback
+                        else {}
+                    ),
                     "reward": s.reward,
                     "latency_breakdown": s.metadata.get("latency", {}),
                 }
@@ -702,9 +702,7 @@ class SignalCollectorAdapter:
             # Persist to database
             await asyncio.get_event_loop().run_in_executor(
                 None,
-                lambda: self._client.table("dspy_agent_training_signals")
-                    .insert(records)
-                    .execute()
+                lambda: self._client.table("dspy_agent_training_signals").insert(records).execute(),
             )
 
             logger.info(f"Flushed {count} training signals to database")
@@ -745,9 +743,7 @@ class SignalCollectorAdapter:
 
             query = query.gte("reward", min_reward).limit(limit)
 
-            response = await asyncio.get_event_loop().run_in_executor(
-                None, lambda: query.execute()
-            )
+            response = await asyncio.get_event_loop().run_in_executor(None, lambda: query.execute())
 
             return response.data if response.data else []
 

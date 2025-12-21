@@ -5,22 +5,19 @@ Tests for HybridRetriever orchestration, RRF fusion, and graph boost.
 All external dependencies are mocked.
 """
 
-import asyncio
-import pytest
+from typing import Dict
 from unittest.mock import AsyncMock, MagicMock, patch
-from typing import Any, Dict, List
 
+import pytest
+
+from src.rag.config import FalkorDBConfig, HybridSearchConfig, RAGConfig
 from src.rag.hybrid_retriever import HybridRetriever
-from src.rag.config import RAGConfig, HybridSearchConfig, FalkorDBConfig
 from src.rag.types import (
+    BackendStatus,
+    ExtractedEntities,
     RetrievalResult,
     RetrievalSource,
-    ExtractedEntities,
-    BackendHealth,
-    BackendStatus,
-    SearchStats,
 )
-
 
 # ============================================================================
 # Fixtures
@@ -74,7 +71,7 @@ def rag_config():
             host="localhost",
             port=6381,
             graph_name="test_graph",
-        )
+        ),
     )
 
 
@@ -89,11 +86,7 @@ def hybrid_retriever(mock_supabase_client, mock_falkordb_client, rag_config):
 
 
 def create_mock_result(
-    id: str,
-    content: str,
-    source: RetrievalSource,
-    score: float,
-    graph_context: Dict = None
+    id: str, content: str, source: RetrievalSource, score: float, graph_context: Dict = None
 ) -> RetrievalResult:
     """Helper to create mock RetrievalResult."""
     return RetrievalResult(
@@ -205,7 +198,9 @@ class TestRRFFusion:
         """Test RRF respects top_k limit."""
         backend_results = {
             RetrievalSource.VECTOR: [
-                create_mock_result(f"doc-{i}", f"Content {i}", RetrievalSource.VECTOR, 0.9 - i*0.1)
+                create_mock_result(
+                    f"doc-{i}", f"Content {i}", RetrievalSource.VECTOR, 0.9 - i * 0.1
+                )
                 for i in range(10)
             ],
             RetrievalSource.FULLTEXT: [],
@@ -229,8 +224,11 @@ class TestGraphBoost:
         """Test that graph boost is applied to results with graph context."""
         results = [
             create_mock_result(
-                "doc-1", "With graph", RetrievalSource.VECTOR, 0.5,
-                graph_context={"connected_nodes": ["node-1"]}
+                "doc-1",
+                "With graph",
+                RetrievalSource.VECTOR,
+                0.5,
+                graph_context={"connected_nodes": ["node-1"]},
             ),
             create_mock_result("doc-2", "No graph", RetrievalSource.VECTOR, 0.6),
         ]
@@ -252,8 +250,11 @@ class TestGraphBoost:
         results = [
             create_mock_result("doc-1", "Lower base", RetrievalSource.VECTOR, 0.5),
             create_mock_result(
-                "doc-2", "Higher base but boostable", RetrievalSource.VECTOR, 0.55,
-                graph_context={"path_length": 2}
+                "doc-2",
+                "Higher base but boostable",
+                RetrievalSource.VECTOR,
+                0.55,
+                graph_context={"path_length": 2},
             ),
         ]
 
@@ -275,15 +276,17 @@ class TestHybridRetrieverSearch:
     @pytest.mark.asyncio
     async def test_search_dispatches_to_all_backends(self, hybrid_retriever):
         """Test that search dispatches to all backends in parallel."""
-        with patch.object(
-            hybrid_retriever, '_safe_vector_search', new_callable=AsyncMock
-        ) as mock_vector, \
+        with (
             patch.object(
-                hybrid_retriever, '_safe_fulltext_search', new_callable=AsyncMock
-            ) as mock_fulltext, \
+                hybrid_retriever, "_safe_vector_search", new_callable=AsyncMock
+            ) as mock_vector,
             patch.object(
-                hybrid_retriever, '_safe_graph_search', new_callable=AsyncMock
-            ) as mock_graph:
+                hybrid_retriever, "_safe_fulltext_search", new_callable=AsyncMock
+            ) as mock_fulltext,
+            patch.object(
+                hybrid_retriever, "_safe_graph_search", new_callable=AsyncMock
+            ) as mock_graph,
+        ):
 
             mock_vector.return_value = []
             mock_fulltext.return_value = []
@@ -292,7 +295,7 @@ class TestHybridRetrieverSearch:
             await hybrid_retriever.search(
                 query="test query",
                 embedding=[0.1] * 1536,
-                entities=ExtractedEntities(brands=["Test"])
+                entities=ExtractedEntities(brands=["Test"]),
             )
 
             mock_vector.assert_called_once()
@@ -302,15 +305,17 @@ class TestHybridRetrieverSearch:
     @pytest.mark.asyncio
     async def test_search_skips_vector_without_embedding(self, hybrid_retriever):
         """Test that vector search is skipped when no embedding provided."""
-        with patch.object(
-            hybrid_retriever, '_safe_vector_search', new_callable=AsyncMock
-        ) as mock_vector, \
+        with (
             patch.object(
-                hybrid_retriever, '_safe_fulltext_search', new_callable=AsyncMock
-            ) as mock_fulltext, \
+                hybrid_retriever, "_safe_vector_search", new_callable=AsyncMock
+            ) as mock_vector,
             patch.object(
-                hybrid_retriever, '_safe_graph_search', new_callable=AsyncMock
-            ) as mock_graph:
+                hybrid_retriever, "_safe_fulltext_search", new_callable=AsyncMock
+            ) as mock_fulltext,
+            patch.object(
+                hybrid_retriever, "_safe_graph_search", new_callable=AsyncMock
+            ) as mock_graph,
+        ):
 
             mock_fulltext.return_value = []
             mock_graph.return_value = []
@@ -327,15 +332,17 @@ class TestHybridRetrieverSearch:
     @pytest.mark.asyncio
     async def test_search_returns_fused_results(self, hybrid_retriever):
         """Test that search returns properly fused and boosted results."""
-        with patch.object(
-            hybrid_retriever, '_safe_vector_search', new_callable=AsyncMock
-        ) as mock_vector, \
+        with (
             patch.object(
-                hybrid_retriever, '_safe_fulltext_search', new_callable=AsyncMock
-            ) as mock_fulltext, \
+                hybrid_retriever, "_safe_vector_search", new_callable=AsyncMock
+            ) as mock_vector,
             patch.object(
-                hybrid_retriever, '_safe_graph_search', new_callable=AsyncMock
-            ) as mock_graph:
+                hybrid_retriever, "_safe_fulltext_search", new_callable=AsyncMock
+            ) as mock_fulltext,
+            patch.object(
+                hybrid_retriever, "_safe_graph_search", new_callable=AsyncMock
+            ) as mock_graph,
+        ):
 
             mock_vector.return_value = [
                 create_mock_result("doc-1", "Vector result", RetrievalSource.VECTOR, 0.9)
@@ -345,8 +352,11 @@ class TestHybridRetrieverSearch:
             ]
             mock_graph.return_value = [
                 create_mock_result(
-                    "doc-1", "Graph result", RetrievalSource.GRAPH, 0.85,
-                    graph_context={"path_length": 1}
+                    "doc-1",
+                    "Graph result",
+                    RetrievalSource.GRAPH,
+                    0.85,
+                    graph_context={"path_length": 1},
                 )
             ]
 
@@ -364,15 +374,17 @@ class TestHybridRetrieverSearch:
     @pytest.mark.asyncio
     async def test_search_handles_backend_failures_gracefully(self, hybrid_retriever):
         """Test that search continues when a backend fails."""
-        with patch.object(
-            hybrid_retriever, '_safe_vector_search', new_callable=AsyncMock
-        ) as mock_vector, \
+        with (
             patch.object(
-                hybrid_retriever, '_safe_fulltext_search', new_callable=AsyncMock
-            ) as mock_fulltext, \
+                hybrid_retriever, "_safe_vector_search", new_callable=AsyncMock
+            ) as mock_vector,
             patch.object(
-                hybrid_retriever, '_safe_graph_search', new_callable=AsyncMock
-            ) as mock_graph:
+                hybrid_retriever, "_safe_fulltext_search", new_callable=AsyncMock
+            ) as mock_fulltext,
+            patch.object(
+                hybrid_retriever, "_safe_graph_search", new_callable=AsyncMock
+            ) as mock_graph,
+        ):
 
             mock_vector.return_value = []  # Returns empty on error
             mock_fulltext.return_value = [
@@ -392,15 +404,17 @@ class TestHybridRetrieverSearch:
     @pytest.mark.asyncio
     async def test_search_tracks_stats(self, hybrid_retriever):
         """Test that search tracks statistics."""
-        with patch.object(
-            hybrid_retriever, '_safe_vector_search', new_callable=AsyncMock
-        ) as mock_vector, \
+        with (
             patch.object(
-                hybrid_retriever, '_safe_fulltext_search', new_callable=AsyncMock
-            ) as mock_fulltext, \
+                hybrid_retriever, "_safe_vector_search", new_callable=AsyncMock
+            ) as mock_vector,
             patch.object(
-                hybrid_retriever, '_safe_graph_search', new_callable=AsyncMock
-            ) as mock_graph:
+                hybrid_retriever, "_safe_fulltext_search", new_callable=AsyncMock
+            ) as mock_fulltext,
+            patch.object(
+                hybrid_retriever, "_safe_graph_search", new_callable=AsyncMock
+            ) as mock_graph,
+        ):
 
             mock_vector.return_value = [
                 create_mock_result("doc-1", "V", RetrievalSource.VECTOR, 0.9),
@@ -435,15 +449,17 @@ class TestHybridRetrieverHealthCheck:
     @pytest.mark.asyncio
     async def test_health_check_all_healthy(self, hybrid_retriever):
         """Test health check when all backends are healthy."""
-        with patch.object(
-            hybrid_retriever.vector_backend, 'health_check', new_callable=AsyncMock
-        ) as mock_vector_health, \
+        with (
             patch.object(
-                hybrid_retriever.fulltext_backend, 'health_check', new_callable=AsyncMock
-            ) as mock_fulltext_health, \
+                hybrid_retriever.vector_backend, "health_check", new_callable=AsyncMock
+            ) as mock_vector_health,
             patch.object(
-                hybrid_retriever.graph_backend, 'health_check', new_callable=AsyncMock
-            ) as mock_graph_health:
+                hybrid_retriever.fulltext_backend, "health_check", new_callable=AsyncMock
+            ) as mock_fulltext_health,
+            patch.object(
+                hybrid_retriever.graph_backend, "health_check", new_callable=AsyncMock
+            ) as mock_graph_health,
+        ):
 
             mock_vector_health.return_value = {"status": "healthy", "latency_ms": 10}
             mock_fulltext_health.return_value = {"status": "healthy", "latency_ms": 5}
@@ -459,18 +475,24 @@ class TestHybridRetrieverHealthCheck:
     @pytest.mark.asyncio
     async def test_health_check_partial_failure(self, hybrid_retriever):
         """Test health check when some backends are unhealthy."""
-        with patch.object(
-            hybrid_retriever.vector_backend, 'health_check', new_callable=AsyncMock
-        ) as mock_vector_health, \
+        with (
             patch.object(
-                hybrid_retriever.fulltext_backend, 'health_check', new_callable=AsyncMock
-            ) as mock_fulltext_health, \
+                hybrid_retriever.vector_backend, "health_check", new_callable=AsyncMock
+            ) as mock_vector_health,
             patch.object(
-                hybrid_retriever.graph_backend, 'health_check', new_callable=AsyncMock
-            ) as mock_graph_health:
+                hybrid_retriever.fulltext_backend, "health_check", new_callable=AsyncMock
+            ) as mock_fulltext_health,
+            patch.object(
+                hybrid_retriever.graph_backend, "health_check", new_callable=AsyncMock
+            ) as mock_graph_health,
+        ):
 
             mock_vector_health.return_value = {"status": "healthy", "latency_ms": 10}
-            mock_fulltext_health.return_value = {"status": "unhealthy", "latency_ms": 0, "error": "DB down"}
+            mock_fulltext_health.return_value = {
+                "status": "unhealthy",
+                "latency_ms": 0,
+                "error": "DB down",
+            }
             mock_graph_health.return_value = {"status": "healthy", "latency_ms": 15}
 
             health = await hybrid_retriever.health_check()
@@ -494,49 +516,38 @@ class TestGraphVisualization:
         expected_result = {
             "nodes": [{"id": "1", "label": "Brand"}],
             "edges": [{"source": "1", "target": "2", "type": "AFFECTS"}],
-            "metadata": {"total_nodes": 1}
+            "metadata": {"total_nodes": 1},
         }
 
         with patch.object(
-            hybrid_retriever.graph_backend, 'get_causal_subgraph', new_callable=AsyncMock
+            hybrid_retriever.graph_backend, "get_causal_subgraph", new_callable=AsyncMock
         ) as mock_subgraph:
             mock_subgraph.return_value = expected_result
 
-            result = await hybrid_retriever.get_causal_subgraph(
-                center_node_id="123",
-                max_depth=2
-            )
+            result = await hybrid_retriever.get_causal_subgraph(center_node_id="123", max_depth=2)
 
             mock_subgraph.assert_called_once_with(
                 center_node_id="123",
                 node_types=None,
                 relationship_types=None,
                 max_depth=2,
-                limit=100
+                limit=100,
             )
             assert result == expected_result
 
     @pytest.mark.asyncio
     async def test_get_causal_path_delegates_to_backend(self, hybrid_retriever):
         """Test that get_causal_path delegates to graph backend."""
-        expected_paths = [
-            {"source_node": "1", "target_node": "2", "path_length": 2}
-        ]
+        expected_paths = [{"source_node": "1", "target_node": "2", "path_length": 2}]
 
         with patch.object(
-            hybrid_retriever.graph_backend, 'get_causal_path', new_callable=AsyncMock
+            hybrid_retriever.graph_backend, "get_causal_path", new_callable=AsyncMock
         ) as mock_path:
             mock_path.return_value = expected_paths
 
             result = await hybrid_retriever.get_causal_path(
-                source_id="1",
-                target_id="2",
-                max_length=3
+                source_id="1", target_id="2", max_length=3
             )
 
-            mock_path.assert_called_once_with(
-                source_id="1",
-                target_id="2",
-                max_length=3
-            )
+            mock_path.assert_called_once_with(source_id="1", target_id="2", max_length=3)
             assert result == expected_paths

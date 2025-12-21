@@ -1,6 +1,7 @@
 """Integration tests for CausalImpactAgent."""
 
 import pytest
+
 from src.agents.causal_impact.agent import CausalImpactAgent
 
 
@@ -46,7 +47,10 @@ class TestCausalImpactAgent:
 
         assert result["status"] == "completed"
         # Summary indicates confounders were included (4 variables: treatment + outcome + 2 confounders)
-        assert "4 variables" in result.get("causal_graph_summary", "") or result.get("causal_graph_summary") is not None
+        assert (
+            "4 variables" in result.get("causal_graph_summary", "")
+            or result.get("causal_graph_summary") is not None
+        )
 
     @pytest.mark.asyncio
     async def test_run_infer_variables_from_query(self):
@@ -405,9 +409,7 @@ class TestCausalImpactRobustness:
         if result["refutation_tests_total"] is not None:
             assert result["refutation_tests_total"] > 0
             assert result["refutation_tests_passed"] >= 0
-            assert (
-                result["refutation_tests_passed"] <= result["refutation_tests_total"]
-            )
+            assert result["refutation_tests_passed"] <= result["refutation_tests_total"]
 
     @pytest.mark.asyncio
     async def test_sensitivity_evalue_included(self):

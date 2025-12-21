@@ -2,7 +2,6 @@
 Pytest fixtures for Feedback Learner agent tests.
 """
 
-from datetime import datetime, timezone
 from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock
 

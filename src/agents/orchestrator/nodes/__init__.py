@@ -1,10 +1,10 @@
 """Nodes for orchestrator agent workflow."""
 
-from .intent_classifier import classify_intent, IntentClassifierNode
-from .rag_context import retrieve_rag_context, RAGContextNode
-from .router import route_to_agents, RouterNode
-from .dispatcher import dispatch_to_agents, DispatcherNode
-from .synthesizer import synthesize_response, SynthesizerNode
+from .dispatcher import DispatcherNode, dispatch_to_agents
+from .intent_classifier import IntentClassifierNode, classify_intent
+from .rag_context import RAGContextNode, retrieve_rag_context
+from .router import RouterNode, route_to_agents
+from .synthesizer import SynthesizerNode, synthesize_response
 
 __all__ = [
     # Node functions (for graph)

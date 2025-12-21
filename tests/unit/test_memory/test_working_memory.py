@@ -13,17 +13,16 @@ All tests use mocked Redis client to avoid external dependencies.
 """
 
 import json
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
 
 from src.memory.working_memory import (
     RedisWorkingMemory,
-    get_working_memory,
     get_langgraph_checkpointer,
+    get_working_memory,
     reset_working_memory,
 )
-
 
 # ============================================================================
 # FIXTURES
@@ -75,7 +74,7 @@ class TestSessionManagement:
     @pytest.mark.asyncio
     async def test_create_session_stores_user_id(self, working_memory, mock_redis):
         """create_session should store the user_id in Redis."""
-        session_id = await working_memory.create_session(user_id="user123")
+        await working_memory.create_session(user_id="user123")
 
         # Check that hset was called with user_id
         call_args = mock_redis.hset.call_args
@@ -92,10 +91,7 @@ class TestSessionManagement:
             "brand": "Remibrutinib",
             "region": "northeast",
         }
-        session_id = await working_memory.create_session(
-            user_id="user123",
-            initial_context=context
-        )
+        await working_memory.create_session(user_id="user123", initial_context=context)
 
         call_args = mock_redis.hset.call_args
         mapping = call_args.kwargs.get("mapping", {})
@@ -107,7 +103,7 @@ class TestSessionManagement:
     @pytest.mark.asyncio
     async def test_create_session_sets_ttl(self, working_memory, mock_redis):
         """create_session should set TTL on the session key."""
-        session_id = await working_memory.create_session(user_id="user123")
+        await working_memory.create_session(user_id="user123")
 
         mock_redis.expire.assert_called()
         # Check that expire was called with TTL from config
@@ -117,7 +113,7 @@ class TestSessionManagement:
     @pytest.mark.asyncio
     async def test_create_session_anonymous_user(self, working_memory, mock_redis):
         """create_session without user_id should use 'anonymous'."""
-        session_id = await working_memory.create_session()
+        await working_memory.create_session()
 
         call_args = mock_redis.hset.call_args
         mapping = call_args.kwargs.get("mapping", {})
@@ -156,8 +152,7 @@ class TestSessionManagement:
     async def test_update_session_sets_fields(self, working_memory, mock_redis):
         """update_session should update specified fields."""
         await working_memory.update_session(
-            "test-session-id",
-            {"current_phase": "investigator", "custom_field": "value"}
+            "test-session-id", {"current_phase": "investigator", "custom_field": "value"}
         )
 
         mock_redis.hset.assert_called()
@@ -171,8 +166,7 @@ class TestSessionManagement:
     async def test_update_session_serializes_dicts(self, working_memory, mock_redis):
         """update_session should serialize dict fields to JSON."""
         await working_memory.update_session(
-            "test-session-id",
-            {"user_preferences": {"new_pref": True}}
+            "test-session-id", {"user_preferences": {"new_pref": True}}
         )
 
         call_args = mock_redis.hset.call_args
@@ -218,10 +212,7 @@ class TestE2IContext:
     @pytest.mark.asyncio
     async def test_set_e2i_context_brand(self, working_memory, mock_redis):
         """set_e2i_context should store brand."""
-        await working_memory.set_e2i_context(
-            "test-session-id",
-            brand="Fabhalta"
-        )
+        await working_memory.set_e2i_context("test-session-id", brand="Fabhalta")
 
         call_args = mock_redis.hset.call_args
         mapping = call_args.kwargs.get("mapping", {})
@@ -230,10 +221,7 @@ class TestE2IContext:
     @pytest.mark.asyncio
     async def test_set_e2i_context_region(self, working_memory, mock_redis):
         """set_e2i_context should store region."""
-        await working_memory.set_e2i_context(
-            "test-session-id",
-            region="midwest"
-        )
+        await working_memory.set_e2i_context("test-session-id", region="midwest")
 
         call_args = mock_redis.hset.call_args
         mapping = call_args.kwargs.get("mapping", {})
@@ -243,8 +231,7 @@ class TestE2IContext:
     async def test_set_e2i_context_patient_ids(self, working_memory, mock_redis):
         """set_e2i_context should store patient IDs as JSON."""
         await working_memory.set_e2i_context(
-            "test-session-id",
-            patient_ids=["P001", "P002", "P003"]
+            "test-session-id", patient_ids=["P001", "P002", "P003"]
         )
 
         call_args = mock_redis.hset.call_args
@@ -254,10 +241,7 @@ class TestE2IContext:
     @pytest.mark.asyncio
     async def test_set_e2i_context_hcp_ids(self, working_memory, mock_redis):
         """set_e2i_context should store HCP IDs as JSON."""
-        await working_memory.set_e2i_context(
-            "test-session-id",
-            hcp_ids=["HCP001", "HCP002"]
-        )
+        await working_memory.set_e2i_context("test-session-id", hcp_ids=["HCP001", "HCP002"])
 
         call_args = mock_redis.hset.call_args
         mapping = call_args.kwargs.get("mapping", {})
@@ -271,7 +255,7 @@ class TestE2IContext:
             brand="Kisqali",
             region="south",
             patient_ids=["P100"],
-            hcp_ids=["HCP100"]
+            hcp_ids=["HCP100"],
         )
 
         call_args = mock_redis.hset.call_args
@@ -328,9 +312,7 @@ class TestMessageHistory:
     async def test_add_message_stores_message(self, working_memory, mock_redis):
         """add_message should store message in Redis list."""
         await working_memory.add_message(
-            "test-session-id",
-            role="user",
-            content="Why did TRx drop?"
+            "test-session-id", role="user", content="Why did TRx drop?"
         )
 
         mock_redis.rpush.assert_called()
@@ -349,7 +331,7 @@ class TestMessageHistory:
             "test-session-id",
             role="assistant",
             content="The drop was caused by...",
-            metadata={"agent": "causal_impact", "confidence": 0.85}
+            metadata={"agent": "causal_impact", "confidence": 0.85},
         )
 
         call_args = mock_redis.rpush.call_args
@@ -363,11 +345,7 @@ class TestMessageHistory:
     @pytest.mark.asyncio
     async def test_add_message_trims_to_window(self, working_memory, mock_redis):
         """add_message should trim list to context window size."""
-        await working_memory.add_message(
-            "test-session-id",
-            role="user",
-            content="Test message"
-        )
+        await working_memory.add_message("test-session-id", role="user", content="Test message")
 
         mock_redis.ltrim.assert_called()
         # Should trim to keep last N messages
@@ -378,11 +356,7 @@ class TestMessageHistory:
     @pytest.mark.asyncio
     async def test_add_message_increments_count(self, working_memory, mock_redis):
         """add_message should increment message_count in session."""
-        await working_memory.add_message(
-            "test-session-id",
-            role="user",
-            content="Test"
-        )
+        await working_memory.add_message("test-session-id", role="user", content="Test")
 
         mock_redis.hincrby.assert_called()
         call_args = mock_redis.hincrby.call_args
@@ -393,8 +367,22 @@ class TestMessageHistory:
     async def test_get_messages_returns_all(self, working_memory, mock_redis):
         """get_messages without limit should return all messages."""
         mock_redis.lrange.return_value = [
-            json.dumps({"role": "user", "content": "Q1", "timestamp": "2025-01-01T00:00:00", "metadata": "{}"}),
-            json.dumps({"role": "assistant", "content": "A1", "timestamp": "2025-01-01T00:00:01", "metadata": "{}"}),
+            json.dumps(
+                {
+                    "role": "user",
+                    "content": "Q1",
+                    "timestamp": "2025-01-01T00:00:00",
+                    "metadata": "{}",
+                }
+            ),
+            json.dumps(
+                {
+                    "role": "assistant",
+                    "content": "A1",
+                    "timestamp": "2025-01-01T00:00:01",
+                    "metadata": "{}",
+                }
+            ),
         ]
 
         messages = await working_memory.get_messages("test-session-id")
@@ -408,10 +396,17 @@ class TestMessageHistory:
     async def test_get_messages_with_limit(self, working_memory, mock_redis):
         """get_messages with limit should return limited messages."""
         mock_redis.lrange.return_value = [
-            json.dumps({"role": "user", "content": "Last Q", "timestamp": "2025-01-01T00:00:00", "metadata": "{}"}),
+            json.dumps(
+                {
+                    "role": "user",
+                    "content": "Last Q",
+                    "timestamp": "2025-01-01T00:00:00",
+                    "metadata": "{}",
+                }
+            ),
         ]
 
-        messages = await working_memory.get_messages("test-session-id", limit=1)
+        await working_memory.get_messages("test-session-id", limit=1)
 
         mock_redis.lrange.assert_called()
         call_args = mock_redis.lrange.call_args
@@ -423,12 +418,14 @@ class TestMessageHistory:
     async def test_get_messages_deserializes_metadata(self, working_memory, mock_redis):
         """get_messages should deserialize metadata JSON."""
         mock_redis.lrange.return_value = [
-            json.dumps({
-                "role": "assistant",
-                "content": "Answer",
-                "timestamp": "2025-01-01T00:00:00",
-                "metadata": json.dumps({"key": "value"})
-            }),
+            json.dumps(
+                {
+                    "role": "assistant",
+                    "content": "Answer",
+                    "timestamp": "2025-01-01T00:00:00",
+                    "metadata": json.dumps({"key": "value"}),
+                }
+            ),
         ]
 
         messages = await working_memory.get_messages("test-session-id")
@@ -632,6 +629,7 @@ class TestLangGraphCheckpointer:
 
         # Should be a MemorySaver instance (fallback)
         from langgraph.checkpoint.memory import MemorySaver
+
         assert isinstance(checkpointer, MemorySaver)
 
 
@@ -667,7 +665,7 @@ class TestSingletonAndFactory:
         with patch.object(RedisWorkingMemory, "get_langgraph_checkpointer") as mock_method:
             mock_method.return_value = MagicMock()
 
-            checkpointer = get_langgraph_checkpointer()
+            get_langgraph_checkpointer()
 
             mock_method.assert_called_once()
 

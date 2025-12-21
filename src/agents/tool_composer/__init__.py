@@ -16,12 +16,12 @@ Pipeline:
 
 Usage:
     from src.agents.tool_composer import ToolComposer, compose_query
-    
+
     # Async usage
     composer = ToolComposer(llm_client=anthropic_client)
     result = await composer.compose("Compare X and predict Y")
     print(result.response.answer)
-    
+
     # Sync convenience function
     result = compose_query_sync("Compare X and predict Y", llm_client)
 """
@@ -32,53 +32,48 @@ from .composer import (
     compose_query,
     compose_query_sync,
 )
-
 from .decomposer import (
-    QueryDecomposer,
     DecompositionError,
+    QueryDecomposer,
     decompose_sync,
 )
-
-from .planner import (
-    ToolPlanner,
-    PlanningError,
-    plan_sync,
-)
-
 from .executor import (
-    PlanExecutor,
     ExecutionError,
+    PlanExecutor,
     execute_sync,
 )
-
+from .models.composition_models import (
+    ComposedResponse,
+    # Enums
+    CompositionPhase,
+    # Top-level
+    CompositionResult,
+    DecompositionResult,
+    DependencyType,
+    ExecutionPlan,
+    ExecutionStatus,
+    ExecutionStep,
+    ExecutionTrace,
+    StepResult,
+    # Phase 1 models
+    SubQuestion,
+    # Phase 4 models
+    SynthesisInput,
+    # Phase 3 models
+    ToolInput,
+    # Phase 2 models
+    ToolMapping,
+    ToolOutput,
+)
+from .planner import (
+    PlanningError,
+    ToolPlanner,
+    plan_sync,
+)
 from .synthesizer import (
     ResponseSynthesizer,
     synthesize_results,
     synthesize_sync,
-)
-
-from .models.composition_models import (
-    # Enums
-    CompositionPhase,
-    ExecutionStatus,
-    DependencyType,
-    # Phase 1 models
-    SubQuestion,
-    DecompositionResult,
-    # Phase 2 models
-    ToolMapping,
-    ExecutionStep,
-    ExecutionPlan,
-    # Phase 3 models
-    ToolInput,
-    ToolOutput,
-    StepResult,
-    ExecutionTrace,
-    # Phase 4 models
-    SynthesisInput,
-    ComposedResponse,
-    # Top-level
-    CompositionResult,
 )
 
 __all__ = [
@@ -87,7 +82,7 @@ __all__ = [
     "ToolComposerIntegration",
     # Phase handlers
     "QueryDecomposer",
-    "ToolPlanner", 
+    "ToolPlanner",
     "PlanExecutor",
     "ResponseSynthesizer",
     # Convenience functions

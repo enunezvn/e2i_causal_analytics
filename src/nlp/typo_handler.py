@@ -21,7 +21,7 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 # Check for fasttext installation
 try:
     import fasttext
+
     FASTTEXT_AVAILABLE = True
 except ImportError:
     fasttext = None
@@ -49,6 +50,7 @@ _CACHE_TTL_SECONDS = 3600  # 1 hour
 @dataclass
 class CorrectionResult:
     """Result of a typo correction attempt."""
+
     original: str
     corrected: str
     confidence: float
@@ -59,36 +61,70 @@ class CorrectionResult:
 
 # Canonical vocabulary for E2I domain
 CANONICAL_VOCABULARY = {
-    "brands": [
-        "Remibrutinib", "Fabhalta", "Kisqali", "ribociclib", "iptacopan"
-    ],
+    "brands": ["Remibrutinib", "Fabhalta", "Kisqali", "ribociclib", "iptacopan"],
     "regions": [
-        "northeast", "southeast", "south", "midwest", "west", "east",
-        "southwest", "northwest", "central"
+        "northeast",
+        "southeast",
+        "south",
+        "midwest",
+        "west",
+        "east",
+        "southwest",
+        "northwest",
+        "central",
     ],
     "agents": [
-        "orchestrator", "causal_impact", "gap_analyzer",
-        "heterogeneous_optimizer", "drift_monitor", "experiment_designer",
-        "health_score", "prediction_synthesizer", "resource_optimizer",
-        "explainer", "feedback_learner", "tool_composer"
+        "orchestrator",
+        "causal_impact",
+        "gap_analyzer",
+        "heterogeneous_optimizer",
+        "drift_monitor",
+        "experiment_designer",
+        "health_score",
+        "prediction_synthesizer",
+        "resource_optimizer",
+        "explainer",
+        "feedback_learner",
+        "tool_composer",
     ],
     "kpis": [
-        "TRx", "NRx", "NBRx", "conversion_rate", "engagement_score",
-        "treatment_effect", "causal_impact", "HCP_coverage",
-        "time_to_therapy", "ROI", "AUC", "acceptance_rate",
-        "market_share", "adoption_rate", "growth_rate", "churn_rate"
+        "TRx",
+        "NRx",
+        "NBRx",
+        "conversion_rate",
+        "engagement_score",
+        "treatment_effect",
+        "causal_impact",
+        "HCP_coverage",
+        "time_to_therapy",
+        "ROI",
+        "AUC",
+        "acceptance_rate",
+        "market_share",
+        "adoption_rate",
+        "growth_rate",
+        "churn_rate",
     ],
     "journey_stages": [
-        "diagnosis", "initial_treatment", "treatment_optimization",
-        "maintenance", "treatment_switch", "discontinuation"
+        "diagnosis",
+        "initial_treatment",
+        "treatment_optimization",
+        "maintenance",
+        "treatment_switch",
+        "discontinuation",
     ],
-    "workstreams": [
-        "WS1", "WS2", "WS3"
-    ],
+    "workstreams": ["WS1", "WS2", "WS3"],
     "entities": [
-        "HCP", "physician", "territory", "brand", "region", "patient",
-        "prescriber", "specialist", "provider"
-    ]
+        "HCP",
+        "physician",
+        "territory",
+        "brand",
+        "region",
+        "patient",
+        "prescriber",
+        "specialist",
+        "provider",
+    ],
 }
 
 # Common abbreviations mapping
@@ -257,8 +293,7 @@ class TypoHandler:
         # Evict oldest if full
         if len(_CORRECTION_CACHE) >= _CACHE_MAX_SIZE:
             oldest_key = min(
-                _CORRECTION_CACHE.keys(),
-                key=lambda k: _CORRECTION_CACHE[k]["timestamp"]
+                _CORRECTION_CACHE.keys(), key=lambda k: _CORRECTION_CACHE[k]["timestamp"]
             )
             del _CORRECTION_CACHE[oldest_key]
 
@@ -472,9 +507,9 @@ class TypoHandler:
                 # and looks like it could be a domain term
                 word_lower = word_clean.lower()
                 is_potential_term = (
-                    len(word_clean) > 3 or
-                    word_lower in ABBREVIATION_EXPANSIONS or
-                    any(word_lower.startswith(cat[:3]) for cat in self.vocabulary.keys())
+                    len(word_clean) > 3
+                    or word_lower in ABBREVIATION_EXPANSIONS
+                    or any(word_lower.startswith(cat[:3]) for cat in self.vocabulary.keys())
                 )
                 should_correct = is_potential_term
 
@@ -483,8 +518,16 @@ class TypoHandler:
 
                 if result.was_corrected:
                     # Preserve original punctuation
-                    prefix = word[:len(word) - len(word.lstrip(".,!?;:()[]{}\"'"))] if word != word.lstrip(".,!?;:()[]{}\"'") else ""
-                    suffix = word[len(word.rstrip(".,!?;:()[]{}\"'")):] if word != word.rstrip(".,!?;:()[]{}\"'") else ""
+                    prefix = (
+                        word[: len(word) - len(word.lstrip(".,!?;:()[]{}\"'"))]
+                        if word != word.lstrip(".,!?;:()[]{}\"'")
+                        else ""
+                    )
+                    suffix = (
+                        word[len(word.rstrip(".,!?;:()[]{}\"'")) :]
+                        if word != word.rstrip(".,!?;:()[]{}\"'")
+                        else ""
+                    )
                     corrected_words.append(f"{prefix}{result.corrected}{suffix}")
                     corrections.append(result)
                 else:
@@ -577,6 +620,8 @@ def correct_term(term: str, category: Optional[str] = None) -> CorrectionResult:
     return get_typo_handler().correct_term(term, category)
 
 
-def correct_query(query: str, correct_all_words: bool = False) -> Tuple[str, List[CorrectionResult]]:
+def correct_query(
+    query: str, correct_all_words: bool = False
+) -> Tuple[str, List[CorrectionResult]]:
     """Convenience function to correct a full query."""
     return get_typo_handler().correct_query(query, correct_all_words)

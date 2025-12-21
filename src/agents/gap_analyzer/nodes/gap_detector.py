@@ -12,9 +12,10 @@ Architecture:
 
 import asyncio
 import time
-from typing import Dict, List, Any, Optional, Literal
-import pandas as pd
+from typing import Any, Dict, List, Literal, Optional
+
 import numpy as np
+import pandas as pd
 
 from ..state import GapAnalyzerState, PerformanceGap
 
@@ -270,18 +271,14 @@ class GapDetectorNode:
             return None
 
         # Get current value
-        current_row = current_data[
-            (current_data[segment] == segment_value)
-        ]
+        current_row = current_data[(current_data[segment] == segment_value)]
         if current_row.empty or metric not in current_row.columns:
             return None
 
         current_value = float(current_row[metric].iloc[0])
 
         # Get target value
-        target_row = comparison_data[
-            (comparison_data[segment] == segment_value)
-        ]
+        target_row = comparison_data[(comparison_data[segment] == segment_value)]
         if target_row.empty or metric not in target_row.columns:
             return None
 

@@ -1,8 +1,7 @@
 """Integration tests for DataPreparerAgent."""
 
 import pytest
-import pandas as pd
-import numpy as np
+
 from src.agents.ml_foundation.data_preparer import DataPreparerAgent
 
 
@@ -42,10 +41,12 @@ async def test_data_preparer_agent_missing_scope_spec(sample_data_source):
     agent = DataPreparerAgent()
 
     with pytest.raises(ValueError, match="scope_spec is required"):
-        await agent.run({
-            "data_source": sample_data_source,
-            # Missing scope_spec
-        })
+        await agent.run(
+            {
+                "data_source": sample_data_source,
+                # Missing scope_spec
+            }
+        )
 
 
 @pytest.mark.asyncio
@@ -54,10 +55,12 @@ async def test_data_preparer_agent_missing_data_source(mock_scope_spec):
     agent = DataPreparerAgent()
 
     with pytest.raises(ValueError, match="data_source is required"):
-        await agent.run({
-            "scope_spec": mock_scope_spec,
-            # Missing data_source
-        })
+        await agent.run(
+            {
+                "scope_spec": mock_scope_spec,
+                # Missing data_source
+            }
+        )
 
 
 @pytest.mark.asyncio
@@ -66,10 +69,12 @@ async def test_data_preparer_agent_missing_experiment_id(sample_data_source):
     agent = DataPreparerAgent()
 
     with pytest.raises(ValueError, match="experiment_id"):
-        await agent.run({
-            "scope_spec": {"problem_type": "classification"},  # Missing experiment_id
-            "data_source": sample_data_source,
-        })
+        await agent.run(
+            {
+                "scope_spec": {"problem_type": "classification"},  # Missing experiment_id
+                "data_source": sample_data_source,
+            }
+        )
 
 
 # NOTE: The following tests require actual data loading implementation
@@ -78,19 +83,19 @@ async def test_data_preparer_agent_missing_experiment_id(sample_data_source):
 
 @pytest.mark.skip(reason="Requires data loading implementation")
 @pytest.mark.asyncio
-async def test_data_preparer_agent_full_pipeline_success(
-    mock_scope_spec, sample_data_source
-):
+async def test_data_preparer_agent_full_pipeline_success(mock_scope_spec, sample_data_source):
     """Test full data preparation pipeline with passing QC.
 
     TODO: Implement after data loading is completed.
     """
     agent = DataPreparerAgent()
 
-    output = await agent.run({
-        "scope_spec": mock_scope_spec,
-        "data_source": sample_data_source,
-    })
+    output = await agent.run(
+        {
+            "scope_spec": mock_scope_spec,
+            "data_source": sample_data_source,
+        }
+    )
 
     # Check output structure
     assert "qc_report" in output
@@ -118,9 +123,7 @@ async def test_data_preparer_agent_full_pipeline_success(
 
 @pytest.mark.skip(reason="Requires data loading implementation")
 @pytest.mark.asyncio
-async def test_data_preparer_agent_qc_gate_blocks_when_failed(
-    mock_scope_spec, sample_data_source
-):
+async def test_data_preparer_agent_qc_gate_blocks_when_failed(mock_scope_spec, sample_data_source):
     """Test that QC gate blocks when data quality fails.
 
     TODO: Implement after data loading is completed.
@@ -129,10 +132,12 @@ async def test_data_preparer_agent_qc_gate_blocks_when_failed(
     agent = DataPreparerAgent()
 
     # Use data source with bad data quality
-    output = await agent.run({
-        "scope_spec": mock_scope_spec,
-        "data_source": "bad_quality_data",  # Hypothetical bad data
-    })
+    output = await agent.run(
+        {
+            "scope_spec": mock_scope_spec,
+            "data_source": "bad_quality_data",  # Hypothetical bad data
+        }
+    )
 
     # QC gate should block
     assert output["gate_passed"] is False
@@ -142,9 +147,7 @@ async def test_data_preparer_agent_qc_gate_blocks_when_failed(
 
 @pytest.mark.skip(reason="Requires data loading implementation")
 @pytest.mark.asyncio
-async def test_data_preparer_agent_leakage_detection_blocks(
-    mock_scope_spec, sample_data_source
-):
+async def test_data_preparer_agent_leakage_detection_blocks(mock_scope_spec, sample_data_source):
     """Test that detected leakage blocks the QC gate.
 
     TODO: Implement after data loading is completed.
@@ -153,10 +156,12 @@ async def test_data_preparer_agent_leakage_detection_blocks(
     agent = DataPreparerAgent()
 
     # Use data source with leakage
-    output = await agent.run({
-        "scope_spec": mock_scope_spec,
-        "data_source": "data_with_leakage",  # Hypothetical leaky data
-    })
+    output = await agent.run(
+        {
+            "scope_spec": mock_scope_spec,
+            "data_source": "data_with_leakage",  # Hypothetical leaky data
+        }
+    )
 
     # Gate should be blocked due to leakage
     assert output["gate_passed"] is False
@@ -165,19 +170,19 @@ async def test_data_preparer_agent_leakage_detection_blocks(
 
 @pytest.mark.skip(reason="Requires database implementation")
 @pytest.mark.asyncio
-async def test_data_preparer_agent_persists_to_database(
-    mock_scope_spec, sample_data_source
-):
+async def test_data_preparer_agent_persists_to_database(mock_scope_spec, sample_data_source):
     """Test that agent persists outputs to database.
 
     TODO: Implement after database persistence is added.
     """
     agent = DataPreparerAgent()
 
-    output = await agent.run({
-        "scope_spec": mock_scope_spec,
-        "data_source": sample_data_source,
-    })
+    await agent.run(
+        {
+            "scope_spec": mock_scope_spec,
+            "data_source": sample_data_source,
+        }
+    )
 
     # TODO: Verify that QC report was written to ml_data_quality_reports table
     # TODO: Verify that baseline metrics were written
@@ -187,19 +192,19 @@ async def test_data_preparer_agent_persists_to_database(
 
 @pytest.mark.skip(reason="Requires Feast integration")
 @pytest.mark.asyncio
-async def test_data_preparer_agent_registers_features_in_feast(
-    mock_scope_spec, sample_data_source
-):
+async def test_data_preparer_agent_registers_features_in_feast(mock_scope_spec, sample_data_source):
     """Test that agent registers features in Feast feature store.
 
     TODO: Implement after Feast integration is completed.
     """
     agent = DataPreparerAgent()
 
-    output = await agent.run({
-        "scope_spec": mock_scope_spec,
-        "data_source": sample_data_source,
-    })
+    await agent.run(
+        {
+            "scope_spec": mock_scope_spec,
+            "data_source": sample_data_source,
+        }
+    )
 
     # TODO: Verify features were registered in Feast
     # TODO: Verify feature definitions are correct

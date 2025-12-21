@@ -9,22 +9,22 @@ Orchestrator Classifier Module
 - Stage 4: Pattern Selection
 """
 
-from .schemas import (
-    Domain,
-    RoutingPattern,
-    DependencyType,
-    ExtractedFeatures,
-    DomainMapping,
-    DependencyAnalysis,
-    ClassificationResult,
-    SubQuestion,
-    Dependency,
-)
-from .feature_extractor import FeatureExtractor
-from .domain_mapper import DomainMapper
 from .dependency_detector import DependencyDetector
+from .domain_mapper import DomainMapper
+from .feature_extractor import FeatureExtractor
 from .pattern_selector import PatternSelector
 from .pipeline import ClassificationPipeline
+from .schemas import (
+    ClassificationResult,
+    Dependency,
+    DependencyAnalysis,
+    DependencyType,
+    Domain,
+    DomainMapping,
+    ExtractedFeatures,
+    RoutingPattern,
+    SubQuestion,
+)
 
 __all__ = [
     # Enums

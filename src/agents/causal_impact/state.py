@@ -3,7 +3,8 @@
 This module defines the TypedDict state used throughout the causal impact workflow.
 """
 
-from typing import TypedDict, Optional, List, Dict, Any, Literal
+from typing import Any, Dict, List, Literal, TypedDict
+
 from typing_extensions import NotRequired
 
 
@@ -212,7 +213,9 @@ class CausalImpactOutput(TypedDict):
     # Core results - Contract-aligned field names
     causal_narrative: str  # Contract field name (was narrative)
     ate_estimate: NotRequired[float]  # Contract field name (was causal_effect)
-    confidence_interval: NotRequired[tuple[float, float]]  # Contract field name (was effect_confidence_interval)
+    confidence_interval: NotRequired[
+        tuple[float, float]
+    ]  # Contract field name (was effect_confidence_interval)
     standard_error: NotRequired[float]  # Added per contract
     statistical_significance: bool
     p_value: NotRequired[float]  # Float type per contract

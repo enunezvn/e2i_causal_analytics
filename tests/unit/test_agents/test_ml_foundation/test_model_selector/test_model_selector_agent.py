@@ -1,6 +1,7 @@
 """Integration tests for ModelSelectorAgent."""
 
 import pytest
+
 from src.agents.ml_foundation.model_selector.agent import ModelSelectorAgent
 
 
@@ -190,9 +191,7 @@ class TestModelSelectorAgentBasicExecution:
         for field in required_fields:
             assert field in candidate, f"Missing field: {field}"
 
-    async def test_selection_rationale_structure(
-        self, valid_scope_spec, valid_qc_report
-    ):
+    async def test_selection_rationale_structure(self, valid_scope_spec, valid_qc_report):
         """SelectionRationale should have all required fields."""
         agent = ModelSelectorAgent()
         input_data = {
@@ -219,9 +218,7 @@ class TestModelSelectorAgentBasicExecution:
 class TestModelSelectorAgentAlgorithmSelection:
     """Test algorithm selection logic."""
 
-    async def test_causal_ml_preferred_for_e2i(
-        self, valid_scope_spec, valid_qc_report
-    ):
+    async def test_causal_ml_preferred_for_e2i(self, valid_scope_spec, valid_qc_report):
         """E2I platform should prefer CausalML algorithms."""
         agent = ModelSelectorAgent()
         input_data = {
@@ -280,9 +277,7 @@ class TestModelSelectorAgentAlgorithmSelection:
         # Selected algorithm should meet memory constraint
         assert candidate["memory_requirement_gb"] <= 2.0
 
-    async def test_respects_algorithm_preferences(
-        self, valid_scope_spec, valid_qc_report
-    ):
+    async def test_respects_algorithm_preferences(self, valid_scope_spec, valid_qc_report):
         """Should prefer user-specified algorithms."""
         agent = ModelSelectorAgent()
         input_data = {
@@ -298,9 +293,7 @@ class TestModelSelectorAgentAlgorithmSelection:
         # (unless constraints exclude it)
         assert candidate["algorithm_name"] in ["LinearDML", "CausalForest", "XGBoost"]
 
-    async def test_respects_excluded_algorithms(
-        self, valid_scope_spec, valid_qc_report
-    ):
+    async def test_respects_excluded_algorithms(self, valid_scope_spec, valid_qc_report):
         """Should exclude user-specified algorithms."""
         agent = ModelSelectorAgent()
         input_data = {
@@ -315,9 +308,7 @@ class TestModelSelectorAgentAlgorithmSelection:
         # Should NOT select excluded algorithms
         assert candidate["algorithm_name"] not in ["XGBoost", "LightGBM"]
 
-    async def test_respects_interpretability_requirement(
-        self, valid_scope_spec, valid_qc_report
-    ):
+    async def test_respects_interpretability_requirement(self, valid_scope_spec, valid_qc_report):
         """Should select interpretable models when required."""
         agent = ModelSelectorAgent()
         input_data = {
@@ -376,9 +367,7 @@ class TestModelSelectorAgentRegressionProblems:
 class TestModelSelectorAgentAlternatives:
     """Test alternative candidate handling."""
 
-    async def test_alternative_candidates_included(
-        self, valid_scope_spec, valid_qc_report
-    ):
+    async def test_alternative_candidates_included(self, valid_scope_spec, valid_qc_report):
         """Should include 2-3 alternative candidates."""
         agent = ModelSelectorAgent()
         input_data = {
@@ -393,9 +382,7 @@ class TestModelSelectorAgentAlternatives:
         assert len(result["alternative_candidates"]) >= 1
         assert len(result["alternative_candidates"]) <= 3
 
-    async def test_alternatives_explained_in_rationale(
-        self, valid_scope_spec, valid_qc_report
-    ):
+    async def test_alternatives_explained_in_rationale(self, valid_scope_spec, valid_qc_report):
         """Rationale should explain why alternatives weren't selected."""
         agent = ModelSelectorAgent()
         input_data = {
@@ -419,9 +406,7 @@ class TestModelSelectorAgentAlternatives:
 class TestModelSelectorAgentConstraintCompliance:
     """Test constraint compliance checking."""
 
-    async def test_constraint_compliance_checked(
-        self, valid_scope_spec, valid_qc_report
-    ):
+    async def test_constraint_compliance_checked(self, valid_scope_spec, valid_qc_report):
         """Should check constraint compliance."""
         agent = ModelSelectorAgent()
         input_data = {
@@ -441,9 +426,7 @@ class TestModelSelectorAgentConstraintCompliance:
             assert constraint in compliance
             assert isinstance(compliance[constraint], bool)
 
-    async def test_selected_algorithm_meets_constraints(
-        self, valid_scope_spec, valid_qc_report
-    ):
+    async def test_selected_algorithm_meets_constraints(self, valid_scope_spec, valid_qc_report):
         """Selected algorithm should pass all constraints."""
         agent = ModelSelectorAgent()
         input_data = {
@@ -476,9 +459,7 @@ class TestModelSelectorAgentOutputFormats:
 
         assert result["experiment_id"] == valid_scope_spec["experiment_id"]
 
-    async def test_algorithm_class_is_valid_python_path(
-        self, valid_scope_spec, valid_qc_report
-    ):
+    async def test_algorithm_class_is_valid_python_path(self, valid_scope_spec, valid_qc_report):
         """algorithm_class should be valid Python import path."""
         agent = ModelSelectorAgent()
         input_data = {
@@ -514,13 +495,11 @@ class TestModelSelectorAgentOutputFormats:
         assert isinstance(hp_space, dict)
 
         # Each hyperparameter should have type
-        for hp_name, hp_spec in hp_space.items():
+        for _hp_name, hp_spec in hp_space.items():
             assert "type" in hp_spec
             assert hp_spec["type"] in ["int", "float", "categorical"]
 
-    async def test_selection_rationale_is_readable_text(
-        self, valid_scope_spec, valid_qc_report
-    ):
+    async def test_selection_rationale_is_readable_text(self, valid_scope_spec, valid_qc_report):
         """Selection rationale should be human-readable text."""
         agent = ModelSelectorAgent()
         input_data = {

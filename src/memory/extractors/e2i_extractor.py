@@ -9,10 +9,10 @@ This module provides extraction capabilities for:
 - Agent-generated insights
 """
 
-import re
 import logging
-from typing import Any, Dict, List, Optional, Tuple
-from dataclasses import dataclass, field
+import re
+from dataclasses import dataclass
+from typing import Dict, List, Optional
 
 from ..graphiti_config import E2IEntityType, E2IRelationshipType
 
@@ -48,21 +48,40 @@ ENTITY_PATTERNS = {
 # Relationship trigger phrases
 RELATIONSHIP_TRIGGERS = {
     E2IRelationshipType.CAUSES: [
-        "causes", "leads to", "results in", "triggers", "drives",
-        "is the cause of", "contributes to",
+        "causes",
+        "leads to",
+        "results in",
+        "triggers",
+        "drives",
+        "is the cause of",
+        "contributes to",
     ],
     E2IRelationshipType.IMPACTS: [
-        "impacts", "affects", "influences", "has effect on",
-        "increases", "decreases", "improves", "reduces",
+        "impacts",
+        "affects",
+        "influences",
+        "has effect on",
+        "increases",
+        "decreases",
+        "improves",
+        "reduces",
     ],
     E2IRelationshipType.PRESCRIBES: [
-        "prescribes", "prescribed", "recommends", "treating with",
+        "prescribes",
+        "prescribed",
+        "recommends",
+        "treating with",
     ],
     E2IRelationshipType.TREATED_BY: [
-        "treated by", "under care of", "patient of",
+        "treated by",
+        "under care of",
+        "patient of",
     ],
     E2IRelationshipType.DISCOVERED: [
-        "discovered", "found", "identified", "detected",
+        "discovered",
+        "found",
+        "identified",
+        "detected",
     ],
 }
 
@@ -70,6 +89,7 @@ RELATIONSHIP_TRIGGERS = {
 @dataclass
 class ExtractedMention:
     """A mention of an entity in text."""
+
     entity_type: E2IEntityType
     text: str
     start: int
@@ -81,6 +101,7 @@ class ExtractedMention:
 @dataclass
 class ExtractedRelationshipMention:
     """A mention of a relationship in text."""
+
     relationship_type: E2IRelationshipType
     source_mention: ExtractedMention
     target_mention: ExtractedMention
@@ -108,9 +129,7 @@ class E2IEntityExtractor:
 
         # Compile patterns
         for entity_type, patterns in ENTITY_PATTERNS.items():
-            self._compiled_patterns[entity_type] = [
-                re.compile(p, re.IGNORECASE) for p in patterns
-            ]
+            self._compiled_patterns[entity_type] = [re.compile(p, re.IGNORECASE) for p in patterns]
 
     def extract_entities(self, text: str) -> List[ExtractedMention]:
         """
@@ -133,16 +152,18 @@ class E2IEntityExtractor:
                     )
 
                     if confidence >= self.min_confidence:
-                        mentions.append(ExtractedMention(
-                            entity_type=entity_type,
-                            text=match.group(0),
-                            start=match.start(),
-                            end=match.end(),
-                            confidence=confidence,
-                            normalized_name=self._normalize_entity_name(
-                                entity_type, match.group(0)
-                            ),
-                        ))
+                        mentions.append(
+                            ExtractedMention(
+                                entity_type=entity_type,
+                                text=match.group(0),
+                                start=match.start(),
+                                end=match.end(),
+                                confidence=confidence,
+                                normalized_name=self._normalize_entity_name(
+                                    entity_type, match.group(0)
+                                ),
+                            )
+                        )
 
         # Remove duplicates and overlapping mentions
         mentions = self._deduplicate_mentions(mentions)
@@ -200,13 +221,15 @@ class E2IEntityExtractor:
                     )
 
                     if confidence >= self.min_confidence:
-                        relationships.append(ExtractedRelationshipMention(
-                            relationship_type=rel_type,
-                            source_mention=source_entity,
-                            target_mention=target_entity,
-                            trigger_text=trigger,
-                            confidence=confidence,
-                        ))
+                        relationships.append(
+                            ExtractedRelationshipMention(
+                                relationship_type=rel_type,
+                                source_mention=source_entity,
+                                target_mention=target_entity,
+                                trigger_text=trigger,
+                                confidence=confidence,
+                            )
+                        )
 
         return relationships
 
@@ -338,7 +361,7 @@ class E2IEntityExtractor:
             # Check for overlap with existing mentions
             overlaps = False
             for existing in deduplicated:
-                if (mention.start < existing.end and mention.end > existing.start):
+                if mention.start < existing.end and mention.end > existing.start:
                     # Overlapping - keep the one with higher confidence
                     if mention.confidence > existing.confidence:
                         deduplicated.remove(existing)

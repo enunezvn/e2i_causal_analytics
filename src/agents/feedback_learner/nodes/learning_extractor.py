@@ -280,9 +280,7 @@ Output JSON:
 
         return []
 
-    def _prioritize(
-        self, recommendations: List[LearningRecommendation]
-    ) -> List[str]:
+    def _prioritize(self, recommendations: List[LearningRecommendation]) -> List[str]:
         """Get prioritized list of improvements."""
         effort_order = {"low": 1, "medium": 2, "high": 3}
 

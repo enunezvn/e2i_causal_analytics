@@ -8,8 +8,8 @@ Algorithm: .claude/specialists/Agent_Specialists_Tiers 1-5/drift-monitor.md line
 Contract: .claude/contracts/tier3-contracts.md lines 349-562
 """
 
-import time
 import asyncio
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -29,7 +29,9 @@ class MockDataConnector:
         from src.repositories.data_connector import SupabaseDataConnector
     """
 
-    async def query(self, source: str, columns: list[str], filters: dict[str, Any] | None = None) -> dict[str, np.ndarray]:
+    async def query(
+        self, source: str, columns: list[str], filters: dict[str, Any] | None = None
+    ) -> dict[str, np.ndarray]:
         """Mock query that returns synthetic data."""
         np.random.seed(42)
         n_samples = 1000
@@ -80,7 +82,9 @@ class DataDriftNode:
         # Check if data drift detection is enabled
         if not state.get("check_data_drift", True):
             state["data_drift_results"] = []
-            state["warnings"] = state.get("warnings", []) + ["Data drift detection skipped (disabled)"]
+            state["warnings"] = state.get("warnings", []) + [
+                "Data drift detection skipped (disabled)"
+            ]
             return state
 
         # Skip if status is failed
@@ -105,7 +109,7 @@ class DataDriftNode:
                 baseline_data,
                 current_data,
                 state["significance_level"],
-                state["psi_threshold"]
+                state["psi_threshold"],
             )
 
             # Update state
@@ -120,7 +124,7 @@ class DataDriftNode:
             error: ErrorDetails = {
                 "node": "data_drift",
                 "error": str(e),
-                "timestamp": datetime.now(timezone.utc).isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             }
             state["errors"] = state.get("errors", []) + [error]
             state["status"] = "failed"
@@ -128,7 +132,9 @@ class DataDriftNode:
 
         return state
 
-    async def _fetch_data(self, state: DriftMonitorState) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
+    async def _fetch_data(
+        self, state: DriftMonitorState
+    ) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
         """Fetch baseline and current data in parallel.
 
         Args:
@@ -138,15 +144,9 @@ class DataDriftNode:
             (baseline_data, current_data) tuple
         """
         # Parse time window
-        baseline_filters = {
-            "period": "baseline",
-            "time_window": state["time_window"]
-        }
+        baseline_filters = {"period": "baseline", "time_window": state["time_window"]}
 
-        current_filters = {
-            "period": "current",
-            "time_window": state["time_window"]
-        }
+        current_filters = {"period": "current", "time_window": state["time_window"]}
 
         if state.get("brand"):
             baseline_filters["brand"] = state["brand"]
@@ -154,15 +154,11 @@ class DataDriftNode:
 
         # Fetch in parallel
         baseline_task = self.data_connector.query(
-            "feature_data",
-            state["features_to_monitor"],
-            baseline_filters
+            "feature_data", state["features_to_monitor"], baseline_filters
         )
 
         current_task = self.data_connector.query(
-            "feature_data",
-            state["features_to_monitor"],
-            current_filters
+            "feature_data", state["features_to_monitor"], current_filters
         )
 
         baseline_data, current_data = await asyncio.gather(baseline_task, current_task)
@@ -175,7 +171,7 @@ class DataDriftNode:
         baseline_data: dict[str, np.ndarray],
         current_data: dict[str, np.ndarray],
         significance_level: float,
-        psi_threshold: float
+        psi_threshold: float,
     ) -> list[DriftResult]:
         """Detect drift for all features in parallel.
 
@@ -195,7 +191,7 @@ class DataDriftNode:
                 baseline_data[feature],
                 current_data[feature],
                 significance_level,
-                psi_threshold
+                psi_threshold,
             )
             for feature in features
         ]
@@ -211,7 +207,7 @@ class DataDriftNode:
         baseline: np.ndarray,
         current: np.ndarray,
         significance: float,
-        psi_threshold: float
+        psi_threshold: float,
     ) -> DriftResult | None:
         """Detect drift for a single feature.
 
@@ -248,7 +244,7 @@ class DataDriftNode:
             "drift_detected": drift_detected,
             "severity": severity,
             "baseline_period": "baseline",
-            "current_period": "current"
+            "current_period": "current",
         }
 
         return result
@@ -294,11 +290,7 @@ class DataDriftNode:
         return float(psi)
 
     def _determine_severity(
-        self,
-        psi: float,
-        p_value: float,
-        significance: float,
-        psi_threshold: float
+        self, psi: float, p_value: float, significance: float, psi_threshold: float
     ) -> tuple[str, bool]:
         """Determine drift severity based on PSI and p-value.
 

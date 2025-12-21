@@ -1,18 +1,20 @@
 """Tests for model evaluator node."""
 
-import pytest
 import numpy as np
+import pytest
+
 from src.agents.ml_foundation.model_trainer.nodes.evaluator import evaluate_model
 
 
 class MockModel:
     """Mock trained model."""
+
     def predict(self, X):
         return np.random.randint(0, 2, len(X))
 
     def predict_proba(self, X):
         proba = np.random.rand(len(X))
-        return np.column_stack([1-proba, proba])
+        return np.column_stack([1 - proba, proba])
 
 
 @pytest.mark.asyncio

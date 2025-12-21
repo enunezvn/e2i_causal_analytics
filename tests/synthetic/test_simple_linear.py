@@ -14,14 +14,14 @@ Failure indicates a fundamental implementation error.
 Reference: docs/E2I_Causal_Validation_Protocol.html
 """
 
-import pytest
 import numpy as np
+import pytest
 
 from tests.synthetic.conftest import (
     SyntheticDataset,
-    generate_simple_linear,
-    estimate_ate_naive,
     estimate_ate_adjusted,
+    estimate_ate_naive,
+    generate_simple_linear,
 )
 
 
@@ -80,9 +80,9 @@ class TestSimpleLinearBenchmark:
         treated_prop = data[dataset.treatment_col].mean()
 
         # With n=10000 and p=0.5, expect ~0.50 with margin
-        assert 0.48 < treated_prop < 0.52, (
-            f"Treatment proportion {treated_prop:.3f} indicates non-random assignment"
-        )
+        assert (
+            0.48 < treated_prop < 0.52
+        ), f"Treatment proportion {treated_prop:.3f} indicates non-random assignment"
 
     def test_reproducibility(self):
         """Verify DGP is reproducible with same seed."""
@@ -120,8 +120,8 @@ class TestSimpleLinearBenchmark:
 
     def test_sample_size_sensitivity(self):
         """Verify smaller samples have larger variance."""
-        small = generate_simple_linear(n=500, seed=42)
-        large = generate_simple_linear(n=50000, seed=42)
+        generate_simple_linear(n=500, seed=42)
+        generate_simple_linear(n=50000, seed=42)
 
         # Estimate with multiple seeds
         small_estimates = []
@@ -131,12 +131,12 @@ class TestSimpleLinearBenchmark:
             small_ds = generate_simple_linear(n=500, seed=seed)
             large_ds = generate_simple_linear(n=50000, seed=seed)
 
-            small_estimates.append(estimate_ate_naive(
-                small_ds.data, small_ds.treatment_col, small_ds.outcome_col
-            ))
-            large_estimates.append(estimate_ate_naive(
-                large_ds.data, large_ds.treatment_col, large_ds.outcome_col
-            ))
+            small_estimates.append(
+                estimate_ate_naive(small_ds.data, small_ds.treatment_col, small_ds.outcome_col)
+            )
+            large_estimates.append(
+                estimate_ate_naive(large_ds.data, large_ds.treatment_col, large_ds.outcome_col)
+            )
 
         small_var = np.var(small_estimates)
         large_var = np.var(large_estimates)
@@ -177,9 +177,9 @@ class TestSimpleLinearDatasetProperties:
         treated_mean = Y[dataset.data["T"] == 1].mean()
 
         assert abs(control_mean) < 0.05, f"Control mean {control_mean:.4f} should be ~0"
-        assert abs(treated_mean - dataset.true_ate) < 0.05, (
-            f"Treated mean {treated_mean:.4f} should be ~{dataset.true_ate}"
-        )
+        assert (
+            abs(treated_mean - dataset.true_ate) < 0.05
+        ), f"Treated mean {treated_mean:.4f} should be ~{dataset.true_ate}"
 
     def test_to_dict_serialization(self, simple_linear_dataset: SyntheticDataset):
         """Verify dataset can be serialized."""

@@ -3,7 +3,7 @@
 This module validates that data quality checks passed before training.
 """
 
-from typing import Dict, Any
+from typing import Any, Dict
 
 
 async def check_qc_gate(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -48,7 +48,5 @@ async def check_qc_gate(state: Dict[str, Any]) -> Dict[str, Any]:
 
     return {
         "qc_gate_passed": True,
-        "qc_gate_message": (
-            f"QC gate PASSED: Quality score {qc_score}. {warning_message}"
-        ),
+        "qc_gate_message": (f"QC gate PASSED: Quality score {qc_score}. {warning_message}"),
     }

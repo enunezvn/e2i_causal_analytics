@@ -9,14 +9,11 @@ import asyncio
 import json
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
-from unittest.mock import AsyncMock, MagicMock, Mock
+from unittest.mock import Mock
 
 import pytest
 
 from src.agents.tool_composer.models.composition_models import (
-    ComposedResponse,
-    CompositionPhase,
-    CompositionResult,
     DecompositionResult,
     DependencyType,
     ExecutionPlan,
@@ -31,19 +28,19 @@ from src.agents.tool_composer.models.composition_models import (
     ToolOutput,
 )
 from src.tool_registry.registry import (
-    RegisteredTool,
     ToolParameter,
     ToolRegistry,
     ToolSchema,
 )
 
-
 # ============================================================================
 # MOCK LLM CLIENT
 # ============================================================================
 
+
 class MockLLMResponse:
     """Mock response from LLM"""
+
     def __init__(self, text: str):
         self.content = [Mock(text=text)]
 
@@ -83,72 +80,78 @@ class MockLLMClient:
         return "{}"
 
     def _default_decomposition(self) -> str:
-        return json.dumps({
-            "reasoning": "Test decomposition reasoning",
-            "sub_questions": [
-                {
-                    "id": "sq_1",
-                    "question": "What is the causal effect of rep visits?",
-                    "intent": "CAUSAL",
-                    "entities": ["rep_visits", "rx_volume"],
-                    "depends_on": []
-                },
-                {
-                    "id": "sq_2",
-                    "question": "How does this vary by region?",
-                    "intent": "COMPARATIVE",
-                    "entities": ["region"],
-                    "depends_on": ["sq_1"]
-                }
-            ]
-        })
+        return json.dumps(
+            {
+                "reasoning": "Test decomposition reasoning",
+                "sub_questions": [
+                    {
+                        "id": "sq_1",
+                        "question": "What is the causal effect of rep visits?",
+                        "intent": "CAUSAL",
+                        "entities": ["rep_visits", "rx_volume"],
+                        "depends_on": [],
+                    },
+                    {
+                        "id": "sq_2",
+                        "question": "How does this vary by region?",
+                        "intent": "COMPARATIVE",
+                        "entities": ["region"],
+                        "depends_on": ["sq_1"],
+                    },
+                ],
+            }
+        )
 
     def _default_planning(self) -> str:
-        return json.dumps({
-            "reasoning": "Test planning reasoning",
-            "tool_mappings": [
-                {
-                    "sub_question_id": "sq_1",
-                    "tool_name": "causal_effect_estimator",
-                    "confidence": 0.95,
-                    "reasoning": "Matches causal intent"
-                },
-                {
-                    "sub_question_id": "sq_2",
-                    "tool_name": "cate_analyzer",
-                    "confidence": 0.9,
-                    "reasoning": "Analyzes regional variation"
-                }
-            ],
-            "execution_steps": [
-                {
-                    "step_id": "step_1",
-                    "sub_question_id": "sq_1",
-                    "tool_name": "causal_effect_estimator",
-                    "input_mapping": {"treatment": "rep_visits", "outcome": "rx_volume"},
-                    "depends_on_steps": []
-                },
-                {
-                    "step_id": "step_2",
-                    "sub_question_id": "sq_2",
-                    "tool_name": "cate_analyzer",
-                    "input_mapping": {"effect": "$step_1.effect", "dimension": "region"},
-                    "depends_on_steps": ["step_1"]
-                }
-            ],
-            "parallel_groups": [["step_1"], ["step_2"]]
-        })
+        return json.dumps(
+            {
+                "reasoning": "Test planning reasoning",
+                "tool_mappings": [
+                    {
+                        "sub_question_id": "sq_1",
+                        "tool_name": "causal_effect_estimator",
+                        "confidence": 0.95,
+                        "reasoning": "Matches causal intent",
+                    },
+                    {
+                        "sub_question_id": "sq_2",
+                        "tool_name": "cate_analyzer",
+                        "confidence": 0.9,
+                        "reasoning": "Analyzes regional variation",
+                    },
+                ],
+                "execution_steps": [
+                    {
+                        "step_id": "step_1",
+                        "sub_question_id": "sq_1",
+                        "tool_name": "causal_effect_estimator",
+                        "input_mapping": {"treatment": "rep_visits", "outcome": "rx_volume"},
+                        "depends_on_steps": [],
+                    },
+                    {
+                        "step_id": "step_2",
+                        "sub_question_id": "sq_2",
+                        "tool_name": "cate_analyzer",
+                        "input_mapping": {"effect": "$step_1.effect", "dimension": "region"},
+                        "depends_on_steps": ["step_1"],
+                    },
+                ],
+                "parallel_groups": [["step_1"], ["step_2"]],
+            }
+        )
 
     def _default_synthesis(self) -> str:
-        return json.dumps({
-            "answer": "Rep visits show a 15% causal lift in Rx volume with regional variation.",
-            "confidence": 0.85,
-            "supporting_data": {"effect_size": 0.15, "ci_lower": 0.12, "ci_upper": 0.18},
-            "citations": ["step_1", "step_2"],
-            "caveats": ["Analysis based on observational data"],
-            "failed_components": [],
-            "reasoning": "Combined causal analysis with regional breakdown"
-        })
+        return json.dumps(
+            {
+                "answer": "Rep visits show a 15% causal lift in Rx volume with regional variation.",
+                "confidence": 0.85,
+                "supporting_data": {"effect_size": 0.15, "ci_lower": 0.12, "ci_upper": 0.18},
+                "citations": ["step_1", "step_2"],
+                "caveats": ["Analysis based on observational data"],
+                "failed_components": [],
+                "reasoning": "Combined causal analysis with regional breakdown",
+            }
+        )
 
 
 class MockMessages:
@@ -163,17 +166,19 @@ class MockMessages:
         max_tokens: int,
         temperature: float,
         system: str,
-        messages: List[Dict[str, str]]
+        messages: List[Dict[str, str]],
     ) -> MockLLMResponse:
         """Mock create message"""
         self.client.call_count += 1
-        self.client.call_history.append({
-            "model": model,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-            "system": system[:100],
-            "messages": messages
-        })
+        self.client.call_history.append(
+            {
+                "model": model,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "system": system[:100],
+                "messages": messages,
+            }
+        )
 
         response_text = self.client.get_response_for_phase(system)
         return MockLLMResponse(response_text)
@@ -188,6 +193,7 @@ def mock_llm_client():
 # ============================================================================
 # MOCK TOOL REGISTRY
 # ============================================================================
+
 
 @pytest.fixture
 def mock_tool_registry():
@@ -212,8 +218,8 @@ def mock_tool_registry():
                 "effect": 0.15,
                 "ci_lower": 0.12,
                 "ci_upper": 0.18,
-                "p_value": 0.001
-            }
+                "p_value": 0.001,
+            },
         },
         {
             "name": "cate_analyzer",
@@ -231,8 +237,8 @@ def mock_tool_registry():
                     {"segment": "Northeast", "cate": 0.12},
                     {"segment": "Midwest", "cate": 0.18},
                 ],
-                "heterogeneity_score": 0.4
-            }
+                "heterogeneity_score": 0.4,
+            },
         },
         {
             "name": "gap_calculator",
@@ -246,8 +252,8 @@ def mock_tool_registry():
             "avg_execution_ms": 300,
             "callable": lambda metric, **kwargs: {
                 "gap_size": 0.25,
-                "top_opportunities": ["region_1", "region_2"]
-            }
+                "top_opportunities": ["region_1", "region_2"],
+            },
         },
         {
             "name": "counterfactual_simulator",
@@ -261,8 +267,8 @@ def mock_tool_registry():
             "avg_execution_ms": 1200,
             "callable": lambda scenario, **kwargs: {
                 "predicted_outcome": 0.22,
-                "confidence_interval": [0.18, 0.26]
-            }
+                "confidence_interval": [0.18, 0.26],
+            },
         },
     ]
 
@@ -276,10 +282,7 @@ def mock_tool_registry():
             output_schema=tool_config["output_schema"],
             avg_execution_ms=tool_config["avg_execution_ms"],
         )
-        registry.register(
-            schema=schema,
-            callable=tool_config["callable"]
-        )
+        registry.register(schema=schema, callable=tool_config["callable"])
 
     yield registry
 
@@ -299,6 +302,7 @@ def empty_registry():
 # ============================================================================
 # SAMPLE DATA FIXTURES
 # ============================================================================
+
 
 @pytest.fixture
 def sample_query():
@@ -324,14 +328,14 @@ def sample_sub_questions():
             question="What is the causal effect of rep visits on Rx volume?",
             intent="CAUSAL",
             entities=["rep_visits", "rx_volume"],
-            depends_on=[]
+            depends_on=[],
         ),
         SubQuestion(
             id="sq_2",
             question="How does this effect vary by region?",
             intent="COMPARATIVE",
             entities=["region"],
-            depends_on=["sq_1"]
+            depends_on=["sq_1"],
         ),
     ]
 
@@ -343,7 +347,7 @@ def sample_decomposition(sample_sub_questions):
         original_query="Compare causal impact of rep visits by region",
         sub_questions=sample_sub_questions,
         decomposition_reasoning="Decomposed into causal + regional analysis",
-        timestamp=datetime.now(timezone.utc)
+        timestamp=datetime.now(timezone.utc),
     )
 
 
@@ -356,14 +360,14 @@ def sample_tool_mappings():
             tool_name="causal_effect_estimator",
             source_agent="causal_impact",
             confidence=0.95,
-            reasoning="Matches causal intent"
+            reasoning="Matches causal intent",
         ),
         ToolMapping(
             sub_question_id="sq_2",
             tool_name="cate_analyzer",
             source_agent="heterogeneous_optimizer",
             confidence=0.9,
-            reasoning="Analyzes heterogeneous effects"
+            reasoning="Analyzes heterogeneous effects",
         ),
     ]
 
@@ -379,7 +383,7 @@ def sample_execution_steps():
             source_agent="causal_impact",
             input_mapping={"treatment": "rep_visits", "outcome": "rx_volume"},
             dependency_type=DependencyType.PARALLEL,
-            depends_on_steps=[]
+            depends_on_steps=[],
         ),
         ExecutionStep(
             step_id="step_2",
@@ -388,7 +392,7 @@ def sample_execution_steps():
             source_agent="heterogeneous_optimizer",
             input_mapping={"effect": "$step_1.effect", "dimension": "region"},
             dependency_type=DependencyType.SEQUENTIAL,
-            depends_on_steps=["step_1"]
+            depends_on_steps=["step_1"],
         ),
     ]
 
@@ -403,7 +407,7 @@ def sample_execution_plan(sample_decomposition, sample_execution_steps, sample_t
         estimated_duration_ms=1300,
         parallel_groups=[["step_1"], ["step_2"]],
         planning_reasoning="Sequential execution with dependency",
-        timestamp=datetime.now(timezone.utc)
+        timestamp=datetime.now(timezone.utc),
     )
 
 
@@ -417,28 +421,25 @@ def sample_step_result():
         input=ToolInput(
             tool_name="causal_effect_estimator",
             parameters={"treatment": "rep_visits", "outcome": "rx_volume"},
-            context={}
+            context={},
         ),
         output=ToolOutput(
             tool_name="causal_effect_estimator",
             success=True,
             result={"effect": 0.15, "ci_lower": 0.12, "ci_upper": 0.18},
-            execution_time_ms=450
+            execution_time_ms=450,
         ),
         status=ExecutionStatus.COMPLETED,
         started_at=datetime.now(timezone.utc),
         completed_at=datetime.now(timezone.utc),
-        duration_ms=450
+        duration_ms=450,
     )
 
 
 @pytest.fixture
 def sample_execution_trace(sample_step_result):
     """Sample execution trace"""
-    trace = ExecutionTrace(
-        plan_id="plan_test123",
-        started_at=datetime.now(timezone.utc)
-    )
+    trace = ExecutionTrace(plan_id="plan_test123", started_at=datetime.now(timezone.utc))
     trace.add_result(sample_step_result)
     trace.completed_at = datetime.now(timezone.utc)
     return trace
@@ -450,7 +451,7 @@ def sample_synthesis_input(sample_decomposition, sample_execution_trace):
     return SynthesisInput(
         original_query="What is the causal effect of rep visits?",
         decomposition=sample_decomposition,
-        execution_trace=sample_execution_trace
+        execution_trace=sample_execution_trace,
     )
 
 
@@ -458,29 +459,36 @@ def sample_synthesis_input(sample_decomposition, sample_execution_trace):
 # ASYNC TOOL FIXTURES
 # ============================================================================
 
+
 @pytest.fixture
 def async_tool():
     """Create an async tool callable"""
+
     async def async_tool_fn(treatment: str, outcome: str) -> Dict[str, Any]:
         await asyncio.sleep(0.01)  # Simulate async work
         return {"effect": 0.2, "p_value": 0.05}
+
     return async_tool_fn
 
 
 @pytest.fixture
 def failing_tool():
     """Create a tool that always fails"""
+
     def failing_tool_fn(**kwargs) -> Dict[str, Any]:
         raise ValueError("Simulated tool failure")
+
     return failing_tool_fn
 
 
 @pytest.fixture
 def slow_tool():
     """Create a slow tool for timeout testing"""
+
     async def slow_tool_fn(**kwargs) -> Dict[str, Any]:
         await asyncio.sleep(10)  # Will trigger timeout
         return {"result": "slow"}
+
     return slow_tool_fn
 
 
@@ -488,30 +496,29 @@ def slow_tool():
 # HELPER FUNCTIONS
 # ============================================================================
 
+
 def make_decomposition_response(
-    sub_questions: List[Dict[str, Any]],
-    reasoning: str = "Test reasoning"
+    sub_questions: List[Dict[str, Any]], reasoning: str = "Test reasoning"
 ) -> str:
     """Helper to create decomposition JSON response"""
-    return json.dumps({
-        "reasoning": reasoning,
-        "sub_questions": sub_questions
-    })
+    return json.dumps({"reasoning": reasoning, "sub_questions": sub_questions})
 
 
 def make_planning_response(
     tool_mappings: List[Dict[str, Any]],
     execution_steps: List[Dict[str, Any]],
     parallel_groups: List[List[str]] = None,
-    reasoning: str = "Test planning"
+    reasoning: str = "Test planning",
 ) -> str:
     """Helper to create planning JSON response"""
-    return json.dumps({
-        "reasoning": reasoning,
-        "tool_mappings": tool_mappings,
-        "execution_steps": execution_steps,
-        "parallel_groups": parallel_groups or [[s["step_id"]] for s in execution_steps]
-    })
+    return json.dumps(
+        {
+            "reasoning": reasoning,
+            "tool_mappings": tool_mappings,
+            "execution_steps": execution_steps,
+            "parallel_groups": parallel_groups or [[s["step_id"]] for s in execution_steps],
+        }
+    )
 
 
 def make_synthesis_response(
@@ -521,15 +528,17 @@ def make_synthesis_response(
     citations: List[str] = None,
     caveats: List[str] = None,
     failed_components: List[str] = None,
-    reasoning: str = "Test synthesis"
+    reasoning: str = "Test synthesis",
 ) -> str:
     """Helper to create synthesis JSON response"""
-    return json.dumps({
-        "answer": answer,
-        "confidence": confidence,
-        "supporting_data": supporting_data or {},
-        "citations": citations or [],
-        "caveats": caveats or [],
-        "failed_components": failed_components or [],
-        "reasoning": reasoning
-    })
+    return json.dumps(
+        {
+            "answer": answer,
+            "confidence": confidence,
+            "supporting_data": supporting_data or {},
+            "citations": citations or [],
+            "caveats": caveats or [],
+            "failed_components": failed_components or [],
+            "reasoning": reasoning,
+        }
+    )

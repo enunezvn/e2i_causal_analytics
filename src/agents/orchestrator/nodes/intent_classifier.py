@@ -5,12 +5,13 @@ Fast intent classification optimized for <500ms:
 - LLM fallback for ambiguous cases (Haiku)
 """
 
-import time
 import re
-from typing import Dict, Any
+import time
+from typing import Any, Dict
+
 from langchain_anthropic import ChatAnthropic
 
-from ..state import OrchestratorState, IntentClassification
+from ..state import IntentClassification, OrchestratorState
 
 
 class IntentClassifierNode:
@@ -80,9 +81,7 @@ class IntentClassifierNode:
     def __init__(self):
         """Initialize intent classifier with Haiku for fast classification."""
         # Use Haiku for fast classification
-        self.llm = ChatAnthropic(
-            model="claude-haiku-4-20250414", max_tokens=256, timeout=2
-        )
+        self.llm = ChatAnthropic(model="claude-haiku-4-20250414", max_tokens=256, timeout=2)
 
     async def execute(self, state: OrchestratorState) -> OrchestratorState:
         """Execute intent classification.
@@ -150,8 +149,9 @@ class IntentClassifierNode:
         confidence = scores[primary]
 
         # Get secondary intents (those with matches but lower score)
-        secondary = [k for k, v in sorted(scores.items(), key=lambda x: -x[1])
-                     if v > 0 and k != primary]
+        secondary = [
+            k for k, v in sorted(scores.items(), key=lambda x: -x[1]) if v > 0 and k != primary
+        ]
 
         return IntentClassification(
             primary_intent=primary,

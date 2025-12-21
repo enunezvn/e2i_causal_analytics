@@ -1,13 +1,15 @@
 """Tests for importance narrator node (LLM interpretation)."""
 
-import pytest
 from unittest.mock import Mock, patch
+
+import pytest
+
 from src.agents.ml_foundation.feature_analyzer.nodes.importance_narrator import (
-    narrate_importance,
-    _prepare_interpretation_context,
-    _parse_interpretation_response,
-    _interpret_interactions,
     _build_complete_interpretation,
+    _interpret_interactions,
+    _parse_interpretation_response,
+    _prepare_interpretation_context,
+    narrate_importance,
 )
 
 
@@ -40,7 +42,9 @@ class TestNarrateImportance:
         # Mock Anthropic response
         mock_response = Mock()
         mock_response.content = [
-            Mock(text='{"executive_summary": "Model relies on engagement metrics", "feature_explanations": {"call_frequency": "Drives prescriptions"}, "key_insights": ["Engagement matters"], "recommendations": ["Focus on high-engagement HCPs"], "cautions": ["Watch for confounders"]}')
+            Mock(
+                text='{"executive_summary": "Model relies on engagement metrics", "feature_explanations": {"call_frequency": "Drives prescriptions"}, "key_insights": ["Engagement matters"], "recommendations": ["Focus on high-engagement HCPs"], "cautions": ["Watch for confounders"]}'
+            )
         ]
         mock_response.usage = Mock(input_tokens=500, output_tokens=300)
 
@@ -92,7 +96,9 @@ class TestNarrateImportance:
         # Mock Anthropic response
         mock_response = Mock()
         mock_response.content = [
-            Mock(text='{"executive_summary": "Summary", "feature_explanations": {"feat_1": "Explanation"}, "key_insights": ["Insight"], "recommendations": ["Rec"], "cautions": ["Caution"]}')
+            Mock(
+                text='{"executive_summary": "Summary", "feature_explanations": {"feat_1": "Explanation"}, "key_insights": ["Insight"], "recommendations": ["Rec"], "cautions": ["Caution"]}'
+            )
         ]
         mock_response.usage = Mock(input_tokens=400, output_tokens=200)
 
@@ -127,7 +133,9 @@ class TestNarrateImportance:
         # Mock Anthropic response
         mock_response = Mock()
         mock_response.content = [
-            Mock(text='{"executive_summary": "Summary", "feature_explanations": {}, "key_insights": [], "recommendations": [], "cautions": []}')
+            Mock(
+                text='{"executive_summary": "Summary", "feature_explanations": {}, "key_insights": [], "recommendations": [], "cautions": []}'
+            )
         ]
         mock_response.usage = Mock(input_tokens=300, output_tokens=150)
 
@@ -165,7 +173,7 @@ class TestPrepareInterpretationContext:
             feature_directions,
             top_interactions_raw,
             experiment_id,
-            model_version
+            model_version,
         )
 
         assert "Experiment ID" in context
@@ -189,7 +197,7 @@ class TestPrepareInterpretationContext:
             feature_directions,
             top_interactions_raw,
             experiment_id,
-            model_version
+            model_version,
         )
 
         assert "Interaction" in context
@@ -210,7 +218,7 @@ class TestPrepareInterpretationContext:
             feature_directions,
             top_interactions_raw,
             experiment_id,
-            model_version
+            model_version,
         )
 
         # Should still produce valid context
@@ -223,7 +231,7 @@ class TestParseInterpretationResponse:
 
     def test_parses_json_from_markdown(self):
         """Should parse JSON from markdown code blocks."""
-        response_text = '''```json
+        response_text = """```json
 {
   "executive_summary": "Summary",
   "feature_explanations": {"feat_1": "Explanation"},
@@ -231,7 +239,7 @@ class TestParseInterpretationResponse:
   "recommendations": ["Rec 1"],
   "cautions": ["Caution 1"]
 }
-```'''
+```"""
 
         result = _parse_interpretation_response(response_text)
 
@@ -273,10 +281,7 @@ class TestInterpretInteractions:
             "feat_2": "Recency metric",
         }
 
-        interpretations = _interpret_interactions(
-            top_interactions_raw,
-            feature_explanations
-        )
+        interpretations = _interpret_interactions(top_interactions_raw, feature_explanations)
 
         assert len(interpretations) == 2
 
@@ -292,16 +297,10 @@ class TestInterpretInteractions:
 
     def test_limits_to_top_3_interactions(self):
         """Should limit to top 3 interactions."""
-        top_interactions_raw = [
-            (f"feat_{i}", f"feat_{i+1}", 0.5 - i * 0.1)
-            for i in range(10)
-        ]
+        top_interactions_raw = [(f"feat_{i}", f"feat_{i+1}", 0.5 - i * 0.1) for i in range(10)]
         feature_explanations = {}
 
-        interpretations = _interpret_interactions(
-            top_interactions_raw,
-            feature_explanations
-        )
+        interpretations = _interpret_interactions(top_interactions_raw, feature_explanations)
 
         assert len(interpretations) == 3
 
@@ -321,11 +320,7 @@ class TestBuildCompleteInterpretation:
         cautions = ["Watch for confounders"]
 
         interpretation = _build_complete_interpretation(
-            executive_summary,
-            feature_explanations,
-            key_insights,
-            recommendations,
-            cautions
+            executive_summary, feature_explanations, key_insights, recommendations, cautions
         )
 
         assert "Executive Summary" in interpretation
@@ -348,11 +343,7 @@ class TestBuildCompleteInterpretation:
         cautions = []
 
         interpretation = _build_complete_interpretation(
-            executive_summary,
-            feature_explanations,
-            key_insights,
-            recommendations,
-            cautions
+            executive_summary, feature_explanations, key_insights, recommendations, cautions
         )
 
         # Should still have executive summary

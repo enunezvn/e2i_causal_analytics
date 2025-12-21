@@ -6,9 +6,8 @@ Handles:
 3. Shadow mode criteria validation
 """
 
-import uuid
-from typing import Dict, Any
-from datetime import datetime, timedelta
+from datetime import datetime
+from typing import Any, Dict
 
 
 async def register_model(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -22,7 +21,7 @@ async def register_model(state: Dict[str, Any]) -> Dict[str, Any]:
     """
     try:
         model_uri = state.get("model_uri")
-        experiment_id = state.get("experiment_id")
+        state.get("experiment_id")
         deployment_name = state.get("deployment_name")
 
         if not model_uri:
@@ -97,7 +96,7 @@ async def validate_promotion(state: Dict[str, Any]) -> Dict[str, Any]:
             "Staging": ["Shadow", "Archived"],
             "Shadow": ["Production", "Archived"],
             "Production": ["Archived"],
-            "Archived": []  # Terminal
+            "Archived": [],  # Terminal
         }
 
         validation_failures = []
@@ -165,7 +164,7 @@ async def promote_stage(state: Dict[str, Any]) -> Dict[str, Any]:
     try:
         # Validate required fields FIRST (before checking promotion_allowed)
         registered_model_name = state.get("registered_model_name")
-        model_version = state.get("model_version")
+        state.get("model_version")
         promotion_target_stage = state.get("promotion_target_stage")
         current_stage = state.get("current_stage", "None")
 
@@ -271,9 +270,7 @@ def _validate_shadow_mode_detailed(state: Dict[str, Any]) -> Dict[str, Any]:
         )
 
     if shadow_requests < MIN_REQUESTS:
-        failures.append(
-            f"shadow_mode_requests {shadow_requests} below minimum {MIN_REQUESTS}"
-        )
+        failures.append(f"shadow_mode_requests {shadow_requests} below minimum {MIN_REQUESTS}")
 
     if shadow_error_rate > MAX_ERROR_RATE:
         failures.append(

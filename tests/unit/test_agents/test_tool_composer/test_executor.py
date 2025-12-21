@@ -5,14 +5,9 @@ Tests the PlanExecutor class which executes tool chains
 according to the execution plan.
 """
 
-import asyncio
-import json
 import pytest
-from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.agents.tool_composer.executor import (
-    ExecutionError,
     PlanExecutor,
     execute_sync,
 )
@@ -23,12 +18,9 @@ from src.agents.tool_composer.models.composition_models import (
     ExecutionStatus,
     ExecutionStep,
     ExecutionTrace,
-    StepResult,
     SubQuestion,
-    ToolMapping,
-    ToolOutput,
 )
-from src.tool_registry.registry import ToolRegistry, ToolSchema, ToolParameter
+from src.tool_registry.registry import ToolSchema
 
 
 class TestPlanExecutorInit:
@@ -44,10 +36,7 @@ class TestPlanExecutorInit:
     def test_custom_initialization(self, mock_tool_registry):
         """Test custom initialization"""
         executor = PlanExecutor(
-            tool_registry=mock_tool_registry,
-            max_parallel=5,
-            max_retries=3,
-            timeout_seconds=60
+            tool_registry=mock_tool_registry, max_parallel=5, max_retries=3, timeout_seconds=60
         )
         assert executor.max_parallel == 5
         assert executor.max_retries == 3
@@ -66,7 +55,7 @@ class TestBasicExecution:
             tool_name="causal_effect_estimator",
             source_agent="causal_impact",
             input_mapping={"treatment": "rep_visits", "outcome": "rx_volume"},
-            depends_on_steps=[]
+            depends_on_steps=[],
         )
 
         plan = ExecutionPlan(
@@ -74,7 +63,7 @@ class TestBasicExecution:
             steps=[step],
             tool_mappings=[],
             parallel_groups=[["step_1"]],
-            planning_reasoning="Single step"
+            planning_reasoning="Single step",
         )
 
         executor = PlanExecutor(tool_registry=mock_tool_registry)
@@ -121,7 +110,7 @@ class TestParallelExecution:
                 source_agent="causal_impact",
                 input_mapping={"treatment": "rep_visits", "outcome": "rx_volume"},
                 dependency_type=DependencyType.PARALLEL,
-                depends_on_steps=[]
+                depends_on_steps=[],
             ),
             ExecutionStep(
                 step_id="step_2",
@@ -130,7 +119,7 @@ class TestParallelExecution:
                 source_agent="gap_analyzer",
                 input_mapping={"metric": "rx_volume"},
                 dependency_type=DependencyType.PARALLEL,
-                depends_on_steps=[]
+                depends_on_steps=[],
             ),
         ]
 
@@ -139,7 +128,7 @@ class TestParallelExecution:
             steps=steps,
             tool_mappings=[],
             parallel_groups=[["step_1", "step_2"]],  # Both in same group
-            planning_reasoning="Parallel steps"
+            planning_reasoning="Parallel steps",
         )
 
         executor = PlanExecutor(tool_registry=mock_tool_registry)
@@ -160,7 +149,7 @@ class TestParallelExecution:
                 source_agent="gap_analyzer",
                 input_mapping={"metric": "test"},
                 dependency_type=DependencyType.PARALLEL,
-                depends_on_steps=[]
+                depends_on_steps=[],
             )
             for i in range(5)
         ]
@@ -168,13 +157,16 @@ class TestParallelExecution:
         plan = ExecutionPlan(
             decomposition=DecompositionResult(
                 original_query="Test",
-                sub_questions=[SubQuestion(id=f"sq_{i}", question=f"Q{i}", intent="DESCRIPTIVE") for i in range(5)],
-                decomposition_reasoning="Test"
+                sub_questions=[
+                    SubQuestion(id=f"sq_{i}", question=f"Q{i}", intent="DESCRIPTIVE")
+                    for i in range(5)
+                ],
+                decomposition_reasoning="Test",
             ),
             steps=steps,
             tool_mappings=[],
             parallel_groups=[[f"step_{i}" for i in range(5)]],
-            planning_reasoning="Many parallel"
+            planning_reasoning="Many parallel",
         )
 
         executor = PlanExecutor(tool_registry=mock_tool_registry, max_parallel=2)
@@ -194,11 +186,8 @@ class TestInputResolution:
             sub_question_id="sq_1",
             tool_name="causal_effect_estimator",
             source_agent="causal_impact",
-            input_mapping={
-                "treatment": "rep_visits",
-                "outcome": "rx_volume"
-            },
-            depends_on_steps=[]
+            input_mapping={"treatment": "rep_visits", "outcome": "rx_volume"},
+            depends_on_steps=[],
         )
 
         plan = ExecutionPlan(
@@ -206,7 +195,7 @@ class TestInputResolution:
             steps=[step],
             tool_mappings=[],
             parallel_groups=[["step_1"]],
-            planning_reasoning="Test"
+            planning_reasoning="Test",
         )
 
         executor = PlanExecutor(tool_registry=mock_tool_registry)
@@ -226,7 +215,7 @@ class TestInputResolution:
                 tool_name="causal_effect_estimator",
                 source_agent="causal_impact",
                 input_mapping={"treatment": "rep_visits", "outcome": "rx_volume"},
-                depends_on_steps=[]
+                depends_on_steps=[],
             ),
             ExecutionStep(
                 step_id="step_2",
@@ -235,9 +224,9 @@ class TestInputResolution:
                 source_agent="heterogeneous_optimizer",
                 input_mapping={
                     "effect": "$step_1.effect",  # Reference to step_1 output
-                    "dimension": "region"
+                    "dimension": "region",
                 },
-                depends_on_steps=["step_1"]
+                depends_on_steps=["step_1"],
             ),
         ]
 
@@ -246,7 +235,7 @@ class TestInputResolution:
             steps=steps,
             tool_mappings=[],
             parallel_groups=[["step_1"], ["step_2"]],
-            planning_reasoning="Test"
+            planning_reasoning="Test",
         )
 
         executor = PlanExecutor(tool_registry=mock_tool_registry)
@@ -265,11 +254,8 @@ class TestInputResolution:
             sub_question_id="sq_1",
             tool_name="causal_effect_estimator",
             source_agent="causal_impact",
-            input_mapping={
-                "treatment": "$context.treatment_var",
-                "outcome": "rx_volume"
-            },
-            depends_on_steps=[]
+            input_mapping={"treatment": "$context.treatment_var", "outcome": "rx_volume"},
+            depends_on_steps=[],
         )
 
         plan = ExecutionPlan(
@@ -277,7 +263,7 @@ class TestInputResolution:
             steps=[step],
             tool_mappings=[],
             parallel_groups=[["step_1"]],
-            planning_reasoning="Test"
+            planning_reasoning="Test",
         )
 
         executor = PlanExecutor(tool_registry=mock_tool_registry)
@@ -310,7 +296,7 @@ class TestRetryBehavior:
             description="A flaky tool",
             source_agent="test",
             tier=1,
-            avg_execution_ms=100
+            avg_execution_ms=100,
         )
         mock_tool_registry.register(schema=schema, callable=flaky_tool)
 
@@ -320,7 +306,7 @@ class TestRetryBehavior:
             tool_name="flaky_tool",
             source_agent="test",
             input_mapping={},
-            depends_on_steps=[]
+            depends_on_steps=[],
         )
 
         plan = ExecutionPlan(
@@ -328,7 +314,7 @@ class TestRetryBehavior:
             steps=[step],
             tool_mappings=[],
             parallel_groups=[["step_1"]],
-            planning_reasoning="Test"
+            planning_reasoning="Test",
         )
 
         executor = PlanExecutor(tool_registry=mock_tool_registry, max_retries=2)
@@ -340,6 +326,7 @@ class TestRetryBehavior:
     @pytest.mark.asyncio
     async def test_max_retries_exhausted(self, mock_tool_registry, sample_decomposition):
         """Test behavior when max retries are exhausted"""
+
         def always_fail(**kwargs):
             raise ValueError("Always fails")
 
@@ -349,7 +336,7 @@ class TestRetryBehavior:
             description="Always fails",
             source_agent="test",
             tier=1,
-            avg_execution_ms=100
+            avg_execution_ms=100,
         )
         mock_tool_registry.register(schema=schema, callable=always_fail)
 
@@ -359,7 +346,7 @@ class TestRetryBehavior:
             tool_name="failing_tool",
             source_agent="test",
             input_mapping={},
-            depends_on_steps=[]
+            depends_on_steps=[],
         )
 
         plan = ExecutionPlan(
@@ -367,7 +354,7 @@ class TestRetryBehavior:
             steps=[step],
             tool_mappings=[],
             parallel_groups=[["step_1"]],
-            planning_reasoning="Test"
+            planning_reasoning="Test",
         )
 
         executor = PlanExecutor(tool_registry=mock_tool_registry, max_retries=2)
@@ -393,7 +380,7 @@ class TestAsyncToolExecution:
             source_agent="test",
             tier=1,
             avg_execution_ms=100,
-            is_async=True
+            is_async=True,
         )
         mock_tool_registry.register(schema=schema, callable=async_tool)
 
@@ -403,7 +390,7 @@ class TestAsyncToolExecution:
             tool_name="async_tool",
             source_agent="test",
             input_mapping={"treatment": "test", "outcome": "test"},
-            depends_on_steps=[]
+            depends_on_steps=[],
         )
 
         plan = ExecutionPlan(
@@ -411,7 +398,7 @@ class TestAsyncToolExecution:
             steps=[step],
             tool_mappings=[],
             parallel_groups=[["step_1"]],
-            planning_reasoning="Test"
+            planning_reasoning="Test",
         )
 
         executor = PlanExecutor(tool_registry=mock_tool_registry)
@@ -433,7 +420,7 @@ class TestToolNotFound:
             tool_name="nonexistent_tool",
             source_agent="test",
             input_mapping={},
-            depends_on_steps=[]
+            depends_on_steps=[],
         )
 
         plan = ExecutionPlan(
@@ -441,7 +428,7 @@ class TestToolNotFound:
             steps=[step],
             tool_mappings=[],
             parallel_groups=[["step_1"]],
-            planning_reasoning="Test"
+            planning_reasoning="Test",
         )
 
         executor = PlanExecutor(tool_registry=empty_registry)
@@ -464,7 +451,7 @@ class TestOutputConversion:
             tool_name="causal_effect_estimator",
             source_agent="causal_impact",
             input_mapping={"treatment": "test", "outcome": "test"},
-            depends_on_steps=[]
+            depends_on_steps=[],
         )
 
         plan = ExecutionPlan(
@@ -472,7 +459,7 @@ class TestOutputConversion:
             steps=[step],
             tool_mappings=[],
             parallel_groups=[["step_1"]],
-            planning_reasoning="Test"
+            planning_reasoning="Test",
         )
 
         executor = PlanExecutor(tool_registry=mock_tool_registry)
@@ -500,7 +487,7 @@ class TestOutputConversion:
             description="Returns Pydantic model",
             source_agent="test",
             tier=1,
-            avg_execution_ms=100
+            avg_execution_ms=100,
         )
         mock_tool_registry.register(schema=schema, callable=pydantic_tool)
 
@@ -510,7 +497,7 @@ class TestOutputConversion:
             tool_name="pydantic_tool",
             source_agent="test",
             input_mapping={},
-            depends_on_steps=[]
+            depends_on_steps=[],
         )
 
         plan = ExecutionPlan(
@@ -518,7 +505,7 @@ class TestOutputConversion:
             steps=[step],
             tool_mappings=[],
             parallel_groups=[["step_1"]],
-            planning_reasoning="Test"
+            planning_reasoning="Test",
         )
 
         executor = PlanExecutor(tool_registry=mock_tool_registry)
@@ -531,6 +518,7 @@ class TestOutputConversion:
     @pytest.mark.asyncio
     async def test_primitive_output_wrapped(self, mock_tool_registry, sample_decomposition):
         """Test that primitive outputs are wrapped in dict"""
+
         def primitive_tool(**kwargs):
             return 42
 
@@ -540,7 +528,7 @@ class TestOutputConversion:
             description="Returns primitive",
             source_agent="test",
             tier=1,
-            avg_execution_ms=100
+            avg_execution_ms=100,
         )
         mock_tool_registry.register(schema=schema, callable=primitive_tool)
 
@@ -550,7 +538,7 @@ class TestOutputConversion:
             tool_name="primitive_tool",
             source_agent="test",
             input_mapping={},
-            depends_on_steps=[]
+            depends_on_steps=[],
         )
 
         plan = ExecutionPlan(
@@ -558,7 +546,7 @@ class TestOutputConversion:
             steps=[step],
             tool_mappings=[],
             parallel_groups=[["step_1"]],
-            planning_reasoning="Test"
+            planning_reasoning="Test",
         )
 
         executor = PlanExecutor(tool_registry=mock_tool_registry)
@@ -591,7 +579,7 @@ class TestExecutionOrder:
                 description="Tracking tool",
                 source_agent="test",
                 tier=1,
-                avg_execution_ms=100
+                avg_execution_ms=100,
             )
             mock_tool_registry.register(schema=schema, callable=fn)
 
@@ -602,7 +590,7 @@ class TestExecutionOrder:
                 tool_name="tool_1",
                 source_agent="test",
                 input_mapping={},
-                depends_on_steps=[]
+                depends_on_steps=[],
             ),
             ExecutionStep(
                 step_id="step_2",
@@ -610,7 +598,7 @@ class TestExecutionOrder:
                 tool_name="tool_2",
                 source_agent="test",
                 input_mapping={},
-                depends_on_steps=["step_1"]
+                depends_on_steps=["step_1"],
             ),
         ]
 
@@ -619,7 +607,7 @@ class TestExecutionOrder:
             steps=steps,
             tool_mappings=[],
             parallel_groups=[["step_1"], ["step_2"]],
-            planning_reasoning="Test"
+            planning_reasoning="Test",
         )
 
         executor = PlanExecutor(tool_registry=mock_tool_registry)
@@ -633,10 +621,7 @@ class TestSyncWrapper:
 
     def test_execute_sync(self, mock_tool_registry, sample_execution_plan):
         """Test synchronous execute wrapper"""
-        trace = execute_sync(
-            sample_execution_plan,
-            tool_registry=mock_tool_registry
-        )
+        trace = execute_sync(sample_execution_plan, tool_registry=mock_tool_registry)
 
         assert isinstance(trace, ExecutionTrace)
         assert trace.tools_executed >= 1
@@ -648,6 +633,7 @@ class TestErrorHandling:
     @pytest.mark.asyncio
     async def test_execution_continues_on_failure(self, mock_tool_registry, sample_decomposition):
         """Test that execution continues even if one step fails"""
+
         def failing_tool(**kwargs):
             raise ValueError("Failure")
 
@@ -661,7 +647,7 @@ class TestErrorHandling:
                 description="Test tool",
                 source_agent="test",
                 tier=1,
-                avg_execution_ms=100
+                avg_execution_ms=100,
             )
             mock_tool_registry.register(schema=schema, callable=fn)
 
@@ -672,7 +658,7 @@ class TestErrorHandling:
                 tool_name="failing_tool",
                 source_agent="test",
                 input_mapping={},
-                depends_on_steps=[]
+                depends_on_steps=[],
             ),
             ExecutionStep(
                 step_id="step_2",
@@ -680,7 +666,7 @@ class TestErrorHandling:
                 tool_name="working_tool",
                 source_agent="test",
                 input_mapping={},
-                depends_on_steps=[]  # No dependency on failing step
+                depends_on_steps=[],  # No dependency on failing step
             ),
         ]
 
@@ -689,7 +675,7 @@ class TestErrorHandling:
             steps=steps,
             tool_mappings=[],
             parallel_groups=[["step_1", "step_2"]],
-            planning_reasoning="Test"
+            planning_reasoning="Test",
         )
 
         executor = PlanExecutor(tool_registry=mock_tool_registry, max_retries=0)

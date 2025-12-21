@@ -4,8 +4,9 @@ Agent Activity Repository.
 Handles agent analysis outputs and activity tracking.
 """
 
-from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
+
 from src.repositories.base import BaseRepository
 
 
@@ -275,11 +276,6 @@ class AgentActivityRepository(BaseRepository):
         if agent_type:
             query = query.eq("agent_name", agent_type)
 
-        result = await (
-            query
-            .order("activity_timestamp", desc=True)
-            .limit(limit)
-            .execute()
-        )
+        result = await query.order("activity_timestamp", desc=True).limit(limit).execute()
 
         return [self._to_model(row) for row in result.data]

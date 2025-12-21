@@ -1,12 +1,13 @@
 """Tests for algorithm_registry.py filtering logic."""
 
 import pytest
+
 from src.agents.ml_foundation.model_selector.nodes.algorithm_registry import (
-    filter_algorithms,
     ALGORITHM_REGISTRY,
-    _filter_by_problem_type,
     _filter_by_constraints,
     _filter_by_preferences,
+    _filter_by_problem_type,
+    filter_algorithms,
 )
 
 

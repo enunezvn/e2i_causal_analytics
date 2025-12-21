@@ -23,21 +23,21 @@ Usage:
     subgraph = await service.get_entity_subgraph("HCP:smith-001", max_depth=2)
 """
 
-import os
-import logging
 import asyncio
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+import logging
+import os
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from .graphiti_config import (
     E2IEntityType,
     E2IRelationshipType,
-    get_graphiti_config,
     GraphitiConfig,
+    get_graphiti_config,
 )
-from .services.factories import get_falkordb_client, ServiceConnectionError
+from .services.factories import ServiceConnectionError, get_falkordb_client
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +45,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ExtractedEntity:
     """An entity extracted from an episode."""
+
     entity_id: str
     entity_type: E2IEntityType
     name: str
@@ -55,6 +56,7 @@ class ExtractedEntity:
 @dataclass
 class ExtractedRelationship:
     """A relationship extracted from an episode."""
+
     source_id: str
     source_type: E2IEntityType
     target_id: str
@@ -67,6 +69,7 @@ class ExtractedRelationship:
 @dataclass
 class EpisodeResult:
     """Result of adding an episode to the graph."""
+
     episode_id: str
     entities_extracted: List[ExtractedEntity]
     relationships_extracted: List[ExtractedRelationship]
@@ -77,6 +80,7 @@ class EpisodeResult:
 @dataclass
 class SearchResult:
     """Result from a graph search."""
+
     entity_id: str
     entity_type: str
     name: str
@@ -88,6 +92,7 @@ class SearchResult:
 @dataclass
 class SubgraphResult:
     """Result of a subgraph query."""
+
     nodes: List[Dict[str, Any]]
     edges: List[Dict[str, Any]]
     center_entity_id: str
@@ -144,7 +149,7 @@ class E2IGraphitiService:
             logger.error(f"Graphiti package not installed: {e}")
             raise ServiceConnectionError(
                 "Graphiti",
-                "graphiti-core package is not installed. Run: pip install graphiti-core[falkordb,anthropic]"
+                "graphiti-core package is not installed. Run: pip install graphiti-core[falkordb,anthropic]",
             )
         except Exception as e:
             logger.error(f"Failed to initialize Graphiti service: {e}")
@@ -154,17 +159,16 @@ class E2IGraphitiService:
         """Initialize the Graphiti client with FalkorDB backend."""
         try:
             from graphiti_core import Graphiti
-            from graphiti_core.llm_client.anthropic_client import AnthropicClient
-            from graphiti_core.llm_client import LLMConfig
-            from graphiti_core.embedder import OpenAIEmbedder, OpenAIEmbedderConfig
             from graphiti_core.driver.falkordb_driver import FalkorDriver
+            from graphiti_core.embedder import OpenAIEmbedder, OpenAIEmbedderConfig
+            from graphiti_core.llm_client import LLMConfig
+            from graphiti_core.llm_client.anthropic_client import AnthropicClient
 
             # Initialize LLM client for entity extraction
             api_key = os.environ.get("ANTHROPIC_API_KEY")
             if not api_key:
                 raise ServiceConnectionError(
-                    "Graphiti",
-                    "ANTHROPIC_API_KEY environment variable is not set"
+                    "Graphiti", "ANTHROPIC_API_KEY environment variable is not set"
                 )
 
             # Create LLM config and client
@@ -325,7 +329,7 @@ class E2IGraphitiService:
                     "valid_at": reference_time.isoformat(),
                     "created_at": datetime.now(timezone.utc).isoformat(),
                     "metadata": str(metadata),
-                }
+                },
             )
 
             logger.info(f"Episode {episode_id[:8]} stored in fallback mode")
@@ -351,20 +355,22 @@ class E2IGraphitiService:
         entities = []
 
         # AddEpisodeResults uses 'nodes' for EntityNode list
-        nodes = getattr(graphiti_result, 'nodes', [])
+        nodes = getattr(graphiti_result, "nodes", [])
         for entity in nodes:
             try:
                 # EntityNode uses 'labels' (list) not 'label', and 'attributes' not 'properties'
-                labels = getattr(entity, 'labels', [])
-                first_label = labels[0] if labels else 'Entity'
+                labels = getattr(entity, "labels", [])
+                first_label = labels[0] if labels else "Entity"
                 entity_type = self._map_entity_type(first_label)
-                entities.append(ExtractedEntity(
-                    entity_id=getattr(entity, 'uuid', ''),
-                    entity_type=entity_type,
-                    name=getattr(entity, 'name', ''),
-                    properties=getattr(entity, 'attributes', {}),
-                    confidence=1.0,  # Graphiti doesn't expose confidence on nodes
-                ))
+                entities.append(
+                    ExtractedEntity(
+                        entity_id=getattr(entity, "uuid", ""),
+                        entity_type=entity_type,
+                        name=getattr(entity, "name", ""),
+                        properties=getattr(entity, "attributes", {}),
+                        confidence=1.0,  # Graphiti doesn't expose confidence on nodes
+                    )
+                )
             except Exception as e:
                 logger.warning(f"Failed to convert entity: {e}")
 
@@ -375,21 +381,23 @@ class E2IGraphitiService:
         relationships = []
 
         # AddEpisodeResults uses 'edges' for EntityEdge list
-        edges = getattr(graphiti_result, 'edges', [])
+        edges = getattr(graphiti_result, "edges", [])
         for edge in edges:
             try:
                 # EntityEdge uses 'name' not 'label', and source_node_uuid/target_node_uuid
-                edge_name = getattr(edge, 'name', 'RELATES_TO')
+                edge_name = getattr(edge, "name", "RELATES_TO")
                 rel_type = self._map_relationship_type(edge_name)
-                relationships.append(ExtractedRelationship(
-                    source_id=getattr(edge, 'source_node_uuid', ''),
-                    source_type=E2IEntityType.AGENT,  # Default - node types not on edge
-                    target_id=getattr(edge, 'target_node_uuid', ''),
-                    target_type=E2IEntityType.AGENT,  # Default - node types not on edge
-                    relationship_type=rel_type,
-                    properties=getattr(edge, 'attributes', {}),
-                    confidence=1.0,  # Graphiti doesn't expose confidence on edges
-                ))
+                relationships.append(
+                    ExtractedRelationship(
+                        source_id=getattr(edge, "source_node_uuid", ""),
+                        source_type=E2IEntityType.AGENT,  # Default - node types not on edge
+                        target_id=getattr(edge, "target_node_uuid", ""),
+                        target_type=E2IEntityType.AGENT,  # Default - node types not on edge
+                        relationship_type=rel_type,
+                        properties=getattr(edge, "attributes", {}),
+                        confidence=1.0,  # Graphiti doesn't expose confidence on edges
+                    )
+                )
             except Exception as e:
                 logger.warning(f"Failed to convert relationship: {e}")
 
@@ -475,23 +483,22 @@ class E2IGraphitiService:
             LIMIT $limit
             """
 
-            result = self._graph.query(
-                cypher,
-                params={"query": query, "limit": limit}
-            )
+            result = self._graph.query(cypher, params={"query": query, "limit": limit})
 
             search_results = []
             for row in result.result_set:
                 node = row[0]
                 types = row[1]
 
-                search_results.append(SearchResult(
-                    entity_id=node.properties.get("id", str(uuid4())),
-                    entity_type=types[0] if types else "Unknown",
-                    name=node.properties.get("name", ""),
-                    score=1.0,  # No scoring in fallback mode
-                    properties=dict(node.properties),
-                ))
+                search_results.append(
+                    SearchResult(
+                        entity_id=node.properties.get("id", str(uuid4())),
+                        entity_type=types[0] if types else "Unknown",
+                        name=node.properties.get("name", ""),
+                        score=1.0,  # No scoring in fallback mode
+                        properties=dict(node.properties),
+                    )
+                )
 
             return search_results
 
@@ -509,7 +516,7 @@ class E2IGraphitiService:
 
         for item in graphiti_results:
             try:
-                entity_type = item.label if hasattr(item, 'label') else "Unknown"
+                entity_type = item.label if hasattr(item, "label") else "Unknown"
 
                 # Filter by entity types if specified
                 if entity_types:
@@ -520,13 +527,15 @@ class E2IGraphitiService:
                     except ValueError:
                         continue
 
-                results.append(SearchResult(
-                    entity_id=item.uuid if hasattr(item, 'uuid') else str(uuid4()),
-                    entity_type=entity_type,
-                    name=item.name if hasattr(item, 'name') else "",
-                    score=item.score if hasattr(item, 'score') else 1.0,
-                    properties=item.properties if hasattr(item, 'properties') else {},
-                ))
+                results.append(
+                    SearchResult(
+                        entity_id=item.uuid if hasattr(item, "uuid") else str(uuid4()),
+                        entity_type=entity_type,
+                        name=item.name if hasattr(item, "name") else "",
+                        score=item.score if hasattr(item, "score") else 1.0,
+                        properties=item.properties if hasattr(item, "properties") else {},
+                    )
+                )
 
             except Exception as e:
                 logger.warning(f"Failed to convert search result: {e}")
@@ -575,23 +584,29 @@ class E2IGraphitiService:
                 # Add node
                 node_id = node.properties.get("id", str(id(node)))
                 if node_id not in seen_nodes:
-                    nodes.append({
-                        "id": node_id,
-                        "labels": list(node.labels) if hasattr(node, 'labels') else [],
-                        "properties": dict(node.properties),
-                    })
+                    nodes.append(
+                        {
+                            "id": node_id,
+                            "labels": list(node.labels) if hasattr(node, "labels") else [],
+                            "properties": dict(node.properties),
+                        }
+                    )
                     seen_nodes.add(node_id)
 
                 # Add edge
                 if rel:
                     edge_key = f"{rel.src_node}-{rel.relation}-{rel.dest_node}"
                     if edge_key not in seen_edges:
-                        edges.append({
-                            "source": str(rel.src_node),
-                            "target": str(rel.dest_node),
-                            "type": rel.relation,
-                            "properties": dict(rel.properties) if hasattr(rel, 'properties') else {},
-                        })
+                        edges.append(
+                            {
+                                "source": str(rel.src_node),
+                                "target": str(rel.dest_node),
+                                "type": rel.relation,
+                                "properties": (
+                                    dict(rel.properties) if hasattr(rel, "properties") else {}
+                                ),
+                            }
+                        )
                         seen_edges.add(edge_key)
 
             return SubgraphResult(
@@ -679,21 +694,25 @@ class E2IGraphitiService:
         nodes = []
         edges = []
 
-        if hasattr(path, 'nodes'):
+        if hasattr(path, "nodes"):
             for node in path.nodes():
-                nodes.append({
-                    "id": node.properties.get("id", ""),
-                    "type": list(node.labels)[0] if node.labels else "Unknown",
-                    "name": node.properties.get("name", ""),
-                })
+                nodes.append(
+                    {
+                        "id": node.properties.get("id", ""),
+                        "type": list(node.labels)[0] if node.labels else "Unknown",
+                        "name": node.properties.get("name", ""),
+                    }
+                )
 
-        if hasattr(path, 'relationships'):
+        if hasattr(path, "relationships"):
             for rel in path.relationships():
-                edges.append({
-                    "type": rel.relation,
-                    "confidence": rel.properties.get("confidence", 1.0),
-                    "effect_size": rel.properties.get("effect_size"),
-                })
+                edges.append(
+                    {
+                        "type": rel.relation,
+                        "confidence": rel.properties.get("confidence", 1.0),
+                        "effect_size": rel.properties.get("effect_size"),
+                    }
+                )
 
         return {
             "nodes": nodes,

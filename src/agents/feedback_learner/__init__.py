@@ -15,22 +15,22 @@ from .agent import (
     FeedbackLearnerOutput,
     process_feedback_batch,
 )
+from .dspy_integration import (
+    DSPY_AVAILABLE,
+    AgentTrainingSignal,
+    FeedbackLearnerCognitiveContext,
+    FeedbackLearnerOptimizer,
+    FeedbackLearnerTrainingSignal,
+    create_memory_contribution,
+)
 from .graph import build_feedback_learner_graph, build_simple_feedback_learner_graph
 from .state import (
-    FeedbackLearnerState,
-    FeedbackItem,
     DetectedPattern,
-    LearningRecommendation,
-    KnowledgeUpdate,
+    FeedbackItem,
+    FeedbackLearnerState,
     FeedbackSummary,
-)
-from .dspy_integration import (
-    FeedbackLearnerCognitiveContext,
-    FeedbackLearnerTrainingSignal,
-    AgentTrainingSignal,
-    FeedbackLearnerOptimizer,
-    create_memory_contribution,
-    DSPY_AVAILABLE,
+    KnowledgeUpdate,
+    LearningRecommendation,
 )
 
 __all__ = [

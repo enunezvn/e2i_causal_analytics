@@ -7,10 +7,10 @@ Version: 4.3
 Database: expert_reviews table (010_causal_validation_tables.sql)
 """
 
-from typing import List, Optional, Dict, Any
-from datetime import date, timedelta
 import json
 import logging
+from datetime import date, timedelta
+from typing import Any, Dict, List, Optional
 
 from src.repositories.base import BaseRepository
 
@@ -372,9 +372,7 @@ class ExpertReviewRepository(BaseRepository):
             )
 
             if not include_expired:
-                query = query.or_(
-                    f"valid_until.gte.{date.today().isoformat()},valid_until.is.null"
-                )
+                query = query.or_(f"valid_until.gte.{date.today().isoformat()},valid_until.is.null")
 
             result = await query.execute()
             return result.data or []

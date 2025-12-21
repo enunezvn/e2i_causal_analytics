@@ -5,11 +5,10 @@ Tests the adapters that bridge real memory implementations
 (MemoryConnector, FalkorDB, Procedural Memory) to the DSPy workflow interface.
 """
 
-import asyncio
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Optional
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -25,7 +24,6 @@ from src.rag.memory_adapters import (
     SignalCollectorProtocol,
     create_memory_adapters,
 )
-
 
 # =============================================================================
 # Test Fixtures and Mock Classes
@@ -54,15 +52,11 @@ class MockMemoryConnector:
         self._results = results or []
         self.calls = []
 
-    async def vector_search(
-        self, query_embedding: List[float], limit: int = 10
-    ) -> List[Any]:
+    async def vector_search(self, query_embedding: List[float], limit: int = 10) -> List[Any]:
         self.calls.append(("vector_search", query_embedding, limit))
         return self._results
 
-    async def vector_search_by_text(
-        self, query_text: str, limit: int = 10
-    ) -> List[Any]:
+    async def vector_search_by_text(self, query_text: str, limit: int = 10) -> List[Any]:
         self.calls.append(("vector_search_by_text", query_text, limit))
         return self._results
 
@@ -105,9 +99,7 @@ class MockFalkorDB:
         self.calls.append(("find_related", entity_type, entity_id, max_hops))
         return self._results
 
-    async def semantic_search(
-        self, query: str, limit: int = 10
-    ) -> List[Dict[str, Any]]:
+    async def semantic_search(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
         self.calls.append(("semantic_search", query, limit))
         return self._results
 
@@ -199,9 +191,7 @@ class TestEpisodicMemoryAdapter:
         mock_results = [MockRetrievalResult(content="TRx volume up", score=0.88)]
         connector = MockMemoryConnector(results=mock_results)
         embedding_model = MockEmbeddingModel()
-        adapter = EpisodicMemoryAdapter(
-            memory_connector=connector, embedding_model=embedding_model
-        )
+        adapter = EpisodicMemoryAdapter(memory_connector=connector, embedding_model=embedding_model)
 
         results = await adapter.vector_search("TRx trends", limit=5)
 
@@ -222,9 +212,9 @@ class TestEpisodicMemoryAdapter:
     @pytest.mark.asyncio
     async def test_vector_search_handles_dict_results(self):
         """Test handling of dict-formatted results."""
-        connector = MockMemoryConnector(results=[
-            {"content": "Dict result", "source": "test", "score": 0.9}
-        ])
+        connector = MockMemoryConnector(
+            results=[{"content": "Dict result", "source": "test", "score": 0.9}]
+        )
         adapter = EpisodicMemoryAdapter(memory_connector=connector)
 
         results = await adapter.vector_search("query")
@@ -290,11 +280,9 @@ class TestSemanticMemoryAdapter:
         """Test fallback to MemoryConnector when FalkorDB unavailable."""
         mock_results = [{"type": "Node", "name": "test"}]
         connector = MockMemoryConnector(results=mock_results)
-        adapter = SemanticMemoryAdapter(
-            falkordb_memory=None, memory_connector=connector
-        )
+        adapter = SemanticMemoryAdapter(falkordb_memory=None, memory_connector=connector)
 
-        results = await adapter.graph_query("Kisqali relationships")
+        await adapter.graph_query("Kisqali relationships")
 
         assert any(call[0] == "graph_traverse" for call in connector.calls)
 
@@ -476,7 +464,9 @@ class TestSignalCollectorAdapter:
 
         # Add 4 signals (exceeds buffer of 3)
         for i in range(4):
-            await adapter.collect([{"type": "test", "query": f"q{i}", "response": f"r{i}", "reward": 0.5}])
+            await adapter.collect(
+                [{"type": "test", "query": f"q{i}", "response": f"r{i}", "reward": 0.5}]
+            )
 
         # Should have flushed once (3 signals) and have 1 remaining
         assert len(adapter._signal_buffer) == 1 or len(client._inserted) >= 3
@@ -487,9 +477,9 @@ class TestSignalCollectorAdapter:
         client = MockSupabaseClient()
         adapter = SignalCollectorAdapter(supabase_client=client, buffer_size=100)
 
-        await adapter.collect([
-            {"type": "response", "query": "q1", "response": "r1", "reward": 0.8}
-        ])
+        await adapter.collect(
+            [{"type": "response", "query": "q1", "response": "r1", "reward": 0.8}]
+        )
 
         count = await adapter.flush()
 
@@ -665,13 +655,17 @@ class TestMemoryAdaptersIntegration:
 
         # Simulate workflow: collect signals from multiple interactions
         for i in range(5):
-            await adapter.collect([{
-                "type": "response",
-                "query": f"Query {i}",
-                "response": f"Response {i}",
-                "reward": 0.7 + (i * 0.05),
-                "metadata": {"iteration": i},
-            }])
+            await adapter.collect(
+                [
+                    {
+                        "type": "response",
+                        "query": f"Query {i}",
+                        "response": f"Response {i}",
+                        "reward": 0.7 + (i * 0.05),
+                        "metadata": {"iteration": i},
+                    }
+                ]
+            )
 
         # Flush all signals
         count = await adapter.flush()

@@ -3,6 +3,7 @@ E2I Resource Optimizer Agent - Problem Formulator Node Tests
 """
 
 import pytest
+
 from src.agents.resource_optimizer.nodes.problem_formulator import (
     ProblemFormulatorNode,
 )
@@ -28,9 +29,7 @@ class TestProblemFormulatorNode:
         assert len(problem["ub"]) == 4
 
     @pytest.mark.asyncio
-    async def test_formulate_objective_coefficients(
-        self, base_state, sample_targets
-    ):
+    async def test_formulate_objective_coefficients(self, base_state, sample_targets):
         """Test that objective coefficients match response coefficients."""
         node = ProblemFormulatorNode()
         result = await node.execute(base_state)
@@ -135,9 +134,7 @@ class TestProblemFormulatorNode:
         assert problem["ub"] == expected_ub
 
     @pytest.mark.asyncio
-    async def test_formulate_multiple_constraints(
-        self, base_state, multiple_constraints
-    ):
+    async def test_formulate_multiple_constraints(self, base_state, multiple_constraints):
         """Test formulation with multiple constraints."""
         base_state["constraints"] = multiple_constraints
         node = ProblemFormulatorNode()

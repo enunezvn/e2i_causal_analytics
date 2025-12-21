@@ -51,9 +51,7 @@ class DeepReasonerNode:
             if not analysis_context:
                 return {
                     **state,
-                    "errors": [
-                        {"node": "deep_reasoner", "error": "No analysis context available"}
-                    ],
+                    "errors": [{"node": "deep_reasoner", "error": "No analysis context available"}],
                     "status": "failed",
                 }
 
@@ -146,9 +144,14 @@ class DeepReasonerNode:
 
         if any(word in finding_lower for word in ["recommend", "should", "suggest", "consider"]):
             return "recommendation"
-        elif any(word in finding_lower for word in ["warning", "caution", "risk", "concern", "note"]):
+        elif any(
+            word in finding_lower for word in ["warning", "caution", "risk", "concern", "note"]
+        ):
             return "warning"
-        elif any(word in finding_lower for word in ["opportunity", "potential", "could increase", "possible gain"]):
+        elif any(
+            word in finding_lower
+            for word in ["opportunity", "potential", "could increase", "possible gain"]
+        ):
             return "opportunity"
         else:
             return "finding"
@@ -190,9 +193,7 @@ class DeepReasonerNode:
         else:
             return 3  # Default to moderate priority
 
-    def _determine_structure(
-        self, expertise: str, insights: List[Insight]
-    ) -> List[str]:
+    def _determine_structure(self, expertise: str, insights: List[Insight]) -> List[str]:
         """Determine narrative structure based on expertise level."""
         has_recommendations = any(i["category"] == "recommendation" for i in insights)
         has_warnings = any(i["category"] == "warning" for i in insights)
@@ -281,13 +282,15 @@ class DeepReasonerNode:
 
     def _build_reasoning_prompt(self, state: ExplainerState) -> str:
         """Build reasoning prompt for LLM."""
-        contexts_str = "\n\n".join([
-            f"### Analysis from {ctx['source_agent']}\n"
-            f"Type: {ctx['analysis_type']}\n"
-            f"Confidence: {ctx['confidence']}\n"
-            f"Key Findings:\n" + "\n".join(f"- {f}" for f in ctx['key_findings'])
-            for ctx in state.get("analysis_context", [])
-        ])
+        contexts_str = "\n\n".join(
+            [
+                f"### Analysis from {ctx['source_agent']}\n"
+                f"Type: {ctx['analysis_type']}\n"
+                f"Confidence: {ctx['confidence']}\n"
+                f"Key Findings:\n" + "\n".join(f"- {f}" for f in ctx["key_findings"])
+                for ctx in state.get("analysis_context", [])
+            ]
+        )
 
         return f"""Analyze these results and extract insights:
 
@@ -311,7 +314,7 @@ Provide JSON with:
 
     def _parse_reasoning(self, content: str) -> Dict[str, Any]:
         """Parse LLM reasoning output."""
-        json_match = re.search(r'```json\s*(.*?)\s*```', content, re.DOTALL)
+        json_match = re.search(r"```json\s*(.*?)\s*```", content, re.DOTALL)
         if json_match:
             try:
                 return json.loads(json_match.group(1))

@@ -15,31 +15,28 @@ Author: E2I Causal Analytics Team
 Version: 1.0.0
 """
 
-from typing import Optional, Dict, Any, List
-from datetime import datetime
-import logging
 import asyncio
+import logging
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
-from src.memory.working_memory import get_working_memory, RedisWorkingMemory
 from src.memory.episodic_memory import (
-    insert_episodic_memory_with_text,
+    E2IEntityReferences,
     EpisodicMemoryInput,
-    E2IEntityReferences
+    insert_episodic_memory_with_text,
 )
-from src.memory.procedural_memory import (
-    record_learning_signal,
-    LearningSignalInput
-)
+from src.memory.procedural_memory import LearningSignalInput, record_learning_signal
+from src.memory.working_memory import RedisWorkingMemory, get_working_memory
 from src.rag.retriever import hybrid_search
-from src.rag.models.retrieval_models import RetrievalResult
 
 logger = logging.getLogger(__name__)
 
 # Graphiti integration for knowledge graph
 try:
     from src.memory.graphiti_service import get_graphiti_service
+
     GRAPHITI_AVAILABLE = True
 except ImportError:
     GRAPHITI_AVAILABLE = False
@@ -50,8 +47,10 @@ except ImportError:
 # SERVICE MODELS
 # =============================================================================
 
+
 class CognitiveQueryInput(BaseModel):
     """Input for cognitive query processing."""
+
     query: str = Field(..., min_length=1, description="User's natural language query")
     session_id: Optional[str] = Field(None, description="Existing session ID for continuity")
     user_id: Optional[str] = Field(None, description="User identifier")
@@ -63,6 +62,7 @@ class CognitiveQueryInput(BaseModel):
 
 class CognitiveQueryOutput(BaseModel):
     """Output from cognitive query processing."""
+
     session_id: str
     cycle_id: str
     query: str
@@ -79,6 +79,7 @@ class CognitiveQueryOutput(BaseModel):
 
 class PhaseResult(BaseModel):
     """Result from a single cognitive phase."""
+
     phase_name: str
     completed: bool
     duration_ms: float
@@ -89,6 +90,7 @@ class PhaseResult(BaseModel):
 # =============================================================================
 # COGNITIVE SERVICE
 # =============================================================================
+
 
 class CognitiveService:
     """
@@ -145,10 +147,7 @@ class CognitiveService:
             if not input.session_id:
                 await working_memory.create_session(
                     user_id=input.user_id,
-                    initial_context={
-                        "brand": input.brand,
-                        "region": input.region
-                    }
+                    initial_context={"brand": input.brand, "region": input.region},
                 )
 
             # Add user message to session
@@ -156,15 +155,12 @@ class CognitiveService:
                 session_id=session_id,
                 role="user",
                 content=input.query,
-                metadata={"cycle_id": cycle_id}
+                metadata={"cycle_id": cycle_id},
             )
 
             # === PHASE 1: SUMMARIZER ===
             phase1_result = await self._run_summarizer(
-                query=input.query,
-                session_id=session_id,
-                brand=input.brand,
-                region=input.region
+                query=input.query, session_id=session_id, brand=input.brand, region=input.region
             )
             phases_completed.append("summarizer")
 
@@ -175,7 +171,7 @@ class CognitiveService:
                 entities=phase1_result.get("entities", {}),
                 brand=input.brand,
                 region=input.region,
-                max_hops=input.max_hops
+                max_hops=input.max_hops,
             )
             phases_completed.append("investigator")
 
@@ -183,7 +179,7 @@ class CognitiveService:
             phase3_result = await self._run_agent(
                 query=input.query,
                 query_type=phase1_result.get("query_type", "general"),
-                evidence=phase2_result.get("evidence", [])
+                evidence=phase2_result.get("evidence", []),
             )
             phases_completed.append("agent")
 
@@ -195,15 +191,14 @@ class CognitiveService:
                 metadata={
                     "cycle_id": cycle_id,
                     "agent_name": phase3_result.get("agent_used", "orchestrator"),
-                    "confidence": phase3_result.get("confidence", 0.5)
-                }
+                    "confidence": phase3_result.get("confidence", 0.5),
+                },
             )
 
             # Store evidence in session
             if input.include_evidence and phase2_result.get("evidence"):
                 await working_memory.append_evidence(
-                    session_id=session_id,
-                    evidence=phase2_result["evidence"]
+                    session_id=session_id, evidence=phase2_result["evidence"]
                 )
 
             phases_completed.append("agent_complete")
@@ -219,7 +214,7 @@ class CognitiveService:
                     response=phase3_result.get("response", ""),
                     confidence=phase3_result.get("confidence", 0.5),
                     evidence=phase2_result.get("evidence", []),
-                    agent_used=phase3_result.get("agent_used", "orchestrator")
+                    agent_used=phase3_result.get("agent_used", "orchestrator"),
                 )
             )
             phases_completed.append("reflector_started")
@@ -238,7 +233,7 @@ class CognitiveService:
                 visualization_config=phase3_result.get("visualization_config"),
                 phases_completed=phases_completed,
                 processing_time_ms=processing_time,
-                worth_remembering=phase3_result.get("confidence", 0.5) > 0.6
+                worth_remembering=phase3_result.get("confidence", 0.5) > 0.6,
             )
 
         except Exception as e:
@@ -257,7 +252,7 @@ class CognitiveService:
                 visualization_config=None,
                 phases_completed=phases_completed,
                 processing_time_ms=processing_time,
-                worth_remembering=False
+                worth_remembering=False,
             )
 
     # =========================================================================
@@ -265,11 +260,7 @@ class CognitiveService:
     # =========================================================================
 
     async def _run_summarizer(
-        self,
-        query: str,
-        session_id: str,
-        brand: Optional[str],
-        region: Optional[str]
+        self, query: str, session_id: str, brand: Optional[str], region: Optional[str]
     ) -> Dict[str, Any]:
         """
         Phase 1: Summarizer
@@ -286,7 +277,9 @@ class CognitiveService:
             query_type = "causal"
         elif any(kw in query_lower for kw in ["predict", "forecast", "will", "expect", "next"]):
             query_type = "prediction"
-        elif any(kw in query_lower for kw in ["optimize", "improve", "best", "maximize", "allocate"]):
+        elif any(
+            kw in query_lower for kw in ["optimize", "improve", "best", "maximize", "allocate"]
+        ):
             query_type = "optimization"
         elif any(kw in query_lower for kw in ["compare", "versus", "vs", "difference", "gap"]):
             query_type = "comparison"
@@ -294,17 +287,13 @@ class CognitiveService:
             query_type = "monitoring"
 
         # Extract entities
-        entities = {
-            "brands": [],
-            "regions": [],
-            "kpis": []
-        }
+        entities = {"brands": [], "regions": [], "kpis": []}
 
         # Brand detection
         brand_keywords = {
             "kisqali": "Kisqali",
             "fabhalta": "Fabhalta",
-            "remibrutinib": "Remibrutinib"
+            "remibrutinib": "Remibrutinib",
         }
         for keyword, brand_name in brand_keywords.items():
             if keyword in query_lower:
@@ -323,16 +312,20 @@ class CognitiveService:
                 entities["regions"].append(region_kw)
 
         # KPI detection
-        kpi_keywords = ["trx", "nrx", "scripts", "adoption", "conversion", "revenue", "market share"]
+        kpi_keywords = [
+            "trx",
+            "nrx",
+            "scripts",
+            "adoption",
+            "conversion",
+            "revenue",
+            "market share",
+        ]
         for kpi in kpi_keywords:
             if kpi in query_lower:
                 entities["kpis"].append(kpi.upper())
 
-        return {
-            "query_type": query_type,
-            "entities": entities,
-            "context_ready": True
-        }
+        return {"query_type": query_type, "entities": entities, "context_ready": True}
 
     async def _run_investigator(
         self,
@@ -341,7 +334,7 @@ class CognitiveService:
         entities: Dict[str, List[str]],
         brand: Optional[str],
         region: Optional[str],
-        max_hops: int
+        max_hops: int,
     ) -> Dict[str, Any]:
         """
         Phase 2: Investigator
@@ -367,41 +360,35 @@ class CognitiveService:
                 k=10 * max_hops,  # More results for multi-hop
                 entities=entities.get("brands", []) + entities.get("regions", []),
                 kpi_name=kpi_name,
-                filters=filters if filters else None
+                filters=filters if filters else None,
             )
 
             # Convert to evidence format
             evidence = []
             for i, result in enumerate(results):
-                evidence.append({
-                    "hop": min(i // 3 + 1, max_hops),  # Distribute across hops
-                    "source": result.source,
-                    "content": result.content,
-                    "score": result.score,
-                    "method": result.retrieval_method,
-                    "metadata": result.metadata
-                })
+                evidence.append(
+                    {
+                        "hop": min(i // 3 + 1, max_hops),  # Distribute across hops
+                        "source": result.source,
+                        "content": result.content,
+                        "score": result.score,
+                        "method": result.retrieval_method,
+                        "metadata": result.metadata,
+                    }
+                )
 
             return {
                 "evidence": evidence,
                 "hops_completed": min(len(evidence) // 3, max_hops),
-                "total_results": len(evidence)
+                "total_results": len(evidence),
             }
 
         except Exception as e:
             logger.warning(f"Investigation phase failed: {e}")
-            return {
-                "evidence": [],
-                "hops_completed": 0,
-                "total_results": 0,
-                "error": str(e)
-            }
+            return {"evidence": [], "hops_completed": 0, "total_results": 0, "error": str(e)}
 
     async def _run_agent(
-        self,
-        query: str,
-        query_type: str,
-        evidence: List[Dict[str, Any]]
+        self, query: str, query_type: str, evidence: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
         """
         Phase 3: Agent
@@ -417,7 +404,7 @@ class CognitiveService:
             "optimization": "resource_optimizer",
             "comparison": "gap_analyzer",
             "monitoring": "drift_monitor",
-            "general": "orchestrator"
+            "general": "orchestrator",
         }
         agent_used = agent_mapping.get(query_type, "orchestrator")
 
@@ -432,10 +419,12 @@ class CognitiveService:
         else:
             # Summarize top evidence
             top_evidence = sorted(evidence, key=lambda x: x.get("score", 0), reverse=True)[:5]
-            evidence_summary = "\n".join([
-                f"- [{e.get('source', 'unknown')}] {e.get('content', '')[:200]}"
-                for e in top_evidence
-            ])
+            evidence_summary = "\n".join(
+                [
+                    f"- [{e.get('source', 'unknown')}] {e.get('content', '')[:200]}"
+                    for e in top_evidence
+                ]
+            )
 
             # Build response based on query type
             if query_type == "causal":
@@ -474,19 +463,16 @@ class CognitiveService:
         if query_type in ["causal", "comparison"]:
             viz_config = {
                 "chart_type": "sankey" if query_type == "causal" else "bar",
-                "show_confidence": True
+                "show_confidence": True,
             }
         elif query_type in ["prediction", "monitoring"]:
-            viz_config = {
-                "chart_type": "line",
-                "show_trend": True
-            }
+            viz_config = {"chart_type": "line", "show_trend": True}
 
         return {
             "agent_used": agent_used,
             "response": response,
             "confidence": confidence,
-            "visualization_config": viz_config
+            "visualization_config": viz_config,
         }
 
     async def _run_reflector(
@@ -498,7 +484,7 @@ class CognitiveService:
         response: str,
         confidence: float,
         evidence: List[Dict[str, Any]],
-        agent_used: str
+        agent_used: str,
     ) -> None:
         """
         Phase 4: Reflector (runs async after response)
@@ -526,15 +512,12 @@ class CognitiveService:
                     "query_type": query_type,
                     "response_preview": response[:500],
                     "confidence": confidence,
-                    "evidence_count": len(evidence)
-                }
+                    "evidence_count": len(evidence),
+                },
             )
 
             await insert_episodic_memory_with_text(
-                memory=memory_input,
-                text_to_embed=query,
-                session_id=session_id,
-                cycle_id=cycle_id
+                memory=memory_input, text_to_embed=query, session_id=session_id, cycle_id=cycle_id
             )
 
             # Store to Graphiti knowledge graph for entity extraction
@@ -546,7 +529,7 @@ class CognitiveService:
                     query_type=query_type,
                     response=response,
                     confidence=confidence,
-                    agent_used=agent_used
+                    agent_used=agent_used,
                 )
 
             # Record learning signal
@@ -559,15 +542,11 @@ class CognitiveService:
                 signal_details={
                     "query_type": query_type,
                     "evidence_count": len(evidence),
-                    "is_training_example": confidence > 0.8
-                }
+                    "is_training_example": confidence > 0.8,
+                },
             )
 
-            await record_learning_signal(
-                signal=signal,
-                session_id=session_id,
-                cycle_id=cycle_id
-            )
+            await record_learning_signal(signal=signal, session_id=session_id, cycle_id=cycle_id)
 
             logger.info(f"Reflection complete for cycle {cycle_id}")
 
@@ -582,7 +561,7 @@ class CognitiveService:
         query_type: str,
         response: str,
         confidence: float,
-        agent_used: str
+        agent_used: str,
     ) -> None:
         """
         Store interaction to Graphiti knowledge graph.
@@ -611,8 +590,8 @@ class CognitiveService:
                     "cycle_id": cycle_id,
                     "query_type": query_type,
                     "confidence": confidence,
-                    "timestamp": str(datetime.now())
-                }
+                    "timestamp": str(datetime.now()),
+                },
             )
 
             logger.info(
@@ -645,13 +624,14 @@ def get_cognitive_service() -> CognitiveService:
 # CONVENIENCE FUNCTIONS
 # =============================================================================
 
+
 async def process_cognitive_query(
     query: str,
     session_id: Optional[str] = None,
     user_id: Optional[str] = None,
     brand: Optional[str] = None,
     region: Optional[str] = None,
-    include_evidence: bool = True
+    include_evidence: bool = True,
 ) -> CognitiveQueryOutput:
     """
     Process a cognitive query with default settings.
@@ -666,7 +646,7 @@ async def process_cognitive_query(
         user_id=user_id,
         brand=brand,
         region=region,
-        include_evidence=include_evidence
+        include_evidence=include_evidence,
     )
 
     return await service.process_query(input_data)

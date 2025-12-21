@@ -4,7 +4,8 @@ Patient Journey Repository.
 Handles patient journey data with source tracking and ML split awareness.
 """
 
-from typing import List, Optional, Dict, Any
+from typing import Any, Dict, List, Optional
+
 from src.repositories.base import SplitAwareRepository
 
 
@@ -279,10 +280,7 @@ class PatientJourneyRepository(SplitAwareRepository):
             }
 
         total = len(result.data)
-        stacked = sum(
-            1 for row in result.data
-            if row.get("source_stacking_flag") is True
-        )
+        stacked = sum(1 for row in result.data if row.get("source_stacking_flag") is True)
         confidences = [
             float(row.get("source_match_confidence"))
             for row in result.data

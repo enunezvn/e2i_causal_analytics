@@ -7,19 +7,16 @@ Version: 4.3
 Database: causal_validations table (010_causal_validation_tables.sql)
 """
 
-from typing import List, Optional, Dict, Any
-from uuid import UUID
 import json
 import logging
+from typing import Any, Dict, List, Optional
 
-from src.repositories.base import BaseRepository
 from src.causal_engine import (
-    RefutationSuite,
-    RefutationResult,
-    RefutationTestType,
-    RefutationStatus,
     GateDecision,
+    RefutationResult,
+    RefutationSuite,
 )
+from src.repositories.base import BaseRepository
 
 logger = logging.getLogger(__name__)
 
@@ -320,9 +317,7 @@ class CausalValidationRepository(BaseRepository):
             "avg_confidence": avg_confidence,
             "final_gate": await self.get_gate_decision(estimate_id),
             "failed_tests": [
-                v.get("test_type")
-                for v in validations
-                if v.get("status") == "failed"
+                v.get("test_type") for v in validations if v.get("status") == "failed"
             ],
         }
 
@@ -407,9 +402,11 @@ class CausalValidationRepository(BaseRepository):
             "delta_percent": test.delta_percent,
             "confidence_score": suite.confidence_score,
             "gate_decision": suite.gate_decision.value,
-            "test_config": json.dumps({
-                "execution_time_ms": test.execution_time_ms,
-            }),
+            "test_config": json.dumps(
+                {
+                    "execution_time_ms": test.execution_time_ms,
+                }
+            ),
             "details_json": json.dumps(test.details),
             "agent_activity_id": agent_activity_id,
             "brand": suite.brand,

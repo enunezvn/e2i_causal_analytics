@@ -18,14 +18,14 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+from .dspy_integration import DSPY_AVAILABLE
+from .graph import build_feedback_learner_graph
 from .state import (
-    FeedbackLearnerState,
     DetectedPattern,
-    LearningRecommendation,
+    FeedbackLearnerState,
     KnowledgeUpdate,
+    LearningRecommendation,
 )
-from .graph import build_feedback_learner_graph, build_simple_feedback_learner_graph
-from .dspy_integration import FeedbackLearnerTrainingSignal, DSPY_AVAILABLE
 
 logger = logging.getLogger(__name__)
 
@@ -216,7 +216,11 @@ class FeedbackLearnerAgent:
             pattern_count=len(patterns),
             recommendation_count=len(recommendations),
             total_latency_ms=result.get("total_latency_ms", 0),
-            model_used=result.get("model_used") if isinstance(result.get("model_used"), str) else "deterministic",
+            model_used=(
+                result.get("model_used")
+                if isinstance(result.get("model_used"), str)
+                else "deterministic"
+            ),
             timestamp=datetime.now(timezone.utc).isoformat(),
             status=result.get("status", "failed"),
             errors=result.get("errors") or [],
@@ -227,9 +231,7 @@ class FeedbackLearnerAgent:
             dspy_available=DSPY_AVAILABLE,
         )
 
-    async def process_feedback(
-        self, feedback_items: List[Dict[str, Any]]
-    ) -> FeedbackLearnerOutput:
+    async def process_feedback(self, feedback_items: List[Dict[str, Any]]) -> FeedbackLearnerOutput:
         """
         Process a specific list of feedback items.
 
@@ -279,7 +281,6 @@ class FeedbackLearnerAgent:
             Handoff dictionary for other agents
         """
         patterns = output.detected_patterns or []
-        recommendations = output.learning_recommendations or []
 
         return {
             "agent": "feedback_learner",

@@ -11,7 +11,7 @@ Usage:
         register_tool,
         get_registry,
     )
-    
+
     # Using decorator
     @composable_tool(
         name="my_tool",
@@ -21,7 +21,7 @@ Usage:
     )
     def my_tool(x: int) -> dict:
         return {"result": x * 2}
-    
+
     # Manual registration
     register_tool(
         name="another_tool",
@@ -30,7 +30,7 @@ Usage:
         source_agent="another_agent",
         tier=3
     )
-    
+
     # Lookup
     registry = get_registry()
     tool = registry.get("my_tool")
@@ -38,17 +38,17 @@ Usage:
 """
 
 from .registry import (
+    RegisteredTool,
+    ToolParameter,
     # Classes
     ToolRegistry,
-    RegisteredTool,
     ToolSchema,
-    ToolParameter,
     # Decorator
     composable_tool,
-    # Functions
-    register_tool,
     get_registry,
     list_available_tools,
+    # Functions
+    register_tool,
 )
 
 __all__ = [

@@ -1,11 +1,12 @@
 """Tests for interaction detection node."""
 
-import pytest
 import numpy as np
+import pytest
+
 from src.agents.ml_foundation.feature_analyzer.nodes.interaction_detector import (
-    detect_interactions,
     _compute_correlation_interactions,
     _extract_top_interactions,
+    detect_interactions,
 )
 
 
@@ -16,12 +17,14 @@ class TestDetectInteractions:
     async def test_detects_interactions(self):
         """Should detect feature interactions from SHAP values."""
         # Create SHAP values with some correlated features
-        shap_values = np.array([
-            [0.5, 0.4, -0.2, 0.1],
-            [0.6, 0.5, -0.3, 0.15],
-            [0.4, 0.3, -0.1, 0.05],
-            [0.7, 0.6, -0.4, 0.2],
-        ])
+        shap_values = np.array(
+            [
+                [0.5, 0.4, -0.2, 0.1],
+                [0.6, 0.5, -0.3, 0.15],
+                [0.4, 0.3, -0.1, 0.05],
+                [0.7, 0.6, -0.4, 0.2],
+            ]
+        )
         # feat_0 and feat_1 are highly correlated (positive)
         # feat_0 and feat_2 are negatively correlated
 
@@ -116,18 +119,18 @@ class TestComputeCorrelationInteractions:
     def test_computes_correlation_matrix(self):
         """Should compute correlation-based interaction matrix."""
         # Create SHAP values with clear correlations
-        shap_values = np.array([
-            [1.0, 0.9, -0.8, 0.0],
-            [2.0, 1.8, -1.6, 0.1],
-            [1.5, 1.4, -1.2, -0.1],
-            [2.5, 2.3, -2.0, 0.05],
-        ])
+        shap_values = np.array(
+            [
+                [1.0, 0.9, -0.8, 0.0],
+                [2.0, 1.8, -1.6, 0.1],
+                [1.5, 1.4, -1.2, -0.1],
+                [2.5, 2.3, -2.0, 0.05],
+            ]
+        )
 
         feature_names = ["feat_0", "feat_1", "feat_2", "feat_3"]
 
-        interaction_matrix, method = _compute_correlation_interactions(
-            shap_values, feature_names
-        )
+        interaction_matrix, method = _compute_correlation_interactions(shap_values, feature_names)
 
         assert method == "correlation"
         assert isinstance(interaction_matrix, dict)
@@ -142,9 +145,7 @@ class TestComputeCorrelationInteractions:
         shap_values = np.random.rand(20, 3)
         feature_names = ["feat_0", "feat_1", "feat_2"]
 
-        interaction_matrix, _ = _compute_correlation_interactions(
-            shap_values, feature_names
-        )
+        interaction_matrix, _ = _compute_correlation_interactions(shap_values, feature_names)
 
         # No feature should have interaction with itself
         for feature in feature_names:
@@ -159,13 +160,11 @@ class TestComputeCorrelationInteractions:
 
         feature_names = ["feat_0", "feat_1", "feat_2", "feat_3"]
 
-        interaction_matrix, _ = _compute_correlation_interactions(
-            shap_values, feature_names
-        )
+        interaction_matrix, _ = _compute_correlation_interactions(shap_values, feature_names)
 
         # Check that only strong correlations are stored
-        for feature_i, interactions in interaction_matrix.items():
-            for feature_j, strength in interactions.items():
+        for _feature_i, interactions in interaction_matrix.items():
+            for _feature_j, strength in interactions.items():
                 assert abs(strength) > 0.1  # Threshold
 
 

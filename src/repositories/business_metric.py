@@ -4,7 +4,8 @@ Business Metric Repository.
 Handles KPI snapshots and metric queries.
 """
 
-from typing import List, Optional, Dict, Any
+from typing import Any, Dict, List, Optional
+
 from src.repositories.base import BaseRepository
 
 
@@ -230,16 +231,8 @@ class BusinessMetricRepository(BaseRepository):
         if not snapshot:
             return {"avg_roi": 0, "max_roi": 0, "min_roi": 0, "total_value": 0}
 
-        rois = [
-            m["roi"]
-            for m in snapshot.values()
-            if m.get("roi") is not None
-        ]
-        values = [
-            m["value"]
-            for m in snapshot.values()
-            if m.get("value") is not None
-        ]
+        rois = [m["roi"] for m in snapshot.values() if m.get("roi") is not None]
+        values = [m["value"] for m in snapshot.values() if m.get("value") is not None]
 
         return {
             "avg_roi": sum(rois) / len(rois) if rois else 0,

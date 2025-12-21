@@ -3,8 +3,7 @@
 This module defines the TypedDict state used by the data_preparer LangGraph.
 """
 
-from typing import TypedDict, Optional, List, Dict, Any, Literal
-from datetime import datetime
+from typing import Any, Dict, List, Literal, Optional, TypedDict
 
 
 class DataPreparerState(TypedDict, total=False):

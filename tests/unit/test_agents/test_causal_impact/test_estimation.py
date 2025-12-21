@@ -1,8 +1,9 @@
 """Tests for estimation node."""
 
 import pytest
+
 from src.agents.causal_impact.nodes.estimation import EstimationNode
-from src.agents.causal_impact.state import CausalImpactState, CausalGraph
+from src.agents.causal_impact.state import CausalGraph, CausalImpactState
 
 
 class TestEstimationNode:

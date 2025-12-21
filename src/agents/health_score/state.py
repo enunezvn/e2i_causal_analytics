@@ -12,6 +12,7 @@ from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
 
 class ComponentStatus(TypedDict):
     """Status of a system component"""
+
     component_name: str
     status: Literal["healthy", "degraded", "unhealthy", "unknown"]
     latency_ms: Optional[int]
@@ -21,6 +22,7 @@ class ComponentStatus(TypedDict):
 
 class ModelMetrics(TypedDict):
     """Model performance metrics"""
+
     model_id: str
     accuracy: Optional[float]
     precision: Optional[float]
@@ -36,6 +38,7 @@ class ModelMetrics(TypedDict):
 
 class PipelineStatus(TypedDict):
     """Data pipeline status"""
+
     pipeline_name: str
     last_run: str
     last_success: str
@@ -46,6 +49,7 @@ class PipelineStatus(TypedDict):
 
 class AgentStatus(TypedDict):
     """Agent availability status"""
+
     agent_name: str
     tier: int
     available: bool

@@ -5,13 +5,13 @@ optimal treatment allocation.
 """
 
 from .agent import HeterogeneousOptimizerAgent
-from .state import (
-    HeterogeneousOptimizerState,
-    CATEResult,
-    SegmentProfile,
-    PolicyRecommendation,
-)
 from .graph import create_heterogeneous_optimizer_graph
+from .state import (
+    CATEResult,
+    HeterogeneousOptimizerState,
+    PolicyRecommendation,
+    SegmentProfile,
+)
 
 __all__ = [
     "HeterogeneousOptimizerAgent",

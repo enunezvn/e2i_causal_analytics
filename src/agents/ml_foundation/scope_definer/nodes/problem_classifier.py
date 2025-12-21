@@ -3,8 +3,8 @@
 This module infers ML problem type from business objectives.
 """
 
-from typing import Dict, Any, Literal
 import re
+from typing import Any, Dict, Literal
 
 
 async def classify_problem(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -45,9 +45,7 @@ async def classify_problem(state: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _infer_problem_type(
-    business_objective: str, target_outcome: str
-) -> Literal[
+def _infer_problem_type(business_objective: str, target_outcome: str) -> Literal[
     "binary_classification",
     "multiclass_classification",
     "regression",
@@ -59,29 +57,59 @@ def _infer_problem_type(
 
     # Regression indicators
     regression_keywords = [
-        "volume", "count", "number of", "quantity", "amount",
-        "increase by", "reduce by", "time to", "duration",
-        "prescription volume", "trx", "nrx"
+        "volume",
+        "count",
+        "number of",
+        "quantity",
+        "amount",
+        "increase by",
+        "reduce by",
+        "time to",
+        "duration",
+        "prescription volume",
+        "trx",
+        "nrx",
     ]
 
     # Binary classification indicators
     binary_keywords = [
-        "will prescribe", "will churn", "will convert", "will abandon",
-        "yes/no", "true/false", "prescriber or not", "adoption",
-        "will adopt", "likely to", "predict whether"
+        "will prescribe",
+        "will churn",
+        "will convert",
+        "will abandon",
+        "yes/no",
+        "true/false",
+        "prescriber or not",
+        "adoption",
+        "will adopt",
+        "likely to",
+        "predict whether",
     ]
 
     # Causal inference indicators
     causal_keywords = [
-        "impact of", "effect of", "caused by", "due to",
-        "influence of", "causal", "attribution", "uplift",
-        "incremental", "counterfactual"
+        "impact of",
+        "effect of",
+        "caused by",
+        "due to",
+        "influence of",
+        "causal",
+        "attribution",
+        "uplift",
+        "incremental",
+        "counterfactual",
     ]
 
     # Time series indicators
     timeseries_keywords = [
-        "forecast", "predict future", "trend", "seasonal",
-        "over time", "time series", "next month", "next quarter"
+        "forecast",
+        "predict future",
+        "trend",
+        "seasonal",
+        "over time",
+        "time series",
+        "next month",
+        "next quarter",
     ]
 
     # Check in order of specificity
@@ -111,9 +139,7 @@ def _infer_problem_type(
     return "binary_classification"
 
 
-def _infer_target_variable(
-    target_outcome: str, problem_type: str
-) -> str:
+def _infer_target_variable(target_outcome: str, problem_type: str) -> str:
     """Infer target variable name from outcome description."""
     target_lower = target_outcome.lower()
 
@@ -143,8 +169,8 @@ def _infer_target_variable(
         return "time_to_event_days"
 
     # Default: sanitize outcome string to variable name
-    sanitized = re.sub(r'[^a-z0-9]+', '_', target_lower)
-    sanitized = sanitized.strip('_')
+    sanitized = re.sub(r"[^a-z0-9]+", "_", target_lower)
+    sanitized = sanitized.strip("_")
     return sanitized or "target_outcome"
 
 

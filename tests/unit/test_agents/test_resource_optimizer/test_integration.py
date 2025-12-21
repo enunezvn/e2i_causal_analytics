@@ -3,23 +3,21 @@ E2I Resource Optimizer Agent - Integration Tests
 """
 
 import pytest
+
 from src.agents.resource_optimizer import (
     ResourceOptimizerAgent,
     ResourceOptimizerInput,
     ResourceOptimizerOutput,
-    optimize_allocation,
     build_resource_optimizer_graph,
+    optimize_allocation,
 )
-from src.agents.resource_optimizer.state import AllocationTarget, Constraint
 
 
 class TestResourceOptimizerAgent:
     """Integration tests for ResourceOptimizerAgent."""
 
     @pytest.mark.asyncio
-    async def test_full_optimization_pipeline(
-        self, sample_targets, budget_constraint
-    ):
+    async def test_full_optimization_pipeline(self, sample_targets, budget_constraint):
         """Test complete optimization pipeline."""
         agent = ResourceOptimizerAgent()
 
@@ -50,9 +48,7 @@ class TestResourceOptimizerAgent:
         assert result.scenarios is None
 
     @pytest.mark.asyncio
-    async def test_optimization_with_scenarios(
-        self, sample_targets, budget_constraint
-    ):
+    async def test_optimization_with_scenarios(self, sample_targets, budget_constraint):
         """Test optimization with scenario analysis."""
         agent = ResourceOptimizerAgent()
 
@@ -171,9 +167,7 @@ class TestConvenienceFunctions:
     """Tests for convenience functions."""
 
     @pytest.mark.asyncio
-    async def test_optimize_allocation_function(
-        self, sample_targets, budget_constraint
-    ):
+    async def test_optimize_allocation_function(self, sample_targets, budget_constraint):
         """Test optimize_allocation convenience function."""
         result = await optimize_allocation(
             allocation_targets=sample_targets,

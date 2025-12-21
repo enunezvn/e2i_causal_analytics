@@ -3,6 +3,7 @@ E2I Resource Optimizer Agent - Impact Projector Node Tests
 """
 
 import pytest
+
 from src.agents.resource_optimizer.nodes.impact_projector import (
     ImpactProjectorNode,
 )
@@ -29,12 +30,8 @@ class TestImpactProjectorNode:
         node = ImpactProjectorNode()
         result = await node.execute(optimized_state)
 
-        expected_outcome = sum(
-            a["expected_impact"] for a in optimized_state["optimal_allocations"]
-        )
-        assert result["projected_total_outcome"] == pytest.approx(
-            expected_outcome, rel=0.01
-        )
+        expected_outcome = sum(a["expected_impact"] for a in optimized_state["optimal_allocations"])
+        assert result["projected_total_outcome"] == pytest.approx(expected_outcome, rel=0.01)
 
     @pytest.mark.asyncio
     async def test_project_roi(self, optimized_state):
@@ -42,9 +39,7 @@ class TestImpactProjectorNode:
         node = ImpactProjectorNode()
         result = await node.execute(optimized_state)
 
-        total_outcome = sum(
-            a["expected_impact"] for a in optimized_state["optimal_allocations"]
-        )
+        total_outcome = sum(a["expected_impact"] for a in optimized_state["optimal_allocations"])
         total_allocation = sum(
             a["optimized_allocation"] for a in optimized_state["optimal_allocations"]
         )

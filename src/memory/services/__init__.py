@@ -13,14 +13,14 @@ Usage:
     )
 """
 
-from src.memory.services.config import load_memory_config, get_config, MemoryConfig
+from src.memory.services.config import MemoryConfig, get_config, load_memory_config
 from src.memory.services.factories import (
+    ServiceConnectionError,
+    get_embedding_service,
+    get_falkordb_client,
+    get_llm_service,
     get_redis_client,
     get_supabase_client,
-    get_falkordb_client,
-    get_embedding_service,
-    get_llm_service,
-    ServiceConnectionError,
 )
 
 __all__ = [

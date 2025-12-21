@@ -18,29 +18,30 @@ Version: 4.1.0
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Dict, Any
+from typing import Any, Dict
 
 from fastapi import FastAPI, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from src.api.routes.cognitive import router as cognitive_router
+
 # Import routers
 from src.api.routes.explain import router as explain_router
-from src.api.routes.memory import router as memory_router
-from src.api.routes.cognitive import router as cognitive_router
 from src.api.routes.graph import router as graph_router
+from src.api.routes.memory import router as memory_router
 from src.api.routes.rag import router as rag_router
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
 # =============================================================================
 # LIFESPAN CONTEXT MANAGER
 # =============================================================================
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -91,7 +92,7 @@ app = FastAPI(
     docs_url="/api/docs",
     redoc_url="/api/redoc",
     openapi_url="/api/openapi.json",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
 # =============================================================================
@@ -111,6 +112,7 @@ app.add_middleware(
 # ROOT ENDPOINTS
 # =============================================================================
 
+
 @app.get("/", tags=["Root"])
 async def root() -> Dict[str, Any]:
     """Root endpoint with API information."""
@@ -119,7 +121,7 @@ async def root() -> Dict[str, Any]:
         "version": "4.1.0",
         "status": "online",
         "docs": "/api/docs",
-        "health": "/health"
+        "health": "/health",
     }
 
 
@@ -138,11 +140,7 @@ async def health_check() -> Dict[str, Any]:
         "service": "e2i-causal-analytics-api",
         "version": "4.1.0",
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "components": {
-            "api": "operational",
-            "workers": "available",
-            "memory_systems": "connected"
-        }
+        "components": {"api": "operational", "workers": "available", "memory_systems": "connected"},
     }
 
 
@@ -169,14 +167,10 @@ async def readiness_check() -> Dict[str, Any]:
     ready = True  # Placeholder
 
     if ready:
-        return {
-            "status": "ready",
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        }
+        return {"status": "ready", "timestamp": datetime.now(timezone.utc).isoformat()}
     else:
         return JSONResponse(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            content={"status": "not_ready"}
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, content={"status": "not_ready"}
         )
 
 
@@ -211,6 +205,7 @@ app.include_router(rag_router)
 # ERROR HANDLERS
 # =============================================================================
 
+
 @app.exception_handler(404)
 async def not_found_handler(request, exc):
     """Custom 404 handler."""
@@ -219,8 +214,8 @@ async def not_found_handler(request, exc):
         content={
             "error": "not_found",
             "message": f"Endpoint {request.url.path} not found",
-            "available_docs": "/api/docs"
-        }
+            "available_docs": "/api/docs",
+        },
     )
 
 
@@ -233,8 +228,8 @@ async def internal_error_handler(request, exc):
         content={
             "error": "internal_server_error",
             "message": "An internal error occurred. Please contact support.",
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        }
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        },
     )
 
 
@@ -246,10 +241,4 @@ if __name__ == "__main__":
     import uvicorn
 
     # Run with: python -m src.api.main
-    uvicorn.run(
-        "src.api.main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
-        log_level="info"
-    )
+    uvicorn.run("src.api.main:app", host="0.0.0.0", port=8000, reload=True, log_level="info")

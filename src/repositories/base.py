@@ -4,9 +4,9 @@ Base repository implementations with split-aware querying.
 CRITICAL: All queries must respect ML splits to prevent data leakage.
 """
 
-from typing import Generic, TypeVar, Dict, Any, List, Optional, Type
-from abc import ABC, abstractmethod
 import hashlib
+from abc import ABC
+from typing import Any, Dict, Generic, List, Optional, Type, TypeVar
 
 T = TypeVar("T")
 
@@ -105,7 +105,7 @@ class BaseRepository(ABC, Generic[T]):
         if not self.client:
             return entity
 
-        data = entity.model_dump() if hasattr(entity, 'model_dump') else entity
+        data = entity.model_dump() if hasattr(entity, "model_dump") else entity
         result = await self.client.table(self.table_name).insert(data).execute()
 
         return self._to_model(result.data[0]) if result.data else entity
@@ -124,12 +124,7 @@ class BaseRepository(ABC, Generic[T]):
         if not self.client:
             return None
 
-        result = await (
-            self.client.table(self.table_name)
-            .update(updates)
-            .eq("id", id)
-            .execute()
-        )
+        result = await self.client.table(self.table_name).update(updates).eq("id", id).execute()
 
         return self._to_model(result.data[0]) if result.data else None
 
@@ -146,18 +141,13 @@ class BaseRepository(ABC, Generic[T]):
         if not self.client:
             return False
 
-        result = await (
-            self.client.table(self.table_name)
-            .delete()
-            .eq("id", id)
-            .execute()
-        )
+        result = await self.client.table(self.table_name).delete().eq("id", id).execute()
 
         return len(result.data) > 0
 
     def _to_model(self, data: Dict[str, Any]) -> T:
         """Convert database row to model instance."""
-        if self.model_class and hasattr(self.model_class, 'model_validate'):
+        if self.model_class and hasattr(self.model_class, "model_validate"):
             return self.model_class.model_validate(data)
         return data
 

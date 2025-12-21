@@ -1,6 +1,7 @@
 """Integration tests for ObservabilityConnectorAgent."""
 
 import pytest
+
 from src.agents.ml_foundation.observability_connector.agent import (
     ObservabilityConnectorAgent,
     Span,
@@ -350,9 +351,7 @@ class TestObservabilityConnectorAgent:
         context2 = {"trace_id": "trace_2", "span_id": "span_2", "sampled": True}
 
         # Start first span
-        async with agent.span(
-            operation_name="op1", agent_name="agent1", context=context1
-        ) as span1:
+        async with agent.span(operation_name="op1", agent_name="agent1", context=context1) as span1:
             span1.set_attribute("operation", "first")
 
             # Start second span while first is active
@@ -383,7 +382,7 @@ class TestObservabilityConnectorAgent:
             operation_name="test",
             agent_name="test_agent",
             context=context,
-        ) as span:
+        ):
             pass
 
         # Sample rate should be preserved in context

@@ -10,21 +10,20 @@ Graph Architecture: .claude/specialists/Agent_Specialists_Tiers 1-5/experiment-d
 Contract: .claude/contracts/tier3-contracts.md lines 82-142
 """
 
-from datetime import datetime
-from typing import Any, Callable
 import asyncio
+from typing import Any, Callable
 
-from langgraph.graph import StateGraph, END
+from langgraph.graph import END, StateGraph
 
-from src.agents.experiment_designer.state import ExperimentDesignState, ErrorDetails
 from src.agents.experiment_designer.nodes import (
     ContextLoaderNode,
     DesignReasoningNode,
     PowerAnalysisNode,
-    ValidityAuditNode,
     RedesignNode,
     TemplateGeneratorNode,
+    ValidityAuditNode,
 )
+from src.agents.experiment_designer.state import ExperimentDesignState
 
 
 def wrap_async_node(async_func: Callable) -> Callable:
@@ -40,6 +39,7 @@ def wrap_async_node(async_func: Callable) -> Callable:
         Sync function that runs the async function
     """
     import nest_asyncio
+
     try:
         nest_asyncio.apply()
     except RuntimeError:

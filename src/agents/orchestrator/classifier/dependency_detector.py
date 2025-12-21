@@ -19,16 +19,16 @@ from typing import Optional
 
 from anthropic import Anthropic
 
+from .prompts import DEPENDENCY_DETECTION_PROMPT
 from .schemas import (
-    Domain,
-    DependencyType,
     Dependency,
     DependencyAnalysis,
-    SubQuestion,
-    ExtractedFeatures,
+    DependencyType,
+    Domain,
     DomainMapping,
+    ExtractedFeatures,
+    SubQuestion,
 )
-from .prompts import DEPENDENCY_DETECTION_PROMPT
 
 
 class DependencyDetector:
@@ -40,8 +40,13 @@ class DependencyDetector:
     # Reference words that indicate dependency
     REFERENCE_PRONOUNS = {"that", "those", "this", "these", "it", "them"}
     REFERENCE_PHRASES = {
-        "the result", "the finding", "the effect", "the impact",
-        "the segment", "the group", "the responders"
+        "the result",
+        "the finding",
+        "the effect",
+        "the impact",
+        "the segment",
+        "the group",
+        "the responders",
     }
 
     CONDITIONAL_PATTERNS = [
@@ -60,7 +65,7 @@ class DependencyDetector:
     def __init__(self, llm_client: Optional[Anthropic] = None):
         """
         Initialize detector.
-        
+
         Args:
             llm_client: Anthropic client for complex dependency detection
         """
@@ -79,13 +84,13 @@ class DependencyDetector:
     ) -> DependencyAnalysis:
         """
         Detect dependencies in query.
-        
+
         Args:
             query: Original query
             features: Extracted features
             domain_mapping: Domain mapping results
             use_llm: Whether to use LLM for complex detection
-            
+
         Returns:
             DependencyAnalysis with sub-questions and dependencies
         """
@@ -106,8 +111,10 @@ class DependencyDetector:
         dependencies = self._detect_rule_based(query, sub_questions)
 
         # Step 3: Use LLM for complex cases if enabled
-        if use_llm and self.llm_client and self._needs_llm_analysis(
-            query, sub_questions, dependencies
+        if (
+            use_llm
+            and self.llm_client
+            and self._needs_llm_analysis(query, sub_questions, dependencies)
         ):
             llm_dependencies = await self._detect_with_llm(query, sub_questions)
             # Merge LLM findings with rule-based (prefer LLM for conflicts)
@@ -128,9 +135,7 @@ class DependencyDetector:
     # QUERY DECOMPOSITION
     # =========================================================================
 
-    def _decompose_query(
-        self, query: str, domain_mapping: DomainMapping
-    ) -> list[SubQuestion]:
+    def _decompose_query(self, query: str, domain_mapping: DomainMapping) -> list[SubQuestion]:
         """
         Decompose query into sub-questions.
         Simple heuristic: split on ", and" or "?" patterns.
@@ -157,7 +162,7 @@ class DependencyDetector:
             # Simple domain assignment based on keywords
             # (In production, would use domain mapper on each part)
             domains = self._infer_domains_for_part(part)
-            
+
             sub_questions.append(
                 SubQuestion(
                     id=f"Q{i + 1}",
@@ -191,14 +196,12 @@ class DependencyDetector:
     # RULE-BASED DETECTION
     # =========================================================================
 
-    def _detect_rule_based(
-        self, query: str, sub_questions: list[SubQuestion]
-    ) -> list[Dependency]:
+    def _detect_rule_based(self, query: str, sub_questions: list[SubQuestion]) -> list[Dependency]:
         """
         Detect dependencies using rule-based patterns.
         """
         dependencies = []
-        query_lower = query.lower()
+        query.lower()
 
         for i, sq in enumerate(sub_questions[1:], start=1):
             text_lower = sq.text.lower()
@@ -264,7 +267,7 @@ class DependencyDetector:
         # 1. Multiple sub-questions but no dependencies found
         # 2. Query is complex (high word count, multiple domains)
         # 3. Implicit dependencies likely (semantic rather than syntactic)
-        
+
         if len(sub_questions) > 2 and len(rule_based_deps) == 0:
             return True
         if len(query.split()) > 30:
@@ -287,17 +290,17 @@ class DependencyDetector:
         )
 
         try:
-            response = self.llm_client.messages.create(
+            self.llm_client.messages.create(
                 model="claude-3-5-haiku-20241022",
                 max_tokens=500,
                 messages=[{"role": "user", "content": prompt}],
             )
-            
+
             # Parse LLM response (expecting JSON)
             # Implementation would parse the response and create Dependency objects
             # For now, return empty list as placeholder
             return []
-            
+
         except Exception as e:
             # Log error and fall back to rule-based only
             print(f"LLM dependency detection failed: {e}")

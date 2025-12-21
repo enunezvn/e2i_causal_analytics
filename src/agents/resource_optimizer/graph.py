@@ -11,13 +11,13 @@ from typing import Any
 
 from langgraph.graph import END, StateGraph
 
-from .state import ResourceOptimizerState
 from .nodes import (
-    ProblemFormulatorNode,
-    OptimizerNode,
-    ScenarioAnalyzerNode,
     ImpactProjectorNode,
+    OptimizerNode,
+    ProblemFormulatorNode,
+    ScenarioAnalyzerNode,
 )
+from .state import ResourceOptimizerState
 
 logger = logging.getLogger(__name__)
 

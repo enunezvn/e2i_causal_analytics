@@ -10,7 +10,7 @@ import logging
 import time
 from typing import Any, Dict, List, Optional
 
-from ..state import FeedbackLearnerState, FeedbackItem, FeedbackSummary
+from ..state import FeedbackItem, FeedbackLearnerState, FeedbackSummary
 
 logger = logging.getLogger(__name__)
 
@@ -89,9 +89,7 @@ class FeedbackCollectorNode:
                 "status": "failed",
             }
 
-    async def _collect_user_feedback(
-        self, state: FeedbackLearnerState
-    ) -> List[FeedbackItem]:
+    async def _collect_user_feedback(self, state: FeedbackLearnerState) -> List[FeedbackItem]:
         """Collect explicit user feedback (ratings, corrections)."""
         if not self.feedback_store:
             return []
@@ -123,9 +121,7 @@ class FeedbackCollectorNode:
             logger.warning(f"Failed to collect user feedback: {e}")
             return []
 
-    async def _collect_outcome_feedback(
-        self, state: FeedbackLearnerState
-    ) -> List[FeedbackItem]:
+    async def _collect_outcome_feedback(self, state: FeedbackLearnerState) -> List[FeedbackItem]:
         """Collect outcome-based feedback (predictions vs actuals)."""
         if not self.outcome_store:
             return []
@@ -163,9 +159,7 @@ class FeedbackCollectorNode:
             logger.warning(f"Failed to collect outcome feedback: {e}")
             return []
 
-    async def _collect_implicit_feedback(
-        self, state: FeedbackLearnerState
-    ) -> List[FeedbackItem]:
+    async def _collect_implicit_feedback(self, state: FeedbackLearnerState) -> List[FeedbackItem]:
         """Collect implicit feedback from user behavior."""
         # Could include: follow-up questions (confusion), session abandonment, etc.
         # For now, returns empty list
@@ -196,9 +190,7 @@ class FeedbackCollectorNode:
             by_agent[agent] = by_agent.get(agent, 0) + 1
 
             # Ratings
-            if fb_type == "rating" and isinstance(
-                item["user_feedback"], (int, float)
-            ):
+            if fb_type == "rating" and isinstance(item["user_feedback"], (int, float)):
                 ratings.append(float(item["user_feedback"]))
 
         return FeedbackSummary(

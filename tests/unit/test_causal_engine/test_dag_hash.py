@@ -5,11 +5,12 @@ Tests compute_dag_hash and related functions.
 """
 
 import pytest
+
 from src.causal_engine import (
     compute_dag_hash,
     compute_dag_hash_from_dot,
-    is_dag_changed,
     get_dag_changes,
+    is_dag_changed,
     validate_dag_hash,
 )
 
@@ -183,7 +184,7 @@ class TestComputeDagHashFromDot:
 
     def test_parse_dot_format(self):
         """Test parsing DOT format string."""
-        dot_string = '''digraph CausalDAG {
+        dot_string = """digraph CausalDAG {
   rankdir=LR;
   node [shape=box];
 
@@ -191,7 +192,7 @@ class TestComputeDagHashFromDot:
   "outcome" [label="Outcome"];
 
   "treatment" -> "outcome";
-}'''
+}"""
 
         hash_result = compute_dag_hash_from_dot(dot_string)
 
@@ -205,7 +206,7 @@ class TestComputeDagHashFromDot:
             "edges": [("treatment", "outcome")],
         }
 
-        dot_string = '''digraph CausalDAG {
+        dot_string = """digraph CausalDAG {
   rankdir=LR;
   node [shape=box];
 
@@ -213,7 +214,7 @@ class TestComputeDagHashFromDot:
   "outcome" [label="Outcome"];
 
   "treatment" -> "outcome";
-}'''
+}"""
 
         dict_hash = compute_dag_hash(causal_graph=graph)
         dot_hash = compute_dag_hash_from_dot(dot_string)

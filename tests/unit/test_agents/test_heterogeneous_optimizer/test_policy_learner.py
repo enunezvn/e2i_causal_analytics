@@ -1,10 +1,11 @@
 """Tests for Policy Learner Node."""
 
 import pytest
+
 from src.agents.heterogeneous_optimizer.nodes.policy_learner import PolicyLearnerNode
 from src.agents.heterogeneous_optimizer.state import (
-    HeterogeneousOptimizerState,
     CATEResult,
+    HeterogeneousOptimizerState,
     SegmentProfile,
 )
 
@@ -13,7 +14,12 @@ class TestPolicyLearnerNode:
     """Test PolicyLearnerNode."""
 
     def _create_cate_result(
-        self, segment_name: str, segment_value: str, cate: float, sample_size: int = 100, significant: bool = True
+        self,
+        segment_name: str,
+        segment_value: str,
+        cate: float,
+        sample_size: int = 100,
+        significant: bool = True,
     ) -> CATEResult:
         """Create test CATE result."""
         return {
@@ -181,7 +187,9 @@ class TestPolicyLearnerNode:
         result = await node.execute(state)
 
         # Expected lift should be sum of incremental outcomes
-        expected_total = sum(r["expected_incremental_outcome"] for r in result["policy_recommendations"])
+        expected_total = sum(
+            r["expected_incremental_outcome"] for r in result["policy_recommendations"]
+        )
 
         assert abs(result["expected_total_lift"] - expected_total) < 0.01
 
@@ -202,8 +210,12 @@ class TestPolicyLearnerNode:
         node = PolicyLearnerNode()
 
         # Create two similar segments with different sample sizes
-        result_small = self._create_cate_result("test", "small", 0.30, sample_size=50, significant=False)
-        result_large = self._create_cate_result("test", "large", 0.30, sample_size=500, significant=False)
+        result_small = self._create_cate_result(
+            "test", "small", 0.30, sample_size=50, significant=False
+        )
+        result_large = self._create_cate_result(
+            "test", "large", 0.30, sample_size=500, significant=False
+        )
 
         rec_small = node._generate_recommendation(result_small, 0.25)
         rec_large = node._generate_recommendation(result_large, 0.25)
@@ -216,8 +228,12 @@ class TestPolicyLearnerNode:
         """Test confidence increases with statistical significance."""
         node = PolicyLearnerNode()
 
-        result_sig = self._create_cate_result("test", "sig", 0.30, sample_size=100, significant=True)
-        result_nonsig = self._create_cate_result("test", "nonsig", 0.30, sample_size=100, significant=False)
+        result_sig = self._create_cate_result(
+            "test", "sig", 0.30, sample_size=100, significant=True
+        )
+        result_nonsig = self._create_cate_result(
+            "test", "nonsig", 0.30, sample_size=100, significant=False
+        )
 
         rec_sig = node._generate_recommendation(result_sig, 0.25)
         rec_nonsig = node._generate_recommendation(result_nonsig, 0.25)
@@ -235,7 +251,10 @@ class TestPolicyLearnerNode:
 
         recs = result["policy_recommendations"]
         for i in range(len(recs) - 1):
-            assert recs[i]["expected_incremental_outcome"] >= recs[i + 1]["expected_incremental_outcome"]
+            assert (
+                recs[i]["expected_incremental_outcome"]
+                >= recs[i + 1]["expected_incremental_outcome"]
+            )
 
     @pytest.mark.asyncio
     async def test_top_20_recommendations(self):
@@ -245,8 +264,7 @@ class TestPolicyLearnerNode:
         # Create state with many segments
         cate_by_segment = {
             "segment1": [
-                self._create_cate_result("segment1", f"value_{i}", 0.30, 100)
-                for i in range(30)
+                self._create_cate_result("segment1", f"value_{i}", 0.30, 100) for i in range(30)
             ]
         }
 
@@ -361,9 +379,7 @@ class TestPolicyLearnerEdgeCases:
         """Test with zero CATE estimate."""
         node = PolicyLearnerNode()
 
-        cate_by_segment = {
-            "segment1": [self._create_cate_result("segment1", "value1", 0.0)]
-        }
+        cate_by_segment = {"segment1": [self._create_cate_result("segment1", "value1", 0.0)]}
         state = self._create_test_state(cate_by_segment)
 
         result = await node.execute(state)
@@ -376,9 +392,7 @@ class TestPolicyLearnerEdgeCases:
         """Test with negative CATE estimate."""
         node = PolicyLearnerNode()
 
-        cate_by_segment = {
-            "segment1": [self._create_cate_result("segment1", "value1", -0.10)]
-        }
+        cate_by_segment = {"segment1": [self._create_cate_result("segment1", "value1", -0.10)]}
         state = self._create_test_state(cate_by_segment)
 
         result = await node.execute(state)
@@ -393,9 +407,7 @@ class TestPolicyLearnerEdgeCases:
         """Test with very high CATE estimate."""
         node = PolicyLearnerNode()
 
-        cate_by_segment = {
-            "segment1": [self._create_cate_result("segment1", "value1", 5.0)]
-        }
+        cate_by_segment = {"segment1": [self._create_cate_result("segment1", "value1", 5.0)]}
         state = self._create_test_state(cate_by_segment, overall_ate=1.0)
 
         result = await node.execute(state)

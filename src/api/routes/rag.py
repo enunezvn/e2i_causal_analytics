@@ -32,20 +32,18 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from src.rag import (
-    HybridRetriever,
     EntityExtractor,
+    ExtractedEntities,
     HealthMonitor,
-    SearchLogger,
+    HybridRetriever,
     RAGConfig,
     RetrievalResult,
-    RetrievalSource,
-    ExtractedEntities,
-    BackendStatus,
+    SearchLogger,
 )
 from src.rag.exceptions import (
-    RAGError,
-    CircuitBreakerOpenError,
     BackendTimeoutError,
+    CircuitBreakerOpenError,
+    RAGError,
 )
 
 logger = logging.getLogger(__name__)
@@ -60,21 +58,24 @@ router = APIRouter(prefix="/api/v1/rag", tags=["Hybrid RAG"])
 
 class SearchMode(str, Enum):
     """Search mode options."""
-    HYBRID = "hybrid"       # Use all backends with RRF fusion
+
+    HYBRID = "hybrid"  # Use all backends with RRF fusion
     VECTOR_ONLY = "vector"  # Semantic search only
     FULLTEXT_ONLY = "fulltext"  # Keyword search only
-    GRAPH_ONLY = "graph"    # Graph traversal only
+    GRAPH_ONLY = "graph"  # Graph traversal only
 
 
 class ResultFormat(str, Enum):
     """Result format options."""
-    FULL = "full"           # All metadata and scores
-    COMPACT = "compact"     # Essential fields only
-    IDS_ONLY = "ids"        # Just document IDs
+
+    FULL = "full"  # All metadata and scores
+    COMPACT = "compact"  # Essential fields only
+    IDS_ONLY = "ids"  # Just document IDs
 
 
 class SearchResultItem(BaseModel):
     """Single search result item."""
+
     document_id: str = Field(..., description="Unique document identifier")
     content: str = Field(..., description="Document content or snippet")
     score: float = Field(..., description="Relevance score (0-1)")
@@ -88,17 +89,14 @@ class SearchResultItem(BaseModel):
                 "content": "Kisqali TRx decline in Q3 2024 was caused by...",
                 "score": 0.89,
                 "source": "vector",
-                "metadata": {
-                    "brand": "Kisqali",
-                    "region": "northeast",
-                    "time_period": "Q3_2024"
-                }
+                "metadata": {"brand": "Kisqali", "region": "northeast", "time_period": "Q3_2024"},
             }
         }
 
 
 class ExtractedEntitiesResponse(BaseModel):
     """Extracted entities from query."""
+
     brands: List[str] = Field(default_factory=list)
     regions: List[str] = Field(default_factory=list)
     kpis: List[str] = Field(default_factory=list)
@@ -110,11 +108,14 @@ class ExtractedEntitiesResponse(BaseModel):
 
 class SearchRequest(BaseModel):
     """Hybrid search request payload."""
+
     query: str = Field(..., min_length=1, max_length=1000, description="Natural language query")
     mode: SearchMode = Field(default=SearchMode.HYBRID, description="Search mode")
     top_k: int = Field(default=10, ge=1, le=50, description="Maximum results to return")
     min_score: float = Field(default=0.0, ge=0.0, le=1.0, description="Minimum relevance score")
-    require_all_sources: bool = Field(default=False, description="Require results from all backends")
+    require_all_sources: bool = Field(
+        default=False, description="Require results from all backends"
+    )
     include_graph_boost: bool = Field(default=True, description="Apply graph context boost")
     filters: Optional[Dict[str, Any]] = Field(None, description="Optional metadata filters")
     format: ResultFormat = Field(default=ResultFormat.FULL, description="Result format")
@@ -128,13 +129,14 @@ class SearchRequest(BaseModel):
                 "mode": "hybrid",
                 "top_k": 10,
                 "min_score": 0.5,
-                "include_graph_boost": True
+                "include_graph_boost": True,
             }
         }
 
 
 class SearchResponse(BaseModel):
     """Hybrid search response payload."""
+
     search_id: str = Field(..., description="Unique search identifier")
     query: str = Field(..., description="Original query")
     timestamp: datetime = Field(..., description="Search timestamp")
@@ -164,20 +166,17 @@ class SearchResponse(BaseModel):
                     "brands": ["Kisqali"],
                     "regions": ["west"],
                     "kpis": ["trx"],
-                    "time_references": ["Q3"]
+                    "time_references": ["Q3"],
                 },
-                "stats": {
-                    "vector_count": 5,
-                    "fulltext_count": 3,
-                    "graph_count": 2
-                },
-                "latency_ms": 234.5
+                "stats": {"vector_count": 5, "fulltext_count": 3, "graph_count": 2},
+                "latency_ms": 234.5,
             }
         }
 
 
 class GraphNode(BaseModel):
     """Node in the causal graph."""
+
     id: str = Field(..., description="Node identifier")
     label: str = Field(..., description="Display label")
     type: str = Field(..., description="Node type (brand/kpi/region/agent)")
@@ -186,6 +185,7 @@ class GraphNode(BaseModel):
 
 class GraphEdge(BaseModel):
     """Edge in the causal graph."""
+
     source: str = Field(..., description="Source node ID")
     target: str = Field(..., description="Target node ID")
     relationship: str = Field(..., description="Relationship type")
@@ -195,6 +195,7 @@ class GraphEdge(BaseModel):
 
 class CausalSubgraphResponse(BaseModel):
     """Causal subgraph for visualization."""
+
     entity: str = Field(..., description="Center entity of the subgraph")
     nodes: List[GraphNode] = Field(..., description="Graph nodes")
     edges: List[GraphEdge] = Field(..., description="Graph edges")
@@ -206,6 +207,7 @@ class CausalSubgraphResponse(BaseModel):
 
 class CausalPathResponse(BaseModel):
     """Causal path between two entities."""
+
     source: str = Field(..., description="Source entity")
     target: str = Field(..., description="Target entity")
     paths: List[List[str]] = Field(..., description="List of paths (node sequences)")
@@ -216,6 +218,7 @@ class CausalPathResponse(BaseModel):
 
 class BackendHealthStatus(BaseModel):
     """Health status for a single backend."""
+
     status: str = Field(..., description="healthy/degraded/unhealthy/unknown")
     latency_ms: float = Field(..., description="Last check latency")
     last_check: datetime = Field(..., description="Last health check time")
@@ -226,6 +229,7 @@ class BackendHealthStatus(BaseModel):
 
 class HealthResponse(BaseModel):
     """Overall RAG health response."""
+
     status: str = Field(..., description="Overall status: healthy/degraded/unhealthy")
     timestamp: datetime = Field(..., description="Health check timestamp")
     backends: Dict[str, BackendHealthStatus] = Field(..., description="Per-backend health")
@@ -297,6 +301,7 @@ class RAGService:
         """Get or create HealthMonitor."""
         if self._health_monitor is None:
             from src.rag.config import HealthMonitorConfig
+
             self._health_monitor = HealthMonitor(config=HealthMonitorConfig())
         return self._health_monitor
 
@@ -409,7 +414,7 @@ def get_rag_service() -> RAGService:
     - "Why did Kisqali TRx drop in the West during Q3?"
     - "Compare Remibrutinib conversion rates across regions"
     - "What caused the adoption decline for Fabhalta?"
-    """
+    """,
 )
 async def search(
     request: SearchRequest,
@@ -437,29 +442,35 @@ async def search(
         result_items = []
         for r in results:
             if request.format == ResultFormat.IDS_ONLY:
-                result_items.append(SearchResultItem(
-                    document_id=r.id,
-                    content="",
-                    score=r.score,
-                    source=r.source.value,
-                    metadata={},
-                ))
+                result_items.append(
+                    SearchResultItem(
+                        document_id=r.id,
+                        content="",
+                        score=r.score,
+                        source=r.source.value,
+                        metadata={},
+                    )
+                )
             elif request.format == ResultFormat.COMPACT:
-                result_items.append(SearchResultItem(
-                    document_id=r.id,
-                    content=r.content[:200] + "..." if len(r.content) > 200 else r.content,
-                    score=r.score,
-                    source=r.source.value,
-                    metadata={},
-                ))
+                result_items.append(
+                    SearchResultItem(
+                        document_id=r.id,
+                        content=r.content[:200] + "..." if len(r.content) > 200 else r.content,
+                        score=r.score,
+                        source=r.source.value,
+                        metadata={},
+                    )
+                )
             else:  # FULL
-                result_items.append(SearchResultItem(
-                    document_id=r.id,
-                    content=r.content,
-                    score=r.score,
-                    source=r.source.value,
-                    metadata=r.metadata or {},
-                ))
+                result_items.append(
+                    SearchResultItem(
+                        document_id=r.id,
+                        content=r.content,
+                        score=r.score,
+                        source=r.source.value,
+                        metadata=r.metadata or {},
+                    )
+                )
 
         latency_ms = (time.time() - start_time) * 1000
 
@@ -485,13 +496,10 @@ async def search(
     except CircuitBreakerOpenError as e:
         raise HTTPException(
             status_code=503,
-            detail=f"Backend temporarily unavailable: {e.backend}. Retry after {e.reset_time_seconds:.0f}s"
+            detail=f"Backend temporarily unavailable: {e.backend}. Retry after {e.reset_time_seconds:.0f}s",
         )
     except BackendTimeoutError as e:
-        raise HTTPException(
-            status_code=504,
-            detail=f"Search timed out: {str(e)}"
-        )
+        raise HTTPException(status_code=504, detail=f"Search timed out: {str(e)}")
     except RAGError as e:
         logger.error(f"RAG error during search: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -514,7 +522,7 @@ async def search(
     - KPIs: trx, nrx, conversion_rate, market_share
     - Regions: northeast, south, midwest, west
     - Agents: causal_impact, drift_monitor, gap_analyzer
-    """
+    """,
 )
 async def get_causal_subgraph(
     entity: str,
@@ -584,7 +592,7 @@ async def get_causal_subgraph(
     - Why did a KPI drop?
     - What connects a brand to a region's performance?
     - How are different agents related?
-    """
+    """,
 )
 async def get_causal_path(
     source: str = Query(..., description="Source entity"),
@@ -635,7 +643,7 @@ async def get_causal_path(
     - Query understanding before search
     - Building graph queries
     - Debugging entity extraction
-    """
+    """,
 )
 async def extract_entities(
     query: str = Query(..., min_length=1, max_length=1000, description="Query to analyze"),
@@ -672,7 +680,7 @@ async def extract_entities(
     - Per-backend status (vector, fulltext, graph)
     - Circuit breaker states
     - Recent errors
-    """
+    """,
 )
 async def get_health(
     service: RAGService = Depends(get_rag_service),
@@ -686,9 +694,17 @@ async def get_health(
             backends[name] = BackendHealthStatus(
                 status=status.get("status", "unknown"),
                 latency_ms=status.get("latency_ms", 0.0),
-                last_check=datetime.fromisoformat(status["last_check"]) if status.get("last_check") else datetime.now(timezone.utc),
+                last_check=(
+                    datetime.fromisoformat(status["last_check"])
+                    if status.get("last_check")
+                    else datetime.now(timezone.utc)
+                ),
                 consecutive_failures=status.get("consecutive_failures", 0),
-                circuit_breaker_state=status.get("circuit_breaker", {}).get("state") if status.get("circuit_breaker") else None,
+                circuit_breaker_state=(
+                    status.get("circuit_breaker", {}).get("state")
+                    if status.get("circuit_breaker")
+                    else None
+                ),
                 error=status.get("error"),
             )
 
@@ -711,9 +727,7 @@ async def get_health(
 
 
 @router.get(
-    "/stats",
-    summary="RAG usage statistics",
-    description="Get usage statistics for the RAG system."
+    "/stats", summary="RAG usage statistics", description="Get usage statistics for the RAG system."
 )
 async def get_stats(
     hours: int = Query(default=24, ge=1, le=168, description="Hours to look back"),
@@ -732,5 +746,5 @@ async def get_stats(
             "graph": 0,
         },
         "error_rate": 0.0,
-        "message": "Statistics will be populated once search logging is configured"
+        "message": "Statistics will be populated once search logging is configured",
     }

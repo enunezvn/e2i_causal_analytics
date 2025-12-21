@@ -18,8 +18,8 @@ Integration:
 - Database: ml_shap_analyses table
 """
 
-import uuid
-from typing import Dict, Any
+from typing import Any, Dict
+
 from .graph import create_feature_analyzer_graph
 from .state import FeatureAnalyzerState
 
@@ -109,9 +109,9 @@ class FeatureAnalyzerAgent:
 
         # Calculate total computation time
         total_time = (
-            final_state.get("shap_computation_time_seconds", 0.0) +
-            final_state.get("interaction_computation_time_seconds", 0.0) +
-            final_state.get("interpretation_time_seconds", 0.0)
+            final_state.get("shap_computation_time_seconds", 0.0)
+            + final_state.get("interaction_computation_time_seconds", 0.0)
+            + final_state.get("interpretation_time_seconds", 0.0)
         )
 
         # Build output
@@ -165,8 +165,8 @@ class FeatureAnalyzerAgent:
             "interactions": self._build_interaction_list(state),
             "samples_analyzed": state.get("samples_analyzed", 0),
             "computation_time_seconds": (
-                state.get("shap_computation_time_seconds", 0.0) +
-                state.get("interaction_computation_time_seconds", 0.0)
+                state.get("shap_computation_time_seconds", 0.0)
+                + state.get("interaction_computation_time_seconds", 0.0)
             ),
         }
 
@@ -183,11 +183,13 @@ class FeatureAnalyzerAgent:
 
         feature_importance_list = []
         for rank, (feature, importance) in enumerate(global_importance_ranked, 1):
-            feature_importance_list.append({
-                "feature": feature,
-                "importance": importance,
-                "rank": rank,
-            })
+            feature_importance_list.append(
+                {
+                    "feature": feature,
+                    "importance": importance,
+                    "rank": rank,
+                }
+            )
 
         return feature_importance_list
 
@@ -212,11 +214,13 @@ class FeatureAnalyzerAgent:
         interaction_list = []
         for feat1, feat2, strength in top_interactions_raw[:5]:
             interaction_type = "amplifying" if strength > 0 else "opposing"
-            interaction_list.append({
-                "features": [feat1, feat2],
-                "interaction_strength": float(strength),
-                "interpretation": f"{feat1} and {feat2} {interaction_type} (strength: {abs(strength):.3f})"
-            })
+            interaction_list.append(
+                {
+                    "features": [feat1, feat2],
+                    "interaction_strength": float(strength),
+                    "interpretation": f"{feat1} and {feat2} {interaction_type} (strength: {abs(strength):.3f})",
+                }
+            )
 
         return interaction_list
 

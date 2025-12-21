@@ -4,8 +4,9 @@ User Session Repository.
 Handles MAU/WAU/DAU tracking for V3 KPIs.
 """
 
-from typing import List, Dict, Any, Optional
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
+from typing import Any, Dict, List, Optional
+
 from src.repositories.base import BaseRepository
 
 
@@ -154,18 +155,9 @@ class UserSessionRepository(BaseRepository):
             }
 
         # Compute aggregations in Python
-        durations = [
-            r.get("session_duration_seconds", 0) or 0
-            for r in result.data
-        ]
-        pages = [
-            r.get("page_views", 0) or 0
-            for r in result.data
-        ]
-        queries = [
-            r.get("queries_executed", 0) or 0
-            for r in result.data
-        ]
+        durations = [r.get("session_duration_seconds", 0) or 0 for r in result.data]
+        pages = [r.get("page_views", 0) or 0 for r in result.data]
+        queries = [r.get("queries_executed", 0) or 0 for r in result.data]
 
         total = len(result.data)
 

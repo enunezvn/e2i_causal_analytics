@@ -15,10 +15,10 @@ Version: 4.1.0
 """
 
 from .shap_explainer_realtime import (
+    ExplainerType,
     RealTimeSHAPExplainer,
     SHAPResult,
-    ExplainerType,
-    SHAPVisualization
+    SHAPVisualization,
 )
 
 __all__ = [

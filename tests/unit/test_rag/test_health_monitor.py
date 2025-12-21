@@ -5,17 +5,16 @@ Tests for CircuitBreaker and HealthMonitor classes.
 All external dependencies are mocked.
 """
 
-import asyncio
-import pytest
 import time
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
-from src.rag.health_monitor import CircuitBreaker, CircuitState, HealthMonitor
+import pytest
+
 from src.rag.config import HealthMonitorConfig
-from src.rag.types import BackendStatus, BackendHealth
 from src.rag.exceptions import CircuitBreakerOpenError
-
+from src.rag.health_monitor import CircuitBreaker, CircuitState, HealthMonitor
+from src.rag.types import BackendHealth, BackendStatus
 
 # ============================================================================
 # Fixtures
@@ -26,10 +25,7 @@ from src.rag.exceptions import CircuitBreakerOpenError
 def circuit_breaker():
     """Create a CircuitBreaker with default settings."""
     return CircuitBreaker(
-        name="test_backend",
-        failure_threshold=3,
-        success_threshold=2,
-        reset_timeout_seconds=60.0
+        name="test_backend", failure_threshold=3, success_threshold=2, reset_timeout_seconds=60.0
     )
 
 
@@ -37,11 +33,9 @@ def circuit_breaker():
 def mock_backend():
     """Create a mock backend with health_check method."""
     backend = MagicMock()
-    backend.health_check = AsyncMock(return_value={
-        "status": "healthy",
-        "latency_ms": 50.0,
-        "error": None
-    })
+    backend.health_check = AsyncMock(
+        return_value={"status": "healthy", "latency_ms": 50.0, "error": None}
+    )
     return backend
 
 
@@ -53,17 +47,14 @@ def health_monitor_config():
         degraded_latency_ms=1000.0,
         unhealthy_consecutive_failures=3,
         circuit_breaker_enabled=True,
-        circuit_breaker_reset_seconds=5.0
+        circuit_breaker_reset_seconds=5.0,
     )
 
 
 @pytest.fixture
 def health_monitor(health_monitor_config, mock_backend):
     """Create a HealthMonitor with mock backends."""
-    monitor = HealthMonitor(
-        config=health_monitor_config,
-        backends={"test": mock_backend}
-    )
+    monitor = HealthMonitor(config=health_monitor_config, backends={"test": mock_backend})
     return monitor
 
 
@@ -217,9 +208,7 @@ class TestHealthMonitor:
         """Test is_available returns True for healthy backend."""
         # Set health status to healthy
         health_monitor._health_status["test"] = BackendHealth(
-            status=BackendStatus.HEALTHY,
-            latency_ms=50.0,
-            last_check=datetime.now(timezone.utc)
+            status=BackendStatus.HEALTHY, latency_ms=50.0, last_check=datetime.now(timezone.utc)
         )
 
         assert health_monitor.is_available("test") is True
@@ -227,9 +216,7 @@ class TestHealthMonitor:
     def test_is_available_degraded(self, health_monitor):
         """Test is_available returns True for degraded backend."""
         health_monitor._health_status["test"] = BackendHealth(
-            status=BackendStatus.DEGRADED,
-            latency_ms=1500.0,
-            last_check=datetime.now(timezone.utc)
+            status=BackendStatus.DEGRADED, latency_ms=1500.0, last_check=datetime.now(timezone.utc)
         )
 
         assert health_monitor.is_available("test") is True
@@ -240,7 +227,7 @@ class TestHealthMonitor:
             status=BackendStatus.UNHEALTHY,
             latency_ms=0.0,
             last_check=datetime.now(timezone.utc),
-            error_message="Connection failed"
+            error_message="Connection failed",
         )
 
         assert health_monitor.is_available("test") is False
@@ -272,7 +259,7 @@ class TestHealthMonitor:
         mock_backend.health_check.return_value = {
             "status": "healthy",
             "latency_ms": 2000.0,  # Above degraded threshold
-            "error": None
+            "error": None,
         }
 
         health = await health_monitor.check_backend_health("test")
@@ -286,7 +273,7 @@ class TestHealthMonitor:
         mock_backend.health_check.return_value = {
             "status": "unhealthy",
             "latency_ms": 0,
-            "error": "Connection refused"
+            "error": "Connection refused",
         }
 
         health = await health_monitor.check_backend_health("test")
@@ -340,7 +327,7 @@ class TestHealthMonitor:
         mock_backend.health_check.return_value = {
             "status": "healthy",
             "latency_ms": 2000.0,
-            "error": None
+            "error": None,
         }
         await health_monitor.check_backend_health("test")
 
@@ -354,7 +341,7 @@ class TestHealthMonitor:
         mock_backend.health_check.return_value = {
             "status": "unhealthy",
             "latency_ms": 0,
-            "error": "Failed"
+            "error": "Failed",
         }
         await health_monitor.check_backend_health("test")
 
@@ -365,13 +352,11 @@ class TestHealthMonitor:
     @pytest.mark.asyncio
     async def test_wrap_with_circuit_breaker_success(self, health_monitor):
         """Test wrapping operation with circuit breaker - success."""
+
         async def mock_operation():
             return "success"
 
-        result = await health_monitor.wrap_with_circuit_breaker(
-            "test",
-            mock_operation
-        )
+        result = await health_monitor.wrap_with_circuit_breaker("test", mock_operation)
 
         assert result == "success"
         # Circuit should record success
@@ -380,14 +365,12 @@ class TestHealthMonitor:
     @pytest.mark.asyncio
     async def test_wrap_with_circuit_breaker_failure(self, health_monitor):
         """Test wrapping operation with circuit breaker - failure."""
+
         async def mock_operation():
             raise ValueError("Operation failed")
 
         with pytest.raises(ValueError):
-            await health_monitor.wrap_with_circuit_breaker(
-                "test",
-                mock_operation
-            )
+            await health_monitor.wrap_with_circuit_breaker("test", mock_operation)
 
         # Circuit should record failure
         assert health_monitor._circuit_breakers["test"]._failure_count == 1
@@ -402,29 +385,20 @@ class TestHealthMonitor:
             return "success"
 
         with pytest.raises(CircuitBreakerOpenError):
-            await health_monitor.wrap_with_circuit_breaker(
-                "test",
-                mock_operation
-            )
+            await health_monitor.wrap_with_circuit_breaker("test", mock_operation)
 
     @pytest.mark.asyncio
     async def test_wrap_with_circuit_breaker_disabled(self, health_monitor_config, mock_backend):
         """Test wrapping when circuit breaker is disabled."""
         health_monitor_config.circuit_breaker_enabled = False
-        monitor = HealthMonitor(
-            config=health_monitor_config,
-            backends={"test": mock_backend}
-        )
+        monitor = HealthMonitor(config=health_monitor_config, backends={"test": mock_backend})
         monitor._circuit_breakers["test"].force_open()
 
         async def mock_operation():
             return "success"
 
         # Should still execute even though circuit is "open"
-        result = await monitor.wrap_with_circuit_breaker(
-            "test",
-            mock_operation
-        )
+        result = await monitor.wrap_with_circuit_breaker("test", mock_operation)
 
         assert result == "success"
 
@@ -486,11 +460,9 @@ class TestHealthMonitorIntegration:
         backends = {}
         for name in ["vector", "fulltext", "graph"]:
             backend = MagicMock()
-            backend.health_check = AsyncMock(return_value={
-                "status": "healthy",
-                "latency_ms": 50.0,
-                "error": None
-            })
+            backend.health_check = AsyncMock(
+                return_value={"status": "healthy", "latency_ms": 50.0, "error": None}
+            )
             backends[name] = backend
 
         return HealthMonitor(config=health_monitor_config, backends=backends)
@@ -510,7 +482,7 @@ class TestHealthMonitorIntegration:
         multi_backend_monitor._backends["graph"].health_check.return_value = {
             "status": "unhealthy",
             "latency_ms": 0,
-            "error": "Connection refused"
+            "error": "Connection refused",
         }
 
         await multi_backend_monitor.check_all_backends()
@@ -527,7 +499,7 @@ class TestHealthMonitorIntegration:
         multi_backend_monitor._backends["fulltext"].health_check.return_value = {
             "status": "unhealthy",
             "latency_ms": 0,
-            "error": "Timeout"
+            "error": "Timeout",
         }
 
         # Check health 3 times (threshold)

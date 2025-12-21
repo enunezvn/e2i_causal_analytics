@@ -6,33 +6,33 @@ Tests the Feedback Learner integration from Causal Validation Protocol.
 Phase 4: Connect Feedback Learner to validation outcomes
 """
 
+
 import pytest
-from unittest.mock import Mock, AsyncMock
 
 from src.causal_engine import (
-    # ENUMs
-    ValidationOutcomeType,
+    ExperimentKnowledgeStore,
     FailureCategory,
+    GateDecision,
+    # Store classes
+    InMemoryValidationOutcomeStore,
+    # Refutation types for test creation
+    RefutationResult,
+    RefutationStatus,
+    RefutationSuite,
+    RefutationTestType,
+    ValidationFailurePattern,
+    ValidationLearning,
     # Dataclasses
     ValidationOutcome,
-    ValidationFailurePattern,
+    # ENUMs
+    ValidationOutcomeType,
     # Functions
     create_validation_outcome,
     extract_failure_patterns,
-    # Store classes
-    InMemoryValidationOutcomeStore,
-    ExperimentKnowledgeStore,
-    ValidationLearning,
+    get_experiment_knowledge_store,
     # Global accessors
     get_validation_outcome_store,
-    get_experiment_knowledge_store,
     log_validation_outcome,
-    # Refutation types for test creation
-    RefutationResult,
-    RefutationSuite,
-    RefutationStatus,
-    GateDecision,
-    RefutationTestType,
 )
 
 
@@ -496,9 +496,7 @@ class TestInMemoryValidationOutcomeStore:
         )
         await store.store(other_outcome)
 
-        failures = await store.query_failures(
-            treatment_variable="rep_visits"
-        )
+        failures = await store.query_failures(treatment_variable="rep_visits")
 
         assert len(failures) == 1
         assert failures[0].treatment_variable == "rep_visits"

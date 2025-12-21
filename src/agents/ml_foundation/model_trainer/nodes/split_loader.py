@@ -3,7 +3,7 @@
 This module loads and validates ML data splits (train/val/test/holdout).
 """
 
-from typing import Dict, Any
+from typing import Any, Dict
 
 
 async def load_splits(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -32,10 +32,7 @@ async def load_splits(state: Dict[str, Any]) -> Dict[str, Any]:
     experiment_id = state.get("experiment_id")
 
     # Check if splits are already in state (direct pass from data_preparer)
-    if all(
-        key in state
-        for key in ["train_data", "validation_data", "test_data", "holdout_data"]
-    ):
+    if all(key in state for key in ["train_data", "validation_data", "test_data", "holdout_data"]):
         # Splits already loaded, validate and calculate sizes
         train_data = state["train_data"]
         validation_data = state["validation_data"]

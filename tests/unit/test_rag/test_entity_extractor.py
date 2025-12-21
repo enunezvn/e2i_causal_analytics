@@ -7,13 +7,10 @@ fixed E2I domain vocabularies.
 All tests use vocabulary-based matching with no medical NER.
 """
 
+
 import pytest
-from unittest.mock import MagicMock, patch
 
 from src.rag.entity_extractor import EntityExtractor, EntityVocabulary
-from src.rag.types import ExtractedEntities
-from src.rag.exceptions import EntityExtractionError
-
 
 # ============================================================================
 # Fixtures
@@ -369,9 +366,7 @@ class TestConfidenceScores:
 
     def test_extract_with_confidence(self, extractor):
         """Test extracting with confidence scores."""
-        result = extractor.extract_with_confidence(
-            "Show Kisqali TRx in West"
-        )
+        result = extractor.extract_with_confidence("Show Kisqali TRx in West")
 
         assert "brands" in result
         assert len(result["brands"]) == 1
@@ -431,6 +426,6 @@ class TestErrorHandling:
         """Test that None doesn't crash."""
         # This should raise an error or handle gracefully
         try:
-            entities = extractor.extract(None)  # type: ignore
+            extractor.extract(None)  # type: ignore
         except (TypeError, AttributeError):
             pass  # Expected behavior

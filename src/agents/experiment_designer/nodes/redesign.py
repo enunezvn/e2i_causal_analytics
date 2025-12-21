@@ -13,9 +13,9 @@ from datetime import datetime, timezone
 from typing import Any
 
 from src.agents.experiment_designer.state import (
-    ExperimentDesignState,
-    ErrorDetails,
     DesignIteration,
+    ErrorDetails,
+    ExperimentDesignState,
 )
 
 
@@ -89,8 +89,7 @@ class RedesignNode:
                 "design_type": state.get("design_type", "RCT"),
                 "validity_threats_identified": len(state.get("validity_threats", [])),
                 "critical_threats": sum(
-                    1 for t in state.get("validity_threats", [])
-                    if t.get("severity") == "critical"
+                    1 for t in state.get("validity_threats", []) if t.get("severity") == "critical"
                 ),
                 "power_achieved": power_analysis.get("achieved_power", 0.0),
                 "redesign_reason": self._get_redesign_reason(state),

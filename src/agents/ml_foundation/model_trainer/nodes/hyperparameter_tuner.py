@@ -3,8 +3,8 @@
 This module uses Optuna to optimize hyperparameters on the validation set.
 """
 
-from typing import Dict, Any, Optional
 import time
+from typing import Any, Dict
 
 
 async def tune_hyperparameters(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -41,11 +41,11 @@ async def tune_hyperparameters(state: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     # Extract HPO configuration
-    hpo_trials = state.get("hpo_trials", 50)
-    hpo_timeout_hours = state.get("hpo_timeout_hours")
+    state.get("hpo_trials", 50)
+    state.get("hpo_timeout_hours")
     hyperparameter_search_space = state.get("hyperparameter_search_space", {})
-    algorithm_class = state.get("algorithm_class")
-    problem_type = state.get("problem_type")
+    state.get("algorithm_class")
+    state.get("problem_type")
 
     # Extract preprocessed data
     X_train_preprocessed = state.get("X_train_preprocessed")

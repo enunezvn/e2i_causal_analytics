@@ -4,7 +4,8 @@ Deep Reasoning node that converts technical results into user-friendly narrative
 """
 
 import time
-from typing import Dict, Literal
+from typing import Dict
+
 from src.agents.causal_impact.state import (
     CausalImpactState,
     NaturalLanguageInterpretation,
@@ -65,13 +66,9 @@ class InterpretationNode:
 
             # Generate interpretation based on depth and expertise
             if depth == "minimal":
-                interpretation = await self._generate_minimal_interpretation(
-                    state, expertise
-                )
+                interpretation = await self._generate_minimal_interpretation(state, expertise)
             elif depth == "standard":
-                interpretation = await self._generate_standard_interpretation(
-                    state, expertise
-                )
+                interpretation = await self._generate_standard_interpretation(state, expertise)
             elif depth == "deep":
                 interpretation = await self._generate_deep_interpretation(state, expertise)
             else:
@@ -133,9 +130,7 @@ class InterpretationNode:
             "causal_confidence": "medium" if significance else "low",
             "assumptions_made": ["Standard causal assumptions"],
             "limitations": ["Minimal interpretation - see standard or deep for details"],
-            "recommendations": [
-                "Consider running detailed analysis for actionable insights"
-            ],
+            "recommendations": ["Consider running detailed analysis for actionable insights"],
             "depth_level": "minimal",
             "user_expertise_adjusted": True,
         }

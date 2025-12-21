@@ -4,30 +4,30 @@ Unit tests for E2I Semantic Memory module.
 Tests FalkorDB graph operations for entity relationships and causal chains.
 """
 
+from unittest.mock import MagicMock, patch
+
 import pytest
-from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch, PropertyMock
 
 from src.memory.episodic_memory import E2IEntityType
 from src.memory.semantic_memory import (
-    # Class
-    FalkorDBSemanticMemory,
     # Label mappings
     E2I_TO_LABEL,
     LABEL_TO_E2I,
+    # Class
+    FalkorDBSemanticMemory,
     # Singleton functions
     get_semantic_memory,
-    reset_semantic_memory,
     # Utility functions
     query_semantic_graph,
-    sync_to_semantic_graph,
+    reset_semantic_memory,
     sync_data_layer_to_semantic_cache,
+    sync_to_semantic_graph,
 )
-
 
 # ============================================================================
 # FIXTURES
 # ============================================================================
+
 
 @pytest.fixture
 def mock_graph():
@@ -57,7 +57,9 @@ def mock_config():
 def semantic_memory(mock_falkordb_client, mock_config):
     """Create semantic memory instance with mocks."""
     with patch("src.memory.semantic_memory.get_config", return_value=mock_config):
-        with patch("src.memory.semantic_memory.get_falkordb_client", return_value=mock_falkordb_client):
+        with patch(
+            "src.memory.semantic_memory.get_falkordb_client", return_value=mock_falkordb_client
+        ):
             memory = FalkorDBSemanticMemory()
             # Force lazy initialization
             _ = memory.client
@@ -85,6 +87,7 @@ def mock_supabase():
 # ============================================================================
 # LABEL MAPPING TESTS
 # ============================================================================
+
 
 class TestLabelMappings:
     """Tests for E2I to graph label mappings."""
@@ -118,6 +121,7 @@ class TestLabelMappings:
 # SEMANTIC MEMORY CLASS TESTS
 # ============================================================================
 
+
 class TestFalkorDBSemanticMemoryInit:
     """Tests for FalkorDBSemanticMemory initialization."""
 
@@ -131,7 +135,9 @@ class TestFalkorDBSemanticMemoryInit:
     def test_lazy_client_initialization(self, mock_falkordb_client, mock_config):
         """Client should be lazily initialized on first access."""
         with patch("src.memory.semantic_memory.get_config", return_value=mock_config):
-            with patch("src.memory.semantic_memory.get_falkordb_client", return_value=mock_falkordb_client):
+            with patch(
+                "src.memory.semantic_memory.get_falkordb_client", return_value=mock_falkordb_client
+            ):
                 memory = FalkorDBSemanticMemory()
                 assert memory._client is None
 
@@ -142,11 +148,13 @@ class TestFalkorDBSemanticMemoryInit:
     def test_lazy_graph_initialization(self, mock_falkordb_client, mock_config):
         """Graph should be lazily initialized on first access."""
         with patch("src.memory.semantic_memory.get_config", return_value=mock_config):
-            with patch("src.memory.semantic_memory.get_falkordb_client", return_value=mock_falkordb_client):
+            with patch(
+                "src.memory.semantic_memory.get_falkordb_client", return_value=mock_falkordb_client
+            ):
                 memory = FalkorDBSemanticMemory()
 
-                # Access graph
-                graph = memory.graph
+                # Access graph to trigger lazy initialization
+                _ = memory.graph
                 mock_falkordb_client.select_graph.assert_called_once_with("e2i_semantic_graph")
 
 
@@ -154,15 +162,14 @@ class TestFalkorDBSemanticMemoryInit:
 # ENTITY MANAGEMENT TESTS
 # ============================================================================
 
+
 class TestAddE2IEntity:
     """Tests for add_e2i_entity method."""
 
     def test_add_patient_entity(self, semantic_memory, mock_graph):
         """add_e2i_entity should create Patient node with MERGE."""
         result = semantic_memory.add_e2i_entity(
-            E2IEntityType.PATIENT,
-            "pat_123",
-            {"name": "John Doe"}
+            E2IEntityType.PATIENT, "pat_123", {"name": "John Doe"}
         )
 
         assert result is True
@@ -180,11 +187,7 @@ class TestAddE2IEntity:
 
     def test_add_hcp_entity(self, semantic_memory, mock_graph):
         """add_e2i_entity should create HCP node."""
-        semantic_memory.add_e2i_entity(
-            E2IEntityType.HCP,
-            "hcp_456",
-            {"specialty": "Oncology"}
-        )
+        semantic_memory.add_e2i_entity(E2IEntityType.HCP, "hcp_456", {"specialty": "Oncology"})
 
         call_args = mock_graph.query.call_args
         query = call_args[0][0]
@@ -195,10 +198,7 @@ class TestAddE2IEntity:
 
     def test_add_entity_without_properties(self, semantic_memory, mock_graph):
         """add_e2i_entity should work without additional properties."""
-        result = semantic_memory.add_e2i_entity(
-            E2IEntityType.TRIGGER,
-            "trig_789"
-        )
+        result = semantic_memory.add_e2i_entity(E2IEntityType.TRIGGER, "trig_789")
 
         assert result is True
         call_args = mock_graph.query.call_args
@@ -213,8 +213,7 @@ class TestAddE2IEntity:
         # Create a mock entity type that's not in the mapping
         with patch.dict(E2I_TO_LABEL, {}, clear=True):
             semantic_memory.add_e2i_entity(
-                E2IEntityType.PATIENT,  # Will not find mapping
-                "test_123"
+                E2IEntityType.PATIENT, "test_123"  # Will not find mapping
             )
 
         call_args = mock_graph.query.call_args
@@ -279,17 +278,14 @@ class TestDeleteEntity:
 # RELATIONSHIP MANAGEMENT TESTS
 # ============================================================================
 
+
 class TestAddE2IRelationship:
     """Tests for add_e2i_relationship method."""
 
     def test_add_treated_by_relationship(self, semantic_memory, mock_graph):
         """add_e2i_relationship should create TREATED_BY relationship."""
         result = semantic_memory.add_e2i_relationship(
-            E2IEntityType.PATIENT,
-            "pat_123",
-            E2IEntityType.HCP,
-            "hcp_456",
-            "TREATED_BY"
+            E2IEntityType.PATIENT, "pat_123", E2IEntityType.HCP, "hcp_456", "TREATED_BY"
         )
 
         assert result is True
@@ -314,7 +310,7 @@ class TestAddE2IRelationship:
             E2IEntityType.TRIGGER,
             "trig_456",
             "CAUSES",
-            {"confidence": 0.85, "effect_size": 0.2}
+            {"confidence": 0.85, "effect_size": 0.2},
         )
 
         last_call = mock_graph.query.call_args_list[-1]
@@ -326,11 +322,7 @@ class TestAddE2IRelationship:
     def test_add_relationship_ensures_entities_exist(self, semantic_memory, mock_graph):
         """add_e2i_relationship should create entities if needed."""
         semantic_memory.add_e2i_relationship(
-            E2IEntityType.PATIENT,
-            "new_pat",
-            E2IEntityType.HCP,
-            "new_hcp",
-            "TREATED_BY"
+            E2IEntityType.PATIENT, "new_pat", E2IEntityType.HCP, "new_hcp", "TREATED_BY"
         )
 
         # First two calls should be MERGE for entities
@@ -351,9 +343,7 @@ class TestGetRelationships:
         ]
 
         result = semantic_memory.get_relationships(
-            E2IEntityType.PATIENT,
-            "pat_123",
-            direction="outgoing"
+            E2IEntityType.PATIENT, "pat_123", direction="outgoing"
         )
 
         assert len(result) == 1
@@ -363,14 +353,10 @@ class TestGetRelationships:
 
     def test_get_incoming_relationships(self, semantic_memory, mock_graph):
         """get_relationships should get incoming relationships."""
-        mock_graph.query.return_value.result_set = [
-            ["pat_123", "TREATED_BY", "hcp_456", None]
-        ]
+        mock_graph.query.return_value.result_set = [["pat_123", "TREATED_BY", "hcp_456", None]]
 
         result = semantic_memory.get_relationships(
-            E2IEntityType.HCP,
-            "hcp_456",
-            direction="incoming"
+            E2IEntityType.HCP, "hcp_456", direction="incoming"
         )
 
         assert len(result) == 1
@@ -379,11 +365,7 @@ class TestGetRelationships:
         """get_relationships should get both directions by default."""
         mock_graph.query.return_value.result_set = []
 
-        semantic_memory.get_relationships(
-            E2IEntityType.PATIENT,
-            "pat_123",
-            direction="both"
-        )
+        semantic_memory.get_relationships(E2IEntityType.PATIENT, "pat_123", direction="both")
 
         # Should not have specific direction in query
         call_args = mock_graph.query.call_args
@@ -394,6 +376,7 @@ class TestGetRelationships:
 # ============================================================================
 # NETWORK TRAVERSAL TESTS
 # ============================================================================
+
 
 class TestGetPatientNetwork:
     """Tests for get_patient_network method."""
@@ -422,10 +405,7 @@ class TestGetPatientNetwork:
         trigger_node.properties = {"id": "trig_456"}
 
         # Query returns only the connected node (single element per record)
-        mock_graph.query.return_value.result_set = [
-            [hcp_node],
-            [trigger_node]
-        ]
+        mock_graph.query.return_value.result_set = [[hcp_node], [trigger_node]]
 
         result = semantic_memory.get_patient_network("pat_123", max_depth=2)
 
@@ -473,10 +453,7 @@ class TestGetHCPInfluenceNetwork:
         brand_node.labels = ["Brand"]
         brand_node.properties = {"id": "Kisqali"}
 
-        mock_graph.query.return_value.result_set = [
-            [patient_node],
-            [brand_node]
-        ]
+        mock_graph.query.return_value.result_set = [[patient_node], [brand_node]]
 
         result = semantic_memory.get_hcp_influence_network("hcp_123")
 
@@ -488,6 +465,7 @@ class TestGetHCPInfluenceNetwork:
 # CAUSAL CHAIN TESTS
 # ============================================================================
 
+
 class TestTraverseCausalChain:
     """Tests for traverse_causal_chain method."""
 
@@ -496,7 +474,7 @@ class TestTraverseCausalChain:
         mock_graph.query.return_value.result_set = [
             [
                 [{"id": "a", "type": "CausalPath"}, {"id": "b", "type": "KPI"}],
-                [{"type": "IMPACTS", "conf": 0.8}]
+                [{"type": "IMPACTS", "conf": 0.8}],
             ]
         ]
 
@@ -523,7 +501,7 @@ class TestFindCausalPathsForKPI:
         """find_causal_paths_for_kpi should return matching paths."""
         mock_graph.query.return_value.result_set = [
             ["cp_1", 0.15, 0.85, "DoWhy"],
-            ["cp_2", 0.10, 0.70, "EconML"]
+            ["cp_2", 0.10, 0.70, "EconML"],
         ]
 
         result = semantic_memory.find_causal_paths_for_kpi("TRx", min_confidence=0.5)
@@ -551,11 +529,7 @@ class TestFindCommonPaths:
     def test_find_paths_between_entities(self, semantic_memory, mock_graph):
         """find_common_paths should return connecting paths."""
         mock_graph.query.return_value.result_set = [
-            [
-                [{"id": "a", "type": "Patient"}, {"id": "b", "type": "HCP"}],
-                ["TREATED_BY"],
-                1
-            ]
+            [[{"id": "a", "type": "Patient"}, {"id": "b", "type": "HCP"}], ["TREATED_BY"], 1]
         ]
 
         result = semantic_memory.find_common_paths("a", "b", max_depth=3)
@@ -569,16 +543,14 @@ class TestFindCommonPaths:
 # GRAPH STATISTICS TESTS
 # ============================================================================
 
+
 class TestGetGraphStats:
     """Tests for get_graph_stats method."""
 
     def test_get_graph_stats(self, semantic_memory, mock_graph):
         """get_graph_stats should aggregate counts."""
         # First query returns node counts
-        mock_graph.query.return_value.result_set = [
-            ["Patient", 100],
-            ["HCP", 50]
-        ]
+        mock_graph.query.return_value.result_set = [["Patient", 100], ["HCP", 50]]
 
         result = semantic_memory.get_graph_stats()
 
@@ -592,6 +564,7 @@ class TestGetGraphStats:
 # SINGLETON TESTS
 # ============================================================================
 
+
 class TestSingleton:
     """Tests for singleton pattern."""
 
@@ -600,7 +573,9 @@ class TestSingleton:
         reset_semantic_memory()
 
         with patch("src.memory.semantic_memory.get_config", return_value=mock_config):
-            with patch("src.memory.semantic_memory.get_falkordb_client", return_value=mock_falkordb_client):
+            with patch(
+                "src.memory.semantic_memory.get_falkordb_client", return_value=mock_falkordb_client
+            ):
                 memory1 = get_semantic_memory()
                 memory2 = get_semantic_memory()
 
@@ -611,7 +586,9 @@ class TestSingleton:
     def test_reset_clears_singleton(self, mock_falkordb_client, mock_config):
         """reset_semantic_memory should clear singleton."""
         with patch("src.memory.semantic_memory.get_config", return_value=mock_config):
-            with patch("src.memory.semantic_memory.get_falkordb_client", return_value=mock_falkordb_client):
+            with patch(
+                "src.memory.semantic_memory.get_falkordb_client", return_value=mock_falkordb_client
+            ):
                 memory1 = get_semantic_memory()
                 reset_semantic_memory()
                 memory2 = get_semantic_memory()
@@ -625,6 +602,7 @@ class TestSingleton:
 # UTILITY FUNCTION TESTS
 # ============================================================================
 
+
 class TestQuerySemanticGraph:
     """Tests for query_semantic_graph function."""
 
@@ -634,14 +612,14 @@ class TestQuerySemanticGraph:
         reset_semantic_memory()
 
         with patch("src.memory.semantic_memory.get_config", return_value=mock_config):
-            with patch("src.memory.semantic_memory.get_falkordb_client", return_value=mock_falkordb_client):
+            with patch(
+                "src.memory.semantic_memory.get_falkordb_client", return_value=mock_falkordb_client
+            ):
                 mock_falkordb_client.select_graph.return_value.query.return_value.result_set = []
 
-                result = await query_semantic_graph({
-                    "start_nodes": ["pat_123"],
-                    "entity_type": "patient",
-                    "max_depth": 2
-                })
+                result = await query_semantic_graph(
+                    {"start_nodes": ["pat_123"], "entity_type": "patient", "max_depth": 2}
+                )
 
                 assert len(result) == 1
                 assert result[0]["type"] == "patient_network"
@@ -654,13 +632,14 @@ class TestQuerySemanticGraph:
         reset_semantic_memory()
 
         with patch("src.memory.semantic_memory.get_config", return_value=mock_config):
-            with patch("src.memory.semantic_memory.get_falkordb_client", return_value=mock_falkordb_client):
+            with patch(
+                "src.memory.semantic_memory.get_falkordb_client", return_value=mock_falkordb_client
+            ):
                 mock_falkordb_client.select_graph.return_value.query.return_value.result_set = []
 
-                result = await query_semantic_graph({
-                    "start_nodes": ["hcp_456"],
-                    "entity_type": "hcp"
-                })
+                result = await query_semantic_graph(
+                    {"start_nodes": ["hcp_456"], "entity_type": "hcp"}
+                )
 
                 assert result[0]["type"] == "hcp_network"
 
@@ -672,16 +651,16 @@ class TestQuerySemanticGraph:
         reset_semantic_memory()
 
         with patch("src.memory.semantic_memory.get_config", return_value=mock_config):
-            with patch("src.memory.semantic_memory.get_falkordb_client", return_value=mock_falkordb_client):
+            with patch(
+                "src.memory.semantic_memory.get_falkordb_client", return_value=mock_falkordb_client
+            ):
                 mock_falkordb_client.select_graph.return_value.query.return_value.result_set = [
                     [[{"id": "a"}], [{"type": "CAUSES"}]]
                 ]
 
-                result = await query_semantic_graph({
-                    "start_nodes": ["cp_123"],
-                    "follow_causal": True,
-                    "max_depth": 3
-                })
+                result = await query_semantic_graph(
+                    {"start_nodes": ["cp_123"], "follow_causal": True, "max_depth": 3}
+                )
 
                 assert result[0]["type"] == "causal_chain"
 
@@ -697,15 +676,19 @@ class TestSyncToSemanticGraph:
         reset_semantic_memory()
 
         with patch("src.memory.semantic_memory.get_config", return_value=mock_config):
-            with patch("src.memory.semantic_memory.get_falkordb_client", return_value=mock_falkordb_client):
-                result = await sync_to_semantic_graph({
-                    "subject": "pat_123",
-                    "subject_type": "Patient",
-                    "predicate": "TREATED_BY",
-                    "object": "hcp_456",
-                    "object_type": "HCP",
-                    "confidence": 0.9
-                })
+            with patch(
+                "src.memory.semantic_memory.get_falkordb_client", return_value=mock_falkordb_client
+            ):
+                result = await sync_to_semantic_graph(
+                    {
+                        "subject": "pat_123",
+                        "subject_type": "Patient",
+                        "predicate": "TREATED_BY",
+                        "object": "hcp_456",
+                        "object_type": "HCP",
+                        "confidence": 0.9,
+                    }
+                )
 
                 assert result is True
 
@@ -717,14 +700,18 @@ class TestSyncToSemanticGraph:
         reset_semantic_memory()
 
         with patch("src.memory.semantic_memory.get_config", return_value=mock_config):
-            with patch("src.memory.semantic_memory.get_falkordb_client", return_value=mock_falkordb_client):
-                result = await sync_to_semantic_graph({
-                    "subject": "unknown_1",
-                    "subject_type": "Unknown",
-                    "predicate": "RELATES_TO",
-                    "object": "unknown_2",
-                    "object_type": "Unknown"
-                })
+            with patch(
+                "src.memory.semantic_memory.get_falkordb_client", return_value=mock_falkordb_client
+            ):
+                result = await sync_to_semantic_graph(
+                    {
+                        "subject": "unknown_1",
+                        "subject_type": "Unknown",
+                        "predicate": "RELATES_TO",
+                        "object": "unknown_2",
+                        "object_type": "Unknown",
+                    }
+                )
 
                 assert result is True
 
@@ -740,16 +727,14 @@ class TestSyncDataLayerToSemanticCache:
         with patch("src.memory.semantic_memory.get_supabase_client", return_value=mock_supabase):
             result = await sync_data_layer_to_semantic_cache()
 
-        mock_supabase.rpc.assert_called_once_with(
-            "sync_hcp_patient_relationships_to_cache",
-            {}
-        )
+        mock_supabase.rpc.assert_called_once_with("sync_hcp_patient_relationships_to_cache", {})
         assert result == {"synced": 10}
 
 
 # ============================================================================
 # EDGE CASE TESTS
 # ============================================================================
+
 
 class TestEdgeCases:
     """Edge case and error handling tests."""
@@ -762,22 +747,11 @@ class TestEdgeCases:
 
     def test_relationship_common_types(self, semantic_memory, mock_graph):
         """Common relationship types should work."""
-        rel_types = [
-            "TREATED_BY",
-            "PRESCRIBED",
-            "PRESCRIBES",
-            "GENERATED",
-            "CAUSES",
-            "IMPACTS"
-        ]
+        rel_types = ["TREATED_BY", "PRESCRIBED", "PRESCRIBES", "GENERATED", "CAUSES", "IMPACTS"]
 
         for rel_type in rel_types:
             result = semantic_memory.add_e2i_relationship(
-                E2IEntityType.PATIENT,
-                "source",
-                E2IEntityType.HCP,
-                "target",
-                rel_type
+                E2IEntityType.PATIENT, "source", E2IEntityType.HCP, "target", rel_type
             )
             assert result is True
 
@@ -788,9 +762,7 @@ class TestEdgeCases:
         node.properties = {"id": "test"}
 
         # Query returns only the connected node (single element per record)
-        mock_graph.query.return_value.result_set = [
-            [node]
-        ]
+        mock_graph.query.return_value.result_set = [[node]]
 
         # Should not raise
         result = semantic_memory.get_patient_network("pat_123")
@@ -798,24 +770,16 @@ class TestEdgeCases:
 
     def test_empty_properties_in_relationship(self, semantic_memory, mock_graph):
         """get_relationships should handle None properties."""
-        mock_graph.query.return_value.result_set = [
-            ["src", "REL", "tgt", None]
-        ]
+        mock_graph.query.return_value.result_set = [["src", "REL", "tgt", None]]
 
-        result = semantic_memory.get_relationships(
-            E2IEntityType.PATIENT,
-            "pat_123"
-        )
+        result = semantic_memory.get_relationships(E2IEntityType.PATIENT, "pat_123")
 
         assert len(result) == 1
         assert result[0]["properties"] == {}
 
     def test_graph_stats_handles_none_label(self, semantic_memory, mock_graph):
         """get_graph_stats should handle None label."""
-        mock_graph.query.return_value.result_set = [
-            [None, 10],
-            ["Patient", 50]
-        ]
+        mock_graph.query.return_value.result_set = [[None, 10], ["Patient", 50]]
 
         result = semantic_memory.get_graph_stats()
 

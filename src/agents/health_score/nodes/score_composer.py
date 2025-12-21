@@ -9,10 +9,10 @@ from __future__ import annotations
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
+from ..metrics import DEFAULT_GRADES, DEFAULT_WEIGHTS, GradeThresholds, ScoreWeights
 from ..state import HealthScoreState
-from ..metrics import DEFAULT_WEIGHTS, DEFAULT_GRADES, GradeThresholds, ScoreWeights
 
 logger = logging.getLogger(__name__)
 
@@ -53,9 +53,7 @@ class ScoreComposerNode:
 
             # Calculate weighted average
             weights_dict = self.weights.to_dict()
-            overall_score = sum(
-                scores[dim] * weight for dim, weight in weights_dict.items()
-            )
+            overall_score = sum(scores[dim] * weight for dim, weight in weights_dict.items())
 
             # Convert to 0-100 scale
             overall_score_100 = overall_score * 100
@@ -69,9 +67,7 @@ class ScoreComposerNode:
             # Generate summary
             summary = self._generate_summary(overall_score_100, grade, critical_issues)
 
-            check_time = state.get("check_latency_ms", 0) + int(
-                (time.time() - start_time) * 1000
-            )
+            check_time = state.get("check_latency_ms", 0) + int((time.time() - start_time) * 1000)
 
             logger.info(
                 f"Score composition complete: score={overall_score_100:.1f}, "
@@ -103,9 +99,7 @@ class ScoreComposerNode:
                 "status": "failed",
             }
 
-    def _identify_issues(
-        self, state: HealthScoreState
-    ) -> Tuple[List[str], List[str]]:
+    def _identify_issues(self, state: HealthScoreState) -> Tuple[List[str], List[str]]:
         """Identify critical issues and warnings."""
         critical = []
         warnings = []
@@ -117,9 +111,7 @@ class ScoreComposerNode:
             elif comp["status"] == "degraded":
                 warnings.append(f"Component '{comp['component_name']}' is degraded")
             elif comp["status"] == "unknown":
-                warnings.append(
-                    f"Component '{comp['component_name']}' status is unknown"
-                )
+                warnings.append(f"Component '{comp['component_name']}' status is unknown")
 
         # Check models
         for model in state.get("model_metrics") or []:
@@ -131,13 +123,9 @@ class ScoreComposerNode:
         # Check pipelines
         for pipeline in state.get("pipeline_statuses") or []:
             if pipeline["status"] == "failed":
-                critical.append(
-                    f"Pipeline '{pipeline['pipeline_name']}' has failed"
-                )
+                critical.append(f"Pipeline '{pipeline['pipeline_name']}' has failed")
             elif pipeline["status"] == "stale":
-                warnings.append(
-                    f"Pipeline '{pipeline['pipeline_name']}' data is stale"
-                )
+                warnings.append(f"Pipeline '{pipeline['pipeline_name']}' data is stale")
 
         # Check agents
         for agent in state.get("agent_statuses") or []:
@@ -157,9 +145,7 @@ class ScoreComposerNode:
 
         return critical, warnings
 
-    def _generate_summary(
-        self, score: float, grade: str, issues: List[str]
-    ) -> str:
+    def _generate_summary(self, score: float, grade: str, issues: List[str]) -> str:
         """Generate health summary."""
         status_map = {
             "A": "excellent",

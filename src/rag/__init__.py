@@ -24,42 +24,42 @@ Cognitive RAG (DSPy-enhanced):
 """
 
 from src.rag.causal_rag import CausalRAG
-from src.rag.retriever import HybridRetriever
-from src.rag.reranker import CrossEncoderReranker
-from src.rag.query_optimizer import QueryOptimizer
-from src.rag.insight_enricher import InsightEnricher
 from src.rag.chunk_processor import ChunkProcessor
-from src.rag.entity_extractor import EntityExtractor
-from src.rag.health_monitor import HealthMonitor
-from src.rag.search_logger import SearchLogger
-from src.rag.config import RAGConfig
-
-# Types
-from src.rag.types import (
-    RetrievalResult,
-    RetrievalSource,
-    ExtractedEntities,
-    BackendStatus,
-    BackendHealth,
-    SearchStats,
-    GraphPath,
-)
 
 # Cognitive RAG exports
 from src.rag.cognitive_rag_dspy import (
+    CognitiveRAGOptimizer,
     CognitiveState,
     create_dspy_cognitive_workflow,
     create_production_cognitive_workflow,
-    CognitiveRAGOptimizer,
 )
+from src.rag.config import RAGConfig
+from src.rag.entity_extractor import EntityExtractor
+from src.rag.health_monitor import HealthMonitor
+from src.rag.insight_enricher import InsightEnricher
 
 # Memory adapters for DSPy integration
 from src.rag.memory_adapters import (
     EpisodicMemoryAdapter,
-    SemanticMemoryAdapter,
     ProceduralMemoryAdapter,
+    SemanticMemoryAdapter,
     SignalCollectorAdapter,
     create_memory_adapters,
+)
+from src.rag.query_optimizer import QueryOptimizer
+from src.rag.reranker import CrossEncoderReranker
+from src.rag.retriever import HybridRetriever
+from src.rag.search_logger import SearchLogger
+
+# Types
+from src.rag.types import (
+    BackendHealth,
+    BackendStatus,
+    ExtractedEntities,
+    GraphPath,
+    RetrievalResult,
+    RetrievalSource,
+    SearchStats,
 )
 
 __all__ = [

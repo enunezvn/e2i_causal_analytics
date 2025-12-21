@@ -2,7 +2,8 @@
 Pydantic models for RAG retrieval operations.
 """
 
-from typing import List, Dict, Any, Optional, Literal
+from typing import Any, Dict, List, Literal, Optional
+
 from pydantic import BaseModel, Field
 
 
@@ -16,18 +17,14 @@ class RetrievalResult(BaseModel):
     retrieval_method: Literal["dense", "sparse", "graph", "structured"] = Field(
         ..., description="Method used to retrieve this result"
     )
-    metadata: Dict[str, Any] = Field(
-        default_factory=dict, description="Additional metadata"
-    )
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
 
 class RetrievalContext(BaseModel):
     """Full context from a retrieval operation."""
 
     query: Any = Field(..., description="Original ParsedQuery")
-    results: List[RetrievalResult] = Field(
-        default_factory=list, description="Retrieved results"
-    )
+    results: List[RetrievalResult] = Field(default_factory=list, description="Retrieved results")
     total_retrieved: int = Field(..., ge=0, description="Total results retrieved")
     retrieval_time_ms: float = Field(..., ge=0, description="Retrieval latency in ms")
 
@@ -46,9 +43,7 @@ class RAGResponse(BaseModel):
     """Output contract for RAG operations (to Agents)."""
 
     context: RetrievalContext = Field(..., description="Retrieval context and results")
-    enriched_insight: Optional[Any] = Field(
-        default=None, description="LLM-enriched insight"
-    )
+    enriched_insight: Optional[Any] = Field(default=None, description="LLM-enriched insight")
     suggested_followups: List[str] = Field(
         default_factory=list, description="Suggested follow-up queries"
     )

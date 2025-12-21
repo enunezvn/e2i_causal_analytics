@@ -2,8 +2,9 @@
 Tests for Learning Extractor node.
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from src.agents.feedback_learner.nodes.learning_extractor import LearningExtractorNode
 

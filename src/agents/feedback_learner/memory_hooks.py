@@ -14,11 +14,11 @@ Author: E2I Causal Analytics Team
 Version: 1.0.0
 """
 
-from typing import Optional, Dict, Any, List, Callable
-from datetime import datetime, timedelta
-from dataclasses import dataclass, field
-import logging
 import asyncio
+import logging
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -27,9 +27,11 @@ logger = logging.getLogger(__name__)
 # DATA STRUCTURES
 # =============================================================================
 
+
 @dataclass
 class LearningSignal:
     """A learning signal from a cognitive cycle."""
+
     signal_id: str
     signal_type: str  # outcome_success, outcome_partial, rating, thumbs_up, thumbs_down
     signal_value: float
@@ -45,6 +47,7 @@ class LearningSignal:
 @dataclass
 class TrainingExample:
     """A training example for DSPy optimization."""
+
     example_id: str
     query: str
     query_type: str
@@ -61,6 +64,7 @@ class TrainingExample:
 @dataclass
 class AgentPerformanceMetric:
     """Performance metric for an agent."""
+
     agent_name: str
     metric_name: str
     metric_value: float
@@ -72,6 +76,7 @@ class AgentPerformanceMetric:
 # =============================================================================
 # MEMORY HOOKS
 # =============================================================================
+
 
 class MemoryHooks:
     """
@@ -163,14 +168,10 @@ class MemoryHooks:
         return {
             "processed": len(signals),
             "metrics_updated": metrics_updated,
-            "examples_created": examples_created
+            "examples_created": examples_created,
         }
 
-    async def _update_agent_metrics(
-        self,
-        agent_name: str,
-        signals: List[LearningSignal]
-    ) -> None:
+    async def _update_agent_metrics(self, agent_name: str, signals: List[LearningSignal]) -> None:
         """Update performance metrics for an agent."""
         from src.memory.procedural_memory import update_procedure_outcome
 
@@ -190,16 +191,12 @@ class MemoryHooks:
             if signal.applies_to_type == "procedure" and signal.applies_to_id:
                 try:
                     await update_procedure_outcome(
-                        procedure_id=signal.applies_to_id,
-                        success=signal.signal_value > 0.7
+                        procedure_id=signal.applies_to_id, success=signal.signal_value > 0.7
                     )
                 except Exception as e:
                     logger.warning(f"Failed to update procedure outcome: {e}")
 
-    async def _create_training_example(
-        self,
-        signal: LearningSignal
-    ) -> Optional[TrainingExample]:
+    async def _create_training_example(self, signal: LearningSignal) -> Optional[TrainingExample]:
         """Create a training example from a high-quality signal."""
         import uuid
 
@@ -224,8 +221,8 @@ class MemoryHooks:
             metadata={
                 "session_id": signal.session_id,
                 "cycle_id": signal.cycle_id,
-                "signal_type": signal.signal_type
-            }
+                "signal_type": signal.signal_type,
+            },
         )
 
     async def get_training_examples(
@@ -233,7 +230,7 @@ class MemoryHooks:
         agent_name: Optional[str] = None,
         query_type: Optional[str] = None,
         min_score: float = 0.8,
-        limit: int = 100
+        limit: int = 100,
     ) -> List[TrainingExample]:
         """
         Get training examples for DSPy optimization.
@@ -256,11 +253,7 @@ class MemoryHooks:
         return examples[:limit]
 
     async def get_few_shot_examples(
-        self,
-        query: str,
-        query_type: str,
-        agent_name: str,
-        max_examples: int = 3
+        self, query: str, query_type: str, agent_name: str, max_examples: int = 3
     ) -> List[Dict[str, Any]]:
         """
         Get few-shot examples for prompt engineering.
@@ -274,18 +267,14 @@ class MemoryHooks:
                 query_embedding=None,  # Will be generated internally
                 intent=query_type,
                 brand=None,
-                max_examples=max_examples
+                max_examples=max_examples,
             )
             return examples
         except Exception as e:
             logger.warning(f"Failed to get few-shot examples: {e}")
             return []
 
-    async def get_agent_performance(
-        self,
-        agent_name: str,
-        window: str = "day"
-    ) -> Dict[str, Any]:
+    async def get_agent_performance(self, agent_name: str, window: str = "day") -> Dict[str, Any]:
         """
         Get performance metrics for an agent.
 
@@ -295,10 +284,7 @@ class MemoryHooks:
 
         try:
             examples = await get_training_examples_for_agent(
-                agent_name=agent_name,
-                brand=None,
-                min_score=0.0,
-                limit=100
+                agent_name=agent_name, brand=None, min_score=0.0, limit=100
             )
 
             if not examples:
@@ -307,7 +293,7 @@ class MemoryHooks:
                     "sample_count": 0,
                     "success_rate": None,
                     "average_score": None,
-                    "window": window
+                    "window": window,
                 }
 
             scores = [e.get("score", 0.5) for e in examples]
@@ -320,15 +306,11 @@ class MemoryHooks:
                 "average_score": sum(scores) / len(scores) if scores else 0,
                 "min_score": min(scores) if scores else 0,
                 "max_score": max(scores) if scores else 0,
-                "window": window
+                "window": window,
             }
         except Exception as e:
             logger.error(f"Failed to get agent performance: {e}")
-            return {
-                "agent_name": agent_name,
-                "error": str(e),
-                "window": window
-            }
+            return {"agent_name": agent_name, "error": str(e), "window": window}
 
 
 # =============================================================================
@@ -350,6 +332,7 @@ def get_memory_hooks() -> MemoryHooks:
 # CONVENIENCE FUNCTIONS
 # =============================================================================
 
+
 async def on_learning_signal(
     signal_type: str,
     signal_value: float,
@@ -358,7 +341,7 @@ async def on_learning_signal(
     rated_agent: Optional[str] = None,
     session_id: Optional[str] = None,
     cycle_id: Optional[str] = None,
-    signal_details: Optional[Dict[str, Any]] = None
+    signal_details: Optional[Dict[str, Any]] = None,
 ) -> None:
     """
     Convenience function to record a learning signal.
@@ -378,16 +361,14 @@ async def on_learning_signal(
         rated_agent=rated_agent,
         session_id=session_id,
         cycle_id=cycle_id,
-        signal_details=signal_details or {}
+        signal_details=signal_details or {},
     )
 
     await hooks.receive_signal(signal)
 
 
 async def get_dspy_training_set(
-    agent_name: str,
-    min_score: float = 0.8,
-    limit: int = 50
+    agent_name: str, min_score: float = 0.8, limit: int = 50
 ) -> List[Dict[str, Any]]:
     """
     Get training examples formatted for DSPy.
@@ -396,19 +377,19 @@ async def get_dspy_training_set(
     """
     hooks = get_memory_hooks()
     examples = await hooks.get_training_examples(
-        agent_name=agent_name,
-        min_score=min_score,
-        limit=limit
+        agent_name=agent_name, min_score=min_score, limit=limit
     )
 
     # Format for DSPy
     dspy_examples = []
     for ex in examples:
-        dspy_examples.append({
-            "question": ex.query,
-            "context": ex.context,
-            "answer": ex.actual_output,
-            "score": ex.score
-        })
+        dspy_examples.append(
+            {
+                "question": ex.query,
+                "context": ex.context,
+                "answer": ex.actual_output,
+                "score": ex.score,
+            }
+        )
 
     return dspy_examples

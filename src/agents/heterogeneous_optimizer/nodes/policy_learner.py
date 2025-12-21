@@ -5,7 +5,7 @@ Uses CATE to recommend allocation changes.
 """
 
 import time
-from typing import List, Dict, Any
+from typing import Any, Dict, List
 
 from ..state import HeterogeneousOptimizerState, PolicyRecommendation
 
@@ -22,9 +22,7 @@ class PolicyLearnerNode:
     def __init__(self):
         self.min_cate_for_treatment = 0.01  # Minimum CATE to recommend treatment
 
-    async def execute(
-        self, state: HeterogeneousOptimizerState
-    ) -> HeterogeneousOptimizerState:
+    async def execute(self, state: HeterogeneousOptimizerState) -> HeterogeneousOptimizerState:
         """Execute policy learning."""
         start_time = time.time()
 
@@ -40,16 +38,14 @@ class PolicyLearnerNode:
             # Generate policy recommendations
             recommendations = []
 
-            for segment_var, results in cate_by_segment.items():
+            for _segment_var, results in cate_by_segment.items():
                 for result in results:
                     rec = self._generate_recommendation(result, ate)
                     if rec:
                         recommendations.append(rec)
 
             # Sort by expected incremental outcome
-            recommendations.sort(
-                key=lambda x: x["expected_incremental_outcome"], reverse=True
-            )
+            recommendations.sort(key=lambda x: x["expected_incremental_outcome"], reverse=True)
 
             # Calculate total expected lift if policy is implemented
             total_lift = sum(r["expected_incremental_outcome"] for r in recommendations)
@@ -81,9 +77,7 @@ class PolicyLearnerNode:
                 "status": "failed",
             }
 
-    def _generate_recommendation(
-        self, result: Dict[str, Any], ate: float
-    ) -> PolicyRecommendation:
+    def _generate_recommendation(self, result: Dict[str, Any], ate: float) -> PolicyRecommendation:
         """Generate policy recommendation for a segment.
 
         Args:

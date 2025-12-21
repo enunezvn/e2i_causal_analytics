@@ -5,10 +5,11 @@ Uses fast model for synthesis.
 """
 
 import time
-from typing import Dict, Any, List
+from typing import Any, Dict, List
+
 from langchain_anthropic import ChatAnthropic
 
-from ..state import OrchestratorState, AgentResult
+from ..state import AgentResult, OrchestratorState
 
 
 class SynthesizerNode:
@@ -19,9 +20,7 @@ class SynthesizerNode:
 
     def __init__(self):
         """Initialize synthesizer with Haiku for fast synthesis."""
-        self.llm = ChatAnthropic(
-            model="claude-haiku-4-20250414", max_tokens=1024, timeout=5
-        )
+        self.llm = ChatAnthropic(model="claude-haiku-4-20250414", max_tokens=1024, timeout=5)
 
     async def execute(self, state: OrchestratorState) -> OrchestratorState:
         """Execute response synthesis.
@@ -123,9 +122,7 @@ Provide a unified 2-3 paragraph response that:
             response = await self.llm.ainvoke(synthesis_prompt)
 
             # Calculate weighted confidence (round to avoid floating point precision issues)
-            avg_confidence = round(
-                sum(confidences) / len(confidences) if confidences else 0.5, 2
-            )
+            avg_confidence = round(sum(confidences) / len(confidences) if confidences else 0.5, 2)
 
             return {
                 "response": response.content,

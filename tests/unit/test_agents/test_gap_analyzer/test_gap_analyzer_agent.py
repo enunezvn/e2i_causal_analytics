@@ -1,6 +1,7 @@
 """Integration tests for GapAnalyzerAgent."""
 
 import pytest
+
 from src.agents.gap_analyzer.agent import GapAnalyzerAgent
 
 

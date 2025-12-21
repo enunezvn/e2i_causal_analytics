@@ -12,8 +12,8 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Protocol
 
-from ..state import HealthScoreState, PipelineStatus
 from ..metrics import DEFAULT_THRESHOLDS
+from ..state import HealthScoreState, PipelineStatus
 
 logger = logging.getLogger(__name__)
 
@@ -74,9 +74,7 @@ class PipelineHealthNode:
 
                 # Fetch status for each pipeline in parallel
                 if pipelines:
-                    tasks = [
-                        self._get_pipeline_status(name) for name in pipelines
-                    ]
+                    tasks = [self._get_pipeline_status(name) for name in pipelines]
                     statuses = await asyncio.gather(*tasks)
                 else:
                     statuses = []
@@ -126,9 +124,7 @@ class PipelineHealthNode:
             last_success = status.get("last_success")
             if last_success:
                 try:
-                    last_success_dt = datetime.fromisoformat(
-                        last_success.replace("Z", "+00:00")
-                    )
+                    last_success_dt = datetime.fromisoformat(last_success.replace("Z", "+00:00"))
                     # Ensure timezone-aware comparison
                     if last_success_dt.tzinfo is None:
                         last_success_dt = last_success_dt.replace(tzinfo=timezone.utc)
@@ -153,9 +149,7 @@ class PipelineHealthNode:
                 last_run=status.get("last_run", ""),
                 last_success=status.get("last_success", ""),
                 rows_processed=status.get("rows_processed", 0),
-                freshness_hours=freshness_hours
-                if freshness_hours != float("inf")
-                else -1,
+                freshness_hours=freshness_hours if freshness_hours != float("inf") else -1,
                 status=pipeline_status,
             )
 

@@ -7,14 +7,15 @@ Contract: .claude/contracts/tier3-contracts.md lines 82-142
 
 import pytest
 from pydantic import ValidationError
+
 from src.agents.experiment_designer import (
     ExperimentDesignerAgent,
     ExperimentDesignerInput,
     ExperimentDesignerOutput,
-    TreatmentOutput,
     OutcomeOutput,
-    ValidityThreatOutput,
     PowerAnalysisOutput,
+    TreatmentOutput,
+    ValidityThreatOutput,
 )
 
 
@@ -47,7 +48,12 @@ class TestExperimentDesignerAgent:
         assert isinstance(result, ExperimentDesignerOutput)
         # Design type comparison is case-insensitive
         design_type_normalized = result.design_type.lower().replace("-", "_")
-        assert design_type_normalized in ["rct", "cluster_rct", "quasi_experimental", "observational"]
+        assert design_type_normalized in [
+            "rct",
+            "cluster_rct",
+            "quasi_experimental",
+            "observational",
+        ]
         assert len(result.design_rationale) > 0
 
     def test_run_with_constraints(self):
@@ -55,11 +61,7 @@ class TestExperimentDesignerAgent:
         agent = ExperimentDesignerAgent()
         input_data = ExperimentDesignerInput(
             business_question="Does digital engagement improve prescription rates?",
-            constraints={
-                "expected_effect_size": 0.25,
-                "power": 0.80,
-                "weekly_accrual": 50
-            }
+            constraints={"expected_effect_size": 0.25, "power": 0.80, "weekly_accrual": 50},
         )
 
         result = agent.run(input_data)
@@ -75,8 +77,8 @@ class TestExperimentDesignerAgent:
             available_data={
                 "variables": ["hcp_id", "territory", "visit_count", "engagement_score"],
                 "sample_size": 5000,
-                "historical_periods": 12
-            }
+                "historical_periods": 12,
+            },
         )
 
         result = agent.run(input_data)
@@ -89,7 +91,7 @@ class TestExperimentDesignerAgent:
         input_data = ExperimentDesignerInput(
             business_question="Test Remibrutinib engagement campaign",
             constraints={"expected_effect_size": 0.20},
-            brand="Remibrutinib"
+            brand="Remibrutinib",
         )
 
         result = agent.run(input_data)
@@ -101,7 +103,7 @@ class TestExperimentDesignerAgent:
         agent = ExperimentDesignerAgent()
         input_data = ExperimentDesignerInput(
             business_question="Test experiment for regulatory submission",
-            preregistration_formality="heavy"
+            preregistration_formality="heavy",
         )
 
         result = agent.run(input_data)
@@ -113,8 +115,7 @@ class TestExperimentDesignerAgent:
         """Test with light preregistration formality."""
         agent = ExperimentDesignerAgent()
         input_data = ExperimentDesignerInput(
-            business_question="Quick pilot test",
-            preregistration_formality="light"
+            business_question="Quick pilot test", preregistration_formality="light"
         )
 
         result = agent.run(input_data)
@@ -125,8 +126,7 @@ class TestExperimentDesignerAgent:
         """Test execution without validity audit."""
         agent = ExperimentDesignerAgent()
         input_data = ExperimentDesignerInput(
-            business_question="Quick design without audit",
-            enable_validity_audit=False
+            business_question="Quick design without audit", enable_validity_audit=False
         )
 
         result = agent.run(input_data)
@@ -137,8 +137,7 @@ class TestExperimentDesignerAgent:
         """Test with max redesign iterations set."""
         agent = ExperimentDesignerAgent(max_redesign_iterations=3)
         input_data = ExperimentDesignerInput(
-            business_question="Complex experiment needing refinement",
-            max_redesign_iterations=3
+            business_question="Complex experiment needing refinement", max_redesign_iterations=3
         )
 
         result = agent.run(input_data)
@@ -152,9 +151,7 @@ class TestExperimentDesignerInput:
 
     def test_valid_input_minimal(self):
         """Test valid minimal input."""
-        input_data = ExperimentDesignerInput(
-            business_question="Does X impact Y?"
-        )
+        input_data = ExperimentDesignerInput(business_question="Does X impact Y?")
 
         assert input_data.business_question == "Does X impact Y?"
         assert input_data.constraints == {}
@@ -173,16 +170,16 @@ class TestExperimentDesignerInput:
                 "power": 0.80,
                 "weekly_accrual": 50,
                 "budget": 100000,
-                "timeline": "6 months"
+                "timeline": "6 months",
             },
             available_data={
                 "variables": ["hcp_id", "territory", "visit_count", "engagement_score"],
-                "sample_size": 5000
+                "sample_size": 5000,
             },
             preregistration_formality="heavy",
             max_redesign_iterations=3,
             enable_validity_audit=True,
-            brand="Remibrutinib"
+            brand="Remibrutinib",
         )
 
         assert input_data.constraints["expected_effect_size"] == 0.25
@@ -193,39 +190,32 @@ class TestExperimentDesignerInput:
     def test_invalid_empty_question(self):
         """Test invalid empty business question."""
         with pytest.raises(ValidationError):
-            ExperimentDesignerInput(
-                business_question=""  # Empty string
-            )
+            ExperimentDesignerInput(business_question="")  # Empty string
 
     def test_invalid_short_question(self):
         """Test invalid short business question."""
         with pytest.raises(ValidationError):
-            ExperimentDesignerInput(
-                business_question="Test?"  # Too short (<10 chars)
-            )
+            ExperimentDesignerInput(business_question="Test?")  # Too short (<10 chars)
 
     def test_invalid_max_iterations_too_high(self):
         """Test invalid max redesign iterations too high."""
         with pytest.raises(ValidationError):
             ExperimentDesignerInput(
-                business_question="Valid question here",
-                max_redesign_iterations=10  # > 5
+                business_question="Valid question here", max_redesign_iterations=10  # > 5
             )
 
     def test_invalid_max_iterations_negative(self):
         """Test invalid negative max redesign iterations."""
         with pytest.raises(ValidationError):
             ExperimentDesignerInput(
-                business_question="Valid question here",
-                max_redesign_iterations=-1
+                business_question="Valid question here", max_redesign_iterations=-1
             )
 
     def test_invalid_formality_level(self):
         """Test invalid preregistration formality level."""
         with pytest.raises(ValidationError):
             ExperimentDesignerInput(
-                business_question="Valid question here",
-                preregistration_formality="invalid"
+                business_question="Valid question here", preregistration_formality="invalid"
             )
 
     def test_valid_constraint_keys(self):
@@ -243,8 +233,8 @@ class TestExperimentDesignerInput:
                 "weekly_accrual": 100,
                 "cluster_size": 20,
                 "expected_icc": 0.05,
-                "baseline_rate": 0.15
-            }
+                "baseline_rate": 0.15,
+            },
         )
 
         assert len(input_data.constraints) == 11
@@ -256,9 +246,7 @@ class TestExperimentDesignerOutput:
     def test_output_structure(self):
         """Test output structure has all required fields."""
         agent = ExperimentDesignerAgent()
-        input_data = ExperimentDesignerInput(
-            business_question="Does X impact Y in meaningful way?"
-        )
+        input_data = ExperimentDesignerInput(business_question="Does X impact Y in meaningful way?")
 
         result = agent.run(input_data)
 
@@ -287,9 +275,7 @@ class TestExperimentDesignerOutput:
     def test_output_validity_score_range(self):
         """Test validity score is in valid range."""
         agent = ExperimentDesignerAgent()
-        input_data = ExperimentDesignerInput(
-            business_question="Test validity score range"
-        )
+        input_data = ExperimentDesignerInput(business_question="Test validity score range")
 
         result = agent.run(input_data)
 
@@ -298,9 +284,7 @@ class TestExperimentDesignerOutput:
     def test_output_treatments_structure(self):
         """Test treatments structure."""
         agent = ExperimentDesignerAgent()
-        input_data = ExperimentDesignerInput(
-            business_question="Does treatment A improve outcome?"
-        )
+        input_data = ExperimentDesignerInput(business_question="Does treatment A improve outcome?")
 
         result = agent.run(input_data)
 
@@ -316,9 +300,7 @@ class TestExperimentDesignerOutput:
     def test_output_outcomes_structure(self):
         """Test outcomes structure."""
         agent = ExperimentDesignerAgent()
-        input_data = ExperimentDesignerInput(
-            business_question="Measure impact on key outcome"
-        )
+        input_data = ExperimentDesignerInput(business_question="Measure impact on key outcome")
 
         result = agent.run(input_data)
 
@@ -334,9 +316,7 @@ class TestExperimentDesignerOutput:
     def test_output_validity_threats_structure(self):
         """Test validity threats structure."""
         agent = ExperimentDesignerAgent()
-        input_data = ExperimentDesignerInput(
-            business_question="Check for validity threats"
-        )
+        input_data = ExperimentDesignerInput(business_question="Check for validity threats")
 
         result = agent.run(input_data)
 
@@ -354,7 +334,7 @@ class TestExperimentDesignerOutput:
         agent = ExperimentDesignerAgent()
         input_data = ExperimentDesignerInput(
             business_question="Calculate required sample size",
-            constraints={"expected_effect_size": 0.3, "power": 0.8}
+            constraints={"expected_effect_size": 0.3, "power": 0.8},
         )
 
         result = agent.run(input_data)
@@ -374,9 +354,7 @@ class TestExperimentDesignerOutput:
     def test_output_analysis_code_generated(self):
         """Test analysis code is generated."""
         agent = ExperimentDesignerAgent()
-        input_data = ExperimentDesignerInput(
-            business_question="Generate analysis template"
-        )
+        input_data = ExperimentDesignerInput(business_question="Generate analysis template")
 
         result = agent.run(input_data)
 
@@ -408,12 +386,12 @@ class TestEndToEndWorkflows:
                 "expected_effect_size": 0.25,
                 "power": 0.80,
                 "alpha": 0.05,
-                "weekly_accrual": 50
+                "weekly_accrual": 50,
             },
             available_data={
                 "variables": ["hcp_id", "territory", "visit_count", "engagement_score"],
-                "sample_size": 5000
-            }
+                "sample_size": 5000,
+            },
         )
 
         result = agent.run(input_data)
@@ -433,11 +411,9 @@ class TestEndToEndWorkflows:
                 "expected_effect_size": 0.20,
                 "power": 0.80,
                 "cluster_size": 50,
-                "expected_icc": 0.05
+                "expected_icc": 0.05,
             },
-            available_data={
-                "variables": ["territory_id", "rep_id", "sales_volume"]
-            }
+            available_data={"variables": ["territory_id", "rep_id", "sales_volume"]},
         )
 
         result = agent.run(input_data)
@@ -449,11 +425,7 @@ class TestEndToEndWorkflows:
         agent = ExperimentDesignerAgent()
         input_data = ExperimentDesignerInput(
             business_question="Does new outreach strategy improve HCP conversion rate?",
-            constraints={
-                "expected_effect_size": 0.10,
-                "baseline_rate": 0.15,
-                "power": 0.80
-            }
+            constraints={"expected_effect_size": 0.10, "baseline_rate": 0.15, "power": 0.80},
         )
 
         result = agent.run(input_data)
@@ -466,8 +438,7 @@ class TestEndToEndWorkflows:
 
         for brand in ["Remibrutinib", "Fabhalta", "Kisqali"]:
             input_data = ExperimentDesignerInput(
-                business_question=f"Optimize {brand} marketing effectiveness",
-                brand=brand
+                business_question=f"Optimize {brand} marketing effectiveness", brand=brand
             )
 
             result = agent.run(input_data)
@@ -480,8 +451,7 @@ class TestEndToEndWorkflows:
 
         for formality in ["light", "medium", "heavy"]:
             input_data = ExperimentDesignerInput(
-                business_question="Test experiment design",
-                preregistration_formality=formality
+                business_question="Test experiment design", preregistration_formality=formality
             )
 
             result = agent.run(input_data)
@@ -495,7 +465,7 @@ class TestEndToEndWorkflows:
         input_data = ExperimentDesignerInput(
             business_question="Complex experiment requiring iteration",
             max_redesign_iterations=2,
-            enable_validity_audit=True
+            enable_validity_audit=True,
         )
 
         result = agent.run(input_data)
@@ -510,10 +480,7 @@ class TestEndToEndWorkflows:
         agent = ExperimentDesignerAgent()
         input_data = ExperimentDesignerInput(
             business_question="Test latency performance",
-            constraints={
-                "expected_effect_size": 0.25,
-                "power": 0.80
-            }
+            constraints={"expected_effect_size": 0.25, "power": 0.80},
         )
 
         result = agent.run(input_data)
@@ -541,9 +508,7 @@ class TestEdgeCases:
     def test_minimal_constraints(self):
         """Test with minimal constraints."""
         agent = ExperimentDesignerAgent()
-        input_data = ExperimentDesignerInput(
-            business_question="Minimal constraint experiment"
-        )
+        input_data = ExperimentDesignerInput(business_question="Minimal constraint experiment")
 
         result = agent.run(input_data)
 
@@ -563,8 +528,8 @@ class TestEdgeCases:
                 "weekly_accrual": 200,
                 "cluster_size": 100,
                 "expected_icc": 0.1,
-                "baseline_rate": 0.25
-            }
+                "baseline_rate": 0.25,
+            },
         )
 
         result = agent.run(input_data)
@@ -575,8 +540,7 @@ class TestEdgeCases:
         """Test with zero redesign iterations."""
         agent = ExperimentDesignerAgent(max_redesign_iterations=0)
         input_data = ExperimentDesignerInput(
-            business_question="Single pass experiment design",
-            max_redesign_iterations=0
+            business_question="Single pass experiment design", max_redesign_iterations=0
         )
 
         result = agent.run(input_data)
@@ -589,10 +553,7 @@ class TestEdgeCases:
         agent = ExperimentDesignerAgent()
         input_data = ExperimentDesignerInput(
             business_question="Detect very small effect",
-            constraints={
-                "expected_effect_size": 0.05,  # Very small
-                "power": 0.80
-            }
+            constraints={"expected_effect_size": 0.05, "power": 0.80},  # Very small
         )
 
         result = agent.run(input_data)
@@ -607,10 +568,7 @@ class TestEdgeCases:
         agent = ExperimentDesignerAgent()
         input_data = ExperimentDesignerInput(
             business_question="Detect large effect",
-            constraints={
-                "expected_effect_size": 0.8,  # Large
-                "power": 0.80
-            }
+            constraints={"expected_effect_size": 0.8, "power": 0.80},  # Large
         )
 
         result = agent.run(input_data)
@@ -626,8 +584,7 @@ class TestEdgeCases:
         """Test with empty available data."""
         agent = ExperimentDesignerAgent()
         input_data = ExperimentDesignerInput(
-            business_question="Design with no available data specified",
-            available_data={}
+            business_question="Design with no available data specified", available_data={}
         )
 
         result = agent.run(input_data)
@@ -640,14 +597,25 @@ class TestEdgeCases:
         input_data = ExperimentDesignerInput(
             business_question="Design with complex data",
             available_data={
-                "variables": ["hcp_id", "territory", "region", "specialty", "years_experience",
-                             "visit_count", "email_opens", "webinar_attendance", "sample_requests",
-                             "trx_volume", "nrx_volume", "market_share"],
+                "variables": [
+                    "hcp_id",
+                    "territory",
+                    "region",
+                    "specialty",
+                    "years_experience",
+                    "visit_count",
+                    "email_opens",
+                    "webinar_attendance",
+                    "sample_requests",
+                    "trx_volume",
+                    "nrx_volume",
+                    "market_share",
+                ],
                 "sample_size": 50000,
                 "historical_periods": 24,
                 "data_quality": "high",
-                "missing_rate": 0.02
-            }
+                "missing_rate": 0.02,
+            },
         )
 
         result = agent.run(input_data)
@@ -662,9 +630,7 @@ class TestAsyncExecution:
     async def test_arun_basic(self):
         """Test basic async execution."""
         agent = ExperimentDesignerAgent()
-        input_data = ExperimentDesignerInput(
-            business_question="Test async execution"
-        )
+        input_data = ExperimentDesignerInput(business_question="Test async execution")
 
         result = await agent.arun(input_data)
 
@@ -676,10 +642,7 @@ class TestAsyncExecution:
         agent = ExperimentDesignerAgent()
         input_data = ExperimentDesignerInput(
             business_question="Test async with constraints",
-            constraints={
-                "expected_effect_size": 0.25,
-                "power": 0.80
-            }
+            constraints={"expected_effect_size": 0.25, "power": 0.80},
         )
 
         result = await agent.arun(input_data)

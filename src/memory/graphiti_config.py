@@ -13,12 +13,12 @@ Usage:
     entity_types = config.entity_types
 """
 
-import os
 import logging
-from enum import Enum
-from typing import Any, Dict, List, Optional
+import os
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
+from typing import Dict, List, Optional
 
 import yaml
 
@@ -30,6 +30,7 @@ DEFAULT_CONFIG_PATH = Path(__file__).parent.parent.parent / "config" / "005_memo
 
 class E2IEntityType(str, Enum):
     """E2I entity types for knowledge graph."""
+
     PATIENT = "Patient"
     HCP = "HCP"
     BRAND = "Brand"
@@ -45,6 +46,7 @@ class E2IEntityType(str, Enum):
 
 class E2IRelationshipType(str, Enum):
     """E2I relationship types for knowledge graph."""
+
     TREATED_BY = "TREATED_BY"
     PRESCRIBED = "PRESCRIBED"
     PRESCRIBES = "PRESCRIBES"
@@ -62,6 +64,7 @@ class E2IRelationshipType(str, Enum):
 @dataclass
 class GraphitiEntityConfig:
     """Configuration for a single entity type."""
+
     name: str
     label: str
     description: str = ""
@@ -72,6 +75,7 @@ class GraphitiEntityConfig:
 @dataclass
 class GraphitiRelationshipConfig:
     """Configuration for a single relationship type."""
+
     name: str
     label: str
     description: str = ""
@@ -84,6 +88,7 @@ class GraphitiConfig:
     Main Graphiti configuration container.
     Provides typed access to entity and relationship configurations.
     """
+
     enabled: bool = True
     model: str = "claude-3-5-sonnet-latest"  # Sonnet for Graphiti operations
     graph_name: str = "e2i_semantic"
@@ -93,7 +98,9 @@ class GraphitiConfig:
     entity_configs: Dict[str, GraphitiEntityConfig] = field(default_factory=dict)
 
     # Relationship configurations
-    relationship_types: List[E2IRelationshipType] = field(default_factory=lambda: list(E2IRelationshipType))
+    relationship_types: List[E2IRelationshipType] = field(
+        default_factory=lambda: list(E2IRelationshipType)
+    )
     relationship_configs: Dict[str, GraphitiRelationshipConfig] = field(default_factory=dict)
 
     # Episode settings
@@ -128,70 +135,70 @@ DEFAULT_ENTITY_CONFIGS = {
         label="Patient",
         description="Patient in the healthcare system",
         properties=["patient_id", "condition", "treatment_status", "journey_stage"],
-        indexes=["patient_id"]
+        indexes=["patient_id"],
     ),
     E2IEntityType.HCP.value: GraphitiEntityConfig(
         name="HCP",
         label="HCP",
         description="Healthcare Provider (physician, specialist)",
         properties=["hcp_id", "npi", "specialty", "region", "tier"],
-        indexes=["hcp_id", "npi"]
+        indexes=["hcp_id", "npi"],
     ),
     E2IEntityType.BRAND.value: GraphitiEntityConfig(
         name="Brand",
         label="Brand",
         description="Pharmaceutical brand/product",
         properties=["brand_name", "indication", "therapeutic_area", "launch_date"],
-        indexes=["brand_name"]
+        indexes=["brand_name"],
     ),
     E2IEntityType.REGION.value: GraphitiEntityConfig(
         name="Region",
         label="Region",
         description="Geographic region or territory",
         properties=["region_id", "region_name", "parent_region"],
-        indexes=["region_id"]
+        indexes=["region_id"],
     ),
     E2IEntityType.KPI.value: GraphitiEntityConfig(
         name="KPI",
         label="KPI",
         description="Key Performance Indicator",
         properties=["kpi_name", "kpi_type", "unit", "target_value"],
-        indexes=["kpi_name"]
+        indexes=["kpi_name"],
     ),
     E2IEntityType.CAUSAL_PATH.value: GraphitiEntityConfig(
         name="CausalPath",
         label="CausalPath",
         description="Discovered causal relationship chain",
         properties=["path_id", "source", "target", "effect_size", "confidence"],
-        indexes=["path_id"]
+        indexes=["path_id"],
     ),
     E2IEntityType.TRIGGER.value: GraphitiEntityConfig(
         name="Trigger",
         label="Trigger",
         description="Event or condition that triggers an action",
         properties=["trigger_id", "trigger_type", "condition", "action"],
-        indexes=["trigger_id"]
+        indexes=["trigger_id"],
     ),
     E2IEntityType.AGENT.value: GraphitiEntityConfig(
         name="Agent",
         label="Agent",
         description="E2I AI agent",
         properties=["agent_name", "tier", "capabilities"],
-        indexes=["agent_name"]
+        indexes=["agent_name"],
     ),
     E2IEntityType.EPISODE.value: GraphitiEntityConfig(
         name="Episode",
         label="Episode",
         description="Graphiti temporal episode",
         properties=["episode_id", "content", "source", "session_id", "valid_at", "invalid_at"],
-        indexes=["episode_id", "session_id"]
+        indexes=["episode_id", "session_id"],
     ),
     E2IEntityType.COMMUNITY.value: GraphitiEntityConfig(
         name="Community",
         label="Community",
         description="Graphiti entity community/cluster",
         properties=["community_id", "name", "summary", "member_count"],
-        indexes=["community_id"]
+        indexes=["community_id"],
     ),
 }
 
@@ -202,67 +209,67 @@ DEFAULT_RELATIONSHIP_CONFIGS = {
         name="TREATED_BY",
         label="TREATED_BY",
         description="Patient treated by HCP",
-        properties=["start_date", "end_date", "treatment_type"]
+        properties=["start_date", "end_date", "treatment_type"],
     ),
     E2IRelationshipType.PRESCRIBED.value: GraphitiRelationshipConfig(
         name="PRESCRIBED",
         label="PRESCRIBED",
         description="Patient prescribed a brand",
-        properties=["prescription_date", "dosage", "duration"]
+        properties=["prescription_date", "dosage", "duration"],
     ),
     E2IRelationshipType.PRESCRIBES.value: GraphitiRelationshipConfig(
         name="PRESCRIBES",
         label="PRESCRIBES",
         description="HCP prescribes a brand",
-        properties=["frequency", "preference_score"]
+        properties=["frequency", "preference_score"],
     ),
     E2IRelationshipType.CAUSES.value: GraphitiRelationshipConfig(
         name="CAUSES",
         label="CAUSES",
         description="Causal relationship between entities",
-        properties=["effect_size", "confidence", "p_value", "mechanism"]
+        properties=["effect_size", "confidence", "p_value", "mechanism"],
     ),
     E2IRelationshipType.IMPACTS.value: GraphitiRelationshipConfig(
         name="IMPACTS",
         label="IMPACTS",
         description="Entity impacts a KPI or outcome",
-        properties=["impact_direction", "impact_magnitude", "lag_days"]
+        properties=["impact_direction", "impact_magnitude", "lag_days"],
     ),
     E2IRelationshipType.INFLUENCES.value: GraphitiRelationshipConfig(
         name="INFLUENCES",
         label="INFLUENCES",
         description="Entity influences another entity",
-        properties=["influence_type", "strength", "context"]
+        properties=["influence_type", "strength", "context"],
     ),
     E2IRelationshipType.DISCOVERED.value: GraphitiRelationshipConfig(
         name="DISCOVERED",
         label="DISCOVERED",
         description="Agent discovered a relationship or insight",
-        properties=["discovery_date", "method", "confidence"]
+        properties=["discovery_date", "method", "confidence"],
     ),
     E2IRelationshipType.GENERATED.value: GraphitiRelationshipConfig(
         name="GENERATED",
         label="GENERATED",
         description="Agent generated an output or analysis",
-        properties=["generation_date", "output_type"]
+        properties=["generation_date", "output_type"],
     ),
     E2IRelationshipType.MENTIONS.value: GraphitiRelationshipConfig(
         name="MENTIONS",
         label="MENTIONS",
         description="Episode mentions an entity (Graphiti)",
-        properties=["confidence", "context", "position"]
+        properties=["confidence", "context", "position"],
     ),
     E2IRelationshipType.MEMBER_OF.value: GraphitiRelationshipConfig(
         name="MEMBER_OF",
         label="MEMBER_OF",
         description="Entity is member of a community (Graphiti)",
-        properties=["membership_score", "role"]
+        properties=["membership_score", "role"],
     ),
     E2IRelationshipType.RELATES_TO.value: GraphitiRelationshipConfig(
         name="RELATES_TO",
         label="RELATES_TO",
         description="General relationship between entities",
-        properties=["relationship_type", "weight", "context"]
+        properties=["relationship_type", "weight", "context"],
     ),
 }
 
@@ -306,7 +313,9 @@ def load_graphiti_config(config_path: Optional[Path] = None) -> GraphitiConfig:
             logger.warning(f"Unknown entity type in config: {name}")
 
     # Parse relationship types from config
-    rel_type_names = graphity_config.get("relationship_types", [r.value for r in E2IRelationshipType])
+    rel_type_names = graphity_config.get(
+        "relationship_types", [r.value for r in E2IRelationshipType]
+    )
     relationship_types = []
     for name in rel_type_names:
         try:
@@ -331,10 +340,14 @@ def load_graphiti_config(config_path: Optional[Path] = None) -> GraphitiConfig:
         falkordb_host=os.environ.get("FALKORDB_HOST", "localhost"),
         falkordb_port=int(os.environ.get("FALKORDB_PORT", "6381")),
         cache_enabled=cache_config.get("enabled", True),
-        cache_ttl_minutes=raw_config.get("performance", {}).get("cache", {}).get("semantic_cache_ttl_minutes", 5),
+        cache_ttl_minutes=raw_config.get("performance", {})
+        .get("cache", {})
+        .get("semantic_cache_ttl_minutes", 5),
     )
 
-    logger.info(f"Loaded Graphiti config: {len(config.entity_types)} entity types, {len(config.relationship_types)} relationship types")
+    logger.info(
+        f"Loaded Graphiti config: {len(config.entity_types)} entity types, {len(config.relationship_types)} relationship types"
+    )
     return config
 
 

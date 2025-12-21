@@ -21,11 +21,9 @@ class ScenarioAnalyzerNode:
     Compares different allocation strategies.
     """
 
-    async def execute(
-        self, state: ResourceOptimizerState
-    ) -> ResourceOptimizerState:
+    async def execute(self, state: ResourceOptimizerState) -> ResourceOptimizerState:
         """Execute scenario analysis."""
-        start_time = time.time()
+        time.time()
 
         if state.get("status") == "failed":
             return state
@@ -41,16 +39,12 @@ class ScenarioAnalyzerNode:
             scenario_count = state.get("scenario_count", 3)
 
             # Generate scenarios
-            scenarios = self._generate_scenarios(
-                allocations, targets, constraints, scenario_count
-            )
+            scenarios = self._generate_scenarios(allocations, targets, constraints, scenario_count)
 
             # Perform sensitivity analysis
             sensitivity = self._analyze_sensitivity(allocations, targets)
 
-            logger.info(
-                f"Scenario analysis complete: {len(scenarios)} scenarios analyzed"
-            )
+            logger.info(f"Scenario analysis complete: {len(scenarios)} scenarios analyzed")
 
             return {
                 **state,
@@ -88,12 +82,9 @@ class ScenarioAnalyzerNode:
             budget = sum(a.get("optimized_allocation", 0) for a in allocations)
 
         # Scenario 1: Current allocation (baseline)
-        current_total = sum(
-            t.get("current_allocation", 0) for t in targets
-        )
+        current_total = sum(t.get("current_allocation", 0) for t in targets)
         current_outcome = sum(
-            t.get("current_allocation", 0) * t.get("expected_response", 1.0)
-            for t in targets
+            t.get("current_allocation", 0) * t.get("expected_response", 1.0) for t in targets
         )
         scenarios.append(
             ScenarioResult(
@@ -121,9 +112,7 @@ class ScenarioAnalyzerNode:
         # Scenario 3: Equal distribution
         if targets:
             equal_alloc = budget / len(targets)
-            equal_outcome = sum(
-                equal_alloc * t.get("expected_response", 1.0) for t in targets
-            )
+            equal_outcome = sum(equal_alloc * t.get("expected_response", 1.0) for t in targets)
             scenarios.append(
                 ScenarioResult(
                     scenario_name="Equal Distribution",
@@ -141,9 +130,7 @@ class ScenarioAnalyzerNode:
             )
             top_half = sorted_targets[: len(sorted_targets) // 2]
             focus_alloc = budget / len(top_half) if top_half else 0
-            focus_outcome = sum(
-                focus_alloc * t.get("expected_response", 1.0) for t in top_half
-            )
+            focus_outcome = sum(focus_alloc * t.get("expected_response", 1.0) for t in top_half)
             scenarios.append(
                 ScenarioResult(
                     scenario_name="Focus Top Performers",

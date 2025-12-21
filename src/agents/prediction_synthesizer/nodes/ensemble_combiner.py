@@ -30,9 +30,7 @@ class EnsembleCombinerNode:
         """
         self.default_confidence_level = confidence_level
 
-    async def execute(
-        self, state: PredictionSynthesizerState
-    ) -> PredictionSynthesizerState:
+    async def execute(self, state: PredictionSynthesizerState) -> PredictionSynthesizerState:
         """Combine predictions into ensemble."""
         start_time = time.time()
 
@@ -44,25 +42,19 @@ class EnsembleCombinerNode:
             if not predictions:
                 return {
                     **state,
-                    "errors": [
-                        {"node": "ensemble", "error": "No predictions to combine"}
-                    ],
+                    "errors": [{"node": "ensemble", "error": "No predictions to combine"}],
                     "status": "failed",
                 }
 
             method = state.get("ensemble_method", "weighted")
-            confidence_level = state.get(
-                "confidence_level", self.default_confidence_level
-            )
+            confidence_level = state.get("confidence_level", self.default_confidence_level)
 
             # Extract prediction values and confidences
             pred_values = [p["prediction"] for p in predictions]
             confidences = [p["confidence"] for p in predictions]
 
             # Combine based on method
-            point_estimate = self._combine_predictions(
-                pred_values, confidences, method
-            )
+            point_estimate = self._combine_predictions(pred_values, confidences, method)
 
             # Calculate prediction interval
             interval_lower, interval_upper = self._calculate_interval(
@@ -130,7 +122,7 @@ class EnsembleCombinerNode:
             if total_conf == 0:
                 return sum(predictions) / len(predictions)
             weights = [c / total_conf for c in confidences]
-            return sum(p * w for p, w in zip(predictions, weights))
+            return sum(p * w for p, w in zip(predictions, weights, strict=False))
 
         elif method == "voting":
             # For classification - round to 0/1 and majority vote
@@ -201,12 +193,8 @@ class EnsembleCombinerNode:
         agreement = ensemble["model_agreement"]
         confidence = ensemble["confidence"]
 
-        confidence_desc = (
-            "high" if confidence > 0.7 else "moderate" if confidence > 0.4 else "low"
-        )
-        agreement_desc = (
-            "strong" if agreement > 0.8 else "moderate" if agreement > 0.5 else "weak"
-        )
+        confidence_desc = "high" if confidence > 0.7 else "moderate" if confidence > 0.4 else "low"
+        agreement_desc = "strong" if agreement > 0.8 else "moderate" if agreement > 0.5 else "weak"
 
         summary = f"Prediction: {pred:.3f} (95% CI: [{lower:.3f}, {upper:.3f}]). "
         summary += f"Confidence: {confidence_desc}. "

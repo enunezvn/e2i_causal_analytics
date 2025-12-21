@@ -4,9 +4,9 @@ This agent validates data quality, computes baseline metrics,
 and enforces a QC gate that blocks downstream training if quality fails.
 """
 
-from typing import Dict, Any
 import logging
 from datetime import datetime
+from typing import Any, Dict
 
 from .graph import create_data_preparer_graph
 from .state import DataPreparerState
@@ -160,15 +160,12 @@ class DataPreparerAgent:
             # Log execution time
             duration = (datetime.now() - start_time).total_seconds()
             logger.info(
-                f"Data preparation completed in {duration:.2f}s "
-                f"(SLA: {self.sla_seconds}s)"
+                f"Data preparation completed in {duration:.2f}s " f"(SLA: {self.sla_seconds}s)"
             )
 
             # Check SLA
             if duration > self.sla_seconds:
-                logger.warning(
-                    f"SLA violation: {duration:.2f}s > {self.sla_seconds}s"
-                )
+                logger.warning(f"SLA violation: {duration:.2f}s > {self.sla_seconds}s")
 
             # TODO: Persist QC report to ml_data_quality_reports table
             # TODO: Persist baseline metrics to ml_data_quality_reports table

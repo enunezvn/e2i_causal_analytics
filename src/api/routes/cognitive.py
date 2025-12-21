@@ -17,13 +17,14 @@ Author: E2I Causal Analytics Team
 Version: 4.1.0
 """
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks
-from pydantic import BaseModel, ConfigDict, Field
-from typing import Optional, List, Dict, Any
-from datetime import datetime, timezone
-from enum import Enum
 import logging
 import uuid
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Any, Dict, List, Optional
+
+from fastapi import APIRouter, BackgroundTasks, HTTPException
+from pydantic import BaseModel, ConfigDict, Field
 
 from src.memory.working_memory import get_working_memory
 from src.rag.retriever import hybrid_search
@@ -37,18 +38,21 @@ router = APIRouter(prefix="/cognitive", tags=["Cognitive Workflow"])
 # ENUMS & MODELS
 # =============================================================================
 
+
 class QueryType(str, Enum):
     """Types of cognitive queries."""
-    CAUSAL = "causal"           # Causal inference questions
-    PREDICTION = "prediction"   # ML prediction requests
+
+    CAUSAL = "causal"  # Causal inference questions
+    PREDICTION = "prediction"  # ML prediction requests
     OPTIMIZATION = "optimization"  # Resource optimization
-    MONITORING = "monitoring"   # Health/drift monitoring
-    EXPLANATION = "explanation" # Explainability requests
-    GENERAL = "general"         # General analytics
+    MONITORING = "monitoring"  # Health/drift monitoring
+    EXPLANATION = "explanation"  # Explainability requests
+    GENERAL = "general"  # General analytics
 
 
 class SessionState(str, Enum):
     """Session states."""
+
     ACTIVE = "active"
     COMPLETED = "completed"
     FAILED = "failed"
@@ -57,6 +61,7 @@ class SessionState(str, Enum):
 
 class CognitivePhase(str, Enum):
     """Phases of the cognitive workflow."""
+
     SUMMARIZE = "summarize"
     INVESTIGATE = "investigate"
     EXECUTE = "execute"
@@ -68,31 +73,44 @@ class CognitivePhase(str, Enum):
 # Query Models
 # -----------------------------------------------------------------------------
 
+
 class CognitiveQueryRequest(BaseModel):
     """Request for full cognitive query processing."""
+
     query: str = Field(..., min_length=1, max_length=5000, description="User query")
     session_id: Optional[str] = Field(None, description="Existing session ID to continue")
     user_id: Optional[str] = Field(None, description="User identifier")
-    brand: Optional[str] = Field(None, description="Brand context (Kisqali, Fabhalta, Remibrutinib)")
+    brand: Optional[str] = Field(
+        None, description="Brand context (Kisqali, Fabhalta, Remibrutinib)"
+    )
     region: Optional[str] = Field(None, description="Region context")
-    query_type: Optional[QueryType] = Field(None, description="Type of query (auto-detected if not specified)")
+    query_type: Optional[QueryType] = Field(
+        None, description="Type of query (auto-detected if not specified)"
+    )
     include_evidence: bool = Field(default=True, description="Include evidence trail in response")
-    max_memory_results: int = Field(default=10, ge=1, le=50, description="Max memory results to retrieve")
-    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Additional metadata")
+    max_memory_results: int = Field(
+        default=10, ge=1, le=50, description="Max memory results to retrieve"
+    )
+    metadata: Optional[Dict[str, Any]] = Field(
+        default_factory=dict, description="Additional metadata"
+    )
 
-    model_config = ConfigDict(json_schema_extra={
-        "example": {
-            "query": "Why did TRx drop 15% in northeast region last quarter?",
-            "brand": "Kisqali",
-            "region": "northeast",
-            "query_type": "causal",
-            "include_evidence": True
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "query": "Why did TRx drop 15% in northeast region last quarter?",
+                "brand": "Kisqali",
+                "region": "northeast",
+                "query_type": "causal",
+                "include_evidence": True,
+            }
         }
-    })
+    )
 
 
 class EvidenceItem(BaseModel):
     """Single piece of evidence from memory retrieval."""
+
     content: str = Field(..., description="Evidence content")
     source: str = Field(..., description="Memory source")
     relevance_score: float = Field(..., description="Relevance score")
@@ -101,6 +119,7 @@ class EvidenceItem(BaseModel):
 
 class CognitiveQueryResponse(BaseModel):
     """Response from cognitive query processing."""
+
     session_id: str = Field(..., description="Session identifier")
     query: str = Field(..., description="Original query")
     response: str = Field(..., description="Generated response")
@@ -118,8 +137,10 @@ class CognitiveQueryResponse(BaseModel):
 # Session Models
 # -----------------------------------------------------------------------------
 
+
 class SessionContext(BaseModel):
     """Current session context."""
+
     session_id: str = Field(..., description="Session identifier")
     user_id: Optional[str] = None
     brand: Optional[str] = None
@@ -133,6 +154,7 @@ class SessionContext(BaseModel):
 
 class SessionMessage(BaseModel):
     """Message in session history."""
+
     role: str = Field(..., description="Message role (user, assistant, system)")
     content: str = Field(..., description="Message content")
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -142,22 +164,29 @@ class SessionMessage(BaseModel):
 
 class SessionResponse(BaseModel):
     """Full session state response."""
+
     context: SessionContext = Field(..., description="Session context")
     messages: List[SessionMessage] = Field(..., description="Message history")
-    evidence_trail: List[EvidenceItem] = Field(default_factory=list, description="Accumulated evidence")
+    evidence_trail: List[EvidenceItem] = Field(
+        default_factory=list, description="Accumulated evidence"
+    )
     memory_stats: Dict[str, Any] = Field(default_factory=dict, description="Memory retrieval stats")
 
 
 class CreateSessionRequest(BaseModel):
     """Request to create a new cognitive session."""
+
     user_id: Optional[str] = Field(None, description="User identifier")
     brand: Optional[str] = Field(None, description="Brand context")
     region: Optional[str] = Field(None, description="Region context")
-    initial_context: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Initial context")
+    initial_context: Optional[Dict[str, Any]] = Field(
+        default_factory=dict, description="Initial context"
+    )
 
 
 class CreateSessionResponse(BaseModel):
     """Response for session creation."""
+
     session_id: str = Field(..., description="Created session ID")
     state: SessionState = Field(default=SessionState.ACTIVE)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -168,10 +197,10 @@ class CreateSessionResponse(BaseModel):
 # ENDPOINTS
 # =============================================================================
 
+
 @router.post("/query", response_model=CognitiveQueryResponse)
 async def process_cognitive_query(
-    request: CognitiveQueryRequest,
-    background_tasks: BackgroundTasks
+    request: CognitiveQueryRequest, background_tasks: BackgroundTasks
 ) -> CognitiveQueryResponse:
     """
     Process a query through the full cognitive workflow.
@@ -185,6 +214,7 @@ async def process_cognitive_query(
     Returns response with evidence trail and confidence score.
     """
     import time
+
     start_time = time.time()
 
     try:
@@ -202,20 +232,20 @@ async def process_cognitive_query(
                 initial_context={
                     "brand": request.brand,
                     "region": request.region,
-                    **(request.metadata or {})
-                }
+                    **(request.metadata or {}),
+                },
             )
 
         # Phase 1: Summarize - Get compressed context
         phases_completed.append(CognitivePhase.SUMMARIZE)
-        context = await working_memory.get_session(session_id)
+        await working_memory.get_session(session_id)
 
         # Store user message
         await working_memory.add_message(
             session_id=session_id,
             role="user",
             content=request.query,
-            metadata={"query_type": request.query_type.value if request.query_type else "auto"}
+            metadata={"query_type": request.query_type.value if request.query_type else "auto"},
         )
 
         # Phase 2: Investigate - Retrieve relevant memories
@@ -224,19 +254,23 @@ async def process_cognitive_query(
             query=request.query,
             k=request.max_memory_results,
             kpi_name=_extract_kpi_from_query(request.query),
-            filters=_build_filters(request.brand, request.region)
+            filters=_build_filters(request.brand, request.region),
         )
 
         # Build evidence items
-        evidence = [
-            EvidenceItem(
-                content=r.content[:500],  # Truncate for response
-                source=r.source.value if hasattr(r.source, 'value') else str(r.source),
-                relevance_score=r.score,
-                retrieval_method=r.metadata.get("retrieval_method", "unknown")
-            )
-            for r in memory_results[:5]  # Top 5 for response
-        ] if request.include_evidence else None
+        evidence = (
+            [
+                EvidenceItem(
+                    content=r.content[:500],  # Truncate for response
+                    source=r.source.value if hasattr(r.source, "value") else str(r.source),
+                    relevance_score=r.score,
+                    retrieval_method=r.metadata.get("retrieval_method", "unknown"),
+                )
+                for r in memory_results[:5]  # Top 5 for response
+            ]
+            if request.include_evidence
+            else None
+        )
 
         # Store evidence in working memory
         for result in memory_results:
@@ -245,8 +279,8 @@ async def process_cognitive_query(
                 evidence={
                     "content": result.content,
                     "source": result.source,
-                    "score": result.score
-                }
+                    "score": result.score,
+                },
             )
 
         # Phase 3: Execute - Route to agent
@@ -257,10 +291,7 @@ async def process_cognitive_query(
         # For now, generate a placeholder response
         # In production, this would route to the actual agent
         response_text = _generate_placeholder_response(
-            query=request.query,
-            query_type=query_type,
-            evidence=evidence,
-            brand=request.brand
+            query=request.query, query_type=query_type, evidence=evidence, brand=request.brand
         )
 
         # Phase 4: Reflect - Store response and learn
@@ -272,8 +303,8 @@ async def process_cognitive_query(
             metadata={
                 "agent_name": agent_name,
                 "query_type": query_type.value,
-                "evidence_count": len(memory_results)
-            }
+                "evidence_count": len(memory_results),
+            },
         )
 
         phases_completed.append(CognitivePhase.COMPLETE)
@@ -292,8 +323,8 @@ async def process_cognitive_query(
             metadata={
                 "brand": request.brand,
                 "region": request.region,
-                "memory_results_count": len(memory_results)
-            }
+                "memory_results_count": len(memory_results),
+            },
         )
 
     except Exception as e:
@@ -328,7 +359,7 @@ async def get_session(session_id: str) -> SessionResponse:
                 content=m.get("content", ""),
                 timestamp=m.get("timestamp", datetime.now(timezone.utc)),
                 agent_name=m.get("metadata", {}).get("agent_name"),
-                metadata=m.get("metadata", {})
+                metadata=m.get("metadata", {}),
             )
             for m in messages_data
         ]
@@ -340,7 +371,7 @@ async def get_session(session_id: str) -> SessionResponse:
                 content=e.get("content", ""),
                 source=e.get("source", "unknown"),
                 relevance_score=e.get("score", 0.0),
-                retrieval_method=e.get("retrieval_method", "unknown")
+                retrieval_method=e.get("retrieval_method", "unknown"),
             )
             for e in evidence_data
         ]
@@ -353,17 +384,14 @@ async def get_session(session_id: str) -> SessionResponse:
             state=SessionState(session.get("state", "active")),
             created_at=session.get("created_at", datetime.now(timezone.utc)),
             last_activity=session.get("last_activity", datetime.now(timezone.utc)),
-            message_count=len(messages)
+            message_count=len(messages),
         )
 
         return SessionResponse(
             context=context,
             messages=messages,
             evidence_trail=evidence,
-            memory_stats={
-                "total_evidence": len(evidence),
-                "message_count": len(messages)
-            }
+            memory_stats={"total_evidence": len(evidence), "message_count": len(messages)},
         )
 
     except HTTPException:
@@ -396,17 +424,15 @@ async def create_session(request: CreateSessionRequest) -> CreateSessionResponse
             initial_context={
                 "brand": request.brand,
                 "region": request.region,
-                **(request.initial_context or {})
-            }
+                **(request.initial_context or {}),
+            },
         )
 
         # Session expires in 1 hour
         expires_at = datetime.now(timezone.utc).replace(hour=datetime.now(timezone.utc).hour + 1)
 
         return CreateSessionResponse(
-            session_id=session_id,
-            state=SessionState.ACTIVE,
-            expires_at=expires_at
+            session_id=session_id, state=SessionState.ACTIVE, expires_at=expires_at
         )
 
     except Exception as e:
@@ -426,7 +452,7 @@ async def delete_session(session_id: str) -> Dict[str, Any]:
         return {
             "session_id": session_id,
             "deleted": True,
-            "timestamp": datetime.now(timezone.utc).isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
     except Exception as e:
@@ -437,6 +463,7 @@ async def delete_session(session_id: str) -> Dict[str, Any]:
 # =============================================================================
 # HELPER FUNCTIONS
 # =============================================================================
+
 
 def _detect_query_type(query: str) -> QueryType:
     """Detect the type of query based on content."""
@@ -464,7 +491,7 @@ def _route_to_agent(query_type: QueryType) -> str:
         QueryType.OPTIMIZATION: "resource_optimizer",
         QueryType.MONITORING: "health_score",
         QueryType.EXPLANATION: "explainer",
-        QueryType.GENERAL: "orchestrator"
+        QueryType.GENERAL: "orchestrator",
     }
     return routing.get(query_type, "orchestrator")
 
@@ -477,7 +504,7 @@ def _extract_kpi_from_query(query: str) -> Optional[str]:
         "conversion": "conversion_rate",
         "market share": "market_share",
         "adherence": "adherence_rate",
-        "churn": "churn_rate"
+        "churn": "churn_rate",
     }
 
     query_lower = query.lower()
@@ -499,10 +526,7 @@ def _build_filters(brand: Optional[str], region: Optional[str]) -> Optional[Dict
 
 
 def _generate_placeholder_response(
-    query: str,
-    query_type: QueryType,
-    evidence: Optional[List[EvidenceItem]],
-    brand: Optional[str]
+    query: str, query_type: QueryType, evidence: Optional[List[EvidenceItem]], brand: Optional[str]
 ) -> str:
     """Generate placeholder response (will be replaced by actual agent processing)."""
     evidence_summary = ""
@@ -517,7 +541,7 @@ def _generate_placeholder_response(
         QueryType.OPTIMIZATION: f"Optimizing resources{brand_context}. This query involves resource optimization.{evidence_summary}",
         QueryType.MONITORING: f"Checking system health{brand_context}. This query involves monitoring and alerts.{evidence_summary}",
         QueryType.EXPLANATION: f"Generating explanation{brand_context}. This query involves model interpretability.{evidence_summary}",
-        QueryType.GENERAL: f"Processing query{brand_context}. This is a general analytics query.{evidence_summary}"
+        QueryType.GENERAL: f"Processing query{brand_context}. This is a general analytics query.{evidence_summary}",
     }
 
     return responses.get(query_type, responses[QueryType.GENERAL])
@@ -527,45 +551,64 @@ def _generate_placeholder_response(
 # DSPy-ENHANCED RAG ENDPOINT
 # =============================================================================
 
+
 class CognitiveRAGRequest(BaseModel):
     """Request for DSPy-enhanced cognitive RAG search."""
+
     query: str = Field(..., min_length=1, max_length=5000, description="Natural language query")
-    conversation_id: Optional[str] = Field(None, description="Conversation/session ID for context continuity")
+    conversation_id: Optional[str] = Field(
+        None, description="Conversation/session ID for context continuity"
+    )
     conversation_history: Optional[str] = Field(None, description="Compressed conversation history")
 
-    model_config = ConfigDict(json_schema_extra={
-        "example": {
-            "query": "Why did Kisqali adoption increase in the Northeast last quarter?",
-            "conversation_id": "session-abc-123"
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "query": "Why did Kisqali adoption increase in the Northeast last quarter?",
+                "conversation_id": "session-abc-123",
+            }
         }
-    })
+    )
 
 
 class CognitiveRAGResponse(BaseModel):
     """Response from DSPy-enhanced cognitive RAG search."""
+
     response: str = Field(..., description="Synthesized natural language response")
-    evidence: List[Dict[str, Any]] = Field(default_factory=list, description="Evidence pieces gathered")
+    evidence: List[Dict[str, Any]] = Field(
+        default_factory=list, description="Evidence pieces gathered"
+    )
     hop_count: int = Field(default=0, description="Number of retrieval hops performed")
-    visualization_config: Dict[str, Any] = Field(default_factory=dict, description="Chart configuration if applicable")
-    routed_agents: List[str] = Field(default_factory=list, description="Agents recommended for further processing")
+    visualization_config: Dict[str, Any] = Field(
+        default_factory=dict, description="Chart configuration if applicable"
+    )
+    routed_agents: List[str] = Field(
+        default_factory=list, description="Agents recommended for further processing"
+    )
     entities: List[str] = Field(default_factory=list, description="Extracted entities")
     intent: str = Field(default="", description="Detected query intent")
     rewritten_query: str = Field(default="", description="DSPy-optimized query rewrite")
-    dspy_signals: List[Dict[str, Any]] = Field(default_factory=list, description="Training signals for optimization")
-    worth_remembering: bool = Field(default=False, description="Whether this exchange should be stored in long-term memory")
+    dspy_signals: List[Dict[str, Any]] = Field(
+        default_factory=list, description="Training signals for optimization"
+    )
+    worth_remembering: bool = Field(
+        default=False, description="Whether this exchange should be stored in long-term memory"
+    )
     latency_ms: float = Field(..., description="Total processing time in milliseconds")
     error: Optional[str] = Field(None, description="Error message if processing failed")
 
-    model_config = ConfigDict(json_schema_extra={
-        "example": {
-            "response": "Kisqali adoption increased 15% in the Northeast due to increased oncologist engagement and successful speaker programs.",
-            "evidence": [{"content": "Northeast TRx up 15%...", "source": "agent_activities"}],
-            "hop_count": 2,
-            "entities": ["Kisqali", "Northeast"],
-            "intent": "causal",
-            "latency_ms": 1250.5
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "response": "Kisqali adoption increased 15% in the Northeast due to increased oncologist engagement and successful speaker programs.",
+                "evidence": [{"content": "Northeast TRx up 15%...", "source": "agent_activities"}],
+                "hop_count": 2,
+                "entities": ["Kisqali", "Northeast"],
+                "intent": "causal",
+                "latency_ms": 1250.5,
+            }
         }
-    })
+    )
 
 
 @router.post("/rag", response_model=CognitiveRAGResponse)
@@ -613,7 +656,7 @@ async def cognitive_rag_search(request: CognitiveRAGRequest) -> CognitiveRAGResp
         result = await rag.cognitive_search(
             query=request.query,
             conversation_id=request.conversation_id,
-            conversation_history=request.conversation_history
+            conversation_history=request.conversation_history,
         )
 
         return CognitiveRAGResponse(
@@ -628,24 +671,17 @@ async def cognitive_rag_search(request: CognitiveRAGRequest) -> CognitiveRAGResp
             dspy_signals=result.get("dspy_signals", []),
             worth_remembering=result.get("worth_remembering", False),
             latency_ms=result.get("latency_ms", 0.0),
-            error=result.get("error")
+            error=result.get("error"),
         )
 
     except ImportError as e:
         logger.error(f"Cognitive RAG import error: {e}")
         raise HTTPException(
-            status_code=503,
-            detail=f"Cognitive RAG dependencies not available: {str(e)}"
+            status_code=503, detail=f"Cognitive RAG dependencies not available: {str(e)}"
         )
     except ValueError as e:
         logger.error(f"Cognitive RAG configuration error: {e}")
-        raise HTTPException(
-            status_code=400,
-            detail=str(e)
-        )
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Cognitive RAG search failed: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Cognitive RAG search failed: {str(e)[:200]}"
-        )
+        raise HTTPException(status_code=500, detail=f"Cognitive RAG search failed: {str(e)[:200]}")

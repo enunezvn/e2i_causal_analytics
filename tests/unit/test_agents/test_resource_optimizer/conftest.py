@@ -2,14 +2,14 @@
 E2I Resource Optimizer Agent - Test Fixtures
 """
 
-import pytest
 from typing import Any, Dict, List
+
+import pytest
 
 from src.agents.resource_optimizer.state import (
     AllocationTarget,
     Constraint,
 )
-
 
 # ============================================================================
 # ALLOCATION TARGET FIXTURES

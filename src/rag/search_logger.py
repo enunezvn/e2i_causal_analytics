@@ -8,7 +8,6 @@ Part of Phase 1, Checkpoint 1.4.
 """
 
 import asyncio
-import hashlib
 import logging
 from typing import Any, Dict, Optional
 from uuid import UUID
@@ -49,11 +48,7 @@ class SearchLogger:
         ```
     """
 
-    def __init__(
-        self,
-        supabase_client: Any,
-        enabled: bool = True
-    ):
+    def __init__(self, supabase_client: Any, enabled: bool = True):
         """
         Initialize the search logger.
 
@@ -72,7 +67,7 @@ class SearchLogger:
         session_id: Optional[UUID] = None,
         user_id: Optional[str] = None,
         config: Optional[Dict[str, Any]] = None,
-        extracted_entities: Optional[Dict[str, Any]] = None
+        extracted_entities: Optional[Dict[str, Any]] = None,
     ) -> Optional[UUID]:
         """
         Log a search query and its statistics.
@@ -98,7 +93,7 @@ class SearchLogger:
                 session_id,
                 user_id,
                 config or {},
-                extracted_entities or {}
+                extracted_entities or {},
             )
 
             if response.data:
@@ -119,7 +114,7 @@ class SearchLogger:
         session_id: Optional[UUID],
         user_id: Optional[str],
         config: Dict[str, Any],
-        extracted_entities: Dict[str, Any]
+        extracted_entities: Dict[str, Any],
     ) -> Any:
         """
         Execute the log_rag_search RPC call synchronously.
@@ -142,15 +137,15 @@ class SearchLogger:
                 "p_sources_used": stats.sources_used,
                 "p_errors": stats.errors,
                 "p_config": config,
-                "p_extracted_entities": extracted_entities
-            }
+                "p_extracted_entities": extracted_entities,
+            },
         ).execute()
 
     async def log_search_batch(
         self,
         stats_list: list[SearchStats],
         session_id: Optional[UUID] = None,
-        user_id: Optional[str] = None
+        user_id: Optional[str] = None,
     ) -> int:
         """
         Log multiple search queries in batch.
@@ -175,9 +170,7 @@ class SearchLogger:
         return success_count
 
     async def get_slow_queries(
-        self,
-        limit: int = 10,
-        threshold_ms: float = 1000.0
+        self, limit: int = 10, threshold_ms: float = 1000.0
     ) -> list[Dict[str, Any]]:
         """
         Get recent slow queries for debugging.
@@ -205,10 +198,7 @@ class SearchLogger:
             logger.warning(f"Failed to get slow queries: {e}")
             return []
 
-    async def get_search_stats_summary(
-        self,
-        hours: int = 24
-    ) -> Dict[str, Any]:
+    async def get_search_stats_summary(self, hours: int = 24) -> Dict[str, Any]:
         """
         Get search statistics summary for the last N hours.
 
@@ -233,24 +223,30 @@ class SearchLogger:
                     "total_queries": 0,
                     "avg_latency_ms": 0,
                     "p95_latency_ms": 0,
-                    "error_rate": 0
+                    "error_rate": 0,
                 }
 
             total_queries = sum(row.get("query_count", 0) for row in response.data)
             total_errors = sum(row.get("error_count", 0) for row in response.data)
 
-            latencies = [row.get("avg_latency_ms", 0) for row in response.data if row.get("avg_latency_ms")]
+            latencies = [
+                row.get("avg_latency_ms", 0) for row in response.data if row.get("avg_latency_ms")
+            ]
             avg_latency = sum(latencies) / len(latencies) if latencies else 0
 
-            p95_values = [row.get("p95_latency_ms", 0) for row in response.data if row.get("p95_latency_ms")]
+            p95_values = [
+                row.get("p95_latency_ms", 0) for row in response.data if row.get("p95_latency_ms")
+            ]
             p95_latency = max(p95_values) if p95_values else 0
 
             return {
                 "total_queries": total_queries,
                 "avg_latency_ms": round(avg_latency, 2),
                 "p95_latency_ms": round(p95_latency, 2),
-                "error_rate": round(total_errors / total_queries * 100, 2) if total_queries > 0 else 0,
-                "hours_analyzed": len(response.data)
+                "error_rate": (
+                    round(total_errors / total_queries * 100, 2) if total_queries > 0 else 0
+                ),
+                "hours_analyzed": len(response.data),
             }
 
         except Exception as e:
@@ -260,7 +256,7 @@ class SearchLogger:
                 "avg_latency_ms": 0,
                 "p95_latency_ms": 0,
                 "error_rate": 0,
-                "error": str(e)
+                "error": str(e),
             }
 
     def __repr__(self) -> str:

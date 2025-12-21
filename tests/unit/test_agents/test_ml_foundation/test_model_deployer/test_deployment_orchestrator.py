@@ -1,10 +1,11 @@
 """Tests for deployment_orchestrator nodes (package_model, deploy_to_endpoint, check_rollback_availability)."""
 
 import pytest
+
 from src.agents.ml_foundation.model_deployer.nodes.deployment_orchestrator import (
-    package_model,
-    deploy_to_endpoint,
     check_rollback_availability,
+    deploy_to_endpoint,
+    package_model,
 )
 
 

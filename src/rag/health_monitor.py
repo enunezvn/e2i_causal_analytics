@@ -17,20 +17,17 @@ from enum import Enum
 from typing import Any, Callable, Coroutine, Dict, Optional
 
 from src.rag.config import HealthMonitorConfig
-from src.rag.types import BackendStatus, BackendHealth
-from src.rag.exceptions import (
-    CircuitBreakerOpenError,
-    BackendUnavailableError,
-    HealthCheckError
-)
+from src.rag.exceptions import CircuitBreakerOpenError, HealthCheckError
+from src.rag.types import BackendHealth, BackendStatus
 
 logger = logging.getLogger(__name__)
 
 
 class CircuitState(Enum):
     """Circuit breaker states."""
-    CLOSED = "closed"     # Normal operation
-    OPEN = "open"         # Failing, rejecting requests
+
+    CLOSED = "closed"  # Normal operation
+    OPEN = "open"  # Failing, rejecting requests
     HALF_OPEN = "half_open"  # Testing recovery
 
 
@@ -67,6 +64,7 @@ class CircuitBreaker:
                 raise
         ```
     """
+
     name: str
     failure_threshold: int = 3
     success_threshold: int = 2  # Successes needed to close from half-open
@@ -162,7 +160,7 @@ class CircuitBreaker:
             "success_count": self._success_count,
             "last_failure_time": self._last_failure_time,
             "last_state_change": self._last_state_change,
-            "time_in_current_state": time.time() - self._last_state_change
+            "time_in_current_state": time.time() - self._last_state_change,
         }
 
     def __repr__(self) -> str:
@@ -211,7 +209,7 @@ class HealthMonitor:
     def __init__(
         self,
         config: Optional[HealthMonitorConfig] = None,
-        backends: Optional[Dict[str, Any]] = None
+        backends: Optional[Dict[str, Any]] = None,
     ):
         """
         Initialize the health monitor.
@@ -238,12 +236,10 @@ class HealthMonitor:
             self._circuit_breakers[name] = CircuitBreaker(
                 name=name,
                 failure_threshold=self.config.unhealthy_consecutive_failures,
-                reset_timeout_seconds=self.config.circuit_breaker_reset_seconds
+                reset_timeout_seconds=self.config.circuit_breaker_reset_seconds,
             )
             self._health_status[name] = BackendHealth(
-                status=BackendStatus.UNKNOWN,
-                latency_ms=0.0,
-                last_check=datetime.now(timezone.utc)
+                status=BackendStatus.UNKNOWN, latency_ms=0.0, last_check=datetime.now(timezone.utc)
             )
 
     def register_backend(self, name: str, backend: Any) -> None:
@@ -258,12 +254,10 @@ class HealthMonitor:
         self._circuit_breakers[name] = CircuitBreaker(
             name=name,
             failure_threshold=self.config.unhealthy_consecutive_failures,
-            reset_timeout_seconds=self.config.circuit_breaker_reset_seconds
+            reset_timeout_seconds=self.config.circuit_breaker_reset_seconds,
         )
         self._health_status[name] = BackendHealth(
-            status=BackendStatus.UNKNOWN,
-            latency_ms=0.0,
-            last_check=datetime.now(timezone.utc)
+            status=BackendStatus.UNKNOWN, latency_ms=0.0, last_check=datetime.now(timezone.utc)
         )
         logger.info(f"Registered backend for health monitoring: {name}")
 
@@ -311,12 +305,12 @@ class HealthMonitor:
                 status=BackendStatus.UNKNOWN,
                 latency_ms=0.0,
                 last_check=datetime.now(timezone.utc),
-                error_message=f"Backend '{backend_name}' not registered"
+                error_message=f"Backend '{backend_name}' not registered",
             )
 
         try:
             # Call backend's health_check method
-            if not hasattr(backend, 'health_check'):
+            if not hasattr(backend, "health_check"):
                 raise HealthCheckError(
                     message=f"Backend '{backend_name}' has no health_check method"
                 )
@@ -329,13 +323,17 @@ class HealthMonitor:
             # Determine status based on result
             if error:
                 status = BackendStatus.UNHEALTHY
-                consecutive_failures = self._health_status.get(
-                    backend_name, BackendHealth(
-                        status=BackendStatus.UNKNOWN,
-                        latency_ms=0.0,
-                        last_check=datetime.now(timezone.utc)
-                    )
-                ).consecutive_failures + 1
+                consecutive_failures = (
+                    self._health_status.get(
+                        backend_name,
+                        BackendHealth(
+                            status=BackendStatus.UNKNOWN,
+                            latency_ms=0.0,
+                            last_check=datetime.now(timezone.utc),
+                        ),
+                    ).consecutive_failures
+                    + 1
+                )
             elif latency_ms > self.config.degraded_latency_ms:
                 status = BackendStatus.DEGRADED
                 consecutive_failures = 0
@@ -348,7 +346,7 @@ class HealthMonitor:
                 latency_ms=latency_ms,
                 last_check=datetime.now(timezone.utc),
                 consecutive_failures=consecutive_failures,
-                error_message=error
+                error_message=error,
             )
 
             # Update stored health
@@ -371,13 +369,15 @@ class HealthMonitor:
                 latency_ms=0.0,
                 last_check=datetime.now(timezone.utc),
                 consecutive_failures=self._health_status.get(
-                    backend_name, BackendHealth(
+                    backend_name,
+                    BackendHealth(
                         status=BackendStatus.UNKNOWN,
                         latency_ms=0.0,
-                        last_check=datetime.now(timezone.utc)
-                    )
-                ).consecutive_failures + 1,
-                error_message=str(e)
+                        last_check=datetime.now(timezone.utc),
+                    ),
+                ).consecutive_failures
+                + 1,
+                error_message=str(e),
             )
             self._health_status[backend_name] = health
 
@@ -421,7 +421,7 @@ class HealthMonitor:
                 "consecutive_failures": health.consecutive_failures,
                 "error": health.error_message,
                 "circuit_breaker": breaker.get_stats() if breaker else None,
-                "available": self.is_available(name)
+                "available": self.is_available(name),
             }
 
             if health.status != BackendStatus.HEALTHY:
@@ -440,7 +440,7 @@ class HealthMonitor:
             "status": overall_status,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "backends": backends_status,
-            "monitoring_enabled": self._running
+            "monitoring_enabled": self._running,
         }
 
     async def start(self) -> None:
@@ -475,7 +475,9 @@ class HealthMonitor:
                 for name, health in self._health_status.items():
                     if health.status == BackendStatus.DEGRADED and self.config.alert_on_degraded:
                         logger.warning(f"Backend '{name}' is degraded: {health.error_message}")
-                    elif health.status == BackendStatus.UNHEALTHY and self.config.alert_on_unhealthy:
+                    elif (
+                        health.status == BackendStatus.UNHEALTHY and self.config.alert_on_unhealthy
+                    ):
                         logger.error(f"Backend '{name}' is unhealthy: {health.error_message}")
 
                 await asyncio.sleep(self.config.check_interval_seconds)
@@ -487,11 +489,7 @@ class HealthMonitor:
                 await asyncio.sleep(self.config.check_interval_seconds)
 
     async def wrap_with_circuit_breaker(
-        self,
-        backend_name: str,
-        operation: Callable[..., Coroutine],
-        *args,
-        **kwargs
+        self, backend_name: str, operation: Callable[..., Coroutine], *args, **kwargs
     ) -> Any:
         """
         Execute an operation with circuit breaker protection.
@@ -521,16 +519,13 @@ class HealthMonitor:
             if breaker._last_failure_time:
                 elapsed = time.time() - breaker._last_failure_time
                 remaining = max(0, breaker.reset_timeout_seconds - elapsed)
-            raise CircuitBreakerOpenError(
-                backend=backend_name,
-                reset_time_seconds=remaining
-            )
+            raise CircuitBreakerOpenError(backend=backend_name, reset_time_seconds=remaining)
 
         try:
             result = await operation(*args, **kwargs)
             breaker.record_success()
             return result
-        except Exception as e:
+        except Exception:
             breaker.record_failure()
             raise
 

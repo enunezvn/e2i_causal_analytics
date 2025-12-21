@@ -2,10 +2,9 @@
 E2I Prediction Synthesizer Agent - Test Fixtures
 """
 
-import pytest
 from typing import Any, Dict, List, Optional
-from unittest.mock import AsyncMock
 
+import pytest
 
 # ============================================================================
 # MOCK MODEL REGISTRY
@@ -18,9 +17,7 @@ class MockModelRegistry:
     def __init__(self, models: Optional[Dict[str, Dict[str, Any]]] = None):
         self.models = models or {}
 
-    async def get_models_for_target(
-        self, target: str, entity_type: str
-    ) -> List[str]:
+    async def get_models_for_target(self, target: str, entity_type: str) -> List[str]:
         """Get models that can predict the target."""
         matching = []
         for model_id, info in self.models.items():
@@ -98,9 +95,7 @@ class MockContextStore:
         """Find similar historical cases."""
         return self.similar_cases[:limit]
 
-    async def get_accuracy(
-        self, prediction_target: str, entity_type: str
-    ) -> float:
+    async def get_accuracy(self, prediction_target: str, entity_type: str) -> float:
         """Get historical accuracy."""
         return self.accuracy
 

@@ -4,8 +4,9 @@ Tests the DoWhy code generation and pre-registration document generation functio
 """
 
 import pytest
-from src.agents.experiment_designer.nodes.template_generator import TemplateGeneratorNode
+
 from src.agents.experiment_designer.graph import create_initial_state
+from src.agents.experiment_designer.nodes.template_generator import TemplateGeneratorNode
 
 
 class TestTemplateGeneratorNode:
@@ -23,9 +24,7 @@ class TestTemplateGeneratorNode:
     async def test_execute_basic(self):
         """Test basic execution."""
         node = TemplateGeneratorNode()
-        state = create_initial_state(
-            business_question="Test template generation"
-        )
+        state = create_initial_state(business_question="Test template generation")
         state["status"] = "generating"
         state["design_type"] = "RCT"
         state["treatments"] = [{"name": "Treatment", "description": "Test"}]
@@ -40,9 +39,7 @@ class TestTemplateGeneratorNode:
     async def test_execute_generates_analysis_code(self):
         """Test that analysis code is generated."""
         node = TemplateGeneratorNode()
-        state = create_initial_state(
-            business_question="Test analysis code generation"
-        )
+        state = create_initial_state(business_question="Test analysis code generation")
         state["status"] = "generating"
         state["design_type"] = "RCT"
         state["treatments"] = [{"name": "T", "description": "D"}]
@@ -57,9 +54,7 @@ class TestTemplateGeneratorNode:
     async def test_execute_generates_causal_graph(self):
         """Test that causal graph DOT format is generated."""
         node = TemplateGeneratorNode()
-        state = create_initial_state(
-            business_question="Test causal graph generation"
-        )
+        state = create_initial_state(business_question="Test causal graph generation")
         state["status"] = "generating"
         state["design_type"] = "RCT"
         state["treatments"] = [{"name": "treatment", "description": "D"}]
@@ -74,9 +69,7 @@ class TestTemplateGeneratorNode:
     async def test_execute_generates_preregistration(self):
         """Test that pre-registration document is generated."""
         node = TemplateGeneratorNode()
-        state = create_initial_state(
-            business_question="Test preregistration generation"
-        )
+        state = create_initial_state(business_question="Test preregistration generation")
         state["status"] = "generating"
         state["design_type"] = "RCT"
         state["treatments"] = [{"name": "T", "description": "D"}]
@@ -92,9 +85,7 @@ class TestTemplateGeneratorNode:
     async def test_execute_generates_dowhy_spec(self):
         """Test that DoWhy specification is generated."""
         node = TemplateGeneratorNode()
-        state = create_initial_state(
-            business_question="Test DoWhy spec generation"
-        )
+        state = create_initial_state(business_question="Test DoWhy spec generation")
         state["status"] = "generating"
         state["design_type"] = "RCT"
         state["treatments"] = [{"name": "treatment", "description": "D"}]
@@ -111,9 +102,7 @@ class TestTemplateGeneratorNode:
     async def test_execute_skip_on_failed(self):
         """Test execution skips on failed status."""
         node = TemplateGeneratorNode()
-        state = create_initial_state(
-            business_question="Test skip on failed"
-        )
+        state = create_initial_state(business_question="Test skip on failed")
         state["status"] = "failed"
 
         result = await node.execute(state)
@@ -124,9 +113,7 @@ class TestTemplateGeneratorNode:
     async def test_execute_records_latency(self):
         """Test that node latency is recorded."""
         node = TemplateGeneratorNode()
-        state = create_initial_state(
-            business_question="Test latency recording"
-        )
+        state = create_initial_state(business_question="Test latency recording")
         state["status"] = "generating"
         state["design_type"] = "RCT"
 
@@ -143,9 +130,7 @@ class TestAnalysisCodeGeneration:
     async def test_code_includes_dowhy_imports(self):
         """Test that generated code includes DoWhy imports."""
         node = TemplateGeneratorNode()
-        state = create_initial_state(
-            business_question="Test DoWhy imports"
-        )
+        state = create_initial_state(business_question="Test DoWhy imports")
         state["status"] = "generating"
         state["design_type"] = "RCT"
         state["treatments"] = [{"name": "treatment", "description": "D"}]
@@ -160,9 +145,7 @@ class TestAnalysisCodeGeneration:
     async def test_code_includes_treatment_variable(self):
         """Test that generated code includes treatment variable."""
         node = TemplateGeneratorNode()
-        state = create_initial_state(
-            business_question="Test treatment variable in code"
-        )
+        state = create_initial_state(business_question="Test treatment variable in code")
         state["status"] = "generating"
         state["design_type"] = "RCT"
         state["treatments"] = [{"name": "my_treatment", "description": "D"}]
@@ -178,9 +161,7 @@ class TestAnalysisCodeGeneration:
     async def test_code_includes_outcome_variable(self):
         """Test that generated code includes outcome variable."""
         node = TemplateGeneratorNode()
-        state = create_initial_state(
-            business_question="Test outcome variable in code"
-        )
+        state = create_initial_state(business_question="Test outcome variable in code")
         state["status"] = "generating"
         state["design_type"] = "RCT"
         state["treatments"] = [{"name": "treatment", "description": "D"}]
@@ -196,9 +177,7 @@ class TestAnalysisCodeGeneration:
     async def test_code_includes_econml_for_heterogeneity(self):
         """Test that EconML is included for heterogeneity analysis."""
         node = TemplateGeneratorNode()
-        state = create_initial_state(
-            business_question="Test EconML inclusion"
-        )
+        state = create_initial_state(business_question="Test EconML inclusion")
         state["status"] = "generating"
         state["design_type"] = "RCT"
         state["treatments"] = [{"name": "treatment", "description": "D"}]
@@ -218,9 +197,7 @@ class TestCausalGraphGeneration:
     async def test_dot_format_valid(self):
         """Test that DOT format is valid."""
         node = TemplateGeneratorNode()
-        state = create_initial_state(
-            business_question="Test DOT format"
-        )
+        state = create_initial_state(business_question="Test DOT format")
         state["status"] = "generating"
         state["design_type"] = "RCT"
         state["treatments"] = [{"name": "treatment", "description": "D"}]
@@ -236,9 +213,7 @@ class TestCausalGraphGeneration:
     async def test_graph_includes_treatment_outcome_edge(self):
         """Test that graph includes treatment->outcome edge."""
         node = TemplateGeneratorNode()
-        state = create_initial_state(
-            business_question="Test treatment-outcome edge"
-        )
+        state = create_initial_state(business_question="Test treatment-outcome edge")
         state["status"] = "generating"
         state["design_type"] = "RCT"
         state["treatments"] = [{"name": "treatment", "description": "D"}]
@@ -254,9 +229,7 @@ class TestCausalGraphGeneration:
     async def test_graph_includes_confounders(self):
         """Test that graph includes confounders."""
         node = TemplateGeneratorNode()
-        state = create_initial_state(
-            business_question="Test confounders in graph"
-        )
+        state = create_initial_state(business_question="Test confounders in graph")
         state["status"] = "generating"
         state["design_type"] = "RCT"
         state["treatments"] = [{"name": "treatment", "description": "D"}]
@@ -278,8 +251,7 @@ class TestPreregistrationGeneration:
         """Test light formality pre-registration."""
         node = TemplateGeneratorNode()
         state = create_initial_state(
-            business_question="Test light preregistration",
-            preregistration_formality="light"
+            business_question="Test light preregistration", preregistration_formality="light"
         )
         state["status"] = "generating"
         state["design_type"] = "RCT"
@@ -297,8 +269,7 @@ class TestPreregistrationGeneration:
         """Test medium formality pre-registration."""
         node = TemplateGeneratorNode()
         state = create_initial_state(
-            business_question="Test medium preregistration",
-            preregistration_formality="medium"
+            business_question="Test medium preregistration", preregistration_formality="medium"
         )
         state["status"] = "generating"
         state["design_type"] = "RCT"
@@ -316,8 +287,7 @@ class TestPreregistrationGeneration:
         """Test heavy formality pre-registration."""
         node = TemplateGeneratorNode()
         state = create_initial_state(
-            business_question="Test heavy preregistration",
-            preregistration_formality="heavy"
+            business_question="Test heavy preregistration", preregistration_formality="heavy"
         )
         state["status"] = "generating"
         state["design_type"] = "RCT"
@@ -337,8 +307,7 @@ class TestPreregistrationGeneration:
 
         # Light
         state_light = create_initial_state(
-            business_question="Test light length",
-            preregistration_formality="light"
+            business_question="Test light length", preregistration_formality="light"
         )
         state_light["status"] = "generating"
         state_light["design_type"] = "RCT"
@@ -348,8 +317,7 @@ class TestPreregistrationGeneration:
 
         # Heavy
         state_heavy = create_initial_state(
-            business_question="Test heavy length",
-            preregistration_formality="heavy"
+            business_question="Test heavy length", preregistration_formality="heavy"
         )
         state_heavy["status"] = "generating"
         state_heavy["design_type"] = "RCT"
@@ -367,9 +335,7 @@ class TestPreregistrationGeneration:
     async def test_includes_hypothesis(self):
         """Test that pre-registration includes hypothesis."""
         node = TemplateGeneratorNode()
-        state = create_initial_state(
-            business_question="Test hypothesis inclusion"
-        )
+        state = create_initial_state(business_question="Test hypothesis inclusion")
         state["status"] = "generating"
         state["design_type"] = "RCT"
         state["treatments"] = [{"name": "T", "description": "D"}]
@@ -380,7 +346,9 @@ class TestPreregistrationGeneration:
         template = result.get("experiment_template", {})
         doc = template.get("pre_registration_document", "")
         # Should mention hypothesis or question
-        assert "hypothesis" in doc.lower() or "question" in doc.lower() or "objective" in doc.lower()
+        assert (
+            "hypothesis" in doc.lower() or "question" in doc.lower() or "objective" in doc.lower()
+        )
 
 
 class TestDoWhySpecGeneration:
@@ -390,9 +358,7 @@ class TestDoWhySpecGeneration:
     async def test_spec_has_treatment(self):
         """Test that spec has treatment variable."""
         node = TemplateGeneratorNode()
-        state = create_initial_state(
-            business_question="Test spec treatment"
-        )
+        state = create_initial_state(business_question="Test spec treatment")
         state["status"] = "generating"
         state["design_type"] = "RCT"
         state["treatments"] = [{"name": "my_treatment", "description": "D"}]
@@ -408,9 +374,7 @@ class TestDoWhySpecGeneration:
     async def test_spec_has_outcome(self):
         """Test that spec has outcome variable."""
         node = TemplateGeneratorNode()
-        state = create_initial_state(
-            business_question="Test spec outcome"
-        )
+        state = create_initial_state(business_question="Test spec outcome")
         state["status"] = "generating"
         state["design_type"] = "RCT"
         state["treatments"] = [{"name": "treatment", "description": "D"}]
@@ -426,9 +390,7 @@ class TestDoWhySpecGeneration:
     async def test_spec_has_common_causes(self):
         """Test that spec has common_causes list."""
         node = TemplateGeneratorNode()
-        state = create_initial_state(
-            business_question="Test spec common causes"
-        )
+        state = create_initial_state(business_question="Test spec common causes")
         state["status"] = "generating"
         state["design_type"] = "RCT"
         state["treatments"] = [{"name": "treatment", "description": "D"}]
@@ -449,9 +411,7 @@ class TestTemplateGeneratorPerformance:
     async def test_latency_under_target(self):
         """Test template generation completes under 500ms target."""
         node = TemplateGeneratorNode()
-        state = create_initial_state(
-            business_question="Test latency performance"
-        )
+        state = create_initial_state(business_question="Test latency performance")
         state["status"] = "generating"
         state["design_type"] = "RCT"
         state["treatments"] = [{"name": "treatment", "description": "D"}]
@@ -470,9 +430,7 @@ class TestTemplateGeneratorEdgeCases:
     async def test_missing_treatments(self):
         """Test handling of missing treatments."""
         node = TemplateGeneratorNode()
-        state = create_initial_state(
-            business_question="Test missing treatments"
-        )
+        state = create_initial_state(business_question="Test missing treatments")
         state["status"] = "generating"
         state["design_type"] = "RCT"
         # No treatments
@@ -486,9 +444,7 @@ class TestTemplateGeneratorEdgeCases:
     async def test_missing_outcomes(self):
         """Test handling of missing outcomes."""
         node = TemplateGeneratorNode()
-        state = create_initial_state(
-            business_question="Test missing outcomes"
-        )
+        state = create_initial_state(business_question="Test missing outcomes")
         state["status"] = "generating"
         state["design_type"] = "RCT"
         state["treatments"] = [{"name": "T", "description": "D"}]
@@ -503,9 +459,7 @@ class TestTemplateGeneratorEdgeCases:
     async def test_empty_design_type(self):
         """Test handling of empty design type."""
         node = TemplateGeneratorNode()
-        state = create_initial_state(
-            business_question="Test empty design type"
-        )
+        state = create_initial_state(business_question="Test empty design type")
         state["status"] = "generating"
         state["treatments"] = [{"name": "T", "description": "D"}]
         state["outcomes"] = [{"name": "Y", "metric_type": "continuous"}]
@@ -520,9 +474,7 @@ class TestTemplateGeneratorEdgeCases:
     async def test_cluster_rct_design(self):
         """Test template generation for cluster RCT."""
         node = TemplateGeneratorNode()
-        state = create_initial_state(
-            business_question="Test cluster RCT template"
-        )
+        state = create_initial_state(business_question="Test cluster RCT template")
         state["status"] = "generating"
         state["design_type"] = "Cluster_RCT"
         state["treatments"] = [{"name": "treatment", "description": "D"}]
@@ -536,9 +488,7 @@ class TestTemplateGeneratorEdgeCases:
     async def test_quasi_experimental_design(self):
         """Test template generation for quasi-experimental design."""
         node = TemplateGeneratorNode()
-        state = create_initial_state(
-            business_question="Test quasi-experimental template"
-        )
+        state = create_initial_state(business_question="Test quasi-experimental template")
         state["status"] = "generating"
         state["design_type"] = "Quasi_Experimental"
         state["treatments"] = [{"name": "treatment", "description": "D"}]
@@ -552,9 +502,7 @@ class TestTemplateGeneratorEdgeCases:
     async def test_with_power_analysis(self):
         """Test template generation with power analysis included."""
         node = TemplateGeneratorNode()
-        state = create_initial_state(
-            business_question="Test with power analysis"
-        )
+        state = create_initial_state(business_question="Test with power analysis")
         state["status"] = "generating"
         state["design_type"] = "RCT"
         state["treatments"] = [{"name": "treatment", "description": "D"}]
@@ -562,7 +510,7 @@ class TestTemplateGeneratorEdgeCases:
         state["power_analysis"] = {
             "required_sample_size": 500,
             "achieved_power": 0.82,
-            "alpha": 0.05
+            "alpha": 0.05,
         }
 
         result = await node.execute(state)
@@ -577,16 +525,12 @@ class TestTemplateGeneratorEdgeCases:
     async def test_with_validity_threats(self):
         """Test template generation with validity threats included."""
         node = TemplateGeneratorNode()
-        state = create_initial_state(
-            business_question="Test with validity threats"
-        )
+        state = create_initial_state(business_question="Test with validity threats")
         state["status"] = "generating"
         state["design_type"] = "RCT"
         state["treatments"] = [{"name": "treatment", "description": "D"}]
         state["outcomes"] = [{"name": "outcome", "metric_type": "continuous"}]
-        state["validity_threats"] = [
-            {"threat_name": "selection_bias", "severity": "high"}
-        ]
+        state["validity_threats"] = [{"threat_name": "selection_bias", "severity": "high"}]
 
         result = await node.execute(state)
 

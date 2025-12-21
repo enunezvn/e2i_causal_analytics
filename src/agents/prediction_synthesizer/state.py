@@ -80,6 +80,4 @@ class PredictionSynthesizerState(TypedDict, total=False):
     # === ERROR HANDLING ===
     errors: Annotated[List[Dict[str, Any]], operator.add]
     warnings: Annotated[List[str], operator.add]
-    status: Literal[
-        "pending", "predicting", "combining", "enriching", "completed", "failed"
-    ]
+    status: Literal["pending", "predicting", "combining", "enriching", "completed", "failed"]

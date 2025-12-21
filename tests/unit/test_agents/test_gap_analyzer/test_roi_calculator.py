@@ -4,12 +4,13 @@ Updated to test the new ROICalculationService-integrated implementation.
 """
 
 import pytest
+
 from src.agents.gap_analyzer.nodes.roi_calculator import ROICalculatorNode
 from src.agents.gap_analyzer.state import GapAnalyzerState, PerformanceGap
 from src.services.roi_calculation import (
+    AttributionLevel,
     ROICalculationService,
     ValueDriverType,
-    AttributionLevel,
 )
 
 
@@ -282,9 +283,7 @@ class TestROICalculatorNode:
         assert result["total_addressable_value"] > 0
 
         # Should equal sum of individual revenue impacts
-        manual_total = sum(
-            est["estimated_revenue_impact"] for est in result["roi_estimates"]
-        )
+        manual_total = sum(est["estimated_revenue_impact"] for est in result["roi_estimates"])
         assert abs(result["total_addressable_value"] - manual_total) < 0.01
 
     @pytest.mark.asyncio
