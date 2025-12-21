@@ -1,0 +1,36 @@
+{
+  "project_root": "/home/enunez/Projects/e2i_causal_analytics",
+  "project_type": "monorepo",
+  "services": {
+    "frontend": {
+      "path": "frontend",
+      "tech_stack": ["TypeScript", "React", "Vite"],
+      "port": 5173,
+      "dev_command": "npm run dev",
+      "build_command": "npm run build",
+      "test_command": "npm test",
+      "lint_command": "npm run lint"
+    },
+    "backend": {
+      "path": "src",
+      "tech_stack": ["Python", "FastAPI"],
+      "port": 8000,
+      "dev_command": "uvicorn src.api.main:app --reload",
+      "test_command": "pytest"
+    }
+  },
+  "infrastructure": {
+    "docker": true,
+    "docker_compose": "docker-compose.yml",
+    "database": "postgresql",
+    "redis": true,
+    "falkordb": true
+  },
+  "conventions": {
+    "linter": "eslint",
+    "formatter": "prettier",
+    "testing": "vitest",
+    "python_linter": "ruff",
+    "python_formatter": "black"
+  }
+}
