@@ -13,12 +13,9 @@ import hashlib
 import json
 from typing import Any, Dict, List, Optional, Tuple
 
-try:
-    import networkx as nx
+import importlib.util
 
-    NETWORKX_AVAILABLE = True
-except ImportError:
-    NETWORKX_AVAILABLE = False
+NETWORKX_AVAILABLE = importlib.util.find_spec("networkx") is not None
 
 
 def compute_dag_hash(

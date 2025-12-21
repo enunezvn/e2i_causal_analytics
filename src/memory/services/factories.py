@@ -325,7 +325,7 @@ def get_supabase_client():
         return _supabase_client
 
     try:
-        from supabase import Client, create_client
+        from supabase import create_client
     except ImportError:
         raise ServiceConnectionError(
             "Supabase", "supabase package is not installed. Run: pip install supabase"
