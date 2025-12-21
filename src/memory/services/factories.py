@@ -9,6 +9,7 @@ Usage:
         get_falkordb_client,
         get_embedding_service,
         get_llm_service,
+        get_graphiti_service,
     )
 
     # Get clients (cached/pooled)
@@ -19,6 +20,9 @@ Usage:
     # Get services
     embedding_service = get_embedding_service()
     llm_service = get_llm_service()
+
+    # Get Graphiti service (async)
+    graphiti = await get_graphiti_service()
 """
 
 import os
@@ -454,6 +458,52 @@ def get_llm_service(environment: Optional[str] = None) -> LLMService:
         return BedrockLLMService()
     else:
         return AnthropicLLMService()
+
+
+# ============================================================================
+# GRAPHITI SERVICE FACTORY
+# ============================================================================
+
+
+async def get_graphiti_service():
+    """
+    Get the Graphiti service for knowledge graph operations.
+
+    This is an async factory that returns the initialized Graphiti service
+    singleton. The service provides:
+    - Automatic entity/relationship extraction from text
+    - Temporal episode tracking
+    - Graph search and traversal
+    - Integration with FalkorDB semantic memory
+
+    Returns:
+        E2IGraphitiService: Initialized Graphiti service
+
+    Raises:
+        ServiceConnectionError: If Graphiti initialization fails
+
+    Example:
+        service = await get_graphiti_service()
+        result = await service.add_episode(
+            content="Dr. Smith prescribed Remibrutinib",
+            source="orchestrator",
+            session_id="session-123"
+        )
+    """
+    try:
+        from ..graphiti_service import get_graphiti_service as _get_graphiti_service
+        return await _get_graphiti_service()
+    except ImportError as e:
+        raise ServiceConnectionError(
+            "Graphiti",
+            f"Failed to import graphiti_service: {e}"
+        )
+    except Exception as e:
+        raise ServiceConnectionError(
+            "Graphiti",
+            f"Failed to get Graphiti service: {e}",
+            e
+        )
 
 
 # ============================================================================

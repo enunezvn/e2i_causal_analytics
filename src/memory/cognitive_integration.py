@@ -37,6 +37,14 @@ from src.rag.models.retrieval_models import RetrievalResult
 
 logger = logging.getLogger(__name__)
 
+# Graphiti integration for knowledge graph
+try:
+    from src.memory.graphiti_service import get_graphiti_service
+    GRAPHITI_AVAILABLE = True
+except ImportError:
+    GRAPHITI_AVAILABLE = False
+    logger.info("Graphiti service not available for knowledge graph integration")
+
 
 # =============================================================================
 # SERVICE MODELS
@@ -497,6 +505,7 @@ class CognitiveService:
 
         - Evaluate if interaction is worth remembering
         - Store episodic memory for significant interactions
+        - Store to Graphiti knowledge graph for entity/relationship extraction
         - Record learning signals for DSPy optimization
         - Update procedural patterns
         """
@@ -528,6 +537,18 @@ class CognitiveService:
                 cycle_id=cycle_id
             )
 
+            # Store to Graphiti knowledge graph for entity extraction
+            if GRAPHITI_AVAILABLE:
+                await self._store_to_graphiti(
+                    session_id=session_id,
+                    cycle_id=cycle_id,
+                    query=query,
+                    query_type=query_type,
+                    response=response,
+                    confidence=confidence,
+                    agent_used=agent_used
+                )
+
             # Record learning signal
             signal = LearningSignalInput(
                 signal_type="outcome_success" if confidence > 0.7 else "outcome_partial",
@@ -552,6 +573,57 @@ class CognitiveService:
 
         except Exception as e:
             logger.error(f"Reflector phase failed: {e}", exc_info=True)
+
+    async def _store_to_graphiti(
+        self,
+        session_id: str,
+        cycle_id: str,
+        query: str,
+        query_type: str,
+        response: str,
+        confidence: float,
+        agent_used: str
+    ) -> None:
+        """
+        Store interaction to Graphiti knowledge graph.
+
+        Graphiti automatically:
+        - Extracts entities (HCP, Brand, Patient, KPI, etc.)
+        - Discovers relationships between entities
+        - Links to existing knowledge graph nodes
+        - Tracks temporal validity
+        """
+        try:
+            graphiti = await get_graphiti_service()
+
+            # Build content for episode - combine query and response
+            episode_content = (
+                f"User Query ({query_type}): {query}\n\n"
+                f"Agent Response ({agent_used}): {response[:1000]}"
+            )
+
+            # Add episode to Graphiti
+            result = await graphiti.add_episode(
+                content=episode_content,
+                source=agent_used,
+                session_id=session_id,
+                metadata={
+                    "cycle_id": cycle_id,
+                    "query_type": query_type,
+                    "confidence": confidence,
+                    "timestamp": str(datetime.now())
+                }
+            )
+
+            logger.info(
+                f"Graphiti episode stored: {result.episode_id} "
+                f"(entities: {len(result.entities_extracted)}, "
+                f"relationships: {len(result.relationships_extracted)})"
+            )
+
+        except Exception as e:
+            # Don't fail the reflector if Graphiti fails
+            logger.warning(f"Failed to store to Graphiti knowledge graph: {e}")
 
 
 # =============================================================================
