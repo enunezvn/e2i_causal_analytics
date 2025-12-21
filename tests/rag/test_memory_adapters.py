@@ -495,8 +495,12 @@ class TestSignalCollectorAdapter:
 
         assert count == 1
         assert len(client._inserted) == 1
-        assert client._inserted[0]["signal_type"] == "response"
+        # Schema uses source_agent instead of signal_type
+        assert client._inserted[0]["source_agent"] == "response"
         assert client._inserted[0]["reward"] == 0.8
+        # Verify new schema fields exist
+        assert "input_context" in client._inserted[0]
+        assert client._inserted[0]["input_context"]["query"] == "q1"
 
     @pytest.mark.asyncio
     async def test_flush_empty_buffer_returns_zero(self):
