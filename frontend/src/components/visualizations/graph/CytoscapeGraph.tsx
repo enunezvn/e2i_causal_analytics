@@ -13,13 +13,15 @@
  * - Themeable through CSS custom properties
  * - Full keyboard and mouse interaction support
  * - Imperative API for external control
+ * - Hover highlighting with connected element emphasis
+ * - Selection state management
  *
  * @module components/visualizations/graph/CytoscapeGraph
  */
 
 import * as React from 'react';
-import { useEffect, useImperativeHandle } from 'react';
-import type { ElementDefinition, StylesheetStyle } from 'cytoscape';
+import { useEffect, useImperativeHandle, useCallback, useRef } from 'react';
+import type { ElementDefinition, StylesheetStyle, Core } from 'cytoscape';
 import { cn } from '@/lib/utils';
 import {
   useCytoscape,
@@ -48,6 +50,18 @@ interface CytoscapeGraphRef {
   runLayout: (name: LayoutName) => void;
   /** Export graph as PNG data URL */
   exportPng: () => string | undefined;
+  /** Select a specific node by ID */
+  selectNode: (nodeId: string) => void;
+  /** Select a specific edge by ID */
+  selectEdge: (edgeId: string) => void;
+  /** Clear all selections */
+  clearSelection: () => void;
+  /** Highlight a node and its connected elements */
+  highlightNode: (nodeId: string) => void;
+  /** Clear all highlights */
+  clearHighlights: () => void;
+  /** Get the Cytoscape instance (for advanced usage) */
+  getCyInstance: () => Core | null;
 }
 
 // =============================================================================
@@ -73,6 +87,8 @@ export interface CytoscapeGraphProps {
   minZoom?: number;
   /** Maximum zoom level */
   maxZoom?: number;
+  /** Enable hover highlighting (dims non-connected elements) */
+  enableHoverHighlight?: boolean;
   /** Event handler for node clicks */
   onNodeClick?: CytoscapeEventHandlers['onNodeClick'];
   /** Event handler for node double clicks */
@@ -83,6 +99,10 @@ export interface CytoscapeGraphProps {
   onNodeMouseOut?: CytoscapeEventHandlers['onNodeMouseOut'];
   /** Event handler for edge clicks */
   onEdgeClick?: CytoscapeEventHandlers['onEdgeClick'];
+  /** Event handler for edge hover start */
+  onEdgeMouseOver?: (edgeId: string, edgeData: Record<string, unknown>) => void;
+  /** Event handler for edge hover end */
+  onEdgeMouseOut?: (edgeId: string) => void;
   /** Event handler for selection changes */
   onSelectionChange?: CytoscapeEventHandlers['onSelectionChange'];
   /** Event handler when graph is ready */
@@ -135,6 +155,7 @@ function LoadingSpinner() {
  * <CytoscapeGraph
  *   elements={elements}
  *   layout="cose"
+ *   enableHoverHighlight
  *   onNodeClick={(id, data) => console.log('Clicked:', id)}
  * />
  * ```
@@ -151,11 +172,14 @@ const CytoscapeGraph = React.forwardRef<CytoscapeGraphRef, CytoscapeGraphProps>(
       loadingComponent,
       minZoom = 0.1,
       maxZoom = 3,
+      enableHoverHighlight = true,
       onNodeClick,
       onNodeDoubleClick,
       onNodeMouseOver,
       onNodeMouseOut,
       onEdgeClick,
+      onEdgeMouseOver,
+      onEdgeMouseOut,
       onSelectionChange,
       onReady,
       onBackgroundClick,
@@ -163,9 +187,79 @@ const CytoscapeGraph = React.forwardRef<CytoscapeGraphRef, CytoscapeGraphProps>(
     },
     ref
   ) => {
+    // Store the Cytoscape instance reference
+    const cyInstanceRef = useRef<Core | null>(null);
+
+    /**
+     * Highlight a node and its connected elements, dimming others
+     */
+    const highlightNodeConnections = useCallback((cy: Core, nodeId: string) => {
+      const node = cy.getElementById(nodeId);
+      if (!node.length) return;
+
+      // Get connected edges and nodes
+      const connectedEdges = node.connectedEdges();
+      const connectedNodes = connectedEdges.connectedNodes();
+
+      // Add highlighted class to the hovered node and its connections
+      node.addClass('highlighted');
+      connectedEdges.addClass('highlighted');
+      connectedNodes.addClass('highlighted');
+
+      // Dim all other elements
+      cy.elements().not(node).not(connectedEdges).not(connectedNodes).addClass('dimmed');
+    }, []);
+
+    /**
+     * Highlight an edge and its connected nodes, dimming others
+     */
+    const highlightEdgeConnections = useCallback((cy: Core, edgeId: string) => {
+      const edge = cy.getElementById(edgeId);
+      if (!edge.length) return;
+
+      // Get connected nodes
+      const connectedNodes = edge.connectedNodes();
+
+      // Add highlighted class to the hovered edge and its nodes
+      edge.addClass('highlighted');
+      connectedNodes.addClass('highlighted');
+
+      // Dim all other elements
+      cy.elements().not(edge).not(connectedNodes).addClass('dimmed');
+    }, []);
+
+    /**
+     * Clear all highlight/dim classes
+     */
+    const clearAllHighlights = useCallback((cy: Core) => {
+      cy.elements().removeClass('highlighted dimmed');
+    }, []);
+
+    // Wrapped event handlers with hover highlighting
+    const wrappedNodeMouseOver = useCallback(
+      (nodeId: string, nodeData: Record<string, unknown>) => {
+        if (enableHoverHighlight && cyInstanceRef.current) {
+          highlightNodeConnections(cyInstanceRef.current, nodeId);
+        }
+        onNodeMouseOver?.(nodeId, nodeData);
+      },
+      [enableHoverHighlight, highlightNodeConnections, onNodeMouseOver]
+    );
+
+    const wrappedNodeMouseOut = useCallback(
+      (nodeId: string) => {
+        if (enableHoverHighlight && cyInstanceRef.current) {
+          clearAllHighlights(cyInstanceRef.current);
+        }
+        onNodeMouseOut?.(nodeId);
+      },
+      [enableHoverHighlight, clearAllHighlights, onNodeMouseOut]
+    );
+
     // Initialize the Cytoscape hook
     const {
       containerRef,
+      cyInstance,
       isLoading,
       setElements,
       runLayout,
@@ -173,6 +267,10 @@ const CytoscapeGraph = React.forwardRef<CytoscapeGraphRef, CytoscapeGraphProps>(
       center,
       zoom,
       getZoom,
+      selectNodes,
+      clearSelection,
+      highlightNode,
+      clearHighlights,
       exportPng,
     } = useCytoscape(
       {
@@ -189,14 +287,40 @@ const CytoscapeGraph = React.forwardRef<CytoscapeGraphRef, CytoscapeGraphProps>(
       {
         onNodeClick,
         onNodeDoubleClick,
-        onNodeMouseOver,
-        onNodeMouseOut,
+        onNodeMouseOver: wrappedNodeMouseOver,
+        onNodeMouseOut: wrappedNodeMouseOut,
         onEdgeClick,
         onSelectionChange,
-        onReady,
+        onReady: (cy) => {
+          cyInstanceRef.current = cy;
+
+          // Add edge hover handlers if hover highlighting is enabled
+          if (enableHoverHighlight) {
+            cy.on('mouseover', 'edge', (evt) => {
+              const edge = evt.target;
+              highlightEdgeConnections(cy, edge.id());
+              onEdgeMouseOver?.(edge.id(), edge.data());
+            });
+
+            cy.on('mouseout', 'edge', (evt) => {
+              const edge = evt.target;
+              clearAllHighlights(cy);
+              onEdgeMouseOut?.(edge.id());
+            });
+          }
+
+          onReady?.(cy);
+        },
         onBackgroundClick,
       }
     );
+
+    // Keep ref in sync
+    useEffect(() => {
+      if (cyInstance) {
+        cyInstanceRef.current = cyInstance;
+      }
+    }, [cyInstance]);
 
     // Expose imperative methods via ref
     useImperativeHandle(
@@ -208,8 +332,44 @@ const CytoscapeGraph = React.forwardRef<CytoscapeGraphRef, CytoscapeGraphProps>(
         center,
         runLayout,
         exportPng,
+        selectNode: (nodeId: string) => selectNodes([nodeId]),
+        selectEdge: (edgeId: string) => {
+          if (cyInstanceRef.current) {
+            cyInstanceRef.current.edges().unselect();
+            cyInstanceRef.current.getElementById(edgeId).select();
+          }
+        },
+        clearSelection,
+        highlightNode: (nodeId: string) => {
+          if (cyInstanceRef.current) {
+            highlightNodeConnections(cyInstanceRef.current, nodeId);
+          } else {
+            highlightNode(nodeId);
+          }
+        },
+        clearHighlights: () => {
+          if (cyInstanceRef.current) {
+            clearAllHighlights(cyInstanceRef.current);
+          } else {
+            clearHighlights();
+          }
+        },
+        getCyInstance: () => cyInstanceRef.current,
       }),
-      [getZoom, zoom, fit, center, runLayout, exportPng]
+      [
+        getZoom,
+        zoom,
+        fit,
+        center,
+        runLayout,
+        exportPng,
+        selectNodes,
+        clearSelection,
+        highlightNode,
+        clearHighlights,
+        highlightNodeConnections,
+        clearAllHighlights,
+      ]
     );
 
     // Update elements when they change
