@@ -421,9 +421,10 @@ class TestGetPatientNetwork:
         trigger_node.labels = ["Trigger"]
         trigger_node.properties = {"id": "trig_456"}
 
+        # Query returns only the connected node (single element per record)
         mock_graph.query.return_value.result_set = [
-            [MagicMock(), MagicMock(), hcp_node],
-            [MagicMock(), MagicMock(), trigger_node]
+            [hcp_node],
+            [trigger_node]
         ]
 
         result = semantic_memory.get_patient_network("pat_123", max_depth=2)
@@ -433,14 +434,19 @@ class TestGetPatientNetwork:
         assert result["hcps"][0]["id"] == "hcp_123"
 
     def test_get_patient_network_respects_max_depth(self, semantic_memory, mock_graph):
-        """get_patient_network should pass max_depth to query."""
+        """get_patient_network should use max_depth in query string.
+
+        Note: FalkorDB doesn't support parameterized variable-length bounds,
+        so max_depth is interpolated into the query string (after sanitization).
+        """
         mock_graph.query.return_value.result_set = []
 
         semantic_memory.get_patient_network("pat_123", max_depth=5)
 
         call_args = mock_graph.query.call_args
-        params = call_args[0][1]
-        assert params["max_depth"] == 5
+        query = call_args[0][0]
+        # max_depth is interpolated in the query as *1..{safe_depth}
+        assert "*1..5" in query
 
 
 class TestGetHCPInfluenceNetwork:
@@ -468,8 +474,8 @@ class TestGetHCPInfluenceNetwork:
         brand_node.properties = {"id": "Kisqali"}
 
         mock_graph.query.return_value.result_set = [
-            [MagicMock(), MagicMock(), patient_node, "TREATS"],
-            [MagicMock(), MagicMock(), brand_node, "PRESCRIBES"]
+            [patient_node],
+            [brand_node]
         ]
 
         result = semantic_memory.get_hcp_influence_network("hcp_123")
@@ -781,8 +787,9 @@ class TestEdgeCases:
         del node.labels  # Remove labels attribute
         node.properties = {"id": "test"}
 
+        # Query returns only the connected node (single element per record)
         mock_graph.query.return_value.result_set = [
-            [MagicMock(), MagicMock(), node]
+            [node]
         ]
 
         # Should not raise

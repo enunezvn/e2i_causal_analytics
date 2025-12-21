@@ -1,7 +1,7 @@
 """LangGraph workflow for orchestrator agent.
 
 Linear flow optimized for speed:
-    [classify] → [route] → [dispatch] → [synthesize] → END
+    [classify] → [rag_context] → [route] → [dispatch] → [synthesize] → END
 
 Total latency target: <2 seconds for orchestration overhead
 (excluding agent execution time)
@@ -14,6 +14,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from .state import OrchestratorState
 from .nodes import (
     classify_intent,
+    retrieve_rag_context,
     route_to_agents,
     dispatch_to_agents,
     synthesize_response,
@@ -23,10 +24,14 @@ from .nodes import (
 def create_orchestrator_graph(
     agent_registry: Optional[Dict[str, Any]] = None,
     enable_checkpointing: bool = False,
+    enable_rag: bool = True,
 ) -> StateGraph:
     """Build the Orchestrator agent graph.
 
-    Architecture:
+    Architecture (with RAG enabled):
+        [classify] → [rag_context] → [route] → [dispatch] → [synthesize] → END
+
+    Architecture (with RAG disabled):
         [classify] → [route] → [dispatch] → [synthesize] → END
 
     Total latency target: <2 seconds for classification + routing
@@ -35,6 +40,7 @@ def create_orchestrator_graph(
     Args:
         agent_registry: Optional dict mapping agent_name to agent instance
         enable_checkpointing: Whether to enable graph checkpointing
+        enable_rag: Whether to enable RAG context retrieval (default: True)
 
     Returns:
         Compiled StateGraph
@@ -44,6 +50,11 @@ def create_orchestrator_graph(
 
     # Add nodes
     workflow.add_node("classify", classify_intent)
+
+    # Conditionally add RAG node
+    if enable_rag:
+        workflow.add_node("rag_context", retrieve_rag_context)
+
     workflow.add_node("route", route_to_agents)
 
     # Dispatcher node with agent registry
@@ -63,7 +74,13 @@ def create_orchestrator_graph(
 
     # Linear flow (no conditionals for speed)
     workflow.set_entry_point("classify")
-    workflow.add_edge("classify", "route")
+
+    if enable_rag:
+        workflow.add_edge("classify", "rag_context")
+        workflow.add_edge("rag_context", "route")
+    else:
+        workflow.add_edge("classify", "route")
+
     workflow.add_edge("route", "dispatch")
     workflow.add_edge("dispatch", "synthesize")
     workflow.add_edge("synthesize", END)

@@ -125,6 +125,16 @@ class OrchestratorState(TypedDict, total=False):
     classification_latency_ms: int
 
     # ========================================================================
+    # NODE 1.5 OUTPUT: RAG Context Retrieval (Optional)
+    # ========================================================================
+
+    # RAG context
+    rag_context: Optional[Dict[str, Any]]  # Retrieved context from RAG
+
+    # Timing
+    rag_latency_ms: int
+
+    # ========================================================================
     # NODE 2 OUTPUT: Routing
     # ========================================================================
 
