@@ -14,14 +14,12 @@ Reference: docs/E2I_Causal_Validation_Protocol.html
 
 from __future__ import annotations
 
-import logging
-import hashlib
-import json
 import copy
-from dataclasses import dataclass, field, asdict
-from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
+import logging
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from enum import Enum
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -29,6 +27,7 @@ import numpy as np
 try:
     import dowhy
     from dowhy import CausalModel
+
     DOWHY_AVAILABLE = True
 except ImportError:
     DOWHY_AVAILABLE = False
@@ -44,11 +43,13 @@ logger = logging.getLogger(__name__)
 # ENUMS (aligned with database/ml/010_causal_validation_tables.sql)
 # ============================================================================
 
+
 class RefutationStatus(str, Enum):
     """Status of individual refutation test.
 
     Aligned with database ENUM: validation_status
     """
+
     PASSED = "passed"
     FAILED = "failed"
     WARNING = "warning"
@@ -60,9 +61,10 @@ class GateDecision(str, Enum):
 
     Aligned with database ENUM: gate_decision
     """
-    PROCEED = "proceed"   # Confidence >= 0.7, all critical tests passed
-    REVIEW = "review"     # Confidence 0.5-0.7, requires expert review
-    BLOCK = "block"       # Confidence < 0.5 or critical test failed
+
+    PROCEED = "proceed"  # Confidence >= 0.7, all critical tests passed
+    REVIEW = "review"  # Confidence 0.5-0.7, requires expert review
+    BLOCK = "block"  # Confidence < 0.5 or critical test failed
 
 
 class RefutationTestType(str, Enum):
@@ -70,6 +72,7 @@ class RefutationTestType(str, Enum):
 
     Aligned with database ENUM: refutation_test_type
     """
+
     PLACEBO_TREATMENT = "placebo_treatment"
     RANDOM_COMMON_CAUSE = "random_common_cause"
     DATA_SUBSET = "data_subset"
@@ -80,6 +83,7 @@ class RefutationTestType(str, Enum):
 # ============================================================================
 # DATACLASSES
 # ============================================================================
+
 
 @dataclass
 class RefutationResult:
@@ -95,6 +99,7 @@ class RefutationResult:
         details: Additional test-specific information
         execution_time_ms: Time taken to run this test
     """
+
     test_name: RefutationTestType
     status: RefutationStatus
     original_effect: float
@@ -133,6 +138,7 @@ class RefutationSuite:
         outcome_variable: Outcome variable name
         brand: Brand context (optional)
     """
+
     passed: bool
     confidence_score: float
     tests: List[RefutationResult]
@@ -213,6 +219,7 @@ class RefutationSuite:
 # REFUTATION RUNNER
 # ============================================================================
 
+
 class RefutationRunner:
     """Orchestrates DoWhy refutation tests for causal estimate validation.
 
@@ -273,23 +280,23 @@ class RefutationRunner:
     # Thresholds for determining pass/fail/warning
     PASS_THRESHOLDS: Dict[str, Dict[str, float]] = {
         "placebo_p_value": {
-            "pass": 0.05,      # Placebo effect p-value must be > 0.05
-            "warning": 0.10,   # Warning if 0.05 < p < 0.10
+            "pass": 0.05,  # Placebo effect p-value must be > 0.05
+            "warning": 0.10,  # Warning if 0.05 < p < 0.10
         },
         "common_cause_delta": {
-            "pass": 0.20,      # Effect change must be < 20%
-            "warning": 0.30,   # Warning if 20% < delta < 30%
+            "pass": 0.20,  # Effect change must be < 20%
+            "warning": 0.30,  # Warning if 20% < delta < 30%
         },
         "subset_ci_coverage": {
-            "pass": 0.80,      # 80% of subsets must contain original effect
+            "pass": 0.80,  # 80% of subsets must contain original effect
             "warning": 0.70,
         },
         "bootstrap_ci_ratio": {
-            "pass": 0.50,      # Bootstrap CI must not be > 50% wider than original
+            "pass": 0.50,  # Bootstrap CI must not be > 50% wider than original
             "warning": 0.75,
         },
         "e_value_min": {
-            "pass": 2.0,       # E-value must be >= 2.0
+            "pass": 2.0,  # E-value must be >= 2.0
             "warning": 1.5,
         },
     }
@@ -297,7 +304,7 @@ class RefutationRunner:
     # Gate decision thresholds
     GATE_THRESHOLDS = {
         "proceed": 0.70,  # Confidence >= 0.70 → proceed
-        "review": 0.50,   # Confidence 0.50-0.70 → review
+        "review": 0.50,  # Confidence 0.50-0.70 → review
         # Below 0.50 → block
     }
 
@@ -360,6 +367,7 @@ class RefutationRunner:
             RefutationSuite with all test results and gate decision
         """
         import time
+
         start_time = time.time()
 
         tests: List[RefutationResult] = []
@@ -373,7 +381,9 @@ class RefutationRunner:
         )
 
         if not use_dowhy:
-            logger.info("Running refutation tests in mock mode (DoWhy not available or model not provided)")
+            logger.info(
+                "Running refutation tests in mock mode (DoWhy not available or model not provided)"
+            )
 
         # Run each enabled test
         if self.config["placebo_treatment"]["enabled"]:
@@ -465,6 +475,7 @@ class RefutationRunner:
         (p-value > 0.05), the original effect is likely causal.
         """
         import time
+
         start_time = time.time()
 
         test_name = RefutationTestType.PLACEBO_TREATMENT
@@ -498,7 +509,9 @@ class RefutationRunner:
             status = RefutationStatus.FAILED
             message = "WARNING: Placebo treatment shows significant effect"
 
-        delta_percent = abs(refuted_effect - original_effect) / max(abs(original_effect), 1e-10) * 100
+        delta_percent = (
+            abs(refuted_effect - original_effect) / max(abs(original_effect), 1e-10) * 100
+        )
         execution_time = (time.time() - start_time) * 1000
 
         return RefutationResult(
@@ -508,7 +521,10 @@ class RefutationRunner:
             refuted_effect=refuted_effect,
             p_value=p_value,
             delta_percent=delta_percent,
-            details={"message": message, "num_simulations": self.config["placebo_treatment"]["num_simulations"]},
+            details={
+                "message": message,
+                "num_simulations": self.config["placebo_treatment"]["num_simulations"],
+            },
             execution_time_ms=execution_time,
         )
 
@@ -526,6 +542,7 @@ class RefutationRunner:
         significantly, unmeasured confounding may be present.
         """
         import time
+
         start_time = time.time()
 
         test_name = RefutationTestType.RANDOM_COMMON_CAUSE
@@ -536,8 +553,12 @@ class RefutationRunner:
                     identified_estimand,
                     estimate,
                     method_name="random_common_cause",
-                    effect_strength_on_treatment=self.config["random_common_cause"]["effect_strength"],
-                    effect_strength_on_outcome=self.config["random_common_cause"]["effect_strength"],
+                    effect_strength_on_treatment=self.config["random_common_cause"][
+                        "effect_strength"
+                    ],
+                    effect_strength_on_outcome=self.config["random_common_cause"][
+                        "effect_strength"
+                    ],
                 )
                 refuted_effect = float(refutation.new_effect)
                 p_value = float(refutation.refutation_result.get("p_value", 0.5))
@@ -548,7 +569,9 @@ class RefutationRunner:
             refuted_effect, p_value = self._mock_random_common_cause_test(original_effect)
 
         # Calculate delta percentage
-        delta_percent = abs(refuted_effect - original_effect) / max(abs(original_effect), 1e-10) * 100
+        delta_percent = (
+            abs(refuted_effect - original_effect) / max(abs(original_effect), 1e-10) * 100
+        )
 
         # Determine status: effect should remain stable
         if delta_percent <= self.thresholds["common_cause_delta"]["pass"] * 100:
@@ -570,7 +593,10 @@ class RefutationRunner:
             refuted_effect=refuted_effect,
             p_value=p_value,
             delta_percent=delta_percent,
-            details={"message": message, "effect_strength": self.config["random_common_cause"]["effect_strength"]},
+            details={
+                "message": message,
+                "effect_strength": self.config["random_common_cause"]["effect_strength"],
+            },
             execution_time_ms=execution_time,
         )
 
@@ -589,6 +615,7 @@ class RefutationRunner:
         across subsets, it may not be robust.
         """
         import time
+
         start_time = time.time()
 
         test_name = RefutationTestType.DATA_SUBSET
@@ -609,11 +636,17 @@ class RefutationRunner:
                 ci_coverage = self._calculate_ci_coverage(subset_effects, original_ci)
             except Exception as e:
                 logger.warning(f"DoWhy data subset test failed: {e}, using mock")
-                refuted_effect, p_value, ci_coverage = self._mock_data_subset_test(original_effect, original_ci)
+                refuted_effect, p_value, ci_coverage = self._mock_data_subset_test(
+                    original_effect, original_ci
+                )
         else:
-            refuted_effect, p_value, ci_coverage = self._mock_data_subset_test(original_effect, original_ci)
+            refuted_effect, p_value, ci_coverage = self._mock_data_subset_test(
+                original_effect, original_ci
+            )
 
-        delta_percent = abs(refuted_effect - original_effect) / max(abs(original_effect), 1e-10) * 100
+        delta_percent = (
+            abs(refuted_effect - original_effect) / max(abs(original_effect), 1e-10) * 100
+        )
 
         # Determine status based on CI coverage
         if ci_coverage >= self.thresholds["subset_ci_coverage"]["pass"]:
@@ -658,6 +691,7 @@ class RefutationRunner:
         Tests effect stability via bootstrap resampling.
         """
         import time
+
         start_time = time.time()
 
         test_name = RefutationTestType.BOOTSTRAP
@@ -672,7 +706,10 @@ class RefutationRunner:
                 )
                 bootstrap_effects = refutation.refutation_result.get("bootstrap_estimates", [])
                 refuted_effect = float(np.mean(bootstrap_effects))
-                bootstrap_ci = (float(np.percentile(bootstrap_effects, 2.5)), float(np.percentile(bootstrap_effects, 97.5)))
+                bootstrap_ci = (
+                    float(np.percentile(bootstrap_effects, 2.5)),
+                    float(np.percentile(bootstrap_effects, 97.5)),
+                )
                 p_value = refutation.refutation_result.get("p_value", 0.8)
             except Exception as e:
                 logger.warning(f"DoWhy bootstrap test failed: {e}, using mock")
@@ -680,7 +717,9 @@ class RefutationRunner:
         else:
             refuted_effect, bootstrap_ci, p_value = self._mock_bootstrap_test(original_effect)
 
-        delta_percent = abs(refuted_effect - original_effect) / max(abs(original_effect), 1e-10) * 100
+        delta_percent = (
+            abs(refuted_effect - original_effect) / max(abs(original_effect), 1e-10) * 100
+        )
 
         # Calculate CI ratio (bootstrap CI width / original CI width)
         original_ci_width = original_ci[1] - original_ci[0]
@@ -727,6 +766,7 @@ class RefutationRunner:
         Based on VanderWeele & Ding (2017).
         """
         import time
+
         start_time = time.time()
 
         test_name = RefutationTestType.SENSITIVITY_E_VALUE
@@ -760,7 +800,9 @@ class RefutationRunner:
             strength = "weak"
         else:
             status = RefutationStatus.FAILED
-            message = f"WARNING: Low E-value {e_value:.2f} indicates high sensitivity to confounding"
+            message = (
+                f"WARNING: Low E-value {e_value:.2f} indicates high sensitivity to confounding"
+            )
             strength = "very_weak"
 
         execution_time = (time.time() - start_time) * 1000
@@ -820,7 +862,10 @@ class RefutationRunner:
         np.random.seed(hash(str(original_effect) + "bootstrap") % 2**32)
         bootstrap_samples = [original_effect + np.random.normal(0, 0.02) for _ in range(100)]
         refuted_effect = float(np.mean(bootstrap_samples))
-        bootstrap_ci = (float(np.percentile(bootstrap_samples, 2.5)), float(np.percentile(bootstrap_samples, 97.5)))
+        bootstrap_ci = (
+            float(np.percentile(bootstrap_samples, 2.5)),
+            float(np.percentile(bootstrap_samples, 97.5)),
+        )
         p_value = 0.80 + np.random.uniform(-0.1, 0.1)
         return refuted_effect, bootstrap_ci, min(max(p_value, 0.01), 0.99)
 
@@ -830,10 +875,7 @@ class RefutationRunner:
         """Calculate what fraction of subset effects fall within original CI."""
         if not subset_effects:
             return 0.9  # Default high coverage
-        count_in_ci = sum(
-            1 for e in subset_effects
-            if original_ci[0] <= e <= original_ci[1]
-        )
+        count_in_ci = sum(1 for e in subset_effects if original_ci[0] <= e <= original_ci[1])
         return count_in_ci / len(subset_effects)
 
     # ========================================================================
@@ -927,6 +969,7 @@ class RefutationRunner:
 # ============================================================================
 # CONVENIENCE FUNCTIONS
 # ============================================================================
+
 
 def run_refutation_suite(
     original_effect: float,

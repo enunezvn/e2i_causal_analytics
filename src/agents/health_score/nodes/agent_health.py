@@ -9,11 +9,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from datetime import datetime
 from typing import Any, Dict, List, Optional, Protocol
 
-from ..state import HealthScoreState, AgentStatus
 from ..metrics import DEFAULT_THRESHOLDS
+from ..state import AgentStatus, HealthScoreState
 
 logger = logging.getLogger(__name__)
 
@@ -74,9 +73,7 @@ class AgentHealthNode:
 
                 # Fetch metrics for each agent in parallel
                 if agents:
-                    tasks = [
-                        self._get_agent_status(agent) for agent in agents
-                    ]
+                    tasks = [self._get_agent_status(agent) for agent in agents]
                     statuses = await asyncio.gather(*tasks)
                 else:
                     statuses = []
@@ -95,9 +92,7 @@ class AgentHealthNode:
                 # Available with good success rate = 1.0
                 # Available with low success rate = 0.5
                 # Unavailable = 0.0
-                score_sum = high_success_count + (
-                    (available_count - high_success_count) * 0.5
-                )
+                score_sum = high_success_count + ((available_count - high_success_count) * 0.5)
                 health_score = score_sum / len(statuses)
             else:
                 health_score = 1.0  # No agents tracked = healthy by default

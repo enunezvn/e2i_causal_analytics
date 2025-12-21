@@ -1,7 +1,9 @@
 """Tests for sensitivity analysis node."""
 
-import pytest
 import math
+
+import pytest
+
 from src.agents.causal_impact.nodes.sensitivity import SensitivityNode
 from src.agents.causal_impact.state import CausalImpactState, EstimationResult
 

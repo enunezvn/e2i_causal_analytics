@@ -4,8 +4,8 @@ This module defines the LangGraph state and all associated TypedDict structures
 for the gap analyzer workflow: gap detection → ROI calculation → prioritization.
 """
 
-from typing import TypedDict, Annotated, Optional, List, Dict, Any, Literal
 import operator
+from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
 
 
 class PerformanceGap(TypedDict):

@@ -8,9 +8,11 @@ Version: 4.3
 """
 
 import time
+from typing import Dict, List, Set, Tuple
+
 import networkx as nx
-from typing import Dict, List, Set, Tuple, Optional
-from src.agents.causal_impact.state import CausalImpactState, CausalGraph
+
+from src.agents.causal_impact.state import CausalGraph, CausalImpactState
 from src.causal_engine import compute_dag_hash
 
 
@@ -76,9 +78,7 @@ class GraphBuilderNode:
             confounders = state.get("confounders", [])
 
             if not treatment or not outcome:
-                treatment, outcome = self._infer_variables_from_query(
-                    state.get("query", "")
-                )
+                treatment, outcome = self._infer_variables_from_query(state.get("query", ""))
 
             # Build DAG
             dag = self._construct_dag(treatment, outcome, confounders)
@@ -173,9 +173,7 @@ class GraphBuilderNode:
 
         return treatment, outcome
 
-    def _construct_dag(
-        self, treatment: str, outcome: str, confounders: List[str]
-    ) -> nx.DiGraph:
+    def _construct_dag(self, treatment: str, outcome: str, confounders: List[str]) -> nx.DiGraph:
         """Construct causal DAG from variables.
 
         Args:
@@ -255,9 +253,7 @@ class GraphBuilderNode:
             from itertools import combinations
 
             for node_pair in combinations(all_nodes, 2):
-                if self._blocks_all_backdoor_paths(
-                    dag, set(node_pair), treatment, outcome
-                ):
+                if self._blocks_all_backdoor_paths(dag, set(node_pair), treatment, outcome):
                     adjustment_sets.append(list(node_pair))
                     if len(adjustment_sets) >= 3:  # Limit to 3 sets
                         break
@@ -283,9 +279,7 @@ class GraphBuilderNode:
 
         # Get all simple paths
         try:
-            all_paths = nx.all_simple_paths(
-                dag.to_undirected(), treatment, outcome, cutoff=5
-            )
+            all_paths = nx.all_simple_paths(dag.to_undirected(), treatment, outcome, cutoff=5)
 
             for path in all_paths:
                 # Check if path enters treatment (backdoor)

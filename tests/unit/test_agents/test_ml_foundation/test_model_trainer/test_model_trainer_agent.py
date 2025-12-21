@@ -1,8 +1,9 @@
 """Integration tests for model_trainer agent."""
 
-import pytest
 import numpy as np
 import pandas as pd
+import pytest
+
 from src.agents.ml_foundation.model_trainer.agent import ModelTrainerAgent
 
 

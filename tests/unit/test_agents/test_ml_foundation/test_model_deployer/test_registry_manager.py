@@ -1,10 +1,11 @@
 """Tests for registry_manager nodes (register_model, validate_promotion, promote_stage)."""
 
 import pytest
+
 from src.agents.ml_foundation.model_deployer.nodes.registry_manager import (
+    promote_stage,
     register_model,
     validate_promotion,
-    promote_stage,
 )
 
 

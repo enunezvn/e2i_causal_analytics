@@ -1,7 +1,9 @@
 """Integration tests for OrchestratorAgent."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
 from src.agents.orchestrator.agent import OrchestratorAgent
 
 
@@ -216,9 +218,7 @@ class TestOrchestratorHelperMethods:
         """Test standalone classify_intent helper."""
         orchestrator = OrchestratorAgent()
 
-        intent = await orchestrator.classify_intent(
-            "what is the impact of hcp engagement?"
-        )
+        intent = await orchestrator.classify_intent("what is the impact of hcp engagement?")
 
         assert "primary_intent" in intent
         assert intent["primary_intent"] == "causal_effect"

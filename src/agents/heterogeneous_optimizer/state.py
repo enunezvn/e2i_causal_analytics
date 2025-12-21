@@ -3,8 +3,8 @@
 This module defines the LangGraph state structure for segment-level CATE analysis.
 """
 
-from typing import TypedDict, Annotated, Optional, List, Dict, Any, Literal
 import operator
+from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
 
 
 class CATEResult(TypedDict):

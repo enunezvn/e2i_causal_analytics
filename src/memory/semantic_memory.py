@@ -37,9 +37,9 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from src.memory.services.factories import get_supabase_client, get_falkordb_client
-from src.memory.services.config import get_config
 from src.memory.episodic_memory import E2IEntityType
+from src.memory.services.config import get_config
+from src.memory.services.factories import get_falkordb_client, get_supabase_client
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +67,7 @@ LABEL_TO_E2I = {v: k for k, v in E2I_TO_LABEL.items()}
 # ============================================================================
 # SEMANTIC MEMORY CLASS
 # ============================================================================
+
 
 class FalkorDBSemanticMemory:
     """
@@ -109,7 +110,7 @@ class FalkorDBSemanticMemory:
         self,
         entity_type: E2IEntityType,
         entity_id: str,
-        properties: Optional[Dict[str, Any]] = None
+        properties: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """
         Add an E2I entity to the semantic graph.
@@ -146,11 +147,7 @@ class FalkorDBSemanticMemory:
         logger.debug(f"Added/updated {label} entity: {entity_id}")
         return True
 
-    def get_entity(
-        self,
-        entity_type: E2IEntityType,
-        entity_id: str
-    ) -> Optional[Dict[str, Any]]:
+    def get_entity(self, entity_type: E2IEntityType, entity_id: str) -> Optional[Dict[str, Any]]:
         """
         Get an entity by type and ID.
 
@@ -176,11 +173,7 @@ class FalkorDBSemanticMemory:
 
         return None
 
-    def delete_entity(
-        self,
-        entity_type: E2IEntityType,
-        entity_id: str
-    ) -> bool:
+    def delete_entity(self, entity_type: E2IEntityType, entity_id: str) -> bool:
         """
         Delete an entity and its relationships.
 
@@ -216,7 +209,7 @@ class FalkorDBSemanticMemory:
         target_type: E2IEntityType,
         target_id: str,
         rel_type: str,
-        properties: Optional[Dict[str, Any]] = None
+        properties: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """
         Add a relationship between E2I entities.
@@ -278,10 +271,7 @@ class FalkorDBSemanticMemory:
         return True
 
     def get_relationships(
-        self,
-        entity_type: E2IEntityType,
-        entity_id: str,
-        direction: str = "both"
+        self, entity_type: E2IEntityType, entity_id: str, direction: str = "both"
     ) -> List[Dict[str, Any]]:
         """
         Get all relationships for an entity.
@@ -320,12 +310,14 @@ class FalkorDBSemanticMemory:
 
         relationships = []
         for record in result.result_set:
-            relationships.append({
-                "source": record[0],
-                "rel_type": record[1],
-                "target": record[2],
-                "properties": dict(record[3]) if record[3] else {}
-            })
+            relationships.append(
+                {
+                    "source": record[0],
+                    "rel_type": record[1],
+                    "target": record[2],
+                    "properties": dict(record[3]) if record[3] else {},
+                }
+            )
 
         return relationships
 
@@ -333,11 +325,7 @@ class FalkorDBSemanticMemory:
     # NETWORK TRAVERSAL
     # ========================================================================
 
-    def get_patient_network(
-        self,
-        patient_id: str,
-        max_depth: int = 2
-    ) -> Dict[str, Any]:
+    def get_patient_network(self, patient_id: str, max_depth: int = 2) -> Dict[str, Any]:
         """
         Get the relationship network around a patient.
 
@@ -358,10 +346,7 @@ class FalkorDBSemanticMemory:
         RETURN DISTINCT connected
         """
 
-        result = self.graph.query(
-            query,
-            {"patient_id": patient_id}
-        )
+        result = self.graph.query(query, {"patient_id": patient_id})
 
         network = {
             "patient_id": patient_id,
@@ -369,16 +354,16 @@ class FalkorDBSemanticMemory:
             "treatments": [],
             "triggers": [],
             "causal_paths": [],
-            "brands": []
+            "brands": [],
         }
 
         for record in result.result_set:
             connected = record[0]  # Now first element since we only return connected
-            labels = connected.labels if hasattr(connected, 'labels') else []
+            labels = connected.labels if hasattr(connected, "labels") else []
 
             node_data = {
                 "id": connected.properties.get("id"),
-                "properties": dict(connected.properties)
+                "properties": dict(connected.properties),
             }
 
             if "HCP" in labels:
@@ -394,11 +379,7 @@ class FalkorDBSemanticMemory:
 
         return network
 
-    def get_hcp_influence_network(
-        self,
-        hcp_id: str,
-        max_depth: int = 2
-    ) -> Dict[str, Any]:
+    def get_hcp_influence_network(self, hcp_id: str, max_depth: int = 2) -> Dict[str, Any]:
         """
         Get the influence network around an HCP.
 
@@ -418,25 +399,17 @@ class FalkorDBSemanticMemory:
         RETURN DISTINCT connected
         """
 
-        result = self.graph.query(
-            query,
-            {"hcp_id": hcp_id}
-        )
+        result = self.graph.query(query, {"hcp_id": hcp_id})
 
-        network = {
-            "hcp_id": hcp_id,
-            "influenced_hcps": [],
-            "patients": [],
-            "brands_prescribed": []
-        }
+        network = {"hcp_id": hcp_id, "influenced_hcps": [], "patients": [], "brands_prescribed": []}
 
         for record in result.result_set:
             connected = record[0]  # First element since we only return connected
-            labels = connected.labels if hasattr(connected, 'labels') else []
+            labels = connected.labels if hasattr(connected, "labels") else []
 
             node_data = {
                 "id": connected.properties.get("id"),
-                "properties": dict(connected.properties)
+                "properties": dict(connected.properties),
             }
 
             if "HCP" in labels:
@@ -453,9 +426,7 @@ class FalkorDBSemanticMemory:
     # ========================================================================
 
     def traverse_causal_chain(
-        self,
-        start_entity_id: str,
-        max_depth: int = 3
+        self, start_entity_id: str, max_depth: int = 3
     ) -> List[Dict[str, Any]]:
         """
         Traverse causal relationships from a starting entity.
@@ -480,25 +451,18 @@ class FalkorDBSemanticMemory:
             [r IN relationships(path) | {{type: type(r), conf: r.confidence}}] as rels
         """
 
-        result = self.graph.query(
-            query,
-            {"start_id": start_entity_id}
-        )
+        result = self.graph.query(query, {"start_id": start_entity_id})
 
         chains = []
         for record in result.result_set:
-            chains.append({
-                "nodes": record[0],
-                "relationships": record[1],
-                "path_length": len(record[1])
-            })
+            chains.append(
+                {"nodes": record[0], "relationships": record[1], "path_length": len(record[1])}
+            )
 
         return chains
 
     def find_causal_paths_for_kpi(
-        self,
-        kpi_name: str,
-        min_confidence: float = 0.5
+        self, kpi_name: str, min_confidence: float = 0.5
     ) -> List[Dict[str, Any]]:
         """
         Find all causal paths that impact a specific KPI.
@@ -520,26 +484,20 @@ class FalkorDBSemanticMemory:
         ORDER BY r.confidence DESC
         """
 
-        result = self.graph.query(
-            query,
-            {"kpi_name": kpi_name, "min_confidence": min_confidence}
-        )
+        result = self.graph.query(query, {"kpi_name": kpi_name, "min_confidence": min_confidence})
 
         return [
             {
                 "path_id": record[0],
                 "effect_size": record[1],
                 "confidence": record[2],
-                "method": record[3]
+                "method": record[3],
             }
             for record in result.result_set
         ]
 
     def find_common_paths(
-        self,
-        entity1_id: str,
-        entity2_id: str,
-        max_depth: int = 3
+        self, entity1_id: str, entity2_id: str, max_depth: int = 3
     ) -> List[Dict[str, Any]]:
         """
         Find paths connecting two entities.
@@ -563,16 +521,11 @@ class FalkorDBSemanticMemory:
         """
 
         result = self.graph.query(
-            query,
-            {"entity1_id": entity1_id, "entity2_id": entity2_id, "max_depth": max_depth}
+            query, {"entity1_id": entity1_id, "entity2_id": entity2_id, "max_depth": max_depth}
         )
 
         return [
-            {
-                "nodes": record[0],
-                "relationship_types": record[1],
-                "path_length": record[2]
-            }
+            {"nodes": record[0], "relationship_types": record[1], "path_length": record[2]}
             for record in result.result_set
         ]
 
@@ -621,7 +574,7 @@ class FalkorDBSemanticMemory:
             "total_nodes": total_nodes,
             "total_relationships": total_rels,
             "nodes_by_type": node_counts,
-            "relationships_by_type": rel_counts
+            "relationships_by_type": rel_counts,
         }
 
     # ========================================================================
@@ -633,7 +586,7 @@ class FalkorDBSemanticMemory:
         entity_types: Optional[List[str]] = None,
         search: Optional[str] = None,
         limit: int = 50,
-        offset: int = 0
+        offset: int = 0,
     ) -> List[Dict[str, Any]]:
         """
         List nodes with filtering and pagination.
@@ -683,9 +636,7 @@ class FalkorDBSemanticMemory:
         return nodes
 
     def count_nodes(
-        self,
-        entity_types: Optional[List[str]] = None,
-        search: Optional[str] = None
+        self, entity_types: Optional[List[str]] = None, search: Optional[str] = None
     ) -> int:
         """Count nodes matching filters."""
         where_parts = []
@@ -717,7 +668,7 @@ class FalkorDBSemanticMemory:
         target_id: Optional[str] = None,
         min_confidence: Optional[float] = None,
         limit: int = 50,
-        offset: int = 0
+        offset: int = 0,
     ) -> List[Dict[str, Any]]:
         """
         List relationships with filtering and pagination.
@@ -783,7 +734,7 @@ class FalkorDBSemanticMemory:
         self,
         relationship_types: Optional[List[str]] = None,
         source_id: Optional[str] = None,
-        target_id: Optional[str] = None
+        target_id: Optional[str] = None,
     ) -> int:
         """Count relationships matching filters."""
         where_parts = []
@@ -863,6 +814,7 @@ def reset_semantic_memory() -> None:
 # UTILITY FUNCTIONS
 # ============================================================================
 
+
 async def query_semantic_graph(query: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     Query the semantic graph (used by investigator node).
@@ -929,7 +881,7 @@ async def sync_to_semantic_graph(triplet: Dict[str, Any]) -> bool:
             target_type=target_e2i_type,
             target_id=triplet["object"],
             rel_type=triplet["predicate"],
-            properties={"confidence": triplet.get("confidence", 0.8)}
+            properties={"confidence": triplet.get("confidence", 0.8)},
         )
 
     # Fall back to generic entity handling

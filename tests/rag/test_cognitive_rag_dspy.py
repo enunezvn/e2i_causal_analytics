@@ -13,16 +13,15 @@ Tests cover:
 Author: E2I Causal Analytics Team
 """
 
-import pytest
-from unittest.mock import Mock, patch, AsyncMock, MagicMock
 from dataclasses import asdict
-from typing import Dict, Any
-import json
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 
 # =============================================================================
 # ENUM TESTS
 # =============================================================================
+
 
 class TestMemoryType:
     """Tests for MemoryType enum."""
@@ -38,8 +37,9 @@ class TestMemoryType:
 
     def test_memory_type_is_enum(self):
         """Test MemoryType is proper enum."""
-        from src.rag.cognitive_rag_dspy import MemoryType
         from enum import Enum
+
+        from src.rag.cognitive_rag_dspy import MemoryType
 
         assert issubclass(MemoryType, Enum)
         assert len(list(MemoryType)) == 4
@@ -59,8 +59,9 @@ class TestHopType:
 
     def test_hop_type_is_enum(self):
         """Test HopType is proper enum."""
-        from src.rag.cognitive_rag_dspy import HopType
         from enum import Enum
+
+        from src.rag.cognitive_rag_dspy import HopType
 
         assert issubclass(HopType, Enum)
         assert len(list(HopType)) == 4
@@ -69,6 +70,7 @@ class TestHopType:
 # =============================================================================
 # DATACLASS TESTS
 # =============================================================================
+
 
 class TestEvidence:
     """Tests for Evidence dataclass."""
@@ -82,7 +84,7 @@ class TestEvidence:
             hop_number=1,
             content="Test content about Kisqali",
             relevance_score=0.85,
-            metadata={"brand": "Kisqali"}
+            metadata={"brand": "Kisqali"},
         )
 
         assert evidence.content == "Test content about Kisqali"
@@ -96,10 +98,7 @@ class TestEvidence:
         from src.rag.cognitive_rag_dspy import Evidence, MemoryType
 
         evidence = Evidence(
-            source=MemoryType.SEMANTIC,
-            hop_number=2,
-            content="Content",
-            relevance_score=0.7
+            source=MemoryType.SEMANTIC, hop_number=2, content="Content", relevance_score=0.7
         )
 
         assert evidence.metadata == {}
@@ -123,10 +122,7 @@ class TestCognitiveState:
         """Test creating CognitiveState with minimal required fields."""
         from src.rag.cognitive_rag_dspy import CognitiveState
 
-        state = CognitiveState(
-            user_query="Why did TRx increase?",
-            conversation_id="conv_001"
-        )
+        state = CognitiveState(user_query="Why did TRx increase?", conversation_id="conv_001")
 
         assert state.user_query == "Why did TRx increase?"
         assert state.conversation_id == "conv_001"
@@ -161,7 +157,7 @@ class TestCognitiveState:
             visualization_config={"chart_type": "line"},
             routed_agents=["causal_impact"],
             worth_remembering=True,
-            dspy_signals=[{"signature": "QueryRewrite"}]
+            dspy_signals=[{"signature": "QueryRewrite"}],
         )
 
         assert len(state.evidence_board) == 1
@@ -173,16 +169,11 @@ class TestCognitiveState:
         """Test that list fields are mutable."""
         from src.rag.cognitive_rag_dspy import CognitiveState, Evidence, MemoryType
 
-        state = CognitiveState(
-            user_query="Test",
-            conversation_id="conv_003"
-        )
+        state = CognitiveState(user_query="Test", conversation_id="conv_003")
 
         # Add to lists
         state.extracted_entities.append("Fabhalta")
-        state.evidence_board.append(
-            Evidence(MemoryType.SEMANTIC, 2, "New evidence", 0.85)
-        )
+        state.evidence_board.append(Evidence(MemoryType.SEMANTIC, 2, "New evidence", 0.85))
         state.dspy_signals.append({"phase": 1})
 
         assert len(state.extracted_entities) == 1
@@ -194,13 +185,15 @@ class TestCognitiveState:
 # DSPY SIGNATURE TESTS
 # =============================================================================
 
+
 class TestPhase1Signatures:
     """Tests for Phase 1 (Summarizer) DSPy signatures."""
 
     def test_query_rewrite_signature_exists(self):
         """Test QueryRewriteSignature is defined."""
-        from src.rag.cognitive_rag_dspy import QueryRewriteSignature
         import dspy
+
+        from src.rag.cognitive_rag_dspy import QueryRewriteSignature
 
         assert issubclass(QueryRewriteSignature, dspy.Signature)
 
@@ -210,19 +203,21 @@ class TestPhase1Signatures:
 
         sig = QueryRewriteSignature
         # Check input fields exist in signature
-        assert hasattr(sig, '__annotations__') or hasattr(sig, '__signature__')
+        assert hasattr(sig, "__annotations__") or hasattr(sig, "__signature__")
 
     def test_entity_extraction_signature_exists(self):
         """Test EntityExtractionSignature is defined."""
-        from src.rag.cognitive_rag_dspy import EntityExtractionSignature
         import dspy
+
+        from src.rag.cognitive_rag_dspy import EntityExtractionSignature
 
         assert issubclass(EntityExtractionSignature, dspy.Signature)
 
     def test_intent_classification_signature_exists(self):
         """Test IntentClassificationSignature is defined."""
-        from src.rag.cognitive_rag_dspy import IntentClassificationSignature
         import dspy
+
+        from src.rag.cognitive_rag_dspy import IntentClassificationSignature
 
         assert issubclass(IntentClassificationSignature, dspy.Signature)
 
@@ -232,22 +227,25 @@ class TestPhase2Signatures:
 
     def test_investigation_plan_signature_exists(self):
         """Test InvestigationPlanSignature is defined."""
-        from src.rag.cognitive_rag_dspy import InvestigationPlanSignature
         import dspy
+
+        from src.rag.cognitive_rag_dspy import InvestigationPlanSignature
 
         assert issubclass(InvestigationPlanSignature, dspy.Signature)
 
     def test_hop_decision_signature_exists(self):
         """Test HopDecisionSignature is defined."""
-        from src.rag.cognitive_rag_dspy import HopDecisionSignature
         import dspy
+
+        from src.rag.cognitive_rag_dspy import HopDecisionSignature
 
         assert issubclass(HopDecisionSignature, dspy.Signature)
 
     def test_evidence_relevance_signature_exists(self):
         """Test EvidenceRelevanceSignature is defined."""
-        from src.rag.cognitive_rag_dspy import EvidenceRelevanceSignature
         import dspy
+
+        from src.rag.cognitive_rag_dspy import EvidenceRelevanceSignature
 
         assert issubclass(EvidenceRelevanceSignature, dspy.Signature)
 
@@ -257,22 +255,25 @@ class TestPhase3Signatures:
 
     def test_evidence_synthesis_signature_exists(self):
         """Test EvidenceSynthesisSignature is defined."""
-        from src.rag.cognitive_rag_dspy import EvidenceSynthesisSignature
         import dspy
+
+        from src.rag.cognitive_rag_dspy import EvidenceSynthesisSignature
 
         assert issubclass(EvidenceSynthesisSignature, dspy.Signature)
 
     def test_agent_routing_signature_exists(self):
         """Test AgentRoutingSignature is defined."""
-        from src.rag.cognitive_rag_dspy import AgentRoutingSignature
         import dspy
+
+        from src.rag.cognitive_rag_dspy import AgentRoutingSignature
 
         assert issubclass(AgentRoutingSignature, dspy.Signature)
 
     def test_visualization_config_signature_exists(self):
         """Test VisualizationConfigSignature is defined."""
-        from src.rag.cognitive_rag_dspy import VisualizationConfigSignature
         import dspy
+
+        from src.rag.cognitive_rag_dspy import VisualizationConfigSignature
 
         assert issubclass(VisualizationConfigSignature, dspy.Signature)
 
@@ -282,15 +283,17 @@ class TestPhase4Signatures:
 
     def test_memory_worthiness_signature_exists(self):
         """Test MemoryWorthinessSignature is defined."""
-        from src.rag.cognitive_rag_dspy import MemoryWorthinessSignature
         import dspy
+
+        from src.rag.cognitive_rag_dspy import MemoryWorthinessSignature
 
         assert issubclass(MemoryWorthinessSignature, dspy.Signature)
 
     def test_procedure_learning_signature_exists(self):
         """Test ProcedureLearningSignature is defined."""
-        from src.rag.cognitive_rag_dspy import ProcedureLearningSignature
         import dspy
+
+        from src.rag.cognitive_rag_dspy import ProcedureLearningSignature
 
         assert issubclass(ProcedureLearningSignature, dspy.Signature)
 
@@ -299,13 +302,15 @@ class TestPhase4Signatures:
 # DSPY MODULE TESTS
 # =============================================================================
 
+
 class TestSummarizerModule:
     """Tests for SummarizerModule (Phase 1)."""
 
     def test_summarizer_module_initialization(self):
         """Test SummarizerModule can be instantiated."""
-        from src.rag.cognitive_rag_dspy import SummarizerModule
         import dspy
+
+        from src.rag.cognitive_rag_dspy import SummarizerModule
 
         module = SummarizerModule()
         assert isinstance(module, dspy.Module)
@@ -315,10 +320,10 @@ class TestSummarizerModule:
         from src.rag.cognitive_rag_dspy import SummarizerModule
 
         module = SummarizerModule()
-        assert hasattr(module, 'forward')
+        assert hasattr(module, "forward")
         assert callable(module.forward)
 
-    @patch('dspy.Predict')
+    @patch("dspy.Predict")
     def test_summarizer_forward_returns_dict(self, mock_predict):
         """Test forward method returns expected dictionary structure."""
         from src.rag.cognitive_rag_dspy import SummarizerModule
@@ -341,7 +346,7 @@ class TestSummarizerModule:
         result = module.forward(
             original_query="Why did TRx increase?",
             conversation_context="",
-            domain_vocabulary="brands: [Kisqali]"
+            domain_vocabulary="brands: [Kisqali]",
         )
 
         assert isinstance(result, dict)
@@ -360,7 +365,7 @@ class TestInvestigatorModule:
         mock_backends = {
             "episodic": MagicMock(),
             "semantic": MagicMock(),
-            "procedural": MagicMock()
+            "procedural": MagicMock(),
         }
 
         module = InvestigatorModule(mock_backends)
@@ -371,7 +376,7 @@ class TestInvestigatorModule:
         from src.rag.cognitive_rag_dspy import InvestigatorModule
 
         module = InvestigatorModule({})
-        assert hasattr(module, 'forward')
+        assert hasattr(module, "forward")
         assert callable(module.forward)
 
     @pytest.mark.asyncio
@@ -400,15 +405,14 @@ class TestAgentModule:
         from src.rag.cognitive_rag_dspy import AgentModule
 
         module = AgentModule({})
-        assert hasattr(module, 'forward')
+        assert hasattr(module, "forward")
 
     @pytest.mark.asyncio
     async def test_agent_forward_updates_state(self):
         """Test forward updates CognitiveState with response."""
-        from src.rag.cognitive_rag_dspy import (
-            AgentModule, CognitiveState, Evidence, MemoryType
-        )
         import dspy
+
+        from src.rag.cognitive_rag_dspy import AgentModule, CognitiveState, Evidence, MemoryType
 
         mock_agent = AsyncMock()
         mock_agent.run.return_value = {"result": "Agent output"}
@@ -417,7 +421,7 @@ class TestAgentModule:
         # Configure mock LM for DSPy
         mock_lm = MagicMock()
 
-        with patch.object(dspy, 'settings', MagicMock(lm=mock_lm)):
+        with patch.object(dspy, "settings", MagicMock(lm=mock_lm)):
             module = AgentModule(mock_registry)
 
             # Mock DSPy predictors
@@ -444,9 +448,7 @@ class TestAgentModule:
                 conversation_id="conv_001",
                 rewritten_query="TRx growth factors",
                 detected_intent="causal",
-                evidence_board=[
-                    Evidence(MemoryType.EPISODIC, 1, "Evidence", 0.9)
-                ]
+                evidence_board=[Evidence(MemoryType.EPISODIC, 1, "Evidence", 0.9)],
             )
 
             updated_state = await module.forward(state)
@@ -474,7 +476,7 @@ class TestReflectorModule:
         from src.rag.cognitive_rag_dspy import ReflectorModule
 
         module = ReflectorModule({}, MagicMock())
-        assert hasattr(module, 'forward')
+        assert hasattr(module, "forward")
 
     @pytest.mark.asyncio
     async def test_reflector_evaluates_worthiness(self):
@@ -489,6 +491,7 @@ class TestReflectorModule:
 # WORKFLOW CREATION TESTS
 # =============================================================================
 
+
 class TestCreateDspyCognitiveWorkflow:
     """Tests for create_dspy_cognitive_workflow function."""
 
@@ -499,7 +502,7 @@ class TestCreateDspyCognitiveWorkflow:
         mock_backends = {
             "episodic": MagicMock(),
             "semantic": MagicMock(),
-            "procedural": MagicMock()
+            "procedural": MagicMock(),
         }
 
         workflow = create_dspy_cognitive_workflow(
@@ -507,12 +510,12 @@ class TestCreateDspyCognitiveWorkflow:
             memory_writers=mock_backends,
             agent_registry={},
             signal_collector=MagicMock(),
-            domain_vocabulary="test vocabulary"
+            domain_vocabulary="test vocabulary",
         )
 
         # Compiled workflow should be a CompiledStateGraph
         assert workflow is not None
-        assert hasattr(workflow, 'ainvoke')
+        assert hasattr(workflow, "ainvoke")
 
     def test_workflow_has_four_nodes(self):
         """Test workflow contains all 4 phase nodes."""
@@ -521,7 +524,7 @@ class TestCreateDspyCognitiveWorkflow:
         mock_backends = {
             "episodic": MagicMock(),
             "semantic": MagicMock(),
-            "procedural": MagicMock()
+            "procedural": MagicMock(),
         }
 
         workflow = create_dspy_cognitive_workflow(
@@ -529,7 +532,7 @@ class TestCreateDspyCognitiveWorkflow:
             memory_writers=mock_backends,
             agent_registry={},
             signal_collector=MagicMock(),
-            domain_vocabulary="test"
+            domain_vocabulary="test",
         )
 
         # Check that workflow has the expected structure
@@ -540,6 +543,7 @@ class TestCreateDspyCognitiveWorkflow:
 # =============================================================================
 # OPTIMIZER TESTS
 # =============================================================================
+
 
 class TestCognitiveRAGOptimizer:
     """Tests for CognitiveRAGOptimizer."""
@@ -595,9 +599,7 @@ class TestCognitiveRAGOptimizer:
 
     def test_investigator_metric_scoring(self):
         """Test investigator_metric returns score 0-1."""
-        from src.rag.cognitive_rag_dspy import (
-            CognitiveRAGOptimizer, Evidence, MemoryType
-        )
+        from src.rag.cognitive_rag_dspy import CognitiveRAGOptimizer, Evidence, MemoryType
 
         optimizer = CognitiveRAGOptimizer(MagicMock())
 
@@ -638,8 +640,9 @@ class TestCognitiveRAGOptimizer:
 
     def test_signals_to_examples_conversion(self):
         """Test _signals_to_examples converts correctly."""
-        from src.rag.cognitive_rag_dspy import CognitiveRAGOptimizer
         import dspy
+
+        from src.rag.cognitive_rag_dspy import CognitiveRAGOptimizer
 
         optimizer = CognitiveRAGOptimizer(MagicMock())
 
@@ -648,20 +651,20 @@ class TestCognitiveRAGOptimizer:
                 "phase": "summarizer",
                 "success": True,
                 "input": {"query": "test query"},
-                "output": {"rewritten": "optimized"}
+                "output": {"rewritten": "optimized"},
             },
             {
                 "phase": "summarizer",
                 "success": False,  # Should be skipped
                 "input": {},
-                "output": {}
+                "output": {},
             },
             {
                 "phase": "investigator",  # Different phase, skipped
                 "success": True,
                 "input": {},
-                "output": {}
-            }
+                "output": {},
+            },
         ]
 
         examples = optimizer._signals_to_examples(signals, "summarizer")
@@ -674,6 +677,7 @@ class TestCognitiveRAGOptimizer:
 # =============================================================================
 # MOCK BACKEND TESTS
 # =============================================================================
+
 
 class TestMockBackends:
     """Tests for mock memory backends."""
@@ -729,6 +733,7 @@ class TestMockBackends:
 # EDGE CASE TESTS
 # =============================================================================
 
+
 class TestEdgeCases:
     """Tests for edge cases and error handling."""
 
@@ -741,7 +746,7 @@ class TestEdgeCases:
             hop_number=1,
             content="Test",
             relevance_score=0.5,
-            metadata={"key": "value"}
+            metadata={"key": "value"},
         )
 
         assert evidence.metadata == {"key": "value"}
@@ -807,18 +812,19 @@ class TestEdgeCases:
 # INTEGRATION TESTS
 # =============================================================================
 
+
 class TestModuleIntegration:
     """Integration tests for module interactions."""
 
     def test_all_modules_can_be_imported(self):
         """Test all DSPy modules can be imported together."""
         from src.rag.cognitive_rag_dspy import (
-            SummarizerModule,
-            InvestigatorModule,
             AgentModule,
-            ReflectorModule,
             CognitiveRAGOptimizer,
-            create_dspy_cognitive_workflow
+            InvestigatorModule,
+            ReflectorModule,
+            SummarizerModule,
+            create_dspy_cognitive_workflow,
         )
 
         # All imports should succeed
@@ -832,33 +838,31 @@ class TestModuleIntegration:
     def test_modules_share_common_state_type(self):
         """Test all modules work with CognitiveState."""
         from src.rag.cognitive_rag_dspy import (
-            CognitiveState,
-            SummarizerModule,
-            InvestigatorModule,
             AgentModule,
-            ReflectorModule
+            CognitiveState,
+            InvestigatorModule,
+            ReflectorModule,
+            SummarizerModule,
         )
 
-        state = CognitiveState(
-            user_query="Test",
-            conversation_id="test_001"
-        )
+        CognitiveState(user_query="Test", conversation_id="test_001")
 
         # All modules should accept CognitiveState
         modules = [
             SummarizerModule(),
             InvestigatorModule({}),
             AgentModule({}),
-            ReflectorModule({}, MagicMock())
+            ReflectorModule({}, MagicMock()),
         ]
 
         for module in modules:
-            assert hasattr(module, 'forward')
+            assert hasattr(module, "forward")
 
 
 # =============================================================================
 # PERFORMANCE TESTS
 # =============================================================================
+
 
 class TestPerformance:
     """Performance tests for DSPy components."""
@@ -866,6 +870,7 @@ class TestPerformance:
     def test_evidence_creation_performance(self):
         """Test Evidence creation is fast."""
         import time
+
         from src.rag.cognitive_rag_dspy import Evidence, MemoryType
 
         iterations = 1000
@@ -877,7 +882,7 @@ class TestPerformance:
                 hop_number=1,
                 content=f"Content {i}",
                 relevance_score=0.8,
-                metadata={"index": i}
+                metadata={"index": i},
             )
 
         elapsed = time.time() - start
@@ -889,16 +894,14 @@ class TestPerformance:
     def test_cognitive_state_creation_performance(self):
         """Test CognitiveState creation is fast."""
         import time
+
         from src.rag.cognitive_rag_dspy import CognitiveState
 
         iterations = 1000
         start = time.time()
 
         for i in range(iterations):
-            CognitiveState(
-                user_query=f"Query {i}",
-                conversation_id=f"conv_{i}"
-            )
+            CognitiveState(user_query=f"Query {i}", conversation_id=f"conv_{i}")
 
         elapsed = time.time() - start
         avg_ms = (elapsed / iterations) * 1000
@@ -909,9 +912,8 @@ class TestPerformance:
     def test_optimizer_metric_performance(self):
         """Test optimizer metrics are fast."""
         import time
-        from src.rag.cognitive_rag_dspy import (
-            CognitiveRAGOptimizer, Evidence, MemoryType
-        )
+
+        from src.rag.cognitive_rag_dspy import CognitiveRAGOptimizer, Evidence, MemoryType
 
         optimizer = CognitiveRAGOptimizer(MagicMock())
 
@@ -924,9 +926,7 @@ class TestPerformance:
         prediction.graph_entities = ["Entity"]
         prediction.primary_intent = "causal"
         prediction.search_keywords = ["hcp"]
-        prediction.evidence_board = [
-            Evidence(MemoryType.EPISODIC, 1, "E", 0.9)
-        ]
+        prediction.evidence_board = [Evidence(MemoryType.EPISODIC, 1, "E", 0.9)]
         prediction.sufficient_evidence = True
         prediction.hop_count = 2
         prediction.response = "A" * 300

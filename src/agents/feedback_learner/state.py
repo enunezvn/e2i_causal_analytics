@@ -15,7 +15,6 @@ from typing import Any, Dict, List, Literal, Optional, TypedDict
 # Import cognitive context from DSPy integration module
 from .dspy_integration import (
     FeedbackLearnerCognitiveContext,
-    AgentTrainingSignal,
     FeedbackLearnerTrainingSignal,
 )
 
@@ -75,9 +74,7 @@ class KnowledgeUpdate(TypedDict):
     """Update to knowledge base."""
 
     update_id: str
-    knowledge_type: Literal[
-        "experiment", "baseline", "agent_config", "prompt", "threshold"
-    ]
+    knowledge_type: Literal["experiment", "baseline", "agent_config", "prompt", "threshold"]
     key: str
     old_value: Any
     new_value: Any

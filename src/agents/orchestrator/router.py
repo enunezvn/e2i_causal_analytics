@@ -24,12 +24,12 @@ class QueryRouter:
     def __init__(
         self,
         agents: dict[str, Any],  # Agent name -> Agent instance
-        tool_composer: Any,       # ToolComposer instance
+        tool_composer: Any,  # ToolComposer instance
         redis_client: Any = None,
     ):
         """
         Initialize router.
-        
+
         Args:
             agents: Dictionary of agent instances by name
             tool_composer: Tool Composer instance
@@ -47,31 +47,25 @@ class QueryRouter:
     ) -> dict[str, Any]:
         """
         Route query based on classification.
-        
+
         Args:
             query: Original query
             classification: Classification result from pipeline
             context: Optional conversation context
-            
+
         Returns:
             Response dictionary with result and metadata
         """
         pattern = classification.routing_pattern
 
         if pattern == RoutingPattern.SINGLE_AGENT:
-            return await self._route_single_agent(
-                query, classification, context
-            )
+            return await self._route_single_agent(query, classification, context)
 
         if pattern == RoutingPattern.PARALLEL_DELEGATION:
-            return await self._route_parallel(
-                query, classification, context
-            )
+            return await self._route_parallel(query, classification, context)
 
         if pattern == RoutingPattern.TOOL_COMPOSER:
-            return await self._route_tool_composer(
-                query, classification, context
-            )
+            return await self._route_tool_composer(query, classification, context)
 
         if pattern == RoutingPattern.CLARIFICATION_NEEDED:
             return self._request_clarification(classification)
@@ -94,7 +88,7 @@ class QueryRouter:
         context: Optional[dict],
     ) -> dict[str, Any]:
         """Route to a single agent."""
-        
+
         if not classification.target_agents:
             return {
                 "response": "Unable to determine appropriate agent.",
@@ -150,7 +144,7 @@ class QueryRouter:
         context: Optional[dict],
     ) -> dict[str, Any]:
         """Route to multiple agents in parallel."""
-        
+
         if not classification.target_agents:
             return {
                 "response": "Unable to determine appropriate agents.",
@@ -160,9 +154,7 @@ class QueryRouter:
 
         # Map sub-questions to agents
         agent_tasks = []
-        sub_question_map = {
-            sq.id: sq for sq in classification.sub_questions
-        }
+        sub_question_map = {sq.id: sq for sq in classification.sub_questions}
 
         for i, agent_name in enumerate(classification.target_agents):
             agent = self.agents.get(agent_name)
@@ -180,17 +172,13 @@ class QueryRouter:
                 "is_parallel": True,
             }
 
-            agent_tasks.append(
-                self._call_agent_safe(agent, agent_name, sq_text, agent_context)
-            )
+            agent_tasks.append(self._call_agent_safe(agent, agent_name, sq_text, agent_context))
 
         # Execute in parallel
         results = await asyncio.gather(*agent_tasks)
 
         # Merge results
-        merged_response = self._merge_parallel_results(
-            results, classification.target_agents
-        )
+        merged_response = self._merge_parallel_results(results, classification.target_agents)
 
         return {
             "response": merged_response,
@@ -229,7 +217,7 @@ class QueryRouter:
         agent_names: list[str],
     ) -> str:
         """Merge results from parallel agent calls."""
-        
+
         successful = [r for r in results if r.get("success")]
         failed = [r for r in results if not r.get("success")]
 
@@ -262,11 +250,11 @@ class QueryRouter:
         context: Optional[dict],
     ) -> dict[str, Any]:
         """Route to Tool Composer for dependent multi-domain queries."""
-        
+
         from ..tool_composer.schemas import (
             CompositionRequest,
-            SubQuestionInput,
             DependencyInput,
+            SubQuestionInput,
         )
 
         # Build composition request
@@ -274,8 +262,12 @@ class QueryRouter:
             SubQuestionInput(
                 id=sq.id,
                 text=sq.text,
-                primary_domain=sq.primary_domain.value if hasattr(sq.primary_domain, 'value') else str(sq.primary_domain),
-                domains=[d.value if hasattr(d, 'value') else str(d) for d in sq.domains],
+                primary_domain=(
+                    sq.primary_domain.value
+                    if hasattr(sq.primary_domain, "value")
+                    else str(sq.primary_domain)
+                ),
+                domains=[d.value if hasattr(d, "value") else str(d) for d in sq.domains],
             )
             for sq in classification.sub_questions
         ]
@@ -286,7 +278,11 @@ class QueryRouter:
                     "from": dep.from_id,
                     "to": dep.to_id,
                 },
-                dependency_type=dep.dependency_type.value if hasattr(dep.dependency_type, 'value') else str(dep.dependency_type),
+                dependency_type=(
+                    dep.dependency_type.value
+                    if hasattr(dep.dependency_type, "value")
+                    else str(dep.dependency_type)
+                ),
                 reason=dep.reason,
             )
             for dep in classification.dependencies
@@ -325,11 +321,9 @@ class QueryRouter:
     # CLARIFICATION
     # =========================================================================
 
-    def _request_clarification(
-        self, classification: ClassificationResult
-    ) -> dict[str, Any]:
+    def _request_clarification(self, classification: ClassificationResult) -> dict[str, Any]:
         """Request clarification for ambiguous queries."""
-        
+
         response = (
             "I'd like to make sure I understand your question correctly. "
             "Could you please clarify:\n\n"
@@ -337,15 +331,11 @@ class QueryRouter:
 
         # Add specific clarifying questions based on classification
         questions = []
-        
+
         if classification.reasoning:
-            questions.append(
-                f"• {classification.reasoning}"
-            )
+            questions.append(f"• {classification.reasoning}")
         else:
-            questions.append(
-                "• What specific aspect would you like me to focus on?"
-            )
+            questions.append("• What specific aspect would you like me to focus on?")
             questions.append(
                 "• Are you looking for causal analysis, predictions, or general exploration?"
             )
@@ -379,16 +369,14 @@ class QueryRouter:
             ex=1800,  # 30 minute TTL
         )
 
-    async def _get_routing_context(
-        self, session_id: str
-    ) -> Optional[ClassificationResult]:
+    async def _get_routing_context(self, session_id: str) -> Optional[ClassificationResult]:
         """Retrieve last routing context for follow-up handling."""
         if not self.redis_client or not session_id:
             return None
 
         key = f"routing:{session_id}:last"
         data = await self.redis_client.get(key)
-        
+
         if data:
             return ClassificationResult.model_validate_json(data)
         return None

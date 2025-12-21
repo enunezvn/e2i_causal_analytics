@@ -16,19 +16,16 @@ Reference: docs/E2I_Causal_Validation_Protocol.html
 
 from __future__ import annotations
 
-import json
 import logging
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from .validation_outcome import (
+    FailureCategory,
     ValidationOutcome,
     ValidationOutcomeType,
-    FailureCategory,
-    ValidationFailurePattern,
 )
 
 logger = logging.getLogger(__name__)
@@ -160,8 +157,7 @@ class InMemoryValidationOutcomeStore(ValidationOutcomeStoreBase):
             self._pattern_counts[key] += 1
 
         logger.info(
-            f"Stored validation outcome {outcome.outcome_id}: "
-            f"{outcome.outcome_type.value}"
+            f"Stored validation outcome {outcome.outcome_id}: " f"{outcome.outcome_type.value}"
         )
 
         return outcome.outcome_id
@@ -199,10 +195,7 @@ class InMemoryValidationOutcomeStore(ValidationOutcomeStoreBase):
 
             # Filter by failure category if specified
             if failure_category:
-                has_category = any(
-                    p.category == failure_category
-                    for p in outcome.failure_patterns
-                )
+                has_category = any(p.category == failure_category for p in outcome.failure_patterns)
                 if not has_category:
                     continue
 
@@ -245,13 +238,15 @@ class InMemoryValidationOutcomeStore(ValidationOutcomeStoreBase):
         results = []
         for key, data in pattern_data.items():
             count = data["count"]
-            results.append({
-                "category": data["category"],
-                "test_name": data["test_name"],
-                "count": count,
-                "avg_delta_percent": data["total_delta"] / count if count > 0 else 0,
-                "recommendations": list(data["recommendations"]),
-            })
+            results.append(
+                {
+                    "category": data["category"],
+                    "test_name": data["test_name"],
+                    "count": count,
+                    "avg_delta_percent": data["total_delta"] / count if count > 0 else 0,
+                    "recommendations": list(data["recommendations"]),
+                }
+            )
 
         # Sort by frequency and limit
         results.sort(key=lambda x: x["count"], reverse=True)
@@ -279,12 +274,16 @@ class InMemoryValidationOutcomeStore(ValidationOutcomeStoreBase):
                 score += 2
             # Partial match on variable names
             if treatment_variable and outcome.treatment_variable:
-                if treatment_variable in outcome.treatment_variable or \
-                   outcome.treatment_variable in treatment_variable:
+                if (
+                    treatment_variable in outcome.treatment_variable
+                    or outcome.treatment_variable in treatment_variable
+                ):
                     score += 1
             if outcome_variable and outcome.outcome_variable:
-                if outcome_variable in outcome.outcome_variable or \
-                   outcome.outcome_variable in outcome_variable:
+                if (
+                    outcome_variable in outcome.outcome_variable
+                    or outcome.outcome_variable in outcome_variable
+                ):
                     score += 1
 
             if score > 0:
@@ -385,17 +384,23 @@ class ExperimentKnowledgeStore:
 
             if relevance > 0 or len(experiments) < limit:
                 lessons = [p.recommendation for p in outcome.failure_patterns[:3]]
-                experiments.append({
-                    "experiment_id": outcome.estimate_id or outcome.outcome_id,
-                    "hypothesis": f"{outcome.treatment_variable} → {outcome.outcome_variable}",
-                    "design_type": "observational",  # From validation context
-                    "sample_size": outcome.sample_size,
-                    "outcome": outcome.outcome_variable,
-                    "result": "failed_validation" if outcome.outcome_type != ValidationOutcomeType.PASSED else "passed",
-                    "effect_size": outcome.effect_size,
-                    "lessons_learned": lessons if lessons else ["No specific lessons"],
-                    "relevance_score": relevance,
-                })
+                experiments.append(
+                    {
+                        "experiment_id": outcome.estimate_id or outcome.outcome_id,
+                        "hypothesis": f"{outcome.treatment_variable} → {outcome.outcome_variable}",
+                        "design_type": "observational",  # From validation context
+                        "sample_size": outcome.sample_size,
+                        "outcome": outcome.outcome_variable,
+                        "result": (
+                            "failed_validation"
+                            if outcome.outcome_type != ValidationOutcomeType.PASSED
+                            else "passed"
+                        ),
+                        "effect_size": outcome.effect_size,
+                        "lessons_learned": lessons if lessons else ["No specific lessons"],
+                        "relevance_score": relevance,
+                    }
+                )
 
         # Sort by relevance and limit
         experiments.sort(key=lambda x: x["relevance_score"], reverse=True)
@@ -417,13 +422,19 @@ class ExperimentKnowledgeStore:
 
         violations = []
         for pattern in patterns:
-            violations.append({
-                "experiment_id": f"pattern_{pattern['category']}",
-                "violation_type": pattern["category"],
-                "description": f"Test {pattern['test_name']} failed {pattern['count']} times",
-                "impact": f"Average effect change: {pattern['avg_delta_percent']:.1f}%",
-                "recommendation": pattern["recommendations"][0] if pattern["recommendations"] else "Review test results",
-            })
+            violations.append(
+                {
+                    "experiment_id": f"pattern_{pattern['category']}",
+                    "violation_type": pattern["category"],
+                    "description": f"Test {pattern['test_name']} failed {pattern['count']} times",
+                    "impact": f"Average effect change: {pattern['avg_delta_percent']:.1f}%",
+                    "recommendation": (
+                        pattern["recommendations"][0]
+                        if pattern["recommendations"]
+                        else "Review test results"
+                    ),
+                }
+            )
 
         return violations
 
@@ -451,7 +462,11 @@ class ExperimentKnowledgeStore:
             # Get example variables from outcomes with this pattern
             failures = await self._outcome_store.query_failures(
                 limit=3,
-                failure_category=FailureCategory(pattern["category"]) if pattern["category"] != "unknown" else None,
+                failure_category=(
+                    FailureCategory(pattern["category"])
+                    if pattern["category"] != "unknown"
+                    else None
+                ),
             )
 
             example_variables = [
@@ -460,14 +475,20 @@ class ExperimentKnowledgeStore:
                 if any(p.test_name == pattern["test_name"] for p in o.failure_patterns)
             ][:3]
 
-            learnings.append(ValidationLearning(
-                failure_category=pattern["category"],
-                description=f"Test {pattern['test_name']} commonly fails",
-                recommendation=pattern["recommendations"][0] if pattern["recommendations"] else "Review methodology",
-                frequency=pattern["count"],
-                example_variables=example_variables,
-                avg_effect_change=pattern["avg_delta_percent"],
-            ))
+            learnings.append(
+                ValidationLearning(
+                    failure_category=pattern["category"],
+                    description=f"Test {pattern['test_name']} commonly fails",
+                    recommendation=(
+                        pattern["recommendations"][0]
+                        if pattern["recommendations"]
+                        else "Review methodology"
+                    ),
+                    frequency=pattern["count"],
+                    example_variables=example_variables,
+                    avg_effect_change=pattern["avg_delta_percent"],
+                )
+            )
 
         return learnings
 

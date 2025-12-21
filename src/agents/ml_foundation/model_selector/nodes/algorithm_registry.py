@@ -3,8 +3,7 @@
 This module defines the catalog of supported algorithms and filtering logic.
 """
 
-from typing import Dict, Any, List
-
+from typing import Any, Dict, List
 
 # Algorithm catalog with specifications
 ALGORITHM_REGISTRY = {
@@ -200,9 +199,7 @@ async def filter_algorithms(state: Dict[str, Any]) -> Dict[str, Any]:
     filtered_by_type = _filter_by_problem_type(problem_type)
 
     # Step 2: Filter by technical constraints
-    filtered_by_constraints = _filter_by_constraints(
-        filtered_by_type, technical_constraints
-    )
+    filtered_by_constraints = _filter_by_constraints(filtered_by_type, technical_constraints)
 
     # Step 3: Filter by user preferences
     filtered_by_preferences = _filter_by_preferences(
@@ -212,8 +209,7 @@ async def filter_algorithms(state: Dict[str, Any]) -> Dict[str, Any]:
     # Step 4: Filter by interpretability requirement
     if interpretability_required:
         filtered_by_preferences = [
-            algo for algo in filtered_by_preferences
-            if algo.get("interpretability_score", 0) >= 0.7
+            algo for algo in filtered_by_preferences if algo.get("interpretability_score", 0) >= 0.7
         ]
 
     # Validation: Ensure at least one candidate remains
@@ -254,21 +250,15 @@ def _filter_by_constraints(
         # Parse latency constraint: "inference_latency_<100ms"
         if "latency" in constraint_lower and "<" in constraint_lower:
             try:
-                max_latency = int(
-                    constraint_lower.split("<")[1].replace("ms", "").strip()
-                )
-                filtered = [
-                    c for c in filtered if c["inference_latency_ms"] <= max_latency
-                ]
+                max_latency = int(constraint_lower.split("<")[1].replace("ms", "").strip())
+                filtered = [c for c in filtered if c["inference_latency_ms"] <= max_latency]
             except (ValueError, IndexError):
                 pass  # Skip malformed constraint
 
         # Parse memory constraint: "memory_<8gb"
         if "memory" in constraint_lower and "<" in constraint_lower:
             try:
-                max_memory = float(
-                    constraint_lower.split("<")[1].replace("gb", "").strip()
-                )
+                max_memory = float(constraint_lower.split("<")[1].replace("gb", "").strip())
                 filtered = [c for c in filtered if c["memory_gb"] <= max_memory]
             except (ValueError, IndexError):
                 pass  # Skip malformed constraint

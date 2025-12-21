@@ -7,16 +7,32 @@ Contract: .claude/contracts/tier3-contracts.md lines 82-200
 Specialist: .claude/specialists/Agent_Specialists_Tiers 1-5/experiment-designer.md
 """
 
-from datetime import datetime
-from typing import Any, Literal, Optional
-from typing_extensions import NotRequired, TypedDict
+from typing import Any, Literal
 
+from typing_extensions import NotRequired, TypedDict
 
 # ===== TYPE ALIASES =====
 
-AgentStatus = Literal["pending", "loading_context", "reasoning", "calculating", "auditing", "redesigning", "generating", "completed", "failed"]
+AgentStatus = Literal[
+    "pending",
+    "loading_context",
+    "reasoning",
+    "calculating",
+    "auditing",
+    "redesigning",
+    "generating",
+    "completed",
+    "failed",
+]
 FormalityLevel = Literal["light", "medium", "heavy"]
-DesignType = Literal["RCT", "quasi_experiment", "difference_in_differences", "regression_discontinuity", "instrumental_variable", "synthetic_control"]
+DesignType = Literal[
+    "RCT",
+    "quasi_experiment",
+    "difference_in_differences",
+    "regression_discontinuity",
+    "instrumental_variable",
+    "synthetic_control",
+]
 RandomizationUnit = Literal["individual", "cluster", "time_period", "geography"]
 ValidityThreatSeverity = Literal["low", "medium", "high", "critical"]
 ConfidenceLevel = Literal["low", "medium", "high"]
@@ -24,11 +40,13 @@ ConfidenceLevel = Literal["low", "medium", "high"]
 
 # ===== NESTED TYPED DICTS =====
 
+
 class TreatmentDefinition(TypedDict):
     """Definition of a treatment arm in the experiment.
 
     Contract: .claude/contracts/tier3-contracts.md lines 145-155
     """
+
     name: str
     description: str
     implementation_details: str
@@ -43,6 +61,7 @@ class OutcomeDefinition(TypedDict):
 
     Contract: .claude/contracts/tier3-contracts.md lines 157-170
     """
+
     name: str
     metric_type: Literal["continuous", "binary", "count", "time_to_event"]
     measurement_method: str
@@ -58,6 +77,7 @@ class ValidityThreat(TypedDict):
 
     Contract: .claude/contracts/tier3-contracts.md lines 172-185
     """
+
     threat_type: Literal["internal", "external", "construct", "statistical_conclusion"]
     threat_name: str
     description: str
@@ -72,6 +92,7 @@ class MitigationRecommendation(TypedDict):
 
     Contract: .claude/contracts/tier3-contracts.md lines 187-198
     """
+
     threat_addressed: str
     strategy: str
     implementation_steps: list[str]
@@ -85,6 +106,7 @@ class PowerAnalysisResult(TypedDict):
 
     Contract: .claude/contracts/tier3-contracts.md lines 200-215
     """
+
     required_sample_size: int
     required_sample_size_per_arm: int
     achieved_power: float
@@ -100,6 +122,7 @@ class DoWhySpec(TypedDict):
 
     Contract: .claude/contracts/tier3-contracts.md lines 217-230
     """
+
     treatment_variable: str
     outcome_variable: str
     common_causes: list[str]
@@ -114,6 +137,7 @@ class ExperimentTemplate(TypedDict):
 
     Contract: .claude/contracts/tier3-contracts.md lines 232-250
     """
+
     template_id: str
     template_version: str
     design_summary: str
@@ -135,6 +159,7 @@ class ErrorDetails(TypedDict):
 
     Contract: .claude/contracts/tier3-contracts.md lines 252-260
     """
+
     node: str
     error: str
     timestamp: str
@@ -147,6 +172,7 @@ class DesignIteration(TypedDict):
 
     Specialist: .claude/specialists/Agent_Specialists_Tiers 1-5/experiment-designer.md lines 450-470
     """
+
     iteration_number: int
     design_type: DesignType
     validity_threats_identified: int
@@ -157,6 +183,7 @@ class DesignIteration(TypedDict):
 
 
 # ===== MAIN STATE =====
+
 
 class ExperimentDesignState(TypedDict):
     """Complete state for experiment designer agent workflow.

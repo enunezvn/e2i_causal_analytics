@@ -10,11 +10,12 @@ Tests cover:
 - Full optimization pipeline
 """
 
-import pytest
 import time
-from unittest.mock import Mock, patch, MagicMock, AsyncMock
+from unittest.mock import MagicMock, Mock, patch
 
-from src.rag.query_optimizer import QueryOptimizer, _EXPANSION_CACHE
+import pytest
+
+from src.rag.query_optimizer import _EXPANSION_CACHE, QueryOptimizer
 
 
 @pytest.fixture
@@ -144,7 +145,7 @@ class TestLLMExpansion:
 
     def test_expand_with_llm_success(self, optimizer, mock_anthropic_response):
         """Test successful LLM expansion."""
-        with patch.object(optimizer, '_get_client') as mock_client:
+        with patch.object(optimizer, "_get_client") as mock_client:
             mock_client.return_value.messages.create.return_value = mock_anthropic_response
 
             result = optimizer.expand_with_llm("TRx for Kisqali")
@@ -154,7 +155,7 @@ class TestLLMExpansion:
 
     def test_expand_with_llm_fallback_on_error(self, optimizer):
         """Test fallback to rule-based on API error."""
-        with patch.object(optimizer, '_get_client') as mock_client:
+        with patch.object(optimizer, "_get_client") as mock_client:
             mock_client.return_value.messages.create.side_effect = Exception("API Error")
 
             result = optimizer.expand_with_llm("TRx for Kisqali")
@@ -168,7 +169,7 @@ class TestLLMExpansion:
         mock_response = MagicMock()
         mock_response.content = [MagicMock(text='"Quoted expanded query"')]
 
-        with patch.object(optimizer, '_get_client') as mock_client:
+        with patch.object(optimizer, "_get_client") as mock_client:
             mock_client.return_value.messages.create.return_value = mock_response
 
             result = optimizer.expand_with_llm("Test query")
@@ -178,12 +179,11 @@ class TestLLMExpansion:
 
     def test_expand_with_llm_with_context(self, optimizer, mock_anthropic_response):
         """Test LLM expansion with conversation context."""
-        with patch.object(optimizer, '_get_client') as mock_client:
+        with patch.object(optimizer, "_get_client") as mock_client:
             mock_client.return_value.messages.create.return_value = mock_anthropic_response
 
             optimizer.expand_with_llm(
-                "What about Q4?",
-                context="Previous discussion about Kisqali TRx trends"
+                "What about Q4?", context="Previous discussion about Kisqali TRx trends"
             )
 
             # Verify context was included in prompt
@@ -194,6 +194,7 @@ class TestLLMExpansion:
     def test_expand_with_llm_missing_api_key(self):
         """Test error when API key is missing."""
         import os
+
         original_key = os.environ.get("ANTHROPIC_API_KEY")
 
         try:
@@ -215,7 +216,7 @@ class TestLLMExpansion:
     @pytest.mark.asyncio
     async def test_expand_with_llm_async(self, optimizer, mock_anthropic_response):
         """Test async LLM expansion."""
-        with patch.object(optimizer, '_call_llm', return_value="Async expanded query"):
+        with patch.object(optimizer, "_call_llm", return_value="Async expanded query"):
             result = await optimizer.expand_with_llm_async("TRx for Kisqali")
 
             assert result == "Async expanded query"
@@ -223,7 +224,7 @@ class TestLLMExpansion:
     @pytest.mark.asyncio
     async def test_expand_with_llm_async_fallback(self, optimizer):
         """Test async fallback to rule-based on error."""
-        with patch.object(optimizer, '_call_llm', side_effect=Exception("API Error")):
+        with patch.object(optimizer, "_call_llm", side_effect=Exception("API Error")):
             result = await optimizer.expand_with_llm_async("TRx for Kisqali")
 
             # Should fall back to rule-based
@@ -236,11 +237,11 @@ class TestHyDEGeneration:
     def test_generate_hyde_document_success(self, optimizer):
         """Test successful HyDE document generation."""
         mock_response = MagicMock()
-        mock_response.content = [MagicMock(
-            text="Kisqali TRx increased 15% in Q4 2024 across the Northeast region."
-        )]
+        mock_response.content = [
+            MagicMock(text="Kisqali TRx increased 15% in Q4 2024 across the Northeast region.")
+        ]
 
-        with patch.object(optimizer, '_get_client') as mock_client:
+        with patch.object(optimizer, "_get_client") as mock_client:
             mock_client.return_value.messages.create.return_value = mock_response
 
             result = optimizer.generate_hyde_document("What is Kisqali TRx?")
@@ -253,7 +254,7 @@ class TestHyDEGeneration:
         mock_response = MagicMock()
         mock_response.content = [MagicMock(text="Generated document")]
 
-        with patch.object(optimizer, '_get_client') as mock_client:
+        with patch.object(optimizer, "_get_client") as mock_client:
             mock_client.return_value.messages.create.return_value = mock_response
 
             # Test insight type
@@ -268,7 +269,7 @@ class TestHyDEGeneration:
 
     def test_generate_hyde_fallback_on_error(self, optimizer):
         """Test HyDE fallback to expanded query on error."""
-        with patch.object(optimizer, '_get_client') as mock_client:
+        with patch.object(optimizer, "_get_client") as mock_client:
             mock_client.return_value.messages.create.side_effect = Exception("API Error")
 
             result = optimizer.generate_hyde_document("TRx for Kisqali")
@@ -279,7 +280,7 @@ class TestHyDEGeneration:
     @pytest.mark.asyncio
     async def test_generate_hyde_async(self, optimizer):
         """Test async HyDE generation."""
-        with patch.object(optimizer, '_call_llm', return_value="Async HyDE document"):
+        with patch.object(optimizer, "_call_llm", return_value="Async HyDE document"):
             result = await optimizer.generate_hyde_document_async("TRx for Kisqali")
 
             assert result == "Async HyDE document"
@@ -290,7 +291,7 @@ class TestCaching:
 
     def test_cache_hit_returns_cached_result(self, cached_optimizer, mock_anthropic_response):
         """Test that cache hits return cached result without API call."""
-        with patch.object(cached_optimizer, '_get_client') as mock_client:
+        with patch.object(cached_optimizer, "_get_client") as mock_client:
             mock_client.return_value.messages.create.return_value = mock_anthropic_response
 
             # First call - should hit API
@@ -305,7 +306,7 @@ class TestCaching:
 
     def test_cache_disabled_always_calls_api(self, optimizer, mock_anthropic_response):
         """Test that cache disabled always calls API."""
-        with patch.object(optimizer, '_get_client') as mock_client:
+        with patch.object(optimizer, "_get_client") as mock_client:
             mock_client.return_value.messages.create.return_value = mock_anthropic_response
 
             optimizer.expand_with_llm("TRx for Kisqali")
@@ -315,7 +316,7 @@ class TestCaching:
 
     def test_cache_different_queries(self, cached_optimizer, mock_anthropic_response):
         """Test that different queries have separate cache entries."""
-        with patch.object(cached_optimizer, '_get_client') as mock_client:
+        with patch.object(cached_optimizer, "_get_client") as mock_client:
             mock_client.return_value.messages.create.return_value = mock_anthropic_response
 
             cached_optimizer.expand_with_llm("Query A")
@@ -336,7 +337,7 @@ class TestCaching:
 
     def test_cache_ttl_expiration(self, cached_optimizer, mock_anthropic_response):
         """Test that cached entries expire after TTL."""
-        with patch.object(cached_optimizer, '_get_client') as mock_client:
+        with patch.object(cached_optimizer, "_get_client") as mock_client:
             mock_client.return_value.messages.create.return_value = mock_anthropic_response
 
             # First call
@@ -381,14 +382,13 @@ class TestOptimizeQuery:
     @pytest.mark.asyncio
     async def test_optimize_query_rule_only(self, optimizer):
         """Test optimization with rule-based only."""
-        result = await optimizer.optimize_query(
-            "TRx for Kisqali",
-            use_llm=False,
-            use_hyde=False
-        )
+        result = await optimizer.optimize_query("TRx for Kisqali", use_llm=False, use_hyde=False)
 
         assert result["original"] == "TRx for Kisqali"
-        assert "total prescriptions" in result["rule_expanded"].lower() or "prescription" in result["rule_expanded"].lower()
+        assert (
+            "total prescriptions" in result["rule_expanded"].lower()
+            or "prescription" in result["rule_expanded"].lower()
+        )
         assert result["llm_expanded"] is None
         assert result["hyde_document"] is None
         assert result["recommended"] == result["rule_expanded"]
@@ -396,12 +396,8 @@ class TestOptimizeQuery:
     @pytest.mark.asyncio
     async def test_optimize_query_with_llm(self, optimizer):
         """Test optimization with LLM expansion."""
-        with patch.object(optimizer, '_call_llm', return_value="LLM expanded result"):
-            result = await optimizer.optimize_query(
-                "TRx for Kisqali",
-                use_llm=True,
-                use_hyde=False
-            )
+        with patch.object(optimizer, "_call_llm", return_value="LLM expanded result"):
+            result = await optimizer.optimize_query("TRx for Kisqali", use_llm=True, use_hyde=False)
 
             assert result["llm_expanded"] == "LLM expanded result"
             assert result["hyde_document"] is None
@@ -410,12 +406,8 @@ class TestOptimizeQuery:
     @pytest.mark.asyncio
     async def test_optimize_query_with_hyde(self, optimizer):
         """Test optimization with HyDE."""
-        with patch.object(optimizer, '_call_llm', return_value="HyDE document"):
-            result = await optimizer.optimize_query(
-                "TRx for Kisqali",
-                use_llm=False,
-                use_hyde=True
-            )
+        with patch.object(optimizer, "_call_llm", return_value="HyDE document"):
+            result = await optimizer.optimize_query("TRx for Kisqali", use_llm=False, use_hyde=True)
 
             assert result["llm_expanded"] is None
             assert result["hyde_document"] == "HyDE document"
@@ -433,12 +425,8 @@ class TestOptimizeQuery:
                 return "HyDE document"
             return "LLM expanded"
 
-        with patch.object(optimizer, '_call_llm', side_effect=mock_llm):
-            result = await optimizer.optimize_query(
-                "TRx for Kisqali",
-                use_llm=True,
-                use_hyde=True
-            )
+        with patch.object(optimizer, "_call_llm", side_effect=mock_llm):
+            result = await optimizer.optimize_query("TRx for Kisqali", use_llm=True, use_hyde=True)
 
             assert result["hyde_document"] is not None
             assert result["recommended"] == result["hyde_document"]
@@ -446,13 +434,11 @@ class TestOptimizeQuery:
     @pytest.mark.asyncio
     async def test_optimize_query_with_context(self, optimizer):
         """Test optimization passes context to LLM."""
-        with patch.object(optimizer, '_call_llm') as mock_llm:
+        with patch.object(optimizer, "_call_llm") as mock_llm:
             mock_llm.return_value = "Contextual expansion"
 
             await optimizer.optimize_query(
-                "What about Q4?",
-                use_llm=True,
-                context="Previous discussion about Kisqali"
+                "What about Q4?", use_llm=True, context="Previous discussion about Kisqali"
             )
 
             # Verify context was included
@@ -473,8 +459,7 @@ class TestPromptBuilding:
     def test_expansion_prompt_includes_context(self, optimizer):
         """Test expansion prompt includes context when provided."""
         prompt = optimizer._build_expansion_prompt(
-            "What about Q4?",
-            context="Previous discussion about Kisqali"
+            "What about Q4?", context="Previous discussion about Kisqali"
         )
 
         assert "Previous discussion" in prompt
@@ -514,7 +499,7 @@ class TestParsedQueryObject:
         query = Mock()
         query.text = "Kisqali TRx trend"
 
-        with patch.object(optimizer, '_get_client') as mock_client:
+        with patch.object(optimizer, "_get_client") as mock_client:
             mock_client.return_value.messages.create.return_value = mock_anthropic_response
 
             result = optimizer.expand_with_llm(query)
@@ -529,7 +514,7 @@ class TestParsedQueryObject:
         mock_response = MagicMock()
         mock_response.content = [MagicMock(text="HyDE document")]
 
-        with patch.object(optimizer, '_get_client') as mock_client:
+        with patch.object(optimizer, "_get_client") as mock_client:
             mock_client.return_value.messages.create.return_value = mock_response
 
             result = optimizer.generate_hyde_document(query)

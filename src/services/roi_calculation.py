@@ -13,11 +13,11 @@ Reference: docs/roi_methodology.md
 """
 
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Dict, List, Optional, Any, Tuple
-import numpy as np
 from datetime import datetime, timezone
+from enum import Enum
+from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
 
 # =============================================================================
 # Enums
@@ -305,8 +305,7 @@ class DataQualityCalculator:
             Annual dollar value of data quality improvement
         """
         monthly_value = (
-            fp_reduction * self.VALUE_PER_FP_AVOIDED
-            + fn_reduction * self.VALUE_PER_FN_AVOIDED
+            fp_reduction * self.VALUE_PER_FP_AVOIDED + fn_reduction * self.VALUE_PER_FN_AVOIDED
         )
         return monthly_value * 12
 
@@ -614,7 +613,7 @@ class CostCalculator:
 
         # Data acquisition
         data_cost = cost_input.incremental_data_cost
-        for source, cost in cost_input.data_source_costs.items():
+        for _source, cost in cost_input.data_source_costs.items():
             data_cost += cost
         breakdown["data_acquisition"] = data_cost
 
@@ -623,9 +622,7 @@ class CostCalculator:
         breakdown["change_management"] = change_cost
 
         # Infrastructure
-        infra_cost = (
-            cost_input.monthly_infrastructure_cost * cost_input.infrastructure_months
-        )
+        infra_cost = cost_input.monthly_infrastructure_cost * cost_input.infrastructure_months
         breakdown["infrastructure"] = infra_cost
 
         # Opportunity cost
@@ -814,9 +811,7 @@ class ROICalculationService:
         roi_samples = self._simulate_roi(
             value_drivers, cost_input, attribution_rate, 1 - total_risk_adj
         )
-        confidence_interval = self.bootstrap.compute_confidence_interval(
-            roi_samples, target_roi
-        )
+        confidence_interval = self.bootstrap.compute_confidence_interval(roi_samples, target_roi)
 
         # Sensitivity analysis (optional)
         sensitivity_results = None
@@ -863,9 +858,7 @@ class ROICalculationService:
             ROI result with NPV calculations
         """
         # First calculate base ROI
-        result = self.calculate_roi(
-            value_drivers, cost_input, attribution_level, risk_assessment
-        )
+        result = self.calculate_roi(value_drivers, cost_input, attribution_level, risk_assessment)
 
         # Calculate NPV assuming constant annual value
         annual_values = [result.attributed_value] * years
@@ -960,8 +953,9 @@ class ROICalculationService:
         # Calculate base ROI
         base_value = sum(self.calculate_value_driver(d) for d in value_drivers)
         base_attributed = base_value * attribution_rate
-        base_roi = ((base_attributed - total_cost) / total_cost * risk_multiplier
-                    if total_cost > 0 else 0)
+        base_roi = (
+            (base_attributed - total_cost) / total_cost * risk_multiplier if total_cost > 0 else 0
+        )
 
         # Sensitivity on each value driver
         for driver in value_drivers:
@@ -972,46 +966,56 @@ class ROICalculationService:
             # Low scenario (-20%)
             low_total = base_value - (driver_value * 0.2)
             low_attributed = low_total * attribution_rate
-            low_roi = ((low_attributed - total_cost) / total_cost * risk_multiplier
-                       if total_cost > 0 else 0)
+            low_roi = (
+                (low_attributed - total_cost) / total_cost * risk_multiplier
+                if total_cost > 0
+                else 0
+            )
 
             # High scenario (+20%)
             high_total = base_value + (driver_value * 0.2)
             high_attributed = high_total * attribution_rate
-            high_roi = ((high_attributed - total_cost) / total_cost * risk_multiplier
-                        if total_cost > 0 else 0)
+            high_roi = (
+                (high_attributed - total_cost) / total_cost * risk_multiplier
+                if total_cost > 0
+                else 0
+            )
 
-            results.append(SensitivityResult(
-                parameter=driver.driver_type.value,
-                base_value=driver.quantity,
-                low_value=driver.quantity * 0.8,
-                high_value=driver.quantity * 1.2,
-                roi_at_low=low_roi,
-                roi_at_base=base_roi,
-                roi_at_high=high_roi,
-                impact_range=high_roi - low_roi,
-            ))
+            results.append(
+                SensitivityResult(
+                    parameter=driver.driver_type.value,
+                    base_value=driver.quantity,
+                    low_value=driver.quantity * 0.8,
+                    high_value=driver.quantity * 1.2,
+                    roi_at_low=low_roi,
+                    roi_at_base=base_roi,
+                    roi_at_high=high_roi,
+                    impact_range=high_roi - low_roi,
+                )
+            )
 
         # Sensitivity on cost
         if total_cost > 0:
             # Low cost scenario (-20%)
             low_cost = total_cost * 0.8
-            low_cost_roi = ((base_attributed - low_cost) / low_cost * risk_multiplier)
+            low_cost_roi = (base_attributed - low_cost) / low_cost * risk_multiplier
 
             # High cost scenario (+20%)
             high_cost = total_cost * 1.2
-            high_cost_roi = ((base_attributed - high_cost) / high_cost * risk_multiplier)
+            high_cost_roi = (base_attributed - high_cost) / high_cost * risk_multiplier
 
-            results.append(SensitivityResult(
-                parameter="implementation_cost",
-                base_value=total_cost,
-                low_value=low_cost,
-                high_value=high_cost,
-                roi_at_low=low_cost_roi,
-                roi_at_base=base_roi,
-                roi_at_high=high_cost_roi,
-                impact_range=low_cost_roi - high_cost_roi,  # Note: reversed for cost
-            ))
+            results.append(
+                SensitivityResult(
+                    parameter="implementation_cost",
+                    base_value=total_cost,
+                    low_value=low_cost,
+                    high_value=high_cost,
+                    roi_at_low=low_cost_roi,
+                    roi_at_base=base_roi,
+                    roi_at_high=high_cost_roi,
+                    impact_range=low_cost_roi - high_cost_roi,  # Note: reversed for cost
+                )
+            )
 
         # Sort by impact range (descending)
         results.sort(key=lambda r: abs(r.impact_range), reverse=True)

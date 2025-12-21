@@ -9,8 +9,8 @@ Exports:
 """
 
 from .agent import GapAnalyzerAgent
-from .state import GapAnalyzerState
 from .graph import create_gap_analyzer_graph
+from .state import GapAnalyzerState
 
 __all__ = [
     "GapAnalyzerAgent",

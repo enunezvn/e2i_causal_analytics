@@ -12,8 +12,8 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from .graph import build_explainer_graph
 from .state import ExplainerState, Insight, NarrativeSection
-from .graph import build_explainer_graph, build_simple_explainer_graph
 
 logger = logging.getLogger(__name__)
 
@@ -29,9 +29,7 @@ class ExplainerInput(BaseModel):
     query: str = ""
     analysis_results: List[Dict[str, Any]] = Field(default_factory=list)
     user_expertise: Literal["executive", "analyst", "data_scientist"] = "analyst"
-    output_format: Literal["narrative", "structured", "presentation", "brief"] = (
-        "narrative"
-    )
+    output_format: Literal["narrative", "structured", "presentation", "brief"] = "narrative"
     focus_areas: Optional[List[str]] = None
 
 
@@ -240,7 +238,9 @@ class ExplainerAgent:
             },
             "outputs": {
                 "executive_summary": "available" if output.executive_summary else "unavailable",
-                "detailed_explanation": "available" if output.detailed_explanation else "unavailable",
+                "detailed_explanation": (
+                    "available" if output.detailed_explanation else "unavailable"
+                ),
                 "sections": len(output.narrative_sections),
             },
             "suggestions": {

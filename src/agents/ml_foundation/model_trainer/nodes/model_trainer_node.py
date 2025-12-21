@@ -3,9 +3,9 @@
 This module trains ML models with the best hyperparameters.
 """
 
-from typing import Dict, Any
 import time
 from datetime import datetime
+from typing import Any, Dict
 
 
 async def train_model(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -34,7 +34,7 @@ async def train_model(state: Dict[str, Any]) -> Dict[str, Any]:
     algorithm_name = state.get("algorithm_name")
     best_hyperparameters = state.get("best_hyperparameters", {})
     early_stopping = state.get("early_stopping", False)
-    early_stopping_patience = state.get("early_stopping_patience", 10)
+    state.get("early_stopping_patience", 10)
 
     # Extract preprocessed data
     X_train_preprocessed = state.get("X_train_preprocessed")

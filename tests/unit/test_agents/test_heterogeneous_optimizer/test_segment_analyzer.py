@@ -1,8 +1,9 @@
 """Tests for Segment Analyzer Node."""
 
 import pytest
+
 from src.agents.heterogeneous_optimizer.nodes.segment_analyzer import SegmentAnalyzerNode
-from src.agents.heterogeneous_optimizer.state import HeterogeneousOptimizerState, CATEResult
+from src.agents.heterogeneous_optimizer.state import CATEResult, HeterogeneousOptimizerState
 
 
 class TestSegmentAnalyzerNode:
@@ -203,9 +204,7 @@ class TestSegmentAnalyzerNode:
 
         # Total size from all segments
         total_size = sum(
-            r["sample_size"]
-            for results in state["cate_by_segment"].values()
-            for r in results
+            r["sample_size"] for results in state["cate_by_segment"].values() for r in results
         )
 
         # Check percentages sum to ~100% (accounting for filtering)

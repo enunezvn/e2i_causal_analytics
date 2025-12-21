@@ -5,7 +5,6 @@ import pytest
 from src.agents.explainer.nodes.context_assembler import ContextAssemblerNode
 from src.agents.explainer.nodes.deep_reasoner import DeepReasonerNode
 from src.agents.explainer.nodes.narrative_generator import NarrativeGeneratorNode
-from src.agents.explainer.state import ExplainerState
 
 
 class TestNarrativeGeneratorNode:
@@ -49,9 +48,7 @@ class TestNarrativeGeneratorNode:
         self, base_explainer_state, sample_causal_analysis
     ):
         """Test that executive summary is generated."""
-        reasoned = await self._get_reasoned_state(
-            base_explainer_state, [sample_causal_analysis]
-        )
+        reasoned = await self._get_reasoned_state(base_explainer_state, [sample_causal_analysis])
 
         node = NarrativeGeneratorNode(use_llm=False)
         result = await node.execute(reasoned)
@@ -65,9 +62,7 @@ class TestNarrativeGeneratorNode:
         self, base_explainer_state, sample_causal_analysis
     ):
         """Test that detailed explanation is generated."""
-        reasoned = await self._get_reasoned_state(
-            base_explainer_state, [sample_causal_analysis]
-        )
+        reasoned = await self._get_reasoned_state(base_explainer_state, [sample_causal_analysis])
 
         node = NarrativeGeneratorNode(use_llm=False)
         result = await node.execute(reasoned)
@@ -80,9 +75,7 @@ class TestNarrativeGeneratorNode:
         self, base_explainer_state, sample_causal_analysis
     ):
         """Test that narrative sections are generated."""
-        reasoned = await self._get_reasoned_state(
-            base_explainer_state, [sample_causal_analysis]
-        )
+        reasoned = await self._get_reasoned_state(base_explainer_state, [sample_causal_analysis])
 
         node = NarrativeGeneratorNode(use_llm=False)
         result = await node.execute(reasoned)
@@ -95,9 +88,7 @@ class TestNarrativeGeneratorNode:
     # ========================================================================
 
     @pytest.mark.asyncio
-    async def test_narrative_format(
-        self, base_explainer_state, sample_causal_analysis
-    ):
+    async def test_narrative_format(self, base_explainer_state, sample_causal_analysis):
         """Test narrative output format."""
         state = {**base_explainer_state, "output_format": "narrative"}
         reasoned = await self._get_reasoned_state(state, [sample_causal_analysis])
@@ -110,9 +101,7 @@ class TestNarrativeGeneratorNode:
         assert len(result["detailed_explanation"]) > 50  # Substantial content
 
     @pytest.mark.asyncio
-    async def test_brief_format(
-        self, base_explainer_state, sample_causal_analysis
-    ):
+    async def test_brief_format(self, base_explainer_state, sample_causal_analysis):
         """Test brief output format."""
         state = {**base_explainer_state, "output_format": "brief"}
         reasoned = await self._get_reasoned_state(state, [sample_causal_analysis])
@@ -125,9 +114,7 @@ class TestNarrativeGeneratorNode:
         assert len(result["executive_summary"]) > 0
 
     @pytest.mark.asyncio
-    async def test_structured_format(
-        self, base_explainer_state, sample_causal_analysis
-    ):
+    async def test_structured_format(self, base_explainer_state, sample_causal_analysis):
         """Test structured output format."""
         state = {**base_explainer_state, "output_format": "structured"}
         reasoned = await self._get_reasoned_state(state, [sample_causal_analysis])
@@ -139,9 +126,7 @@ class TestNarrativeGeneratorNode:
         assert result["detailed_explanation"] is not None
 
     @pytest.mark.asyncio
-    async def test_presentation_format(
-        self, base_explainer_state, sample_causal_analysis
-    ):
+    async def test_presentation_format(self, base_explainer_state, sample_causal_analysis):
         """Test presentation output format."""
         state = {**base_explainer_state, "output_format": "presentation"}
         reasoned = await self._get_reasoned_state(state, [sample_causal_analysis])
@@ -162,9 +147,7 @@ class TestNarrativeGeneratorNode:
         self, base_explainer_state, sample_causal_analysis
     ):
         """Test that narrative sections have required fields."""
-        reasoned = await self._get_reasoned_state(
-            base_explainer_state, [sample_causal_analysis]
-        )
+        reasoned = await self._get_reasoned_state(base_explainer_state, [sample_causal_analysis])
 
         node = NarrativeGeneratorNode(use_llm=False)
         result = await node.execute(reasoned)
@@ -178,13 +161,9 @@ class TestNarrativeGeneratorNode:
     # ========================================================================
 
     @pytest.mark.asyncio
-    async def test_generates_visual_suggestions(
-        self, base_explainer_state, sample_causal_analysis
-    ):
+    async def test_generates_visual_suggestions(self, base_explainer_state, sample_causal_analysis):
         """Test that visual suggestions are generated."""
-        reasoned = await self._get_reasoned_state(
-            base_explainer_state, [sample_causal_analysis]
-        )
+        reasoned = await self._get_reasoned_state(base_explainer_state, [sample_causal_analysis])
 
         node = NarrativeGeneratorNode(use_llm=False)
         result = await node.execute(reasoned)
@@ -193,13 +172,9 @@ class TestNarrativeGeneratorNode:
         assert len(result["visual_suggestions"]) > 0
 
     @pytest.mark.asyncio
-    async def test_visual_suggestions_have_type(
-        self, base_explainer_state, sample_causal_analysis
-    ):
+    async def test_visual_suggestions_have_type(self, base_explainer_state, sample_causal_analysis):
         """Test that visual suggestions have type field."""
-        reasoned = await self._get_reasoned_state(
-            base_explainer_state, [sample_causal_analysis]
-        )
+        reasoned = await self._get_reasoned_state(base_explainer_state, [sample_causal_analysis])
 
         node = NarrativeGeneratorNode(use_llm=False)
         result = await node.execute(reasoned)
@@ -216,9 +191,7 @@ class TestNarrativeGeneratorNode:
         self, base_explainer_state, sample_causal_analysis
     ):
         """Test that follow-up questions are generated."""
-        reasoned = await self._get_reasoned_state(
-            base_explainer_state, [sample_causal_analysis]
-        )
+        reasoned = await self._get_reasoned_state(base_explainer_state, [sample_causal_analysis])
 
         node = NarrativeGeneratorNode(use_llm=False)
         result = await node.execute(reasoned)
@@ -231,9 +204,7 @@ class TestNarrativeGeneratorNode:
         self, base_explainer_state, sample_causal_analysis
     ):
         """Test that follow-ups are actual questions."""
-        reasoned = await self._get_reasoned_state(
-            base_explainer_state, [sample_causal_analysis]
-        )
+        reasoned = await self._get_reasoned_state(base_explainer_state, [sample_causal_analysis])
 
         node = NarrativeGeneratorNode(use_llm=False)
         result = await node.execute(reasoned)
@@ -265,13 +236,9 @@ class TestNarrativeGeneratorNode:
         assert result["status"] == "failed"
 
     @pytest.mark.asyncio
-    async def test_handles_empty_insights(
-        self, base_explainer_state, sample_causal_analysis
-    ):
+    async def test_handles_empty_insights(self, base_explainer_state, sample_causal_analysis):
         """Test handling of empty insights list."""
-        reasoned = await self._get_reasoned_state(
-            base_explainer_state, [sample_causal_analysis]
-        )
+        reasoned = await self._get_reasoned_state(base_explainer_state, [sample_causal_analysis])
         # Override with empty insights
         reasoned["extracted_insights"] = []
 
@@ -287,13 +254,9 @@ class TestNarrativeGeneratorNode:
     # ========================================================================
 
     @pytest.mark.asyncio
-    async def test_tracks_generation_latency(
-        self, base_explainer_state, sample_causal_analysis
-    ):
+    async def test_tracks_generation_latency(self, base_explainer_state, sample_causal_analysis):
         """Test that generation latency is tracked."""
-        reasoned = await self._get_reasoned_state(
-            base_explainer_state, [sample_causal_analysis]
-        )
+        reasoned = await self._get_reasoned_state(base_explainer_state, [sample_causal_analysis])
 
         node = NarrativeGeneratorNode(use_llm=False)
         result = await node.execute(reasoned)
@@ -302,13 +265,9 @@ class TestNarrativeGeneratorNode:
         assert isinstance(result["generation_latency_ms"], int)
 
     @pytest.mark.asyncio
-    async def test_calculates_total_latency(
-        self, base_explainer_state, sample_causal_analysis
-    ):
+    async def test_calculates_total_latency(self, base_explainer_state, sample_causal_analysis):
         """Test that total latency is calculated."""
-        reasoned = await self._get_reasoned_state(
-            base_explainer_state, [sample_causal_analysis]
-        )
+        reasoned = await self._get_reasoned_state(base_explainer_state, [sample_causal_analysis])
 
         node = NarrativeGeneratorNode(use_llm=False)
         result = await node.execute(reasoned)
@@ -322,13 +281,9 @@ class TestNarrativeGeneratorNode:
     # ========================================================================
 
     @pytest.mark.asyncio
-    async def test_preserves_model_used(
-        self, base_explainer_state, sample_causal_analysis
-    ):
+    async def test_preserves_model_used(self, base_explainer_state, sample_causal_analysis):
         """Test that model used is preserved from reasoning phase."""
-        reasoned = await self._get_reasoned_state(
-            base_explainer_state, [sample_causal_analysis]
-        )
+        reasoned = await self._get_reasoned_state(base_explainer_state, [sample_causal_analysis])
 
         node = NarrativeGeneratorNode(use_llm=False)
         result = await node.execute(reasoned)
@@ -340,13 +295,9 @@ class TestNarrativeGeneratorNode:
     # ========================================================================
 
     @pytest.mark.asyncio
-    async def test_summary_is_reasonable_length(
-        self, base_explainer_state, sample_causal_analysis
-    ):
+    async def test_summary_is_reasonable_length(self, base_explainer_state, sample_causal_analysis):
         """Test that executive summary has reasonable length."""
-        reasoned = await self._get_reasoned_state(
-            base_explainer_state, [sample_causal_analysis]
-        )
+        reasoned = await self._get_reasoned_state(base_explainer_state, [sample_causal_analysis])
 
         node = NarrativeGeneratorNode(use_llm=False)
         result = await node.execute(reasoned)
@@ -356,13 +307,9 @@ class TestNarrativeGeneratorNode:
         assert 10 < summary_length < 5000  # Reasonable bounds
 
     @pytest.mark.asyncio
-    async def test_explanation_has_substance(
-        self, base_explainer_state, sample_causal_analysis
-    ):
+    async def test_explanation_has_substance(self, base_explainer_state, sample_causal_analysis):
         """Test that detailed explanation has substance."""
-        reasoned = await self._get_reasoned_state(
-            base_explainer_state, [sample_causal_analysis]
-        )
+        reasoned = await self._get_reasoned_state(base_explainer_state, [sample_causal_analysis])
 
         node = NarrativeGeneratorNode(use_llm=False)
         result = await node.execute(reasoned)

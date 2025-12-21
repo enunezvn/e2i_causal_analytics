@@ -9,12 +9,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Protocol
 
-from ..state import ComponentStatus, HealthScoreState
 from ..metrics import DEFAULT_THRESHOLDS
+from ..state import ComponentStatus, HealthScoreState
 
 logger = logging.getLogger(__name__)
 
@@ -77,20 +76,15 @@ class ComponentHealthNode:
         try:
             # Run parallel health checks
             if self.health_client:
-                tasks = [
-                    self._check_component(comp)
-                    for comp in self.components
-                ]
+                tasks = [self._check_component(comp) for comp in self.components]
                 statuses = await asyncio.gather(*tasks, return_exceptions=True)
             else:
                 # No client - simulate healthy for testing
-                statuses = [
-                    self._create_mock_status(comp) for comp in self.components
-                ]
+                statuses = [self._create_mock_status(comp) for comp in self.components]
 
             # Process results
             component_statuses = []
-            for comp, status in zip(self.components, statuses):
+            for comp, status in zip(self.components, statuses, strict=False):
                 if isinstance(status, Exception):
                     component_statuses.append(
                         ComponentStatus(
@@ -106,12 +100,8 @@ class ComponentHealthNode:
 
             # Calculate component health score
             if component_statuses:
-                healthy_count = sum(
-                    1 for s in component_statuses if s["status"] == "healthy"
-                )
-                degraded_count = sum(
-                    1 for s in component_statuses if s["status"] == "degraded"
-                )
+                healthy_count = sum(1 for s in component_statuses if s["status"] == "healthy")
+                degraded_count = sum(1 for s in component_statuses if s["status"] == "degraded")
                 # Healthy = 1.0, Degraded = 0.5, Others = 0.0
                 total_score = healthy_count + (degraded_count * 0.5)
                 health_score = total_score / len(component_statuses)

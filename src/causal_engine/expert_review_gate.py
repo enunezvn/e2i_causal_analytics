@@ -7,11 +7,11 @@ Integrates with ExpertReviewRepository for persistence.
 Version: 4.3
 """
 
-from dataclasses import dataclass
-from enum import Enum
-from typing import Optional, Dict, Any, List
-from datetime import date, timedelta
 import logging
+from dataclasses import dataclass
+from datetime import date
+from enum import Enum
+from typing import Any, Dict, Optional
 
 from src.repositories.expert_review import ExpertReviewRepository
 
@@ -365,7 +365,11 @@ class ExpertReviewGate:
             "total_approved": approved,
             "total_rejected": summary.get("rejected", 0),
             "total_expired": summary.get("expired", 0),
-            "message": "Gate healthy" if healthy else "Attention needed: pending reviews or expiring approvals",
+            "message": (
+                "Gate healthy"
+                if healthy
+                else "Attention needed: pending reviews or expiring approvals"
+            ),
         }
 
 

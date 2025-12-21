@@ -10,24 +10,21 @@ Environment variables:
     REDIS_URL: Redis connection URL (default: redis://localhost:6382)
 """
 
-import os
-import json
-import pytest
 import asyncio
-from datetime import datetime
+import os
+
+import pytest
 
 # Check if Redis is available before running tests
 try:
     import redis.asyncio as redis
+
     REDIS_AVAILABLE = True
 except ImportError:
     REDIS_AVAILABLE = False
 
 
-pytestmark = pytest.mark.skipif(
-    not REDIS_AVAILABLE,
-    reason="redis package not installed"
-)
+pytestmark = pytest.mark.skipif(not REDIS_AVAILABLE, reason="redis package not installed")
 
 
 # ============================================================================
@@ -124,8 +121,8 @@ class TestSessionIntegration:
             initial_context={
                 "preferences": {"language": "en"},
                 "brand": "Remibrutinib",
-                "region": "northeast"
-            }
+                "region": "northeast",
+            },
         )
 
         # Retrieve the session
@@ -153,14 +150,11 @@ class TestSessionIntegration:
     async def test_update_session_preserves_data(self, working_memory):
         """Update should preserve existing session data."""
         session_id = await working_memory.create_session(
-            user_id="update_test",
-            initial_context={"brand": "Fabhalta"}
+            user_id="update_test", initial_context={"brand": "Fabhalta"}
         )
 
         # Update with new field
-        await working_memory.update_session(session_id, {
-            "current_phase": "investigator"
-        })
+        await working_memory.update_session(session_id, {"current_phase": "investigator"})
 
         # Verify both old and new data exist
         session = await working_memory.get_session(session_id)
@@ -208,7 +202,7 @@ class TestE2IContextIntegration:
             brand="Kisqali",
             region="south",
             patient_ids=["P001", "P002"],
-            hcp_ids=["HCP001"]
+            hcp_ids=["HCP001"],
         )
 
         context = await working_memory.get_e2i_context(session_id)
@@ -224,17 +218,10 @@ class TestE2IContextIntegration:
         session_id = await working_memory.create_session(user_id="partial_test")
 
         # Set initial context
-        await working_memory.set_e2i_context(
-            session_id,
-            brand="Remibrutinib",
-            region="midwest"
-        )
+        await working_memory.set_e2i_context(session_id, brand="Remibrutinib", region="midwest")
 
         # Partial update - only brand
-        await working_memory.set_e2i_context(
-            session_id,
-            brand="Fabhalta"
-        )
+        await working_memory.set_e2i_context(session_id, brand="Fabhalta")
 
         context = await working_memory.get_e2i_context(session_id)
 
@@ -274,13 +261,10 @@ class TestMessageHistoryIntegration:
         metadata = {
             "agent": "causal_impact",
             "confidence": 0.85,
-            "sources": ["kpi_data", "causal_graph"]
+            "sources": ["kpi_data", "causal_graph"],
         }
         await working_memory.add_message(
-            session_id,
-            "assistant",
-            "Analysis result",
-            metadata=metadata
+            session_id, "assistant", "Analysis result", metadata=metadata
         )
 
         messages = await working_memory.get_messages(session_id)
@@ -348,16 +332,18 @@ class TestEvidenceBoardIntegration:
         """Should append and retrieve evidence items."""
         session_id = await working_memory.create_session(user_id="evidence_test")
 
-        await working_memory.append_evidence(session_id, {
-            "source": "causal_impact",
-            "content": "TRx drop linked to competitor launch",
-            "relevance": 0.92
-        })
-        await working_memory.append_evidence(session_id, {
-            "source": "gap_analyzer",
-            "content": "Revenue gap in Q3",
-            "relevance": 0.78
-        })
+        await working_memory.append_evidence(
+            session_id,
+            {
+                "source": "causal_impact",
+                "content": "TRx drop linked to competitor launch",
+                "relevance": 0.92,
+            },
+        )
+        await working_memory.append_evidence(
+            session_id,
+            {"source": "gap_analyzer", "content": "Revenue gap in Q3", "relevance": 0.78},
+        )
 
         trail = await working_memory.get_evidence_trail(session_id)
 
@@ -370,18 +356,9 @@ class TestEvidenceBoardIntegration:
         """Evidence summary should calculate correct statistics."""
         session_id = await working_memory.create_session(user_id="summary_test")
 
-        await working_memory.append_evidence(session_id, {
-            "source": "agent_a",
-            "relevance": 0.9
-        })
-        await working_memory.append_evidence(session_id, {
-            "source": "agent_b",
-            "relevance": 0.7
-        })
-        await working_memory.append_evidence(session_id, {
-            "source": "agent_a",
-            "relevance": 0.8
-        })
+        await working_memory.append_evidence(session_id, {"source": "agent_a", "relevance": 0.9})
+        await working_memory.append_evidence(session_id, {"source": "agent_b", "relevance": 0.7})
+        await working_memory.append_evidence(session_id, {"source": "agent_a", "relevance": 0.8})
 
         summary = await working_memory.get_evidence_summary(session_id)
 
@@ -457,10 +434,7 @@ class TestConcurrentAccess:
         session_id = await working_memory.create_session(user_id="concurrent_test")
 
         # Add 10 messages concurrently
-        tasks = [
-            working_memory.add_message(session_id, "user", f"Message {i}")
-            for i in range(10)
-        ]
+        tasks = [working_memory.add_message(session_id, "user", f"Message {i}") for i in range(10)]
         await asyncio.gather(*tasks)
 
         messages = await working_memory.get_messages(session_id)

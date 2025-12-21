@@ -59,7 +59,9 @@ class ConceptDriftNode:
         # Check if concept drift detection is enabled
         if not state.get("check_concept_drift", True):
             state["concept_drift_results"] = []
-            state["warnings"] = state.get("warnings", []) + ["Concept drift detection skipped (disabled)"]
+            state["warnings"] = state.get("warnings", []) + [
+                "Concept drift detection skipped (disabled)"
+            ]
             return state
 
         # Skip if status is failed
@@ -83,7 +85,7 @@ class ConceptDriftNode:
             error: ErrorDetails = {
                 "node": "concept_drift",
                 "error": str(e),
-                "timestamp": datetime.now(timezone.utc).isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             }
             state["errors"] = state.get("errors", []) + [error]
             state["status"] = "failed"
@@ -113,7 +115,7 @@ class ConceptDriftNode:
         current_features: dict,
         baseline_labels: dict,
         current_labels: dict,
-        significance: float
+        significance: float,
     ) -> list[DriftResult]:
         """Detect drift in feature importance.
 
@@ -136,7 +138,7 @@ class ConceptDriftNode:
         baseline_predictions: dict,
         current_predictions: dict,
         baseline_labels: dict,
-        current_labels: dict
+        current_labels: dict,
     ) -> DriftResult | None:
         """Detect concept drift through performance degradation.
 

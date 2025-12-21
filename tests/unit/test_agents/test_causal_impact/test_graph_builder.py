@@ -1,6 +1,7 @@
 """Tests for graph_builder node."""
 
 import pytest
+
 from src.agents.causal_impact.nodes.graph_builder import GraphBuilderNode
 from src.agents.causal_impact.state import CausalImpactState
 
@@ -93,7 +94,7 @@ class TestGraphBuilderNode:
         edges = graph["edges"]
 
         # Build adjacency list
-        from collections import defaultdict, deque
+        from collections import defaultdict
 
         adj = defaultdict(list)
         for source, target in edges:
@@ -119,9 +120,7 @@ class TestGraphBuilderNode:
 
         for node_name in graph["nodes"]:
             if node_name not in visited:
-                assert not has_cycle(
-                    node_name, visited, rec_stack
-                ), "DAG contains cycle"
+                assert not has_cycle(node_name, visited, rec_stack), "DAG contains cycle"
 
     @pytest.mark.asyncio
     async def test_dag_includes_confounders(self):

@@ -1,6 +1,7 @@
 """Tests for split enforcer node."""
 
 import pytest
+
 from src.agents.ml_foundation.model_trainer.nodes.split_enforcer import enforce_splits
 
 

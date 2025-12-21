@@ -1,6 +1,7 @@
 """Tests for router node."""
 
 import pytest
+
 from src.agents.orchestrator.nodes.router import RouterNode, route_to_agents
 
 
@@ -90,9 +91,7 @@ class TestRouterNode:
 
         assert result["dispatch_plan"][0]["agent_name"] == "experiment_designer"
         assert result["dispatch_plan"][0]["timeout_ms"] == 60000
-        assert result["dispatch_plan"][0]["parameters"] == {
-            "preregistration_formality": "medium"
-        }
+        assert result["dispatch_plan"][0]["parameters"] == {"preregistration_formality": "medium"}
 
     @pytest.mark.asyncio
     async def test_route_prediction(self):
@@ -482,9 +481,7 @@ class TestIntentToAgentMapping:
         ]
 
         for intent in expected_intents:
-            assert (
-                intent in router.INTENT_TO_AGENTS
-            ), f"Missing mapping for intent: {intent}"
+            assert intent in router.INTENT_TO_AGENTS, f"Missing mapping for intent: {intent}"
 
     def test_all_dispatches_have_required_fields(self):
         """Test that all agent dispatches have required fields."""
@@ -501,9 +498,7 @@ class TestIntentToAgentMapping:
         for intent, dispatches in router.INTENT_TO_AGENTS.items():
             for dispatch in dispatches:
                 for field in required_fields:
-                    assert (
-                        field in dispatch
-                    ), f"Missing field '{field}' in {intent} dispatch"
+                    assert field in dispatch, f"Missing field '{field}' in {intent} dispatch"
 
     def test_timeout_configurations(self):
         """Test timeout configurations are reasonable."""
@@ -526,9 +521,7 @@ class TestIntentToAgentMapping:
         ]
 
         for pattern in expected_patterns:
-            assert (
-                pattern in router.MULTI_AGENT_PATTERNS
-            ), f"Missing multi-agent pattern: {pattern}"
+            assert pattern in router.MULTI_AGENT_PATTERNS, f"Missing multi-agent pattern: {pattern}"
 
     def test_multi_agent_patterns_have_priorities(self):
         """Test that multi-agent patterns define priorities."""

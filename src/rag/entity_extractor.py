@@ -19,11 +19,11 @@ Part of Phase 1, Checkpoint 1.6.
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set, TYPE_CHECKING
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-from src.rag.types import ExtractedEntities
 from src.rag.exceptions import EntityExtractionError
+from src.rag.types import ExtractedEntities
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +36,7 @@ class EntityVocabulary:
     Loaded from YAML config or provided directly.
     Contains normalized forms and aliases for each entity type.
     """
+
     brands: Dict[str, List[str]] = field(default_factory=dict)
     regions: Dict[str, List[str]] = field(default_factory=dict)
     kpis: Dict[str, List[str]] = field(default_factory=dict)
@@ -77,7 +78,11 @@ class EntityVocabulary:
                 "orchestrator": ["orchestrator", "coordinator"],
                 "causal_impact": ["causal impact", "causal", "impact analyzer"],
                 "gap_analyzer": ["gap analyzer", "gap", "gap analysis"],
-                "heterogeneous_optimizer": ["heterogeneous optimizer", "het optimizer", "cate optimizer"],
+                "heterogeneous_optimizer": [
+                    "heterogeneous optimizer",
+                    "het optimizer",
+                    "cate optimizer",
+                ],
                 "drift_monitor": ["drift monitor", "drift", "monitoring"],
                 "experiment_designer": ["experiment designer", "experiment", "a/b test"],
                 "prediction_synthesizer": ["prediction", "synthesizer", "forecast"],
@@ -139,9 +144,7 @@ class EntityExtractor:
     """
 
     def __init__(
-        self,
-        vocabulary: Optional[EntityVocabulary] = None,
-        config_path: Optional[str] = None
+        self, vocabulary: Optional[EntityVocabulary] = None, config_path: Optional[str] = None
     ):
         """
         Initialize the entity extractor.
@@ -226,7 +229,7 @@ class EntityExtractor:
         if "agents" in config:
             agents_data = config["agents"]
             if isinstance(agents_data, dict):
-                for tier, agent_list in agents_data.items():
+                for _tier, agent_list in agents_data.items():
                     if isinstance(agent_list, list):
                         for agent in agent_list:
                             vocab.agents[agent] = [agent.lower().replace("_", " ")]
@@ -306,8 +309,8 @@ class EntityExtractor:
         except Exception as e:
             logger.error(f"Entity extraction failed: {e}")
             raise EntityExtractionError(
-                message=f"Failed to extract entities from query",
-                details={"query": query[:100], "error": str(e)}
+                message="Failed to extract entities from query",
+                details={"query": query[:100], "error": str(e)},
             )
 
     def _extract_brands(self, query: str) -> List[str]:
@@ -316,7 +319,7 @@ class EntityExtractor:
         for alias, canonical in self._brand_index.items():
             if self._is_word_match(alias, query):
                 found.add(canonical)
-        return sorted(list(found))
+        return sorted(found)
 
     def _extract_regions(self, query: str) -> List[str]:
         """Extract region names from query."""
@@ -324,7 +327,7 @@ class EntityExtractor:
         for alias, canonical in self._region_index.items():
             if self._is_word_match(alias, query):
                 found.add(canonical)
-        return sorted(list(found))
+        return sorted(found)
 
     def _extract_kpis(self, query: str) -> List[str]:
         """Extract KPI names from query."""
@@ -332,7 +335,7 @@ class EntityExtractor:
         for alias, canonical in self._kpi_index.items():
             if self._is_word_match(alias, query):
                 found.add(canonical)
-        return sorted(list(found))
+        return sorted(found)
 
     def _extract_agents(self, query: str) -> List[str]:
         """Extract agent names from query."""
@@ -340,7 +343,7 @@ class EntityExtractor:
         for alias, canonical in self._agent_index.items():
             if self._is_word_match(alias, query):
                 found.add(canonical)
-        return sorted(list(found))
+        return sorted(found)
 
     def _extract_journey_stages(self, query: str) -> List[str]:
         """Extract patient journey stages from query."""
@@ -348,7 +351,7 @@ class EntityExtractor:
         for alias, canonical in self._journey_index.items():
             if self._is_word_match(alias, query):
                 found.add(canonical)
-        return sorted(list(found))
+        return sorted(found)
 
     def _extract_time_references(self, query: str) -> List[str]:
         """Extract time references from query."""
@@ -358,11 +361,11 @@ class EntityExtractor:
                 found.add(canonical)
 
         # Also extract year references
-        year_pattern = r'\b20[0-9]{2}\b'
+        year_pattern = r"\b20[0-9]{2}\b"
         years = re.findall(year_pattern, query)
         found.update(years)
 
-        return sorted(list(found))
+        return sorted(found)
 
     def _extract_hcp_segments(self, query: str) -> List[str]:
         """Extract HCP segment names from query."""
@@ -370,7 +373,7 @@ class EntityExtractor:
         for alias, canonical in self._segment_index.items():
             if self._is_word_match(alias, query):
                 found.add(canonical)
-        return sorted(list(found))
+        return sorted(found)
 
     def _is_word_match(self, pattern: str, text: str) -> bool:
         """
@@ -381,13 +384,10 @@ class EntityExtractor:
         # Escape special regex characters but allow spaces
         escaped = re.escape(pattern)
         # Use word boundaries
-        regex = rf'\b{escaped}\b'
+        regex = rf"\b{escaped}\b"
         return bool(re.search(regex, text, re.IGNORECASE))
 
-    def extract_with_confidence(
-        self,
-        query: str
-    ) -> Dict[str, List[Dict[str, Any]]]:
+    def extract_with_confidence(self, query: str) -> Dict[str, List[Dict[str, Any]]]:
         """
         Extract entities with confidence scores.
 
@@ -417,7 +417,7 @@ class EntityExtractor:
                     {
                         "entity": v,
                         "confidence": 0.95,  # High confidence for vocabulary matches
-                        "source": "vocabulary"
+                        "source": "vocabulary",
                     }
                     for v in values
                 ]

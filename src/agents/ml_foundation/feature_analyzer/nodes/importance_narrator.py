@@ -5,7 +5,8 @@ This is the LLM interpretation node in the hybrid pipeline.
 """
 
 import time
-from typing import Dict, Any, List
+from typing import Any, Dict, List
+
 from anthropic import Anthropic
 
 
@@ -48,7 +49,7 @@ async def narrate_importance(state: Dict[str, Any]) -> Dict[str, Any]:
             feature_directions,
             top_interactions_raw,
             experiment_id,
-            model_version
+            model_version,
         )
 
         # Call Claude for interpretation
@@ -105,7 +106,7 @@ Format your response as JSON with this structure:
         response = client.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=4000,
-            messages=[{"role": "user", "content": prompt}]
+            messages=[{"role": "user", "content": prompt}],
         )
 
         # Parse LLM response
@@ -126,17 +127,12 @@ Format your response as JSON with this structure:
 
         # Generate interaction interpretations
         interaction_interpretations = _interpret_interactions(
-            top_interactions_raw,
-            feature_explanations
+            top_interactions_raw, feature_explanations
         )
 
         # Create complete interpretation text
         interpretation = _build_complete_interpretation(
-            executive_summary,
-            feature_explanations,
-            key_insights,
-            recommendations,
-            cautions
+            executive_summary, feature_explanations, key_insights, recommendations, cautions
         )
 
         computation_time = time.time() - start_time
@@ -168,7 +164,7 @@ def _prepare_interpretation_context(
     feature_directions: Dict[str, str],
     top_interactions_raw: List,
     experiment_id: str,
-    model_version: str
+    model_version: str,
 ) -> str:
     """Prepare context string for LLM interpretation.
 
@@ -202,9 +198,7 @@ def _prepare_interpretation_context(
         context_parts.append("**Top 5 Feature Interactions**:")
         for i, (feat1, feat2, strength) in enumerate(top_interactions_raw[:5], 1):
             interaction_type = "amplifying" if strength > 0 else "opposing"
-            context_parts.append(
-                f"{i}. {feat1} × {feat2}: {strength:.4f} ({interaction_type})"
-            )
+            context_parts.append(f"{i}. {feat1} × {feat2}: {strength:.4f} ({interaction_type})")
 
     return "\n".join(context_parts)
 
@@ -222,12 +216,12 @@ def _parse_interpretation_response(response_text: str) -> Dict[str, Any]:
     import re
 
     # Try to extract JSON from markdown code blocks
-    json_match = re.search(r'```json\n(.*?)\n```', response_text, re.DOTALL)
+    json_match = re.search(r"```json\n(.*?)\n```", response_text, re.DOTALL)
     if json_match:
         json_str = json_match.group(1)
     else:
         # Try to find JSON object directly
-        json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+        json_match = re.search(r"\{.*\}", response_text, re.DOTALL)
         if json_match:
             json_str = json_match.group(0)
         else:
@@ -243,13 +237,12 @@ def _parse_interpretation_response(response_text: str) -> Dict[str, Any]:
             "feature_explanations": {},
             "key_insights": [],
             "recommendations": [],
-            "cautions": ["Failed to parse LLM response"]
+            "cautions": ["Failed to parse LLM response"],
         }
 
 
 def _interpret_interactions(
-    top_interactions_raw: List,
-    feature_explanations: Dict[str, str]
+    top_interactions_raw: List, feature_explanations: Dict[str, str]
 ) -> List[Dict[str, Any]]:
     """Generate interpretations for feature interactions.
 
@@ -268,7 +261,7 @@ def _interpret_interactions(
         interpretation = {
             "features": [feat1, feat2],
             "interaction_strength": float(strength),
-            "interpretation": f"{feat1} and {feat2} {interaction_type} (strength: {abs(strength):.3f})"
+            "interpretation": f"{feat1} and {feat2} {interaction_type} (strength: {abs(strength):.3f})",
         }
 
         interpretations.append(interpretation)
@@ -281,7 +274,7 @@ def _build_complete_interpretation(
     feature_explanations: Dict[str, str],
     key_insights: List[str],
     recommendations: List[str],
-    cautions: List[str]
+    cautions: List[str],
 ) -> str:
     """Build complete interpretation text from components.
 

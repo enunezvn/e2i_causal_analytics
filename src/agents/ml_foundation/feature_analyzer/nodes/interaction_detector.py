@@ -5,7 +5,8 @@ This is a deterministic computation node with no LLM calls.
 """
 
 import time
-from typing import Dict, Any, List, Tuple
+from typing import Any, Dict, List, Tuple
+
 import numpy as np
 
 
@@ -54,9 +55,7 @@ async def detect_interactions(state: Dict[str, Any]) -> Dict[str, Any]:
         )
 
         # Extract top interactions (sorted by absolute strength)
-        top_interactions_raw = _extract_top_interactions(
-            interaction_matrix, top_k=10
-        )
+        top_interactions_raw = _extract_top_interactions(interaction_matrix, top_k=10)
 
         computation_time = time.time() - start_time
 
@@ -77,8 +76,7 @@ async def detect_interactions(state: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _compute_correlation_interactions(
-    shap_values: np.ndarray,
-    feature_names: List[str]
+    shap_values: np.ndarray, feature_names: List[str]
 ) -> Tuple[Dict[str, Dict[str, float]], str]:
     """Compute feature interactions using SHAP value correlations.
 
@@ -121,8 +119,7 @@ def _compute_correlation_interactions(
 
 
 def _extract_top_interactions(
-    interaction_matrix: Dict[str, Dict[str, float]],
-    top_k: int = 10
+    interaction_matrix: Dict[str, Dict[str, float]], top_k: int = 10
 ) -> List[Tuple[str, str, float]]:
     """Extract top-k feature interactions by strength.
 
@@ -148,10 +145,6 @@ def _extract_top_interactions(
                 interactions.append((feature_i, feature_j, strength))
 
     # Sort by absolute strength
-    interactions_sorted = sorted(
-        interactions,
-        key=lambda x: abs(x[2]),
-        reverse=True
-    )
+    interactions_sorted = sorted(interactions, key=lambda x: abs(x[2]), reverse=True)
 
     return interactions_sorted[:top_k]

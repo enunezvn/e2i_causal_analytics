@@ -6,7 +6,8 @@ This agent is a HYBRID agent with 3 nodes:
 3. NL Interpretation (LLM) - Generate human-readable explanations
 """
 
-from typing import TypedDict, Dict, Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, TypedDict
+
 import numpy as np
 
 

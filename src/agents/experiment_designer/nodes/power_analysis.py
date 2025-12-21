@@ -16,8 +16,8 @@ import numpy as np
 from scipy import stats
 
 from src.agents.experiment_designer.state import (
-    ExperimentDesignState,
     ErrorDetails,
+    ExperimentDesignState,
     PowerAnalysisResult,
 )
 
@@ -233,9 +233,7 @@ class PowerAnalysisNode:
         if diff < 0.001:
             diff = 0.001  # Prevent division by zero
 
-        n_per_arm = int(
-            np.ceil(2 * p_bar * (1 - p_bar) * ((z_alpha + z_beta) / diff) ** 2)
-        )
+        n_per_arm = int(np.ceil(2 * p_bar * (1 - p_bar) * ((z_alpha + z_beta) / diff) ** 2))
 
         return {
             "sample_size": n_per_arm * 2,

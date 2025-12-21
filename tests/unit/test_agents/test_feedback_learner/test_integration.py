@@ -2,12 +2,11 @@
 Integration tests for Feedback Learner agent.
 """
 
+
 import pytest
-from unittest.mock import AsyncMock
 
 from src.agents.feedback_learner import (
     FeedbackLearnerAgent,
-    FeedbackLearnerInput,
     FeedbackLearnerOutput,
     build_feedback_learner_graph,
     build_simple_feedback_learner_graph,
@@ -102,17 +101,19 @@ class TestFeedbackLearnerAgent:
         """Test agent with LLM enabled."""
         agent = FeedbackLearnerAgent(use_llm=True, llm=mock_llm)
 
-        result = await agent.process_feedback([
-            {
-                "feedback_id": "F1",
-                "source_agent": "test",
-                "query": "test query",
-                "agent_response": "test response",
-                "user_feedback": 3,
-                "feedback_type": "rating",
-                "timestamp": "2024-01-01T00:00:00Z",
-            }
-        ])
+        result = await agent.process_feedback(
+            [
+                {
+                    "feedback_id": "F1",
+                    "source_agent": "test",
+                    "query": "test query",
+                    "agent_response": "test response",
+                    "user_feedback": 3,
+                    "feedback_type": "rating",
+                    "timestamp": "2024-01-01T00:00:00Z",
+                }
+            ]
+        )
 
         assert isinstance(result, FeedbackLearnerOutput)
 
@@ -121,17 +122,19 @@ class TestFeedbackLearnerAgent:
         """Test agent with knowledge stores."""
         agent = FeedbackLearnerAgent(knowledge_stores=mock_knowledge_stores)
 
-        result = await agent.process_feedback([
-            {
-                "feedback_id": "F1",
-                "source_agent": "test",
-                "query": "test query",
-                "agent_response": "test response",
-                "user_feedback": 1,
-                "feedback_type": "rating",
-                "timestamp": "2024-01-01T00:00:00Z",
-            }
-        ])
+        result = await agent.process_feedback(
+            [
+                {
+                    "feedback_id": "F1",
+                    "source_agent": "test",
+                    "query": "test query",
+                    "agent_response": "test response",
+                    "user_feedback": 1,
+                    "feedback_type": "rating",
+                    "timestamp": "2024-01-01T00:00:00Z",
+                }
+            ]
+        )
 
         assert isinstance(result, FeedbackLearnerOutput)
 

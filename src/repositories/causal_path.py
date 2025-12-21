@@ -5,6 +5,7 @@ Handles discovered causal relationships.
 """
 
 from typing import List, Optional
+
 from src.repositories.base import BaseRepository
 
 

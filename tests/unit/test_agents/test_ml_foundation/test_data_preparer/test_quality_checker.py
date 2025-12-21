@@ -1,8 +1,10 @@
 """Unit tests for quality_checker node."""
 
-import pytest
-import pandas as pd
 from datetime import datetime
+
+import pandas as pd
+import pytest
+
 from src.agents.ml_foundation.data_preparer.nodes.quality_checker import (
     run_quality_checks,
 )
@@ -12,11 +14,13 @@ from src.agents.ml_foundation.data_preparer.nodes.quality_checker import (
 def mock_state():
     """Create a mock state for testing."""
     # Create sample DataFrame
-    train_df = pd.DataFrame({
-        "feature1": [1, 2, 3, 4, 5],
-        "feature2": ["a", "b", "c", "d", "e"],
-        "target": [0, 1, 0, 1, 0],
-    })
+    train_df = pd.DataFrame(
+        {
+            "feature1": [1, 2, 3, 4, 5],
+            "feature2": ["a", "b", "c", "d", "e"],
+            "target": [0, 1, 0, 1, 0],
+        }
+    )
 
     return {
         "experiment_id": "exp_test_123",

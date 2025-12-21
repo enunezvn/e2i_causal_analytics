@@ -3,7 +3,7 @@
 This module defines the TypedDict state used by the scope_definer LangGraph.
 """
 
-from typing import TypedDict, Optional, List, Dict, Any, Literal
+from typing import Any, Dict, List, Literal, Optional, TypedDict
 
 
 class ScopeDefinerState(TypedDict, total=False):
@@ -20,13 +20,15 @@ class ScopeDefinerState(TypedDict, total=False):
     target_outcome: str  # Target outcome (e.g., "Increase prescriptions")
 
     # Problem type hint (optional)
-    problem_type_hint: Optional[Literal[
-        "binary_classification",
-        "multiclass_classification",
-        "regression",
-        "causal_inference",
-        "time_series"
-    ]]
+    problem_type_hint: Optional[
+        Literal[
+            "binary_classification",
+            "multiclass_classification",
+            "regression",
+            "causal_inference",
+            "time_series",
+        ]
+    ]
 
     # Target variable (optional)
     target_variable: Optional[str]  # Target variable name if known

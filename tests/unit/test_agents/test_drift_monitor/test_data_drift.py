@@ -3,8 +3,9 @@
 Tests PSI calculation, KS test, severity determination, and edge cases.
 """
 
-import pytest
 import numpy as np
+import pytest
+
 from src.agents.drift_monitor.nodes.data_drift import DataDriftNode
 from src.agents.drift_monitor.state import DriftMonitorState
 
@@ -76,9 +77,7 @@ class TestDataDriftNode:
     async def test_features_checked_count(self):
         """Test features_checked count."""
         node = DataDriftNode()
-        state = self._create_test_state(
-            features_to_monitor=["f1", "f2", "f3"]
-        )
+        state = self._create_test_state(features_to_monitor=["f1", "f2", "f3"])
 
         result = await node.execute(state)
 

@@ -1,8 +1,10 @@
 """Integration tests for feature_analyzer agent."""
 
-import pytest
+from unittest.mock import Mock, patch
+
 import numpy as np
-from unittest.mock import Mock, patch, MagicMock
+import pytest
+
 from src.agents.ml_foundation.feature_analyzer.agent import FeatureAnalyzerAgent
 
 
@@ -42,14 +44,19 @@ class TestFeatureAnalyzerAgent:
     @patch("src.agents.ml_foundation.feature_analyzer.nodes.shap_computer.shap")
     @patch("src.agents.ml_foundation.feature_analyzer.nodes.importance_narrator.Anthropic")
     async def test_complete_analysis_workflow(
-        self, mock_anthropic_class, mock_shap, mock_mlflow, agent, valid_input_data, mock_random_forest_model
+        self,
+        mock_anthropic_class,
+        mock_shap,
+        mock_mlflow,
+        agent,
+        valid_input_data,
+        mock_random_forest_model,
     ):
         """Should complete full analysis workflow successfully."""
         # Mock MLflow
         mock_mlflow.sklearn.load_model.return_value = mock_random_forest_model
         mock_mlflow.get_run.return_value = Mock(
-            info=Mock(run_id="abc123"),
-            data=Mock(params={"model_version": "v1"})
+            info=Mock(run_id="abc123"), data=Mock(params={"model_version": "v1"})
         )
 
         # Mock SHAP
@@ -61,7 +68,9 @@ class TestFeatureAnalyzerAgent:
         # Mock Anthropic
         mock_response = Mock()
         mock_response.content = [
-            Mock(text='{"executive_summary": "Test summary", "feature_explanations": {"feat_1": "Explanation"}, "key_insights": ["Insight"], "recommendations": ["Recommendation"], "cautions": ["Caution"]}')
+            Mock(
+                text='{"executive_summary": "Test summary", "feature_explanations": {"feat_1": "Explanation"}, "key_insights": ["Insight"], "recommendations": ["Recommendation"], "cautions": ["Caution"]}'
+            )
         ]
         mock_response.usage = Mock(input_tokens=400, output_tokens=200)
 
@@ -99,14 +108,19 @@ class TestFeatureAnalyzerAgent:
     @patch("src.agents.ml_foundation.feature_analyzer.nodes.shap_computer.shap")
     @patch("src.agents.ml_foundation.feature_analyzer.nodes.importance_narrator.Anthropic")
     async def test_returns_shap_analysis(
-        self, mock_anthropic_class, mock_shap, mock_mlflow, agent, valid_input_data, mock_random_forest_model
+        self,
+        mock_anthropic_class,
+        mock_shap,
+        mock_mlflow,
+        agent,
+        valid_input_data,
+        mock_random_forest_model,
     ):
         """Should return SHAP analysis structure."""
         # Mock setup
         mock_mlflow.sklearn.load_model.return_value = mock_random_forest_model
         mock_mlflow.get_run.return_value = Mock(
-            info=Mock(run_id="abc123"),
-            data=Mock(params={"model_version": "v1"})
+            info=Mock(run_id="abc123"), data=Mock(params={"model_version": "v1"})
         )
 
         mock_explainer = Mock()
@@ -116,7 +130,9 @@ class TestFeatureAnalyzerAgent:
 
         mock_response = Mock()
         mock_response.content = [
-            Mock(text='{"executive_summary": "Summary", "feature_explanations": {}, "key_insights": [], "recommendations": [], "cautions": []}')
+            Mock(
+                text='{"executive_summary": "Summary", "feature_explanations": {}, "key_insights": [], "recommendations": [], "cautions": []}'
+            )
         ]
         mock_response.usage = Mock(input_tokens=300, output_tokens=150)
 
@@ -141,15 +157,18 @@ class TestFeatureAnalyzerAgent:
     @patch("src.agents.ml_foundation.feature_analyzer.nodes.shap_computer.shap")
     @patch("src.agents.ml_foundation.feature_analyzer.nodes.importance_narrator.Anthropic")
     async def test_returns_feature_importance_list(
-        self, mock_anthropic_class, mock_shap, mock_mlflow, agent, valid_input_data, mock_random_forest_model
+        self,
+        mock_anthropic_class,
+        mock_shap,
+        mock_mlflow,
+        agent,
+        valid_input_data,
+        mock_random_forest_model,
     ):
         """Should return feature importance as structured list."""
         # Mock setup
         mock_mlflow.sklearn.load_model.return_value = mock_random_forest_model
-        mock_mlflow.get_run.return_value = Mock(
-            info=Mock(run_id="abc123"),
-            data=Mock(params={})
-        )
+        mock_mlflow.get_run.return_value = Mock(info=Mock(run_id="abc123"), data=Mock(params={}))
 
         mock_explainer = Mock()
         mock_explainer.shap_values.return_value = np.random.rand(100, 5)
@@ -158,7 +177,9 @@ class TestFeatureAnalyzerAgent:
 
         mock_response = Mock()
         mock_response.content = [
-            Mock(text='{"executive_summary": "Summary", "feature_explanations": {}, "key_insights": [], "recommendations": [], "cautions": []}')
+            Mock(
+                text='{"executive_summary": "Summary", "feature_explanations": {}, "key_insights": [], "recommendations": [], "cautions": []}'
+            )
         ]
         mock_response.usage = Mock(input_tokens=300, output_tokens=150)
 
@@ -187,15 +208,18 @@ class TestFeatureAnalyzerAgent:
     @patch("src.agents.ml_foundation.feature_analyzer.nodes.shap_computer.shap")
     @patch("src.agents.ml_foundation.feature_analyzer.nodes.importance_narrator.Anthropic")
     async def test_returns_interpretation(
-        self, mock_anthropic_class, mock_shap, mock_mlflow, agent, valid_input_data, mock_random_forest_model
+        self,
+        mock_anthropic_class,
+        mock_shap,
+        mock_mlflow,
+        agent,
+        valid_input_data,
+        mock_random_forest_model,
     ):
         """Should return natural language interpretation."""
         # Mock setup
         mock_mlflow.sklearn.load_model.return_value = mock_random_forest_model
-        mock_mlflow.get_run.return_value = Mock(
-            info=Mock(run_id="abc123"),
-            data=Mock(params={})
-        )
+        mock_mlflow.get_run.return_value = Mock(info=Mock(run_id="abc123"), data=Mock(params={}))
 
         mock_explainer = Mock()
         mock_explainer.shap_values.return_value = np.random.rand(100, 5)
@@ -204,7 +228,9 @@ class TestFeatureAnalyzerAgent:
 
         mock_response = Mock()
         mock_response.content = [
-            Mock(text='{"executive_summary": "Model prioritizes engagement", "feature_explanations": {}, "key_insights": ["Engagement dominates"], "recommendations": ["Target high engagement"], "cautions": ["Watch confounders"]}')
+            Mock(
+                text='{"executive_summary": "Model prioritizes engagement", "feature_explanations": {}, "key_insights": ["Engagement dominates"], "recommendations": ["Target high engagement"], "cautions": ["Watch confounders"]}'
+            )
         ]
         mock_response.usage = Mock(input_tokens=400, output_tokens=250)
 
@@ -238,7 +264,13 @@ class TestFeatureAnalyzerAgent:
     @patch("src.agents.ml_foundation.feature_analyzer.nodes.shap_computer.shap")
     @patch("src.agents.ml_foundation.feature_analyzer.nodes.importance_narrator.Anthropic")
     async def test_respects_max_samples(
-        self, mock_anthropic_class, mock_shap, mock_mlflow, agent, valid_input_data, mock_random_forest_model
+        self,
+        mock_anthropic_class,
+        mock_shap,
+        mock_mlflow,
+        agent,
+        valid_input_data,
+        mock_random_forest_model,
     ):
         """Should respect max_samples configuration."""
         # Set max_samples to 50
@@ -246,10 +278,7 @@ class TestFeatureAnalyzerAgent:
 
         # Mock setup
         mock_mlflow.sklearn.load_model.return_value = mock_random_forest_model
-        mock_mlflow.get_run.return_value = Mock(
-            info=Mock(run_id="abc123"),
-            data=Mock(params={})
-        )
+        mock_mlflow.get_run.return_value = Mock(info=Mock(run_id="abc123"), data=Mock(params={}))
 
         mock_explainer = Mock()
         mock_explainer.shap_values.return_value = np.random.rand(50, 5)
@@ -258,7 +287,9 @@ class TestFeatureAnalyzerAgent:
 
         mock_response = Mock()
         mock_response.content = [
-            Mock(text='{"executive_summary": "Summary", "feature_explanations": {}, "key_insights": [], "recommendations": [], "cautions": []}')
+            Mock(
+                text='{"executive_summary": "Summary", "feature_explanations": {}, "key_insights": [], "recommendations": [], "cautions": []}'
+            )
         ]
         mock_response.usage = Mock(input_tokens=300, output_tokens=150)
 
@@ -276,7 +307,13 @@ class TestFeatureAnalyzerAgent:
     @patch("src.agents.ml_foundation.feature_analyzer.nodes.shap_computer.shap")
     @patch("src.agents.ml_foundation.feature_analyzer.nodes.importance_narrator.Anthropic")
     async def test_skips_interactions_when_disabled(
-        self, mock_anthropic_class, mock_shap, mock_mlflow, agent, valid_input_data, mock_random_forest_model
+        self,
+        mock_anthropic_class,
+        mock_shap,
+        mock_mlflow,
+        agent,
+        valid_input_data,
+        mock_random_forest_model,
     ):
         """Should skip interaction detection when compute_interactions is False."""
         # Disable interactions
@@ -284,10 +321,7 @@ class TestFeatureAnalyzerAgent:
 
         # Mock setup
         mock_mlflow.sklearn.load_model.return_value = mock_random_forest_model
-        mock_mlflow.get_run.return_value = Mock(
-            info=Mock(run_id="abc123"),
-            data=Mock(params={})
-        )
+        mock_mlflow.get_run.return_value = Mock(info=Mock(run_id="abc123"), data=Mock(params={}))
 
         mock_explainer = Mock()
         mock_explainer.shap_values.return_value = np.random.rand(100, 5)
@@ -296,7 +330,9 @@ class TestFeatureAnalyzerAgent:
 
         mock_response = Mock()
         mock_response.content = [
-            Mock(text='{"executive_summary": "Summary", "feature_explanations": {}, "key_insights": [], "recommendations": [], "cautions": []}')
+            Mock(
+                text='{"executive_summary": "Summary", "feature_explanations": {}, "key_insights": [], "recommendations": [], "cautions": []}'
+            )
         ]
         mock_response.usage = Mock(input_tokens=300, output_tokens=150)
 

@@ -4,7 +4,8 @@ Prediction Repository.
 Handles ML predictions with rank metrics and model performance tracking.
 """
 
-from typing import List, Optional, Dict, Any
+from typing import Any, Dict, List, Optional
+
 from src.repositories.base import SplitAwareRepository
 
 
@@ -71,22 +72,13 @@ class PredictionRepository(SplitAwareRepository):
         if not self.client:
             return []
 
-        query = (
-            self.client.table(self.table_name)
-            .select("*")
-            .eq("model_version", model_id)
-        )
+        query = self.client.table(self.table_name).select("*").eq("model_version", model_id)
 
         if split:
             query = query.eq("data_split", split)
 
         # Order by prediction_value descending to get top predictions
-        result = await (
-            query
-            .order("prediction_value", desc=True)
-            .limit(top_k)
-            .execute()
-        )
+        result = await query.order("prediction_value", desc=True).limit(top_k).execute()
 
         return [self._to_model(row) for row in result.data]
 
@@ -159,7 +151,9 @@ class PredictionRepository(SplitAwareRepository):
             "pr_auc": sum(pr_aucs) / len(pr_aucs) if pr_aucs else 0.0,
             "avg_brier_score": sum(brier_scores) / len(brier_scores) if brier_scores else 0.0,
             "recall_at_5": sum(recall_5_values) / len(recall_5_values) if recall_5_values else 0.0,
-            "recall_at_10": sum(recall_10_values) / len(recall_10_values) if recall_10_values else 0.0,
+            "recall_at_10": (
+                sum(recall_10_values) / len(recall_10_values) if recall_10_values else 0.0
+            ),
             "total_predictions": len(result.data),
         }
 
@@ -183,21 +177,12 @@ class PredictionRepository(SplitAwareRepository):
         if not self.client:
             return []
 
-        query = (
-            self.client.table(self.table_name)
-            .select("*")
-            .eq("patient_id", patient_id)
-        )
+        query = self.client.table(self.table_name).select("*").eq("patient_id", patient_id)
 
         if prediction_type:
             query = query.eq("prediction_type", prediction_type)
 
-        result = await (
-            query
-            .order("prediction_timestamp", desc=True)
-            .limit(limit)
-            .execute()
-        )
+        result = await query.order("prediction_timestamp", desc=True).limit(limit).execute()
 
         return [self._to_model(row) for row in result.data]
 
@@ -282,11 +267,7 @@ class PredictionRepository(SplitAwareRepository):
             for r in result.data
             if r.get("calibration_score") is not None
         ]
-        briers = [
-            float(r["brier_score"])
-            for r in result.data
-            if r.get("brier_score") is not None
-        ]
+        briers = [float(r["brier_score"]) for r in result.data if r.get("brier_score") is not None]
 
         return {
             "avg_calibration": sum(calibrations) / len(calibrations) if calibrations else 0.0,

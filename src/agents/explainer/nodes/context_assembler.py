@@ -19,9 +19,7 @@ logger = logging.getLogger(__name__)
 class ConversationStoreProtocol(Protocol):
     """Protocol for conversation store."""
 
-    async def get_recent(
-        self, session_id: str, limit: int
-    ) -> List[Dict[str, Any]]:
+    async def get_recent(self, session_id: str, limit: int) -> List[Dict[str, Any]]:
         """Get recent conversation history."""
         ...
 
@@ -32,9 +30,7 @@ class ContextAssemblerNode:
     Prepares input for deep reasoning.
     """
 
-    def __init__(
-        self, conversation_store: Optional[ConversationStoreProtocol] = None
-    ):
+    def __init__(self, conversation_store: Optional[ConversationStoreProtocol] = None):
         """Initialize context assembler."""
         self.conversation_store = conversation_store
 
@@ -124,9 +120,7 @@ class ContextAssemblerNode:
                 "confidence",
                 "warnings",
             }
-            data_summary = {
-                k: v for k, v in result.items() if k not in excluded_keys
-            }
+            data_summary = {k: v for k, v in result.items() if k not in excluded_keys}
 
             return AnalysisContext(
                 source_agent=result.get("agent", "unknown"),
@@ -148,9 +142,7 @@ class ContextAssemblerNode:
             "output_format": state.get("output_format", "narrative"),
         }
 
-    async def _get_conversation_history(
-        self, state: ExplainerState
-    ) -> List[Dict[str, Any]]:
+    async def _get_conversation_history(self, state: ExplainerState) -> List[Dict[str, Any]]:
         """Get relevant conversation history."""
         if self.conversation_store:
             try:

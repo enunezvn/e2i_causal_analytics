@@ -1,7 +1,8 @@
 """Tests for model training node."""
 
-import pytest
 import numpy as np
+import pytest
+
 from src.agents.ml_foundation.model_trainer.nodes.model_trainer_node import train_model
 
 

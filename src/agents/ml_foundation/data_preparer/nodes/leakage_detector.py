@@ -6,8 +6,9 @@ This node detects three types of data leakage:
 3. Train-test contamination: Overlapping samples between splits
 """
 
-from typing import Dict, Any, List
 import logging
+from typing import Any, Dict, List
+
 import numpy as np
 
 from ..state import DataPreparerState
@@ -124,9 +125,7 @@ def check_temporal_leakage(df: Any, scope_spec: Dict[str, Any]) -> List[str]:
     return issues
 
 
-def check_target_leakage(
-    df: Any, target_variable: str, features: List[str]
-) -> List[str]:
+def check_target_leakage(df: Any, target_variable: str, features: List[str]) -> List[str]:
     """Check for target leakage.
 
     Target leakage occurs when features have suspiciously high correlation

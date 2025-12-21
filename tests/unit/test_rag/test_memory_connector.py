@@ -4,21 +4,21 @@ Unit tests for RAG Memory Connector.
 Tests the bridge between RAG retriever and memory backends.
 """
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
 
 from src.rag.memory_connector import (
     MemoryConnector,
     get_memory_connector,
     reset_memory_connector,
 )
-from src.rag.models.retrieval_models import RetrievalResult
 from src.rag.types import RetrievalSource
-
 
 # ============================================================================
 # FIXTURES
 # ============================================================================
+
 
 @pytest.fixture
 def mock_supabase():
@@ -53,7 +53,9 @@ def memory_connector(mock_supabase, mock_embedding_service):
     """Create memory connector with mocks."""
     reset_memory_connector()
     with patch("src.rag.memory_connector.get_supabase_client", return_value=mock_supabase):
-        with patch("src.rag.memory_connector.get_embedding_service", return_value=mock_embedding_service):
+        with patch(
+            "src.rag.memory_connector.get_embedding_service", return_value=mock_embedding_service
+        ):
             connector = MemoryConnector()
             return connector
 
@@ -61,6 +63,7 @@ def memory_connector(mock_supabase, mock_embedding_service):
 # ============================================================================
 # VECTOR SEARCH TESTS
 # ============================================================================
+
 
 class TestVectorSearch:
     """Tests for vector similarity search."""
@@ -74,16 +77,13 @@ class TestVectorSearch:
                 "content": "Test memory content",
                 "similarity": 0.85,
                 "metadata": {"event_type": "query"},
-                "source_table": "episodic_memories"
+                "source_table": "episodic_memories",
             }
         ]
 
         with patch("src.rag.memory_connector.get_supabase_client", return_value=mock_supabase):
             connector = MemoryConnector()
-            results = await connector.vector_search(
-                query_embedding=[0.1] * 1536,
-                k=10
-            )
+            results = await connector.vector_search(query_embedding=[0.1] * 1536, k=10)
 
         assert len(results) == 1
         assert results[0].content == "Test memory content"
@@ -96,16 +96,26 @@ class TestVectorSearch:
     async def test_vector_search_filters_by_similarity(self, mock_supabase):
         """vector_search should filter results below min_similarity."""
         mock_supabase.rpc.return_value.execute.return_value.data = [
-            {"id": "mem_1", "content": "High similarity", "similarity": 0.9, "metadata": {}, "source_table": "episodic_memories"},
-            {"id": "mem_2", "content": "Low similarity", "similarity": 0.3, "metadata": {}, "source_table": "episodic_memories"},
+            {
+                "id": "mem_1",
+                "content": "High similarity",
+                "similarity": 0.9,
+                "metadata": {},
+                "source_table": "episodic_memories",
+            },
+            {
+                "id": "mem_2",
+                "content": "Low similarity",
+                "similarity": 0.3,
+                "metadata": {},
+                "source_table": "episodic_memories",
+            },
         ]
 
         with patch("src.rag.memory_connector.get_supabase_client", return_value=mock_supabase):
             connector = MemoryConnector()
             results = await connector.vector_search(
-                query_embedding=[0.1] * 1536,
-                k=10,
-                min_similarity=0.5
+                query_embedding=[0.1] * 1536, k=10, min_similarity=0.5
             )
 
         assert len(results) == 1
@@ -121,7 +131,7 @@ class TestVectorSearch:
             await connector.vector_search(
                 query_embedding=[0.1] * 1536,
                 k=10,
-                filters={"brand": "Kisqali", "region": "northeast"}
+                filters={"brand": "Kisqali", "region": "northeast"},
             )
 
         mock_supabase.rpc.assert_called_once()
@@ -131,17 +141,19 @@ class TestVectorSearch:
         assert call_args[0][1]["filters"] == {"brand": "Kisqali", "region": "northeast"}
 
     @pytest.mark.asyncio
-    async def test_vector_search_by_text_generates_embedding(self, mock_supabase, mock_embedding_service):
+    async def test_vector_search_by_text_generates_embedding(
+        self, mock_supabase, mock_embedding_service
+    ):
         """vector_search_by_text should auto-generate embedding."""
         mock_supabase.rpc.return_value.execute.return_value.data = []
 
         with patch("src.rag.memory_connector.get_supabase_client", return_value=mock_supabase):
-            with patch("src.rag.memory_connector.get_embedding_service", return_value=mock_embedding_service):
+            with patch(
+                "src.rag.memory_connector.get_embedding_service",
+                return_value=mock_embedding_service,
+            ):
                 connector = MemoryConnector()
-                await connector.vector_search_by_text(
-                    query_text="Why did TRx drop?",
-                    k=10
-                )
+                await connector.vector_search_by_text(query_text="Why did TRx drop?", k=10)
 
         mock_embedding_service.embed.assert_called_once_with("Why did TRx drop?")
 
@@ -152,10 +164,7 @@ class TestVectorSearch:
 
         with patch("src.rag.memory_connector.get_supabase_client", return_value=mock_supabase):
             connector = MemoryConnector()
-            results = await connector.vector_search(
-                query_embedding=[0.1] * 1536,
-                k=10
-            )
+            results = await connector.vector_search(query_embedding=[0.1] * 1536, k=10)
 
         assert results == []
 
@@ -163,6 +172,7 @@ class TestVectorSearch:
 # ============================================================================
 # FULLTEXT SEARCH TESTS
 # ============================================================================
+
 
 class TestFulltextSearch:
     """Tests for full-text search."""
@@ -176,16 +186,13 @@ class TestFulltextSearch:
                 "content": "HCP engagement → TRx increase",
                 "rank": 0.85,
                 "metadata": {"start_node": "HCP engagement"},
-                "source_table": "causal_paths"
+                "source_table": "causal_paths",
             }
         ]
 
         with patch("src.rag.memory_connector.get_supabase_client", return_value=mock_supabase):
             connector = MemoryConnector()
-            results = await connector.fulltext_search(
-                query_text="TRx increase",
-                k=10
-            )
+            results = await connector.fulltext_search(query_text="TRx increase", k=10)
 
         assert len(results) == 1
         assert results[0].content == "HCP engagement → TRx increase"
@@ -197,16 +204,25 @@ class TestFulltextSearch:
     async def test_fulltext_search_normalizes_scores(self, mock_supabase):
         """fulltext_search should normalize rank scores to 0-1."""
         mock_supabase.rpc.return_value.execute.return_value.data = [
-            {"id": "1", "content": "High rank", "rank": 1.0, "metadata": {}, "source_table": "causal_paths"},
-            {"id": "2", "content": "Half rank", "rank": 0.5, "metadata": {}, "source_table": "causal_paths"},
+            {
+                "id": "1",
+                "content": "High rank",
+                "rank": 1.0,
+                "metadata": {},
+                "source_table": "causal_paths",
+            },
+            {
+                "id": "2",
+                "content": "Half rank",
+                "rank": 0.5,
+                "metadata": {},
+                "source_table": "causal_paths",
+            },
         ]
 
         with patch("src.rag.memory_connector.get_supabase_client", return_value=mock_supabase):
             connector = MemoryConnector()
-            results = await connector.fulltext_search(
-                query_text="test",
-                k=10
-            )
+            results = await connector.fulltext_search(query_text="test", k=10)
 
         assert results[0].score == 1.0
         assert results[1].score == 0.5
@@ -218,10 +234,7 @@ class TestFulltextSearch:
 
         with patch("src.rag.memory_connector.get_supabase_client", return_value=mock_supabase):
             connector = MemoryConnector()
-            results = await connector.fulltext_search(
-                query_text="nonexistent query",
-                k=10
-            )
+            results = await connector.fulltext_search(query_text="nonexistent query", k=10)
 
         assert results == []
 
@@ -232,10 +245,7 @@ class TestFulltextSearch:
 
         with patch("src.rag.memory_connector.get_supabase_client", return_value=mock_supabase):
             connector = MemoryConnector()
-            results = await connector.fulltext_search(
-                query_text="test",
-                k=10
-            )
+            results = await connector.fulltext_search(query_text="test", k=10)
 
         assert results == []
 
@@ -243,6 +253,7 @@ class TestFulltextSearch:
 # ============================================================================
 # GRAPH TRAVERSAL TESTS
 # ============================================================================
+
 
 class TestGraphTraverse:
     """Tests for graph traversal."""
@@ -253,16 +264,16 @@ class TestGraphTraverse:
             {
                 "path": ["HCP engagement", "Script volume", "TRx"],
                 "confidence": 0.85,
-                "start_entity_id": "ent_1"
+                "start_entity_id": "ent_1",
             }
         ]
 
-        with patch("src.rag.memory_connector.get_semantic_memory", return_value=mock_semantic_memory):
+        with patch(
+            "src.rag.memory_connector.get_semantic_memory", return_value=mock_semantic_memory
+        ):
             connector = MemoryConnector()
             results = connector.graph_traverse(
-                entity_id="ent_1",
-                relationship="causal_path",
-                max_depth=3
+                entity_id="ent_1", relationship="causal_path", max_depth=3
             )
 
         assert len(results) == 1
@@ -276,15 +287,15 @@ class TestGraphTraverse:
             "center_node": {"id": "pat_123", "properties": {"name": "John"}},
             "connections": [
                 {"node_id": "hcp_1", "node_type": "HCP", "relationship": "TREATED_BY", "depth": 1}
-            ]
+            ],
         }
 
-        with patch("src.rag.memory_connector.get_semantic_memory", return_value=mock_semantic_memory):
+        with patch(
+            "src.rag.memory_connector.get_semantic_memory", return_value=mock_semantic_memory
+        ):
             connector = MemoryConnector()
             results = connector.graph_traverse(
-                entity_id="pat_123",
-                relationship="patient_network",
-                max_depth=2
+                entity_id="pat_123", relationship="patient_network", max_depth=2
             )
 
         assert len(results) == 2  # center + 1 connection
@@ -294,15 +305,15 @@ class TestGraphTraverse:
         """graph_traverse should traverse HCP networks."""
         mock_semantic_memory.get_hcp_influence_network.return_value = {
             "center_node": {"id": "hcp_1"},
-            "connections": []
+            "connections": [],
         }
 
-        with patch("src.rag.memory_connector.get_semantic_memory", return_value=mock_semantic_memory):
+        with patch(
+            "src.rag.memory_connector.get_semantic_memory", return_value=mock_semantic_memory
+        ):
             connector = MemoryConnector()
-            results = connector.graph_traverse(
-                entity_id="hcp_1",
-                relationship="hcp_network",
-                max_depth=2
+            connector.graph_traverse(
+                entity_id="hcp_1", relationship="hcp_network", max_depth=2
             )
 
         mock_semantic_memory.get_hcp_influence_network.assert_called_once_with("hcp_1", max_depth=2)
@@ -311,12 +322,11 @@ class TestGraphTraverse:
         """graph_traverse should return empty list on error."""
         mock_semantic_memory.traverse_causal_chain.side_effect = Exception("Graph error")
 
-        with patch("src.rag.memory_connector.get_semantic_memory", return_value=mock_semantic_memory):
+        with patch(
+            "src.rag.memory_connector.get_semantic_memory", return_value=mock_semantic_memory
+        ):
             connector = MemoryConnector()
-            results = connector.graph_traverse(
-                entity_id="ent_1",
-                relationship="causal_path"
-            )
+            results = connector.graph_traverse(entity_id="ent_1", relationship="causal_path")
 
         assert results == []
 
@@ -327,32 +337,29 @@ class TestGraphTraverseKPI:
     def test_graph_traverse_kpi_returns_paths(self, mock_semantic_memory):
         """graph_traverse_kpi should find paths for KPI."""
         mock_semantic_memory.find_causal_paths_for_kpi.return_value = [
-            {
-                "nodes": ["HCP engagement", "TRx"],
-                "confidence": 0.9,
-                "kpi_impact": 0.15
-            }
+            {"nodes": ["HCP engagement", "TRx"], "confidence": 0.9, "kpi_impact": 0.15}
         ]
 
-        with patch("src.rag.memory_connector.get_semantic_memory", return_value=mock_semantic_memory):
+        with patch(
+            "src.rag.memory_connector.get_semantic_memory", return_value=mock_semantic_memory
+        ):
             connector = MemoryConnector()
-            results = connector.graph_traverse_kpi(
-                kpi_name="TRx",
-                min_confidence=0.5
-            )
+            results = connector.graph_traverse_kpi(kpi_name="TRx", min_confidence=0.5)
 
         assert len(results) == 1
-        mock_semantic_memory.find_causal_paths_for_kpi.assert_called_once_with("TRx", min_confidence=0.5)
+        mock_semantic_memory.find_causal_paths_for_kpi.assert_called_once_with(
+            "TRx", min_confidence=0.5
+        )
 
     def test_graph_traverse_kpi_handles_error(self, mock_semantic_memory):
         """graph_traverse_kpi should return empty list on error."""
         mock_semantic_memory.find_causal_paths_for_kpi.side_effect = Exception("Graph error")
 
-        with patch("src.rag.memory_connector.get_semantic_memory", return_value=mock_semantic_memory):
+        with patch(
+            "src.rag.memory_connector.get_semantic_memory", return_value=mock_semantic_memory
+        ):
             connector = MemoryConnector()
-            results = connector.graph_traverse_kpi(
-                kpi_name="TRx"
-            )
+            results = connector.graph_traverse_kpi(kpi_name="TRx")
 
         assert results == []
 
@@ -360,6 +367,7 @@ class TestGraphTraverseKPI:
 # ============================================================================
 # SINGLETON TESTS
 # ============================================================================
+
 
 class TestSingleton:
     """Tests for singleton pattern."""
@@ -390,6 +398,7 @@ class TestSingleton:
 # RESULT CONVERSION TESTS
 # ============================================================================
 
+
 class TestResultConversion:
     """Tests for result conversion helpers."""
 
@@ -401,7 +410,7 @@ class TestResultConversion:
                 "path": ["A", "B", "C"],
                 "confidence": 0.85,
                 "start_entity_id": "ent_1",
-                "path_length": 3
+                "path_length": 3,
             }
         ]
 
@@ -417,7 +426,7 @@ class TestResultConversion:
         connector = MemoryConnector()
         network = {
             "center_node": {"id": "pat_123", "properties": {"name": "Test"}},
-            "connections": []
+            "connections": [],
         }
 
         results = connector._network_to_results(network, "patient")
@@ -433,7 +442,7 @@ class TestResultConversion:
             "connections": [
                 {"node_id": "conn_1", "depth": 1, "node_type": "HCP"},
                 {"node_id": "conn_2", "depth": 2, "node_type": "Treatment"},
-            ]
+            ],
         }
 
         results = connector._network_to_results(network, "patient")
@@ -447,12 +456,7 @@ class TestResultConversion:
         """_paths_to_results should convert path dicts to RetrievalResult."""
         connector = MemoryConnector()
         paths = [
-            {
-                "nodes": ["X", "Y", "Z"],
-                "confidence": 0.75,
-                "path_id": "path_1",
-                "kpi_impact": 0.1
-            }
+            {"nodes": ["X", "Y", "Z"], "confidence": 0.75, "path_id": "path_1", "kpi_impact": 0.1}
         ]
 
         results = connector._paths_to_results(paths)

@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-
 # ============================================================================
 # PROTOCOL MOCKS
 # ============================================================================
@@ -17,9 +16,7 @@ class MockConversationStore:
     def __init__(self, history: Optional[List[Dict[str, Any]]] = None):
         self._history = history or []
 
-    async def get_recent(
-        self, session_id: str, limit: int = 10
-    ) -> List[Dict[str, Any]]:
+    async def get_recent(self, session_id: str, limit: int = 10) -> List[Dict[str, Any]]:
         """Return mock conversation history."""
         return self._history[:limit]
 
@@ -106,9 +103,7 @@ def sample_prediction_result():
 
 
 @pytest.fixture
-def sample_analysis_results(
-    sample_causal_analysis, sample_gap_analysis, sample_prediction_result
-):
+def sample_analysis_results(sample_causal_analysis, sample_gap_analysis, sample_prediction_result):
     """Combined analysis results from multiple agents."""
     return [sample_causal_analysis, sample_gap_analysis, sample_prediction_result]
 
@@ -259,9 +254,7 @@ def mock_llm():
     """Mock LLM for testing LLM-enabled mode."""
     llm = MagicMock()
     llm.ainvoke = AsyncMock(
-        return_value=MagicMock(
-            content='{"insights": [], "narrative": "Test narrative"}'
-        )
+        return_value=MagicMock(content='{"insights": [], "narrative": "Test narrative"}')
     )
     return llm
 

@@ -3,6 +3,7 @@ E2I Resource Optimizer Agent - Scenario Analyzer Node Tests
 """
 
 import pytest
+
 from src.agents.resource_optimizer.nodes.scenario_analyzer import (
     ScenarioAnalyzerNode,
 )
@@ -108,9 +109,7 @@ class TestScenarioAnalyzerNode:
         assert result["status"] == "failed"
 
     @pytest.mark.asyncio
-    async def test_analyze_scenario_count(
-        self, optimized_state, sample_targets, budget_constraint
-    ):
+    async def test_analyze_scenario_count(self, optimized_state, sample_targets, budget_constraint):
         """Test scenario count limiting."""
         optimized_state["run_scenarios"] = True
         optimized_state["scenario_count"] = 2
@@ -134,7 +133,5 @@ class TestScenarioAnalyzerNode:
 
         for scenario in result["scenarios"]:
             if scenario["total_allocation"] > 0:
-                expected_roi = (
-                    scenario["projected_outcome"] / scenario["total_allocation"]
-                )
+                expected_roi = scenario["projected_outcome"] / scenario["total_allocation"]
                 assert scenario["roi"] == pytest.approx(expected_roi, rel=0.01)

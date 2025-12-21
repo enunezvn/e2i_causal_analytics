@@ -21,12 +21,12 @@ Integration:
 """
 
 import uuid
-from typing import Dict, Any, List, Optional
-from datetime import datetime, timezone
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+
 from .graph import create_observability_connector_graph
 from .state import ObservabilityConnectorState
-from .nodes import create_context, extract_context, inject_context
 
 
 class ObservabilityConnectorAgent:
@@ -158,9 +158,7 @@ class ObservabilityConnectorAgent:
         finally:
             span.end_time = datetime.now(timezone.utc)
             # Ensure at least 1ms duration (operations complete in <1ms can show as 0)
-            span.duration_ms = max(
-                1, int((span.end_time - span.start_time).total_seconds() * 1000)
-            )
+            span.duration_ms = max(1, int((span.end_time - span.start_time).total_seconds() * 1000))
 
             # Emit span asynchronously (non-blocking)
             if context.get("sampled", True):
@@ -264,9 +262,7 @@ class ObservabilityConnectorAgent:
 
         # Extract metrics
         return {
-            "quality_metrics_computed": final_state.get(
-                "quality_metrics_computed", True
-            ),
+            "quality_metrics_computed": final_state.get("quality_metrics_computed", True),
             "latency_by_agent": final_state.get("latency_by_agent", {}),
             "latency_by_tier": final_state.get("latency_by_tier", {}),
             "error_rate_by_agent": final_state.get("error_rate_by_agent", {}),
@@ -277,9 +273,7 @@ class ObservabilityConnectorAgent:
             "overall_p99_latency_ms": final_state.get("overall_p99_latency_ms", 0.0),
             "total_spans_analyzed": final_state.get("total_spans_analyzed", 0),
             "quality_score": final_state.get("quality_score", 1.0),
-            "fallback_invocation_rate": final_state.get(
-                "fallback_invocation_rate", 0.0
-            ),
+            "fallback_invocation_rate": final_state.get("fallback_invocation_rate", 0.0),
             "status_distribution": final_state.get(
                 "status_distribution", {"ok": 0, "error": 0, "timeout": 0}
             ),
@@ -335,9 +329,7 @@ class ObservabilityConnectorAgent:
             "opik_project": final_state.get("opik_project", "e2i-causal-analytics"),
             "opik_workspace": final_state.get("opik_workspace", "default"),
             # Quality metrics
-            "quality_metrics_computed": final_state.get(
-                "quality_metrics_computed", True
-            ),
+            "quality_metrics_computed": final_state.get("quality_metrics_computed", True),
             "quality_score": final_state.get("quality_score", 1.0),
             "overall_success_rate": final_state.get("overall_success_rate", 1.0),
             "overall_p95_latency_ms": final_state.get("overall_p95_latency_ms", 0.0),

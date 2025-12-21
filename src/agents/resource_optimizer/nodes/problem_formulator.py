@@ -21,9 +21,7 @@ class ProblemFormulatorNode:
     Converts targets and constraints into optimization matrices.
     """
 
-    async def execute(
-        self, state: ResourceOptimizerState
-    ) -> ResourceOptimizerState:
+    async def execute(self, state: ResourceOptimizerState) -> ResourceOptimizerState:
         """Formulate the optimization problem."""
         start_time = time.time()
 
@@ -41,9 +39,7 @@ class ProblemFormulatorNode:
             if validation_errors:
                 return {
                     **state,
-                    "errors": [
-                        {"node": "formulator", "error": e} for e in validation_errors
-                    ],
+                    "errors": [{"node": "formulator", "error": e} for e in validation_errors],
                     "status": "failed",
                 }
 
@@ -88,18 +84,14 @@ class ProblemFormulatorNode:
             errors.append("No allocation targets provided")
 
         # Check for budget constraint
-        budget_constraints = [
-            c for c in constraints if c.get("constraint_type") == "budget"
-        ]
+        budget_constraints = [c for c in constraints if c.get("constraint_type") == "budget"]
         if not budget_constraints:
             errors.append("No budget constraint specified")
 
         # Check for negative values
         for target in targets:
             if target.get("expected_response", 0) < 0:
-                errors.append(
-                    f"Negative response coefficient for {target.get('entity_id')}"
-                )
+                errors.append(f"Negative response coefficient for {target.get('entity_id')}")
 
         # Check for valid entity IDs
         for target in targets:
@@ -168,9 +160,7 @@ class ProblemFormulatorNode:
             "objective": objective,
         }
 
-    def _select_solver(
-        self, problem: Dict[str, Any], requested: Optional[str]
-    ) -> str:
+    def _select_solver(self, problem: Dict[str, Any], requested: Optional[str]) -> str:
         """Select appropriate solver for the problem."""
         # Check for integer variables (would need to be specified in targets)
         has_integer = False  # Future: check targets for discrete requirements

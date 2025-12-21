@@ -4,7 +4,8 @@ Tests alert generation, drift score calculation, and summary generation.
 """
 
 import pytest
-from src.agents.drift_monitor.nodes.alert_aggregator import AlertAggregatorNode, SEVERITY_WEIGHTS
+
+from src.agents.drift_monitor.nodes.alert_aggregator import AlertAggregatorNode
 from src.agents.drift_monitor.state import DriftMonitorState, DriftResult
 
 
@@ -23,7 +24,7 @@ class TestAlertAggregatorNode:
             "drift_detected": drift_detected,
             "severity": severity,  # type: ignore
             "baseline_period": "baseline",
-            "current_period": "current"
+            "current_period": "current",
         }
 
     def _create_test_state(self, **overrides) -> DriftMonitorState:
@@ -52,9 +53,7 @@ class TestAlertAggregatorNode:
         """Test basic execution."""
         node = AlertAggregatorNode()
         state = self._create_test_state(
-            data_drift_results=[
-                self._create_drift_result("f1", "data", "high")
-            ]
+            data_drift_results=[self._create_drift_result("f1", "data", "high")]
         )
 
         result = await node.execute(state)
@@ -105,9 +104,7 @@ class TestDriftScoreCalculation:
     def test_calculate_drift_score_all_none(self):
         """Test drift score with all none severity."""
         node = AlertAggregatorNode()
-        results = [
-            {"severity": "none"} for _ in range(5)
-        ]
+        results = [{"severity": "none"} for _ in range(5)]
 
         drift_score = node._calculate_drift_score(results)  # type: ignore
 
@@ -116,9 +113,7 @@ class TestDriftScoreCalculation:
     def test_calculate_drift_score_all_low(self):
         """Test drift score with all low severity."""
         node = AlertAggregatorNode()
-        results = [
-            {"severity": "low"} for _ in range(5)
-        ]
+        results = [{"severity": "low"} for _ in range(5)]
 
         drift_score = node._calculate_drift_score(results)  # type: ignore
 
@@ -128,9 +123,7 @@ class TestDriftScoreCalculation:
     def test_calculate_drift_score_all_critical(self):
         """Test drift score with all critical severity."""
         node = AlertAggregatorNode()
-        results = [
-            {"severity": "critical"} for _ in range(5)
-        ]
+        results = [{"severity": "critical"} for _ in range(5)]
 
         drift_score = node._calculate_drift_score(results)  # type: ignore
 
@@ -142,10 +135,10 @@ class TestDriftScoreCalculation:
         node = AlertAggregatorNode()
         results = [
             {"severity": "critical"},  # 1.0
-            {"severity": "high"},      # 0.75
-            {"severity": "medium"},    # 0.5
-            {"severity": "low"},       # 0.25
-            {"severity": "none"},      # 0.0
+            {"severity": "high"},  # 0.75
+            {"severity": "medium"},  # 0.5
+            {"severity": "low"},  # 0.25
+            {"severity": "none"},  # 0.0
         ]
 
         drift_score = node._calculate_drift_score(results)  # type: ignore
@@ -157,9 +150,7 @@ class TestDriftScoreCalculation:
 class TestFeatureIdentification:
     """Test feature identification."""
 
-    def _create_drift_result(
-        self, feature: str, drift_detected: bool
-    ) -> DriftResult:
+    def _create_drift_result(self, feature: str, drift_detected: bool) -> DriftResult:
         """Create test drift result."""
         return {
             "feature": feature,
@@ -169,7 +160,7 @@ class TestFeatureIdentification:
             "drift_detected": drift_detected,
             "severity": "high",
             "baseline_period": "baseline",
-            "current_period": "current"
+            "current_period": "current",
         }
 
     def test_identify_drifted_features_none(self):
@@ -231,9 +222,7 @@ class TestFeatureIdentification:
 class TestAlertGeneration:
     """Test alert generation."""
 
-    def _create_drift_result(
-        self, feature: str, drift_type: str, severity: str
-    ) -> DriftResult:
+    def _create_drift_result(self, feature: str, drift_type: str, severity: str) -> DriftResult:
         """Create test drift result."""
         return {
             "feature": feature,
@@ -243,15 +232,13 @@ class TestAlertGeneration:
             "drift_detected": True,
             "severity": severity,  # type: ignore
             "baseline_period": "baseline",
-            "current_period": "current"
+            "current_period": "current",
         }
 
     def test_generate_alerts_critical_data_drift(self):
         """Test critical alert for data drift."""
         node = AlertAggregatorNode()
-        results = [
-            self._create_drift_result("f1", "data", "critical")
-        ]
+        results = [self._create_drift_result("f1", "data", "critical")]
 
         alerts = node._generate_alerts(results)
 
@@ -264,9 +251,7 @@ class TestAlertGeneration:
     def test_generate_alerts_high_severity(self):
         """Test warning alert for high severity."""
         node = AlertAggregatorNode()
-        results = [
-            self._create_drift_result("f1", "data", "high")
-        ]
+        results = [self._create_drift_result("f1", "data", "high")]
 
         alerts = node._generate_alerts(results)
 
@@ -278,9 +263,7 @@ class TestAlertGeneration:
     def test_generate_alerts_medium_severity(self):
         """Test no alert for medium severity."""
         node = AlertAggregatorNode()
-        results = [
-            self._create_drift_result("f1", "data", "medium")
-        ]
+        results = [self._create_drift_result("f1", "data", "medium")]
 
         alerts = node._generate_alerts(results)
 
@@ -333,15 +316,13 @@ class TestDriftSummary:
             "drift_detected": drift_detected,
             "severity": severity,  # type: ignore
             "baseline_period": "baseline",
-            "current_period": "current"
+            "current_period": "current",
         }
 
     def test_create_drift_summary_critical(self):
         """Test summary for critical drift."""
         node = AlertAggregatorNode()
-        results = [
-            self._create_drift_result("f1", "critical")
-        ]
+        results = [self._create_drift_result("f1", "critical")]
         drift_score = 0.9
         features_with_drift = ["f1"]
 
@@ -353,9 +334,7 @@ class TestDriftSummary:
     def test_create_drift_summary_no_drift(self):
         """Test summary for no drift."""
         node = AlertAggregatorNode()
-        results = [
-            self._create_drift_result("f1", "none", drift_detected=False)
-        ]
+        results = [self._create_drift_result("f1", "none", drift_detected=False)]
         drift_score = 0.0
         features_with_drift = []
 
@@ -396,15 +375,13 @@ class TestRecommendations:
             "drift_detected": True,
             "severity": severity,  # type: ignore
             "baseline_period": "baseline",
-            "current_period": "current"
+            "current_period": "current",
         }
 
     def test_generate_recommendations_critical_drift(self):
         """Test recommendations for critical drift."""
         node = AlertAggregatorNode()
-        results = [
-            self._create_drift_result("f1", "critical")
-        ]
+        results = [self._create_drift_result("f1", "critical")]
         drift_score = 0.9
 
         recommendations = node._generate_recommendations(results, drift_score)
@@ -426,9 +403,7 @@ class TestRecommendations:
     def test_generate_recommendations_data_drift(self):
         """Test data drift specific recommendations."""
         node = AlertAggregatorNode()
-        results = [
-            self._create_drift_result("f1", "medium", "data")
-        ]
+        results = [self._create_drift_result("f1", "medium", "data")]
         drift_score = 0.5
 
         recommendations = node._generate_recommendations(results, drift_score)
@@ -438,9 +413,7 @@ class TestRecommendations:
     def test_generate_recommendations_model_drift(self):
         """Test model drift specific recommendations."""
         node = AlertAggregatorNode()
-        results = [
-            self._create_drift_result("pred", "medium", "model")
-        ]
+        results = [self._create_drift_result("pred", "medium", "model")]
         drift_score = 0.5
 
         recommendations = node._generate_recommendations(results, drift_score)

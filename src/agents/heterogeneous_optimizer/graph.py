@@ -4,13 +4,13 @@ Defines the 4-node workflow:
     estimate_cate → analyze_segments → learn_policy → generate_profiles
 """
 
-from langgraph.graph import StateGraph, END
+from langgraph.graph import END, StateGraph
 
-from .state import HeterogeneousOptimizerState
 from .nodes.cate_estimator import CATEEstimatorNode
-from .nodes.segment_analyzer import SegmentAnalyzerNode
 from .nodes.policy_learner import PolicyLearnerNode
 from .nodes.profile_generator import ProfileGeneratorNode
+from .nodes.segment_analyzer import SegmentAnalyzerNode
+from .state import HeterogeneousOptimizerState
 
 
 async def error_handler_node(

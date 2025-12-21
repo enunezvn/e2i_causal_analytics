@@ -22,12 +22,10 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
-from src.agents.experiment_designer.state import ExperimentDesignState
 from src.agents.experiment_designer.graph import (
     create_experiment_designer_graph,
-    experiment_designer_graph,
 )
-
+from src.agents.experiment_designer.state import ExperimentDesignState
 
 # ===== INPUT/OUTPUT MODELS =====
 
@@ -159,12 +157,8 @@ class ExperimentDesignerOutput(BaseModel):
     treatments: list[TreatmentOutput] = Field(
         default_factory=list, description="Treatment definitions"
     )
-    outcomes: list[OutcomeOutput] = Field(
-        default_factory=list, description="Outcome definitions"
-    )
-    randomization_unit: str = Field(
-        "individual", description="Unit of randomization"
-    )
+    outcomes: list[OutcomeOutput] = Field(default_factory=list, description="Outcome definitions")
+    randomization_unit: str = Field("individual", description="Unit of randomization")
     randomization_method: str = Field("simple", description="Randomization method")
     stratification_variables: list[str] = Field(
         default_factory=list, description="Variables used for stratification"
@@ -177,26 +171,20 @@ class ExperimentDesignerOutput(BaseModel):
     power_analysis: Optional[PowerAnalysisOutput] = Field(
         None, description="Power analysis results"
     )
-    sample_size_justification: str = Field(
-        "", description="Justification for sample size"
-    )
+    sample_size_justification: str = Field("", description="Justification for sample size")
     duration_estimate_days: int = Field(0, description="Estimated experiment duration")
 
     # Validity audit outputs
     validity_threats: list[ValidityThreatOutput] = Field(
         default_factory=list, description="Identified validity threats"
     )
-    overall_validity_score: float = Field(
-        0.0, ge=0.0, le=1.0, description="Overall validity score"
-    )
+    overall_validity_score: float = Field(0.0, ge=0.0, le=1.0, description="Overall validity score")
     validity_confidence: str = Field("low", description="Confidence in validity assessment")
 
     # Generated templates
     causal_graph_dot: str = Field("", description="DOT format causal graph")
     analysis_code: str = Field("", description="Python analysis code template")
-    preregistration_document: str = Field(
-        "", description="Pre-registration document"
-    )
+    preregistration_document: str = Field("", description="Pre-registration document")
 
     # Execution metadata
     total_latency_ms: int = Field(0, description="Total execution latency")
@@ -311,9 +299,7 @@ class ExperimentDesignerAgent:
 
         return output
 
-    def _create_initial_state(
-        self, input_data: ExperimentDesignerInput
-    ) -> ExperimentDesignState:
+    def _create_initial_state(self, input_data: ExperimentDesignerInput) -> ExperimentDesignState:
         """Create initial state from input.
 
         Args:

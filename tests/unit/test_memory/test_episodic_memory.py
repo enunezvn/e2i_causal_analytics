@@ -4,47 +4,46 @@ Unit tests for E2I Episodic Memory (Supabase + pgvector).
 Tests the episodic memory module with mocked Supabase client.
 """
 
-import json
-import pytest
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
 from dataclasses import asdict
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from src.memory.episodic_memory import (
-    # Enums
-    E2IEntityType,
-    E2IBrand,
-    E2IRegion,
+    AgentActivityContext,
     E2IAgentName,
+    E2IBrand,
     # Data classes
     E2IEntityContext,
     E2IEntityReferences,
+    # Enums
+    E2IEntityType,
+    E2IRegion,
+    EnrichedEpisodicMemory,
     EpisodicMemoryInput,
     EpisodicSearchFilters,
-    EnrichedEpisodicMemory,
-    AgentActivityContext,
-    # Functions
-    search_episodic_memory,
-    search_episodic_by_text,
-    search_episodic_by_e2i_entity,
-    insert_episodic_memory,
-    insert_episodic_memory_with_text,
     bulk_insert_episodic_memories,
-    get_memory_entity_context,
-    get_enriched_episodic_memory,
+    count_memories_by_type,
+    delete_memory,
     get_agent_activity_with_context,
     get_causal_path_context,
-    get_recent_memories,
+    get_enriched_episodic_memory,
     get_memory_by_id,
-    delete_memory,
-    count_memories_by_type,
+    get_memory_entity_context,
+    get_recent_memories,
+    insert_episodic_memory,
+    insert_episodic_memory_with_text,
+    search_episodic_by_e2i_entity,
+    search_episodic_by_text,
+    # Functions
+    search_episodic_memory,
     sync_treatment_relationships_to_cache,
 )
-
 
 # ============================================================================
 # FIXTURES
 # ============================================================================
+
 
 @pytest.fixture
 def mock_supabase():
@@ -103,11 +102,7 @@ def sample_memory_input():
         user_satisfaction_score=4,
         agent_name="causal_impact",
         importance_score=0.75,
-        e2i_refs=E2IEntityReferences(
-            brand="Kisqali",
-            region="northeast",
-            hcp_id="hcp_123"
-        )
+        e2i_refs=E2IEntityReferences(brand="Kisqali", region="northeast", hcp_id="hcp_123"),
     )
 
 
@@ -115,10 +110,7 @@ def sample_memory_input():
 def sample_search_filters():
     """Create sample search filters."""
     return EpisodicSearchFilters(
-        event_type="query_answer",
-        agent_name="causal_impact",
-        brand="Kisqali",
-        region="northeast"
+        event_type="query_answer", agent_name="causal_impact", brand="Kisqali", region="northeast"
     )
 
 
@@ -142,13 +134,14 @@ def sample_memory_record():
         "brand": "Kisqali",
         "region": "northeast",
         "hcp_id": "hcp_123",
-        "occurred_at": "2025-12-20T10:00:00+00:00"
+        "occurred_at": "2025-12-20T10:00:00+00:00",
     }
 
 
 # ============================================================================
 # DATA CLASS TESTS
 # ============================================================================
+
 
 class TestEnums:
     """Test E2I enum values."""
@@ -199,8 +192,7 @@ class TestDataClasses:
     def test_e2i_entity_context_with_values(self):
         """E2IEntityContext should accept values."""
         context = E2IEntityContext(
-            patient={"id": "p1", "name": "Patient 1"},
-            hcp={"id": "h1", "name": "Dr. Smith"}
+            patient={"id": "p1", "name": "Patient 1"}, hcp={"id": "h1", "name": "Dr. Smith"}
         )
         assert context.patient["id"] == "p1"
         assert context.hcp["name"] == "Dr. Smith"
@@ -219,10 +211,7 @@ class TestDataClasses:
 
     def test_episodic_memory_input_default_importance(self):
         """EpisodicMemoryInput should have default importance_score."""
-        memory = EpisodicMemoryInput(
-            event_type="test",
-            description="Test memory"
-        )
+        memory = EpisodicMemoryInput(event_type="test", description="Test memory")
         assert memory.importance_score == 0.5
 
     def test_episodic_search_filters_all_optional(self):
@@ -239,7 +228,7 @@ class TestDataClasses:
             event_type="query_answer",
             description="Test",
             occurred_at="2025-12-20T10:00:00",
-            patient_context={"id": "p1"}
+            patient_context={"id": "p1"},
         )
         assert memory.memory_id == "mem_123"
         assert memory.patient_context["id"] == "p1"
@@ -252,7 +241,7 @@ class TestDataClasses:
             action_type="analyze",
             started_at="2025-12-20T10:00:00",
             status="completed",
-            duration_ms=1500
+            duration_ms=1500,
         )
         assert activity.activity_id == "act_123"
         assert activity.duration_ms == 1500
@@ -261,6 +250,7 @@ class TestDataClasses:
 # ============================================================================
 # SEARCH FUNCTION TESTS
 # ============================================================================
+
 
 class TestSearchEpisodicMemory:
     """Test episodic memory search functions."""
@@ -292,9 +282,7 @@ class TestSearchEpisodicMemory:
             mock_supabase.rpc.return_value.execute.return_value.data = []
 
             await search_episodic_memory(
-                embedding=embedding,
-                filters=sample_search_filters,
-                min_similarity=0.7
+                embedding=embedding, filters=sample_search_filters, min_similarity=0.7
             )
 
             call_args = mock_supabase.rpc.call_args
@@ -317,10 +305,11 @@ class TestSearchEpisodicMemory:
     async def test_search_episodic_by_text(self, mock_supabase, mock_embedding_service):
         """search_episodic_by_text should generate embedding and search."""
         with patch("src.memory.episodic_memory.get_supabase_client", return_value=mock_supabase):
-            with patch("src.memory.episodic_memory.get_embedding_service", return_value=mock_embedding_service):
-                mock_supabase.rpc.return_value.execute.return_value.data = [
-                    {"memory_id": "mem_1"}
-                ]
+            with patch(
+                "src.memory.episodic_memory.get_embedding_service",
+                return_value=mock_embedding_service,
+            ):
+                mock_supabase.rpc.return_value.execute.return_value.data = [{"memory_id": "mem_1"}]
 
                 results = await search_episodic_by_text("Why did TRx drop?")
 
@@ -331,13 +320,10 @@ class TestSearchEpisodicMemory:
     async def test_search_episodic_by_e2i_entity(self, mock_supabase):
         """search_episodic_by_e2i_entity should query by entity column."""
         with patch("src.memory.episodic_memory.get_supabase_client", return_value=mock_supabase):
-            mock_supabase.table.return_value.execute.return_value.data = [
-                {"memory_id": "mem_1"}
-            ]
+            mock_supabase.table.return_value.execute.return_value.data = [{"memory_id": "mem_1"}]
 
             results = await search_episodic_by_e2i_entity(
-                entity_type=E2IEntityType.HCP,
-                entity_id="hcp_123"
+                entity_type=E2IEntityType.HCP, entity_id="hcp_123"
             )
 
             mock_supabase.table.assert_called_with("episodic_memories")
@@ -353,7 +339,7 @@ class TestSearchEpisodicMemory:
             await search_episodic_by_e2i_entity(
                 entity_type=E2IEntityType.PATIENT,
                 entity_id="patient_123",
-                event_types=["query_answer", "investigation"]
+                event_types=["query_answer", "investigation"],
             )
 
             mock_supabase.table.return_value.in_.assert_called_with(
@@ -381,10 +367,16 @@ class TestSearchEpisodicMemory:
             for entity_type, expected_column in entity_column_map.items():
                 mock_supabase.reset_mock()
                 # Reset chain
-                mock_supabase.table.return_value.select.return_value = mock_supabase.table.return_value
+                mock_supabase.table.return_value.select.return_value = (
+                    mock_supabase.table.return_value
+                )
                 mock_supabase.table.return_value.eq.return_value = mock_supabase.table.return_value
-                mock_supabase.table.return_value.order.return_value = mock_supabase.table.return_value
-                mock_supabase.table.return_value.limit.return_value = mock_supabase.table.return_value
+                mock_supabase.table.return_value.order.return_value = (
+                    mock_supabase.table.return_value
+                )
+                mock_supabase.table.return_value.limit.return_value = (
+                    mock_supabase.table.return_value
+                )
                 mock_supabase.table.return_value.execute.return_value.data = []
 
                 await search_episodic_by_e2i_entity(entity_type, "id_123")
@@ -395,6 +387,7 @@ class TestSearchEpisodicMemory:
 # ============================================================================
 # INSERT FUNCTION TESTS
 # ============================================================================
+
 
 class TestInsertEpisodicMemory:
     """Test episodic memory insert functions."""
@@ -409,7 +402,7 @@ class TestInsertEpisodicMemory:
                 memory=sample_memory_input,
                 embedding=embedding,
                 session_id="sess_123",
-                cycle_id="cycle_456"
+                cycle_id="cycle_456",
             )
 
             assert memory_id is not None
@@ -430,10 +423,7 @@ class TestInsertEpisodicMemory:
     async def test_insert_episodic_memory_minimal(self, mock_supabase):
         """insert_episodic_memory should work with minimal input."""
         with patch("src.memory.episodic_memory.get_supabase_client", return_value=mock_supabase):
-            memory = EpisodicMemoryInput(
-                event_type="test",
-                description="Test memory"
-            )
+            memory = EpisodicMemoryInput(event_type="test", description="Test memory")
             embedding = [0.1] * 1536
 
             memory_id = await insert_episodic_memory(memory=memory, embedding=embedding)
@@ -445,25 +435,34 @@ class TestInsertEpisodicMemory:
             assert "session_id" not in record or record.get("session_id") is None
 
     @pytest.mark.asyncio
-    async def test_insert_episodic_memory_with_text(self, mock_supabase, mock_embedding_service, sample_memory_input):
+    async def test_insert_episodic_memory_with_text(
+        self, mock_supabase, mock_embedding_service, sample_memory_input
+    ):
         """insert_episodic_memory_with_text should auto-generate embedding."""
         with patch("src.memory.episodic_memory.get_supabase_client", return_value=mock_supabase):
-            with patch("src.memory.episodic_memory.get_embedding_service", return_value=mock_embedding_service):
-                memory_id = await insert_episodic_memory_with_text(
-                    memory=sample_memory_input
-                )
+            with patch(
+                "src.memory.episodic_memory.get_embedding_service",
+                return_value=mock_embedding_service,
+            ):
+                memory_id = await insert_episodic_memory_with_text(memory=sample_memory_input)
 
-                mock_embedding_service.embed.assert_called_once_with(sample_memory_input.description)
+                mock_embedding_service.embed.assert_called_once_with(
+                    sample_memory_input.description
+                )
                 assert memory_id is not None
 
     @pytest.mark.asyncio
-    async def test_insert_episodic_memory_with_custom_text(self, mock_supabase, mock_embedding_service, sample_memory_input):
+    async def test_insert_episodic_memory_with_custom_text(
+        self, mock_supabase, mock_embedding_service, sample_memory_input
+    ):
         """insert_episodic_memory_with_text should use custom text for embedding."""
         with patch("src.memory.episodic_memory.get_supabase_client", return_value=mock_supabase):
-            with patch("src.memory.episodic_memory.get_embedding_service", return_value=mock_embedding_service):
+            with patch(
+                "src.memory.episodic_memory.get_embedding_service",
+                return_value=mock_embedding_service,
+            ):
                 await insert_episodic_memory_with_text(
-                    memory=sample_memory_input,
-                    text_to_embed="Custom embedding text"
+                    memory=sample_memory_input, text_to_embed="Custom embedding text"
                 )
 
                 mock_embedding_service.embed.assert_called_once_with("Custom embedding text")
@@ -479,8 +478,7 @@ class TestInsertEpisodicMemory:
             ]
 
             memory_ids = await bulk_insert_episodic_memories(
-                memories=memories,
-                session_id="sess_123"
+                memories=memories, session_id="sess_123"
             )
 
             assert len(memory_ids) == 3
@@ -506,6 +504,7 @@ class TestInsertEpisodicMemory:
 # CONTEXT FUNCTION TESTS
 # ============================================================================
 
+
 class TestContextFunctions:
     """Test entity context retrieval functions."""
 
@@ -514,13 +513,25 @@ class TestContextFunctions:
         """get_memory_entity_context should return entity details."""
         with patch("src.memory.episodic_memory.get_supabase_client", return_value=mock_supabase):
             mock_supabase.rpc.return_value.execute.return_value.data = [
-                {"entity_type": "patient", "entity_id": "p1", "entity_name": "Patient 1", "entity_details": {}},
-                {"entity_type": "hcp", "entity_id": "h1", "entity_name": "Dr. Smith", "entity_details": {}},
+                {
+                    "entity_type": "patient",
+                    "entity_id": "p1",
+                    "entity_name": "Patient 1",
+                    "entity_details": {},
+                },
+                {
+                    "entity_type": "hcp",
+                    "entity_id": "h1",
+                    "entity_name": "Dr. Smith",
+                    "entity_details": {},
+                },
             ]
 
             context = await get_memory_entity_context("mem_123")
 
-            mock_supabase.rpc.assert_called_with("get_memory_entity_context", {"p_memory_id": "mem_123"})
+            mock_supabase.rpc.assert_called_with(
+                "get_memory_entity_context", {"p_memory_id": "mem_123"}
+            )
             assert context.patient["id"] == "p1"
             assert context.hcp["name"] == "Dr. Smith"
 
@@ -552,7 +563,12 @@ class TestContextFunctions:
         with patch("src.memory.episodic_memory.get_supabase_client", return_value=mock_supabase):
             mock_supabase.table.return_value.execute.return_value.data = sample_memory_record
             mock_supabase.rpc.return_value.execute.return_value.data = [
-                {"entity_type": "hcp", "entity_id": "h1", "entity_name": "Dr. Smith", "entity_details": {}}
+                {
+                    "entity_type": "hcp",
+                    "entity_id": "h1",
+                    "entity_name": "Dr. Smith",
+                    "entity_details": {},
+                }
             ]
 
             enriched = await get_enriched_episodic_memory("mem_12345678")
@@ -576,19 +592,21 @@ class TestContextFunctions:
     async def test_get_agent_activity_with_context(self, mock_supabase):
         """get_agent_activity_with_context should return activity details."""
         with patch("src.memory.episodic_memory.get_supabase_client", return_value=mock_supabase):
-            mock_supabase.rpc.return_value.execute.return_value.data = [{
-                "activity_id": "act_123",
-                "agent_name": "causal_impact",
-                "action_type": "analyze",
-                "started_at": "2025-12-20T10:00:00",
-                "completed_at": "2025-12-20T10:00:05",
-                "status": "completed",
-                "trigger": {"id": "t1"},
-                "causal_paths": [{"id": "cp1"}],
-                "predictions": None,
-                "duration_ms": 5000,
-                "tokens_used": 1500
-            }]
+            mock_supabase.rpc.return_value.execute.return_value.data = [
+                {
+                    "activity_id": "act_123",
+                    "agent_name": "causal_impact",
+                    "action_type": "analyze",
+                    "started_at": "2025-12-20T10:00:00",
+                    "completed_at": "2025-12-20T10:00:05",
+                    "status": "completed",
+                    "trigger": {"id": "t1"},
+                    "causal_paths": [{"id": "cp1"}],
+                    "predictions": None,
+                    "duration_ms": 5000,
+                    "tokens_used": 1500,
+                }
+            ]
 
             activity = await get_agent_activity_with_context("act_123")
 
@@ -619,7 +637,7 @@ class TestContextFunctions:
                 "effect_size": 0.35,
                 "confidence": 0.89,
                 "method_used": "dowhy",
-                "created_at": "2025-12-20"
+                "created_at": "2025-12-20",
             }
 
             # Second call - get related memories
@@ -650,6 +668,7 @@ class TestContextFunctions:
 # UTILITY FUNCTION TESTS
 # ============================================================================
 
+
 class TestUtilityFunctions:
     """Test episodic memory utility functions."""
 
@@ -659,7 +678,7 @@ class TestUtilityFunctions:
         with patch("src.memory.episodic_memory.get_supabase_client", return_value=mock_supabase):
             mock_supabase.table.return_value.execute.return_value.data = [
                 {"memory_id": "mem_1"},
-                {"memory_id": "mem_2"}
+                {"memory_id": "mem_2"},
             ]
 
             memories = await get_recent_memories(limit=10)
@@ -674,10 +693,7 @@ class TestUtilityFunctions:
             mock_supabase.table.return_value.execute.return_value.data = []
 
             await get_recent_memories(
-                limit=10,
-                event_types=["query_answer"],
-                agent_name="causal_impact",
-                brand="Kisqali"
+                limit=10, event_types=["query_answer"], agent_name="causal_impact", brand="Kisqali"
             )
 
             mock_supabase.table.return_value.in_.assert_called_with("event_type", ["query_answer"])
@@ -772,6 +788,7 @@ class TestUtilityFunctions:
 # EDGE CASE TESTS
 # ============================================================================
 
+
 class TestEdgeCases:
     """Test edge cases and error handling."""
 
@@ -780,10 +797,7 @@ class TestEdgeCases:
         """insert_episodic_memory should filter out None values from record."""
         with patch("src.memory.episodic_memory.get_supabase_client", return_value=mock_supabase):
             memory = EpisodicMemoryInput(
-                event_type="test",
-                description="Test",
-                event_subtype=None,
-                outcome_type=None
+                event_type="test", description="Test", event_subtype=None, outcome_type=None
             )
 
             await insert_episodic_memory(memory=memory, embedding=[0.1] * 1536)
@@ -804,8 +818,7 @@ class TestEdgeCases:
             ]
 
             results = await search_episodic_memory(
-                embedding=[0.1] * 1536,
-                include_entity_context=True
+                embedding=[0.1] * 1536, include_entity_context=True
             )
 
             # Should have called RPC twice (search + context)
@@ -824,10 +837,16 @@ class TestEdgeCases:
             for entity_type in E2IEntityType:
                 # Reset mock for each call
                 mock_supabase.reset_mock()
-                mock_supabase.table.return_value.select.return_value = mock_supabase.table.return_value
+                mock_supabase.table.return_value.select.return_value = (
+                    mock_supabase.table.return_value
+                )
                 mock_supabase.table.return_value.eq.return_value = mock_supabase.table.return_value
-                mock_supabase.table.return_value.order.return_value = mock_supabase.table.return_value
-                mock_supabase.table.return_value.limit.return_value = mock_supabase.table.return_value
+                mock_supabase.table.return_value.order.return_value = (
+                    mock_supabase.table.return_value
+                )
+                mock_supabase.table.return_value.limit.return_value = (
+                    mock_supabase.table.return_value
+                )
                 mock_supabase.table.return_value.execute.return_value.data = []
 
                 result = await search_episodic_by_e2i_entity(entity_type, "id_123")
@@ -846,13 +865,11 @@ class TestEdgeCases:
             experiment_id="e_1",
             agent_activity_id="aa_1",
             brand="Kisqali",
-            region="northeast"
+            region="northeast",
         )
 
         memory = EpisodicMemoryInput(
-            event_type="test",
-            description="Test with all refs",
-            e2i_refs=refs
+            event_type="test", description="Test with all refs", e2i_refs=refs
         )
 
         assert memory.e2i_refs.patient_journey_id == "pj_1"
@@ -865,7 +882,7 @@ class TestEdgeCases:
             event_type="query_answer",
             description="Test",
             occurred_at="2025-12-20T10:00:00",
-            patient_context={"id": "p1", "name": "Patient 1"}
+            patient_context={"id": "p1", "name": "Patient 1"},
         )
 
         memory_dict = asdict(memory)

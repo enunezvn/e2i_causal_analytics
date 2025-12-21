@@ -14,10 +14,10 @@ Uses memory backends for retrieval:
 
 import asyncio
 import logging
-from typing import List, Dict, Optional, Any
+from typing import Any, Dict, List, Optional
 
-from src.rag.models.retrieval_models import RetrievalResult
 from src.rag.memory_connector import get_memory_connector
+from src.rag.models.retrieval_models import RetrievalResult
 
 logger = logging.getLogger(__name__)
 
@@ -40,10 +40,7 @@ class DenseRetriever:
         self.embedding_dim = 1536
 
     async def search(
-        self,
-        query: str,
-        k: int = 10,
-        filters: Optional[Dict[str, Any]] = None
+        self, query: str, k: int = 10, filters: Optional[Dict[str, Any]] = None
     ) -> List[RetrievalResult]:
         """
         Search vector store for semantically similar content.
@@ -64,10 +61,7 @@ class DenseRetriever:
 
         try:
             results = await connector.vector_search_by_text(
-                query_text=query,
-                k=k,
-                filters=filters,
-                min_similarity=0.5
+                query_text=query, k=k, filters=filters, min_similarity=0.5
             )
             logger.debug(f"Dense retrieval returned {len(results)} results for: {query[:50]}...")
             return results
@@ -85,10 +79,7 @@ class BM25Retriever:
     """
 
     async def search(
-        self,
-        query: str,
-        k: int = 10,
-        filters: Optional[Dict[str, Any]] = None
+        self, query: str, k: int = 10, filters: Optional[Dict[str, Any]] = None
     ) -> List[RetrievalResult]:
         """
         Search using BM25-like sparse retrieval.
@@ -109,11 +100,7 @@ class BM25Retriever:
         connector = get_memory_connector()
 
         try:
-            results = await connector.fulltext_search(
-                query_text=query,
-                k=k,
-                filters=filters
-            )
+            results = await connector.fulltext_search(query_text=query, k=k, filters=filters)
             logger.debug(f"Sparse retrieval returned {len(results)} results for: {query[:50]}...")
             return results
 
@@ -160,9 +147,7 @@ class GraphRetriever:
         for entity_id in entities:
             try:
                 results = connector.graph_traverse(
-                    entity_id=entity_id,
-                    relationship=relationship,
-                    max_depth=max_depth
+                    entity_id=entity_id, relationship=relationship, max_depth=max_depth
                 )
                 all_results.extend(results)
 
@@ -180,11 +165,7 @@ class GraphRetriever:
         logger.debug(f"Graph retrieval returned {len(unique_results)} results")
         return unique_results
 
-    def traverse_kpi(
-        self,
-        kpi_name: str,
-        min_confidence: float = 0.5
-    ) -> List[RetrievalResult]:
+    def traverse_kpi(self, kpi_name: str, min_confidence: float = 0.5) -> List[RetrievalResult]:
         """
         Find causal paths impacting a specific KPI.
 
@@ -198,10 +179,7 @@ class GraphRetriever:
         connector = get_memory_connector()
 
         try:
-            results = connector.graph_traverse_kpi(
-                kpi_name=kpi_name,
-                min_confidence=min_confidence
-            )
+            results = connector.graph_traverse_kpi(kpi_name=kpi_name, min_confidence=min_confidence)
             logger.debug(f"KPI graph retrieval returned {len(results)} results for: {kpi_name}")
             return results
 
@@ -232,7 +210,7 @@ class HybridRetriever:
         k: int = 10,
         entities: Optional[List[str]] = None,
         kpi_name: Optional[str] = None,
-        filters: Optional[Dict[str, Any]] = None
+        filters: Optional[Dict[str, Any]] = None,
     ) -> List[RetrievalResult]:
         """
         Execute hybrid search with configurable weights.
@@ -304,7 +282,7 @@ class HybridRetriever:
         scores: Dict[str, float] = {}
         result_map: Dict[str, RetrievalResult] = {}
 
-        for results, weight in zip(result_lists, weights):
+        for results, weight in zip(result_lists, weights, strict=False):
             for rank, result in enumerate(results, start=1):
                 # Use source_id for deduplication - same document from different sources should be boosted
                 key = result.source_id
@@ -330,8 +308,8 @@ class HybridRetriever:
                     metadata={
                         **result.metadata,
                         "rrf_score": scores[key],
-                        "original_score": result.score
-                    }
+                        "original_score": result.score,
+                    },
                 )
                 fused_results.append(fused_result)
 
@@ -342,12 +320,13 @@ class HybridRetriever:
 # CONVENIENCE FUNCTIONS
 # ============================================================================
 
+
 async def hybrid_search(
     query: str,
     k: int = 10,
     entities: Optional[List[str]] = None,
     kpi_name: Optional[str] = None,
-    filters: Optional[Dict[str, Any]] = None
+    filters: Optional[Dict[str, Any]] = None,
 ) -> List[RetrievalResult]:
     """
     Execute hybrid search using default retriever.
@@ -364,9 +343,5 @@ async def hybrid_search(
     """
     retriever = HybridRetriever()
     return await retriever.search(
-        query=query,
-        k=k,
-        entities=entities,
-        kpi_name=kpi_name,
-        filters=filters
+        query=query, k=k, entities=entities, kpi_name=kpi_name, filters=filters
     )

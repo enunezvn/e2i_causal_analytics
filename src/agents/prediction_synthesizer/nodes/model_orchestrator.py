@@ -19,9 +19,7 @@ logger = logging.getLogger(__name__)
 class ModelRegistry(Protocol):
     """Protocol for model registry"""
 
-    async def get_models_for_target(
-        self, target: str, entity_type: str
-    ) -> List[str]:
+    async def get_models_for_target(self, target: str, entity_type: str) -> List[str]:
         """Get list of models for a prediction target"""
         ...
 
@@ -63,9 +61,7 @@ class ModelOrchestratorNode:
         self.clients = model_clients or {}
         self.timeout_per_model = timeout_per_model
 
-    async def execute(
-        self, state: PredictionSynthesizerState
-    ) -> PredictionSynthesizerState:
+    async def execute(self, state: PredictionSynthesizerState) -> PredictionSynthesizerState:
         """Orchestrate predictions from multiple models."""
         # Check if already failed or completed
         if state.get("status") in ["failed", "completed"]:
@@ -100,9 +96,7 @@ class ModelOrchestratorNode:
                 }
 
             # Run predictions in parallel
-            tasks = [
-                self._get_prediction(model_id, state) for model_id in models_to_use
-            ]
+            tasks = [self._get_prediction(model_id, state) for model_id in models_to_use]
 
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -112,7 +106,7 @@ class ModelOrchestratorNode:
             failed = 0
             new_warnings = []
 
-            for model_id, result in zip(models_to_use, results):
+            for model_id, result in zip(models_to_use, results, strict=False):
                 if isinstance(result, Exception):
                     failed += 1
                     new_warnings.append(f"Model {model_id} failed: {str(result)}")
@@ -198,9 +192,7 @@ class ModelOrchestratorNode:
         except asyncio.TimeoutError:
             raise TimeoutError(f"Model {model_id} timed out")
 
-    def _create_mock_prediction(
-        self, model_id: str, start_time: float
-    ) -> ModelPrediction:
+    def _create_mock_prediction(self, model_id: str, start_time: float) -> ModelPrediction:
         """Create mock prediction for testing."""
         import random
 

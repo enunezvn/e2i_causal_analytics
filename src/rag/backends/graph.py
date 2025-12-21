@@ -16,13 +16,13 @@ import time
 from typing import Any, Dict, List, Optional
 
 from src.rag.config import FalkorDBConfig, HybridSearchConfig
+from src.rag.exceptions import GraphSearchError
 from src.rag.types import (
     ExtractedEntities,
     GraphPath,
     RetrievalResult,
     RetrievalSource,
 )
-from src.rag.exceptions import GraphSearchError
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +66,7 @@ class GraphBackend:
         self,
         falkordb_client: Any,
         falkordb_config: Optional[FalkorDBConfig] = None,
-        search_config: Optional[HybridSearchConfig] = None
+        search_config: Optional[HybridSearchConfig] = None,
     ):
         """
         Initialize the graph backend.
@@ -93,7 +93,7 @@ class GraphBackend:
         entities: ExtractedEntities,
         query: Optional[str] = None,
         filters: Optional[Dict[str, Any]] = None,
-        top_k: Optional[int] = None
+        top_k: Optional[int] = None,
     ) -> List[RetrievalResult]:
         """
         Execute graph search using extracted entities.
@@ -120,11 +120,7 @@ class GraphBackend:
 
             # Execute query with timeout
             result = await asyncio.wait_for(
-                asyncio.to_thread(
-                    self._execute_query,
-                    cypher_query
-                ),
-                timeout=timeout_seconds
+                asyncio.to_thread(self._execute_query, cypher_query), timeout=timeout_seconds
             )
 
             self._last_latency_ms = (time.time() - start_time) * 1000
@@ -133,30 +129,25 @@ class GraphBackend:
             results = self._parse_query_results(result)
 
             logger.debug(
-                f"Graph search returned {len(results)} results "
-                f"in {self._last_latency_ms:.1f}ms"
+                f"Graph search returned {len(results)} results " f"in {self._last_latency_ms:.1f}ms"
             )
 
             return results
 
         except asyncio.TimeoutError:
             self._last_latency_ms = self.search_config.graph_timeout_ms
-            logger.warning(
-                f"Graph search timeout after {self.search_config.graph_timeout_ms}ms"
-            )
+            logger.warning(f"Graph search timeout after {self.search_config.graph_timeout_ms}ms")
             raise GraphSearchError(
                 message=f"Graph search timeout after {self.search_config.graph_timeout_ms}ms",
                 backend="falkordb_graph",
-                details={"timeout_ms": self.search_config.graph_timeout_ms}
+                details={"timeout_ms": self.search_config.graph_timeout_ms},
             )
 
         except Exception as e:
             self._last_latency_ms = (time.time() - start_time) * 1000
             logger.error(f"Graph search error: {e}")
             raise GraphSearchError(
-                message=f"Graph search failed: {e}",
-                backend="falkordb_graph",
-                original_error=e
+                message=f"Graph search failed: {e}", backend="falkordb_graph", original_error=e
             )
 
     def _execute_query(self, cypher_query: str) -> Any:
@@ -164,11 +155,7 @@ class GraphBackend:
         graph = self._get_graph()
         return graph.query(cypher_query)
 
-    def _build_entity_query(
-        self,
-        entities: ExtractedEntities,
-        limit: int
-    ) -> str:
+    def _build_entity_query(self, entities: ExtractedEntities, limit: int) -> str:
         """
         Build Cypher query from extracted entities.
 
@@ -245,21 +232,23 @@ class GraphBackend:
                 relevance = max(0.2, 1.0 - (path_length * 0.15))
 
                 if relevance >= self.search_config.graph_min_relevance:
-                    results.append(RetrievalResult(
-                        id=parsed["id"],
-                        content=parsed.get("description", ""),
-                        source=RetrievalSource.GRAPH,
-                        score=relevance,
-                        metadata=parsed.get("properties", {}),
-                        graph_context={
-                            "connected_nodes": parsed.get("neighbors", []),
-                            "path_length": path_length,
-                            "relationship_types": parsed.get("rel_types", []),
-                            "node_type": parsed.get("node_type", "unknown")
-                        },
-                        query_latency_ms=self._last_latency_ms,
-                        raw_score=relevance
-                    ))
+                    results.append(
+                        RetrievalResult(
+                            id=parsed["id"],
+                            content=parsed.get("description", ""),
+                            source=RetrievalSource.GRAPH,
+                            score=relevance,
+                            metadata=parsed.get("properties", {}),
+                            graph_context={
+                                "connected_nodes": parsed.get("neighbors", []),
+                                "path_length": path_length,
+                                "relationship_types": parsed.get("rel_types", []),
+                                "node_type": parsed.get("node_type", "unknown"),
+                            },
+                            query_latency_ms=self._last_latency_ms,
+                            raw_score=relevance,
+                        )
+                    )
 
         return results
 
@@ -272,22 +261,23 @@ class GraphBackend:
 
             # First item is usually the main node
             node = record[0]
-            if not hasattr(node, 'id'):
+            if not hasattr(node, "id"):
                 return None
 
-            properties = dict(node.properties) if hasattr(node, 'properties') else {}
+            properties = dict(node.properties) if hasattr(node, "properties") else {}
 
             result = {
                 "id": str(node.id),
                 "description": properties.get(
-                    "description",
-                    properties.get("name", f"Node-{node.id}")
+                    "description", properties.get("name", f"Node-{node.id}")
                 ),
                 "properties": properties,
-                "node_type": node.labels[0] if hasattr(node, 'labels') and node.labels else "unknown",
+                "node_type": (
+                    node.labels[0] if hasattr(node, "labels") and node.labels else "unknown"
+                ),
                 "neighbors": [],
                 "rel_types": [],
-                "path_length": 0
+                "path_length": 0,
             }
 
             # Extract path information if available
@@ -297,9 +287,9 @@ class GraphBackend:
                 elif isinstance(item, list):
                     # Could be nodes or relationships
                     for sub_item in item:
-                        if hasattr(sub_item, 'id'):
+                        if hasattr(sub_item, "id"):
                             result["neighbors"].append(str(sub_item.id))
-                        elif hasattr(sub_item, 'type'):
+                        elif hasattr(sub_item, "type"):
                             result["rel_types"].append(sub_item.type)
 
             return result
@@ -314,7 +304,7 @@ class GraphBackend:
         node_types: Optional[List[str]] = None,
         relationship_types: Optional[List[str]] = None,
         max_depth: int = 2,
-        limit: int = 100
+        limit: int = 100,
     ) -> Dict[str, Any]:
         """
         Get a subgraph for visualization.
@@ -358,30 +348,23 @@ class GraphBackend:
                 """
 
             result = await asyncio.wait_for(
-                asyncio.to_thread(self._execute_query, query),
-                timeout=timeout_seconds
+                asyncio.to_thread(self._execute_query, query), timeout=timeout_seconds
             )
 
             return self._parse_graph_for_visualization(result, center_node_id, max_depth)
 
         except asyncio.TimeoutError:
-            raise GraphSearchError(
-                message="Graph subgraph query timeout",
-                backend="falkordb_graph"
-            )
+            raise GraphSearchError(message="Graph subgraph query timeout", backend="falkordb_graph")
 
         except Exception as e:
             raise GraphSearchError(
                 message=f"Graph subgraph query failed: {e}",
                 backend="falkordb_graph",
-                original_error=e
+                original_error=e,
             )
 
     def _parse_graph_for_visualization(
-        self,
-        result: Any,
-        center_node_id: Optional[str],
-        max_depth: int
+        self, result: Any, center_node_id: Optional[str], max_depth: int
     ) -> Dict[str, Any]:
         """Parse graph results for visualization format."""
         nodes_map = {}
@@ -389,25 +372,33 @@ class GraphBackend:
 
         for record in result.result_set:
             for item in record:
-                if hasattr(item, 'id') and hasattr(item, 'properties'):
+                if hasattr(item, "id") and hasattr(item, "properties"):
                     # It's a node
                     node_id = str(item.id)
                     if node_id not in nodes_map:
-                        props = dict(item.properties) if hasattr(item, 'properties') else {}
+                        props = dict(item.properties) if hasattr(item, "properties") else {}
                         nodes_map[node_id] = {
                             "id": node_id,
                             "label": props.get("name", f"Node-{node_id}"),
-                            "type": item.labels[0] if hasattr(item, 'labels') and item.labels else "Unknown",
-                            "properties": props
+                            "type": (
+                                item.labels[0]
+                                if hasattr(item, "labels") and item.labels
+                                else "Unknown"
+                            ),
+                            "properties": props,
                         }
-                elif hasattr(item, 'type') and hasattr(item, 'src_node'):
+                elif hasattr(item, "type") and hasattr(item, "src_node"):
                     # It's a relationship
-                    edges.append({
-                        "source": str(item.src_node),
-                        "target": str(item.dest_node),
-                        "type": item.type,
-                        "properties": dict(item.properties) if hasattr(item, 'properties') else {}
-                    })
+                    edges.append(
+                        {
+                            "source": str(item.src_node),
+                            "target": str(item.dest_node),
+                            "type": item.type,
+                            "properties": (
+                                dict(item.properties) if hasattr(item, "properties") else {}
+                            ),
+                        }
+                    )
 
         return {
             "nodes": list(nodes_map.values()),
@@ -416,15 +407,12 @@ class GraphBackend:
                 "total_nodes": len(nodes_map),
                 "total_edges": len(edges),
                 "query_depth": max_depth,
-                "center_node": center_node_id
-            }
+                "center_node": center_node_id,
+            },
         }
 
     async def get_causal_path(
-        self,
-        source_id: str,
-        target_id: str,
-        max_length: int = 4
+        self, source_id: str, target_id: str, max_length: int = 4
     ) -> List[GraphPath]:
         """
         Find causal paths between two nodes.
@@ -451,8 +439,7 @@ class GraphBackend:
 
         try:
             result = await asyncio.wait_for(
-                asyncio.to_thread(self._execute_query, query),
-                timeout=timeout_seconds
+                asyncio.to_thread(self._execute_query, query), timeout=timeout_seconds
             )
 
             paths = []
@@ -462,28 +449,29 @@ class GraphBackend:
                 path_length = record[2] if len(record) > 2 else 0
 
                 if nodes:
-                    paths.append(GraphPath(
-                        source_node=str(nodes[0].id) if nodes else source_id,
-                        target_node=str(nodes[-1].id) if nodes else target_id,
-                        relationship_types=[r.type for r in rels if hasattr(r, 'type')],
-                        path_length=path_length,
-                        nodes=[
-                            {
-                                "id": str(n.id),
-                                "label": n.properties.get("name", str(n.id)),
-                                "type": n.labels[0] if n.labels else "Unknown"
-                            }
-                            for n in nodes if hasattr(n, 'id')
-                        ]
-                    ))
+                    paths.append(
+                        GraphPath(
+                            source_node=str(nodes[0].id) if nodes else source_id,
+                            target_node=str(nodes[-1].id) if nodes else target_id,
+                            relationship_types=[r.type for r in rels if hasattr(r, "type")],
+                            path_length=path_length,
+                            nodes=[
+                                {
+                                    "id": str(n.id),
+                                    "label": n.properties.get("name", str(n.id)),
+                                    "type": n.labels[0] if n.labels else "Unknown",
+                                }
+                                for n in nodes
+                                if hasattr(n, "id")
+                            ],
+                        )
+                    )
 
             return paths
 
         except Exception as e:
             raise GraphSearchError(
-                message=f"Causal path query failed: {e}",
-                backend="falkordb_graph",
-                original_error=e
+                message=f"Causal path query failed: {e}", backend="falkordb_graph", original_error=e
             )
 
     async def health_check(self) -> Dict[str, Any]:
@@ -497,11 +485,8 @@ class GraphBackend:
             start_time = time.time()
 
             result = await asyncio.wait_for(
-                asyncio.to_thread(
-                    self._execute_query,
-                    "MATCH (n) RETURN count(n) LIMIT 1"
-                ),
-                timeout=5.0
+                asyncio.to_thread(self._execute_query, "MATCH (n) RETURN count(n) LIMIT 1"),
+                timeout=5.0,
             )
 
             latency_ms = (time.time() - start_time) * 1000
@@ -511,22 +496,14 @@ class GraphBackend:
                 "status": "healthy",
                 "latency_ms": latency_ms,
                 "node_count": node_count,
-                "error": None
+                "error": None,
             }
 
         except asyncio.TimeoutError:
-            return {
-                "status": "unhealthy",
-                "latency_ms": 5000,
-                "error": "Health check timeout"
-            }
+            return {"status": "unhealthy", "latency_ms": 5000, "error": "Health check timeout"}
 
         except Exception as e:
-            return {
-                "status": "unhealthy",
-                "latency_ms": 0,
-                "error": str(e)
-            }
+            return {"status": "unhealthy", "latency_ms": 0, "error": str(e)}
 
     @property
     def last_latency_ms(self) -> float:

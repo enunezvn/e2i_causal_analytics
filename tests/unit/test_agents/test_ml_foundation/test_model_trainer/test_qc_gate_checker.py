@@ -1,6 +1,7 @@
 """Tests for QC gate checker node."""
 
 import pytest
+
 from src.agents.ml_foundation.model_trainer.nodes.qc_gate_checker import check_qc_gate
 
 

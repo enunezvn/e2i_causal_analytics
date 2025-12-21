@@ -1,7 +1,7 @@
 """Context Manager Node - Manage observability context (trace_id, span_id)."""
 
 import uuid
-from typing import Dict, Any, Optional
+from typing import Any, Dict
 
 
 async def create_context(state: Dict[str, Any]) -> Dict[str, Any]:

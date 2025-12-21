@@ -7,7 +7,7 @@ Handles:
 """
 
 import time
-from typing import Dict, Any
+from typing import Any, Dict
 
 
 async def check_health(state: Dict[str, Any]) -> Dict[str, Any]:

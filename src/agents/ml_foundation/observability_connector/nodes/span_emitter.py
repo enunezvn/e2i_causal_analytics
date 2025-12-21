@@ -1,8 +1,7 @@
 """Span Emitter Node - Emit spans to Opik and database."""
 
 import uuid
-from typing import Dict, Any, List
-from datetime import datetime
+from typing import Any, Dict
 
 
 async def emit_spans(state: Dict[str, Any]) -> Dict[str, Any]:

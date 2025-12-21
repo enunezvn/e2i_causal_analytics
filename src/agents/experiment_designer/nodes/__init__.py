@@ -18,9 +18,9 @@ Workflow:
 from src.agents.experiment_designer.nodes.context_loader import ContextLoaderNode
 from src.agents.experiment_designer.nodes.design_reasoning import DesignReasoningNode
 from src.agents.experiment_designer.nodes.power_analysis import PowerAnalysisNode
-from src.agents.experiment_designer.nodes.validity_audit import ValidityAuditNode
 from src.agents.experiment_designer.nodes.redesign import RedesignNode
 from src.agents.experiment_designer.nodes.template_generator import TemplateGeneratorNode
+from src.agents.experiment_designer.nodes.validity_audit import ValidityAuditNode
 
 __all__ = [
     "ContextLoaderNode",

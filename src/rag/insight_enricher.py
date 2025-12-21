@@ -12,15 +12,14 @@ import logging
 import os
 import re
 from datetime import datetime
-from functools import lru_cache
-from typing import List, Optional, Dict, Any
+from typing import Dict, List, Optional
 
 import anthropic
 from tenacity import (
     retry,
+    retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
-    retry_if_exception_type,
 )
 
 from src.rag.models.insight_models import EnrichedInsight
@@ -76,9 +75,7 @@ class InsightEnricher:
         if self._client is None:
             api_key = os.environ.get("ANTHROPIC_API_KEY")
             if not api_key:
-                raise ValueError(
-                    "ANTHROPIC_API_KEY environment variable is required"
-                )
+                raise ValueError("ANTHROPIC_API_KEY environment variable is required")
             self._client = anthropic.AsyncAnthropic(api_key=api_key)
         return self._client
 
@@ -108,7 +105,7 @@ class InsightEnricher:
                 data_freshness=None,
             )
 
-        query_text = query.text if hasattr(query, 'text') else str(query)
+        query_text = query.text if hasattr(query, "text") else str(query)
 
         # Check cache first
         cache_key = self._build_cache_key(query_text, retrieved)
@@ -119,8 +116,8 @@ class InsightEnricher:
         # Build context from retrieved results
         context_parts = []
         for i, result in enumerate(retrieved[:10], 1):
-            content = result.content if hasattr(result, 'content') else str(result)
-            source = result.source if hasattr(result, 'source') else "unknown"
+            content = result.content if hasattr(result, "content") else str(result)
+            source = result.source if hasattr(result, "source") else "unknown"
             context_parts.append(f"[{i}] Source: {source}\n{content}")
 
         context = "\n\n".join(context_parts)
@@ -151,10 +148,9 @@ class InsightEnricher:
 
     def _build_cache_key(self, query: str, retrieved: List) -> str:
         """Build cache key from query and retrieved content."""
-        content_hash = hash(tuple(
-            r.source_id if hasattr(r, 'source_id') else str(r)
-            for r in retrieved[:10]
-        ))
+        content_hash = hash(
+            tuple(r.source_id if hasattr(r, "source_id") else str(r) for r in retrieved[:10])
+        )
         return f"{hash(query)}:{content_hash}"
 
     def _cache_response(self, key: str, response: EnrichedInsight) -> None:
@@ -223,15 +219,13 @@ Respond ONLY with valid JSON, no additional text."""
             model=self.model,
             max_tokens=self.max_tokens,
             temperature=self.temperature,
-            messages=[
-                {"role": "user", "content": prompt}
-            ],
+            messages=[{"role": "user", "content": prompt}],
         )
 
         # Extract text content from response
         response_text = ""
         for block in message.content:
-            if hasattr(block, 'text'):
+            if hasattr(block, "text"):
                 response_text += block.text
 
         logger.debug(f"Generated response with {message.usage.output_tokens} tokens")
@@ -268,7 +262,7 @@ Respond ONLY with valid JSON, no additional text."""
 
         try:
             # Try to extract JSON from response
-            json_match = re.search(r'\{[\s\S]*\}', response)
+            json_match = re.search(r"\{[\s\S]*\}", response)
             if json_match:
                 parsed = json.loads(json_match.group())
             else:
@@ -309,15 +303,15 @@ Respond ONLY with valid JSON, no additional text."""
         """Extract the most recent timestamp from retrieved results."""
         latest = None
         for result in retrieved:
-            metadata = getattr(result, 'metadata', {})
+            metadata = getattr(result, "metadata", {})
             if isinstance(metadata, dict):
-                timestamp = metadata.get('timestamp') or metadata.get('created_at')
+                timestamp = metadata.get("timestamp") or metadata.get("created_at")
                 if timestamp:
                     try:
                         if isinstance(timestamp, datetime):
                             ts = timestamp
                         elif isinstance(timestamp, str):
-                            ts = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                            ts = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
                         else:
                             continue
                         if latest is None or ts > latest:

@@ -3,7 +3,7 @@
 This module generates explanations for algorithm selection decisions.
 """
 
-from typing import Dict, Any, List
+from typing import Any, Dict, List
 
 
 async def generate_rationale(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -35,7 +35,7 @@ async def generate_rationale(state: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     algo_name = primary.get("name", "Unknown")
-    algo_family = primary.get("family", "unknown")
+    primary.get("family", "unknown")
     strengths = primary.get("strengths", [])
     selection_score = primary.get("selection_score", 0.0)
 
@@ -81,7 +81,7 @@ def _generate_primary_reason(candidate: Dict[str, Any], problem_type: str) -> st
     """
     algo_name = candidate.get("name", "Unknown")
     algo_family = candidate.get("family", "unknown")
-    strengths = candidate.get("strengths", [])
+    candidate.get("strengths", [])
 
     # Causal ML algorithms
     if algo_family == "causal_ml":
@@ -109,9 +109,7 @@ def _generate_primary_reason(candidate: Dict[str, Any], problem_type: str) -> st
     return f"Strong performance on {problem_type} problems"
 
 
-def _generate_supporting_factors(
-    candidate: Dict[str, Any], strengths: List[str]
-) -> List[str]:
+def _generate_supporting_factors(candidate: Dict[str, Any], strengths: List[str]) -> List[str]:
     """Generate list of supporting factors.
 
     Args:
@@ -191,12 +189,14 @@ def _describe_alternatives(
         # Explain why not selected
         reason = _explain_why_not_selected(alt, primary, score_diff)
 
-        described.append({
-            "algorithm_name": alt_name,
-            "selection_score": alt_score,
-            "score_difference": round(score_diff, 3),
-            "reason_not_selected": reason,
-        })
+        described.append(
+            {
+                "algorithm_name": alt_name,
+                "selection_score": alt_score,
+                "score_difference": round(score_diff, 3),
+                "reason_not_selected": reason,
+            }
+        )
 
     return described
 
@@ -221,7 +221,10 @@ def _explain_why_not_selected(
     if alternative.get("memory_gb", 0) > primary.get("memory_gb", 0) * 1.5:
         return "Higher memory requirements than selected algorithm"
 
-    if alternative.get("interpretability_score", 0) < primary.get("interpretability_score", 0) - 0.2:
+    if (
+        alternative.get("interpretability_score", 0)
+        < primary.get("interpretability_score", 0) - 0.2
+    ):
         return "Lower interpretability than selected algorithm"
 
     if score_diff > 0.1:
@@ -250,9 +253,7 @@ def _check_constraint_compliance(
         # Check latency constraint
         if "latency" in constraint_lower and "<" in constraint_lower:
             try:
-                max_latency = int(
-                    constraint_lower.split("<")[1].replace("ms", "").strip()
-                )
+                max_latency = int(constraint_lower.split("<")[1].replace("ms", "").strip())
                 actual_latency = candidate.get("inference_latency_ms", 0)
                 compliance[constraint] = actual_latency <= max_latency
             except (ValueError, IndexError):
@@ -261,9 +262,7 @@ def _check_constraint_compliance(
         # Check memory constraint
         elif "memory" in constraint_lower and "<" in constraint_lower:
             try:
-                max_memory = float(
-                    constraint_lower.split("<")[1].replace("gb", "").strip()
-                )
+                max_memory = float(constraint_lower.split("<")[1].replace("gb", "").strip())
                 actual_memory = candidate.get("memory_gb", 0)
                 compliance[constraint] = actual_memory <= max_memory
             except (ValueError, IndexError):
@@ -300,18 +299,18 @@ def _build_rationale_text(
     """
     lines = [
         f"Selected {algo_name} (score: {selection_score:.3f})",
-        f"",
+        "",
         f"Primary Reason: {primary_reason}",
-        f"",
-        f"Supporting Factors:",
+        "",
+        "Supporting Factors:",
     ]
 
     for i, factor in enumerate(supporting_factors, 1):
         lines.append(f"  {i}. {factor}")
 
     if alternatives:
-        lines.append(f"")
-        lines.append(f"Alternatives Considered:")
+        lines.append("")
+        lines.append("Alternatives Considered:")
         for alt in alternatives[:3]:
             lines.append(
                 f"  - {alt['algorithm_name']} (score: {alt['selection_score']:.3f}): "

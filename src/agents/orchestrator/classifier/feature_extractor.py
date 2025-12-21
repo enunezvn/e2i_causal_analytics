@@ -14,11 +14,11 @@ import re
 from typing import Optional
 
 from .schemas import (
+    EntityFeatures,
     ExtractedFeatures,
+    IntentSignals,
     StructuralFeatures,
     TemporalFeatures,
-    EntityFeatures,
-    IntentSignals,
 )
 
 
@@ -33,25 +33,45 @@ class FeatureExtractor:
     # =========================================================================
 
     CONDITIONAL_MARKERS = {
-        "if", "would", "what if", "assuming", "suppose", "hypothetically",
-        "in case", "should we", "could we"
+        "if",
+        "would",
+        "what if",
+        "assuming",
+        "suppose",
+        "hypothetically",
+        "in case",
+        "should we",
+        "could we",
     }
 
     COMPARISON_MARKERS = {
-        "vs", "versus", "compared to", "relative to", "against",
-        "better than", "worse than", "difference between"
+        "vs",
+        "versus",
+        "compared to",
+        "relative to",
+        "against",
+        "better than",
+        "worse than",
+        "difference between",
     }
 
     SEQUENCE_MARKERS = {
-        "then", "after", "next", "followed by", "subsequently",
-        "first", "second", "finally", "before"
+        "then",
+        "after",
+        "next",
+        "followed by",
+        "subsequently",
+        "first",
+        "second",
+        "finally",
+        "before",
     }
 
     CONNECTORS = {"and", "but", "also", "additionally", "moreover", "plus"}
 
     TIME_PATTERNS = [
-        r"\bQ[1-4]\b",                          # Q1, Q2, Q3, Q4
-        r"\b20[0-9]{2}\b",                      # Years
+        r"\bQ[1-4]\b",  # Q1, Q2, Q3, Q4
+        r"\b20[0-9]{2}\b",  # Years
         r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b",
         r"\b(last|this|next)\s+(week|month|quarter|year)\b",
         r"\b(yesterday|today|tomorrow)\b",
@@ -63,68 +83,106 @@ class FeatureExtractor:
 
     # Intent keyword dictionaries
     CAUSAL_KEYWORDS = {
-        "impact", "effect", "caused", "drove", "attributed", "due to",
-        "resulted in", "led to", "influenced", "affected"
+        "impact",
+        "effect",
+        "caused",
+        "drove",
+        "attributed",
+        "due to",
+        "resulted in",
+        "led to",
+        "influenced",
+        "affected",
     }
 
     EXPLORATION_KEYWORDS = {
-        "show", "list", "which", "what", "display", "find", "identify",
-        "who", "where", "how many"
+        "show",
+        "list",
+        "which",
+        "what",
+        "display",
+        "find",
+        "identify",
+        "who",
+        "where",
+        "how many",
     }
 
     PREDICTION_KEYWORDS = {
-        "predict", "forecast", "will", "would", "expect", "likelihood",
-        "probability", "risk", "chance", "future"
+        "predict",
+        "forecast",
+        "will",
+        "would",
+        "expect",
+        "likelihood",
+        "probability",
+        "risk",
+        "chance",
+        "future",
     }
 
     DESIGN_KEYWORDS = {
-        "design", "create", "plan", "test", "experiment", "A/B",
-        "trial", "validate", "hypothesis", "setup"
+        "design",
+        "create",
+        "plan",
+        "test",
+        "experiment",
+        "A/B",
+        "trial",
+        "validate",
+        "hypothesis",
+        "setup",
     }
 
     EXPLANATION_KEYWORDS = {
-        "explain", "why", "how", "clarify", "simplify", "summarize",
-        "elaborate", "describe", "understand", "mean"
+        "explain",
+        "why",
+        "how",
+        "clarify",
+        "simplify",
+        "summarize",
+        "elaborate",
+        "describe",
+        "understand",
+        "mean",
     }
 
     MONITORING_KEYWORDS = {
-        "drift", "shift", "change", "anomaly", "data quality", "issue",
-        "problem", "error", "missing", "outlier"
+        "drift",
+        "shift",
+        "change",
+        "anomaly",
+        "data quality",
+        "issue",
+        "problem",
+        "error",
+        "missing",
+        "outlier",
     }
 
     # Entity patterns (simplified - would use NER in production)
     ENTITY_PATTERNS = {
         "HCP": [
-            r"\bHCP[s]?\b", 
-            r"\bphysician[s]?\b", 
+            r"\bHCP[s]?\b",
+            r"\bphysician[s]?\b",
             r"\bdoctor[s]?\b",
-            r"\boncologist[s]?\b", 
-            r"\brheumatologist[s]?\b"
+            r"\boncologist[s]?\b",
+            r"\brheumatologist[s]?\b",
         ],
         "region": [
             r"\b(Northeast|Midwest|South|West|Southeast|Northwest)\b",
-            r"\bregion[s]?\b", 
-            r"\bterritor(y|ies)\b"
+            r"\bregion[s]?\b",
+            r"\bterritor(y|ies)\b",
         ],
-        "drug": [
-            r"\b(Kisqali|Fabhalta|Remibrutinib)\b", 
-            r"\bbrand[s]?\b"
-        ],
+        "drug": [r"\b(Kisqali|Fabhalta|Remibrutinib)\b", r"\bbrand[s]?\b"],
         "campaign": [
-            r"\b(Q[1-4]\s+)?campaign[s]?\b", 
+            r"\b(Q[1-4]\s+)?campaign[s]?\b",
             r"\bmessaging\b",
-            r"\bprogram[s]?\b", 
-            r"\bintervention[s]?\b"
+            r"\bprogram[s]?\b",
+            r"\bintervention[s]?\b",
         ],
-        "segment": [
-            r"\bsegment[s]?\b", 
-            r"\bcohort[s]?\b", 
-            r"\bgroup[s]?\b"
-        ],
-        "time_period": [
-            r"\bQ[1-4]\b", 
-            r"\b20[0-9]{2}\b"
-        ],
+        "segment": [r"\bsegment[s]?\b", r"\bcohort[s]?\b", r"\bgroup[s]?\b"],
+        "time_period": [r"\bQ[1-4]\b", r"\b20[0-9]{2}\b"],
     }
 
     # =========================================================================
@@ -134,11 +192,11 @@ class FeatureExtractor:
     def extract(self, query: str, context: Optional[dict] = None) -> ExtractedFeatures:
         """
         Extract all features from query text.
-        
+
         Args:
             query: Raw user query
             context: Optional conversation context
-            
+
         Returns:
             ExtractedFeatures with all feature categories
         """
@@ -156,11 +214,9 @@ class FeatureExtractor:
     # STRUCTURAL FEATURES
     # =========================================================================
 
-    def _extract_structural(
-        self, query: str, query_lower: str
-    ) -> StructuralFeatures:
+    def _extract_structural(self, query: str, query_lower: str) -> StructuralFeatures:
         """Extract structural features from query."""
-        
+
         # Count questions (? marks + implied questions with "and")
         question_marks = query.count("?")
         # Detect compound questions: "X, and Y?" or "X and what Y"
@@ -173,28 +229,20 @@ class FeatureExtractor:
         clause_count = len([c for c in clause_splits if len(c.strip()) > 5])
 
         # Check for conditional markers
-        has_conditional = any(
-            marker in query_lower for marker in self.CONDITIONAL_MARKERS
-        )
+        has_conditional = any(marker in query_lower for marker in self.CONDITIONAL_MARKERS)
 
         # Check for comparison markers
-        has_comparison = any(
-            marker in query_lower for marker in self.COMPARISON_MARKERS
-        )
+        has_comparison = any(marker in query_lower for marker in self.COMPARISON_MARKERS)
 
         # Check for sequence markers
-        has_sequence = any(
-            marker in query_lower for marker in self.SEQUENCE_MARKERS
-        )
+        has_sequence = any(marker in query_lower for marker in self.SEQUENCE_MARKERS)
 
         # Word count
         words = query.split()
         word_count = len(words)
 
         # Connector density
-        connector_count = sum(
-            1 for word in words if word.lower() in self.CONNECTORS
-        )
+        connector_count = sum(1 for word in words if word.lower() in self.CONNECTORS)
         connector_density = connector_count / max(word_count, 1)
 
         return StructuralFeatures(
@@ -211,11 +259,9 @@ class FeatureExtractor:
     # TEMPORAL FEATURES
     # =========================================================================
 
-    def _extract_temporal(
-        self, query: str, query_lower: str
-    ) -> TemporalFeatures:
+    def _extract_temporal(self, query: str, query_lower: str) -> TemporalFeatures:
         """Extract temporal features from query."""
-        
+
         time_references = []
         for pattern in self.TIME_PATTERNS:
             matches = re.findall(pattern, query_lower, re.IGNORECASE)
@@ -241,11 +287,9 @@ class FeatureExtractor:
     # ENTITY FEATURES
     # =========================================================================
 
-    def _extract_entities(
-        self, query: str, query_lower: str
-    ) -> EntityFeatures:
+    def _extract_entities(self, query: str, query_lower: str) -> EntityFeatures:
         """Extract entity features from query."""
-        
+
         entity_types = []
         entity_mentions = []
 
@@ -269,7 +313,7 @@ class FeatureExtractor:
 
     def _extract_intent_signals(self, query_lower: str) -> IntentSignals:
         """Extract intent signal keywords from query."""
-        
+
         def find_matches(keywords: set) -> list[str]:
             return [kw for kw in keywords if kw in query_lower]
 

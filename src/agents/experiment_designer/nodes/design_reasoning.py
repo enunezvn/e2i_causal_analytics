@@ -16,10 +16,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 from src.agents.experiment_designer.state import (
-    ExperimentDesignState,
     ErrorDetails,
-    TreatmentDefinition,
+    ExperimentDesignState,
     OutcomeDefinition,
+    TreatmentDefinition,
 )
 
 
@@ -137,15 +137,9 @@ class DesignReasoningNode:
                     self.llm.ainvoke(prompt),
                     timeout=120,
                 )
-                model_used = self.model_name
             except (asyncio.TimeoutError, Exception) as e:
-                response = await self.fallback_llm.ainvoke(
-                    self._build_simplified_prompt(state)
-                )
-                model_used = f"{self.fallback_model_name} (fallback)"
-                state["warnings"] = state.get("warnings", []) + [
-                    f"Design used fallback: {str(e)}"
-                ]
+                response = await self.fallback_llm.ainvoke(self._build_simplified_prompt(state))
+                state["warnings"] = state.get("warnings", []) + [f"Design used fallback: {str(e)}"]
 
             # Parse design response
             design = self._parse_design_response(response.content)
@@ -198,7 +192,9 @@ class DesignReasoningNode:
 
             # Update metadata
             state["node_latencies_ms"] = node_latencies
-            state["total_llm_tokens_used"] = state.get("total_llm_tokens_used", 0) + 2000  # Estimate
+            state["total_llm_tokens_used"] = (
+                state.get("total_llm_tokens_used", 0) + 2000
+            )  # Estimate
 
             # Update status for next node
             state["status"] = "calculating"
@@ -329,16 +325,21 @@ Based on trade-offs, recommend ONE design with full specification.
             domain = state["domain_knowledge"]
             if "organizational_defaults" in domain:
                 defaults = domain["organizational_defaults"]
-                parts.append(f"""### Organizational Defaults
+                parts.append(
+                    f"""### Organizational Defaults
 - Default effect size: {defaults.get('effect_size', 0.25)}
 - Default ICC for clusters: {defaults.get('icc', 0.05)}
-- Standard confounders: {defaults.get('standard_confounders', [])}""")
+- Standard confounders: {defaults.get('standard_confounders', [])}"""
+                )
 
         if state.get("warnings"):
             # Include recent assumption violations from warnings
             violations = [w for w in state["warnings"] if "Past violation" in w]
             if violations:
-                parts.append(f"### Recent Assumption Violations\n" + "\n".join(f"- {v}" for v in violations[:3]))
+                parts.append(
+                    "### Recent Assumption Violations\n"
+                    + "\n".join(f"- {v}" for v in violations[:3])
+                )
 
         return "\n\n".join(parts) if parts else "No historical context available."
 

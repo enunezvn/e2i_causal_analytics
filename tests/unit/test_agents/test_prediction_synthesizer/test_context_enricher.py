@@ -3,6 +3,7 @@ E2I Prediction Synthesizer Agent - Context Enricher Node Tests
 """
 
 import pytest
+
 from src.agents.prediction_synthesizer.nodes.context_enricher import (
     ContextEnricherNode,
 )
@@ -33,9 +34,7 @@ class TestContextEnricherNode:
         assert result["status"] == "completed"
 
     @pytest.mark.asyncio
-    async def test_enrich_similar_cases(
-        self, mock_context_store, state_with_ensemble
-    ):
+    async def test_enrich_similar_cases(self, mock_context_store, state_with_ensemble):
         """Test similar cases enrichment."""
         node = ContextEnricherNode(context_store=mock_context_store)
 
@@ -62,9 +61,7 @@ class TestContextEnricherNode:
         assert "prescription_count" in context["feature_importance"]
 
     @pytest.mark.asyncio
-    async def test_enrich_historical_accuracy(
-        self, mock_context_store, state_with_ensemble
-    ):
+    async def test_enrich_historical_accuracy(self, mock_context_store, state_with_ensemble):
         """Test historical accuracy enrichment."""
         node = ContextEnricherNode(context_store=mock_context_store)
 
@@ -74,9 +71,7 @@ class TestContextEnricherNode:
         assert context["historical_accuracy"] == 0.82
 
     @pytest.mark.asyncio
-    async def test_enrich_trend_increasing(
-        self, mock_context_store, state_with_ensemble
-    ):
+    async def test_enrich_trend_increasing(self, mock_context_store, state_with_ensemble):
         """Test trend detection for increasing values."""
         # History has increasing values
         node = ContextEnricherNode(context_store=mock_context_store)
@@ -178,9 +173,7 @@ class TestContextEnricherNode:
         assert result["status"] == "completed"
 
     @pytest.mark.asyncio
-    async def test_enrich_total_latency(
-        self, mock_context_store, state_with_ensemble
-    ):
+    async def test_enrich_total_latency(self, mock_context_store, state_with_ensemble):
         """Test total latency calculation."""
         node = ContextEnricherNode(context_store=mock_context_store)
 
@@ -274,9 +267,7 @@ class TestFeatureImportanceAggregation:
         assert "prescription_count" in importance
 
     @pytest.mark.asyncio
-    async def test_importance_top_10_limit(
-        self, state_with_ensemble
-    ):
+    async def test_importance_top_10_limit(self, state_with_ensemble):
         """Test that feature importance is limited to top 10."""
         from tests.unit.test_agents.test_prediction_synthesizer.conftest import (
             MockFeatureStore,
@@ -284,9 +275,7 @@ class TestFeatureImportanceAggregation:
 
         # Create feature store with many features
         store = MockFeatureStore(
-            importance={
-                "model_1": {f"feature_{i}": 1.0 / (i + 1) for i in range(20)}
-            }
+            importance={"model_1": {f"feature_{i}": 1.0 / (i + 1) for i in range(20)}}
         )
 
         state_with_ensemble["individual_predictions"] = [

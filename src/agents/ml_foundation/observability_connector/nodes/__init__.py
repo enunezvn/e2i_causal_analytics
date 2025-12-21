@@ -10,9 +10,9 @@ Plus context management helpers:
 - Inject Context - Inject context into headers
 """
 
-from .span_emitter import emit_spans
-from .metrics_aggregator import aggregate_metrics
 from .context_manager import create_context, extract_context, inject_context
+from .metrics_aggregator import aggregate_metrics
+from .span_emitter import emit_spans
 
 __all__ = [
     # Main workflow nodes

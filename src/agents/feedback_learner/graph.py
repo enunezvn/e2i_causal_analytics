@@ -16,16 +16,15 @@ from typing import Any, Dict, Optional
 
 from langgraph.graph import END, StateGraph
 
-from .state import FeedbackLearnerState
-from .nodes.feedback_collector import FeedbackCollectorNode
-from .nodes.pattern_analyzer import PatternAnalyzerNode
-from .nodes.learning_extractor import LearningExtractorNode
-from .nodes.knowledge_updater import KnowledgeUpdaterNode
 from .dspy_integration import (
     FeedbackLearnerCognitiveContext,
     FeedbackLearnerTrainingSignal,
-    DSPY_AVAILABLE,
 )
+from .nodes.feedback_collector import FeedbackCollectorNode
+from .nodes.knowledge_updater import KnowledgeUpdaterNode
+from .nodes.learning_extractor import LearningExtractorNode
+from .nodes.pattern_analyzer import PatternAnalyzerNode
+from .state import FeedbackLearnerState
 
 logger = logging.getLogger(__name__)
 
@@ -189,9 +188,7 @@ async def _cognitive_context_enricher(
         return {
             **state,
             "cognitive_context": None,
-            "warnings": (state.get("warnings") or []) + [
-                f"Cognitive enrichment skipped: {str(e)}"
-            ],
+            "warnings": (state.get("warnings") or []) + [f"Cognitive enrichment skipped: {str(e)}"],
         }
 
 
@@ -217,8 +214,8 @@ async def _finalize_training_signal(state: FeedbackLearnerState) -> FeedbackLear
     pattern_accuracy = 0.85 if patterns else 0.0  # Placeholder - would be validated
     recommendation_actionability = min(len(recommendations) / 5.0, 1.0) if recommendations else 0.0
     update_effectiveness = len(applied_updates) / max(len(state.get("proposed_updates") or []), 1)
-    efficiency = min(1.0, 5000 / max(state.get("total_latency_ms", 1), 1))  # Target < 5s
-    coverage = min(len(patterns) / max(len(feedback_items), 1), 1.0) if feedback_items else 0.0
+    min(1.0, 5000 / max(state.get("total_latency_ms", 1), 1))  # Target < 5s
+    min(len(patterns) / max(len(feedback_items), 1), 1.0) if feedback_items else 0.0
 
     training_signal = FeedbackLearnerTrainingSignal(
         batch_id=state.get("batch_id", ""),

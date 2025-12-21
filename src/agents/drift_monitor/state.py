@@ -8,9 +8,7 @@ Agent Type: Standard (Fast Path)
 Performance Target: <10s for 50 features
 """
 
-from typing import TypedDict, Literal, Optional, NotRequired
-from typing_extensions import TypedDict as ExtTypedDict
-
+from typing import Literal, NotRequired, Optional, TypedDict
 
 # Type aliases
 DriftType = Literal["data", "model", "concept"]
@@ -24,6 +22,7 @@ class DriftResult(TypedDict):
 
     Contract: .claude/contracts/tier3-contracts.md lines 401-410
     """
+
     feature: str
     drift_type: DriftType
     test_statistic: float
@@ -39,6 +38,7 @@ class DriftAlert(TypedDict):
 
     Contract: .claude/contracts/tier3-contracts.md lines 412-420
     """
+
     alert_id: str
     severity: AlertSeverity
     drift_type: DriftType
@@ -50,6 +50,7 @@ class DriftAlert(TypedDict):
 
 class ErrorDetails(TypedDict):
     """Error information."""
+
     node: str
     error: str
     timestamp: str

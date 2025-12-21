@@ -3,10 +3,11 @@
 Tests the statistical power calculation functionality.
 """
 
+
 import pytest
-import math
-from src.agents.experiment_designer.nodes.power_analysis import PowerAnalysisNode
+
 from src.agents.experiment_designer.graph import create_initial_state
+from src.agents.experiment_designer.nodes.power_analysis import PowerAnalysisNode
 
 
 class TestPowerAnalysisNode:
@@ -30,19 +31,11 @@ class TestPowerAnalysisNode:
         node = PowerAnalysisNode()
         state = create_initial_state(
             business_question="Test power analysis",
-            constraints={
-                "expected_effect_size": 0.25,
-                "power": 0.80,
-                "alpha": 0.05
-            }
+            constraints={"expected_effect_size": 0.25, "power": 0.80, "alpha": 0.05},
         )
         state["status"] = "calculating"
         state["outcomes"] = [
-            {
-                "name": "Engagement",
-                "metric_type": "continuous",
-                "is_primary": True
-            }
+            {"name": "Engagement", "metric_type": "continuous", "is_primary": True}
         ]
 
         result = await node.execute(state)
@@ -57,10 +50,7 @@ class TestPowerAnalysisNode:
         node = PowerAnalysisNode()
         state = create_initial_state(
             business_question="Test sample size",
-            constraints={
-                "expected_effect_size": 0.30,
-                "power": 0.80
-            }
+            constraints={"expected_effect_size": 0.30, "power": 0.80},
         )
         state["status"] = "calculating"
         state["outcomes"] = [{"name": "Y", "metric_type": "continuous", "is_primary": True}]
@@ -77,10 +67,7 @@ class TestPowerAnalysisNode:
         node = PowerAnalysisNode()
         state = create_initial_state(
             business_question="Test achieved power",
-            constraints={
-                "expected_effect_size": 0.25,
-                "power": 0.80
-            }
+            constraints={"expected_effect_size": 0.25, "power": 0.80},
         )
         state["status"] = "calculating"
         state["outcomes"] = [{"name": "Y", "metric_type": "continuous", "is_primary": True}]
@@ -95,11 +82,7 @@ class TestPowerAnalysisNode:
         """Test that minimum detectable effect is returned."""
         node = PowerAnalysisNode()
         state = create_initial_state(
-            business_question="Test MDE",
-            constraints={
-                "expected_effect_size": 0.25,
-                "power": 0.80
-            }
+            business_question="Test MDE", constraints={"expected_effect_size": 0.25, "power": 0.80}
         )
         state["status"] = "calculating"
         state["outcomes"] = [{"name": "Y", "metric_type": "continuous", "is_primary": True}]
@@ -113,9 +96,7 @@ class TestPowerAnalysisNode:
     async def test_execute_skip_on_failed(self):
         """Test execution skips on failed status."""
         node = PowerAnalysisNode()
-        state = create_initial_state(
-            business_question="Test skip on failed"
-        )
+        state = create_initial_state(business_question="Test skip on failed")
         state["status"] = "failed"
 
         result = await node.execute(state)
@@ -127,8 +108,7 @@ class TestPowerAnalysisNode:
         """Test that node latency is recorded."""
         node = PowerAnalysisNode()
         state = create_initial_state(
-            business_question="Test latency recording",
-            constraints={"expected_effect_size": 0.25}
+            business_question="Test latency recording", constraints={"expected_effect_size": 0.25}
         )
         state["status"] = "calculating"
         state["outcomes"] = [{"name": "Y", "metric_type": "continuous", "is_primary": True}]
@@ -149,11 +129,7 @@ class TestContinuousOutcomePowerAnalysis:
         node = PowerAnalysisNode()
         state = create_initial_state(
             business_question="Continuous outcome test",
-            constraints={
-                "expected_effect_size": 0.25,
-                "power": 0.80,
-                "alpha": 0.05
-            }
+            constraints={"expected_effect_size": 0.25, "power": 0.80, "alpha": 0.05},
         )
         state["status"] = "calculating"
         state["outcomes"] = [
@@ -171,10 +147,7 @@ class TestContinuousOutcomePowerAnalysis:
         node = PowerAnalysisNode()
         state = create_initial_state(
             business_question="Small effect test",
-            constraints={
-                "expected_effect_size": 0.10,  # Small effect
-                "power": 0.80
-            }
+            constraints={"expected_effect_size": 0.10, "power": 0.80},  # Small effect
         )
         state["status"] = "calculating"
         state["outcomes"] = [{"name": "Y", "metric_type": "continuous", "is_primary": True}]
@@ -191,10 +164,7 @@ class TestContinuousOutcomePowerAnalysis:
         node = PowerAnalysisNode()
         state = create_initial_state(
             business_question="Large effect test",
-            constraints={
-                "expected_effect_size": 0.80,  # Large effect
-                "power": 0.80
-            }
+            constraints={"expected_effect_size": 0.80, "power": 0.80},  # Large effect
         )
         state["status"] = "calculating"
         state["outcomes"] = [{"name": "Y", "metric_type": "continuous", "is_primary": True}]
@@ -213,10 +183,7 @@ class TestContinuousOutcomePowerAnalysis:
         # Test with 80% power
         state_80 = create_initial_state(
             business_question="80% power test",
-            constraints={
-                "expected_effect_size": 0.30,
-                "power": 0.80
-            }
+            constraints={"expected_effect_size": 0.30, "power": 0.80},
         )
         state_80["status"] = "calculating"
         state_80["outcomes"] = [{"name": "Y", "metric_type": "continuous", "is_primary": True}]
@@ -225,10 +192,7 @@ class TestContinuousOutcomePowerAnalysis:
         # Test with 95% power
         state_95 = create_initial_state(
             business_question="95% power test",
-            constraints={
-                "expected_effect_size": 0.30,
-                "power": 0.95
-            }
+            constraints={"expected_effect_size": 0.30, "power": 0.95},
         )
         state_95["status"] = "calculating"
         state_95["outcomes"] = [{"name": "Y", "metric_type": "continuous", "is_primary": True}]
@@ -247,11 +211,7 @@ class TestContinuousOutcomePowerAnalysis:
         # Test with alpha=0.05
         state_05 = create_initial_state(
             business_question="Alpha 0.05 test",
-            constraints={
-                "expected_effect_size": 0.30,
-                "power": 0.80,
-                "alpha": 0.05
-            }
+            constraints={"expected_effect_size": 0.30, "power": 0.80, "alpha": 0.05},
         )
         state_05["status"] = "calculating"
         state_05["outcomes"] = [{"name": "Y", "metric_type": "continuous", "is_primary": True}]
@@ -260,11 +220,7 @@ class TestContinuousOutcomePowerAnalysis:
         # Test with alpha=0.01
         state_01 = create_initial_state(
             business_question="Alpha 0.01 test",
-            constraints={
-                "expected_effect_size": 0.30,
-                "power": 0.80,
-                "alpha": 0.01
-            }
+            constraints={"expected_effect_size": 0.30, "power": 0.80, "alpha": 0.01},
         )
         state_01["status"] = "calculating"
         state_01["outcomes"] = [{"name": "Y", "metric_type": "continuous", "is_primary": True}]
@@ -285,16 +241,10 @@ class TestBinaryOutcomePowerAnalysis:
         node = PowerAnalysisNode()
         state = create_initial_state(
             business_question="Binary outcome test",
-            constraints={
-                "expected_effect_size": 0.10,
-                "power": 0.80,
-                "baseline_rate": 0.15
-            }
+            constraints={"expected_effect_size": 0.10, "power": 0.80, "baseline_rate": 0.15},
         )
         state["status"] = "calculating"
-        state["outcomes"] = [
-            {"name": "Conversion", "metric_type": "binary", "is_primary": True}
-        ]
+        state["outcomes"] = [{"name": "Conversion", "metric_type": "binary", "is_primary": True}]
 
         result = await node.execute(state)
 
@@ -309,11 +259,7 @@ class TestBinaryOutcomePowerAnalysis:
         # Low baseline rate
         state_low = create_initial_state(
             business_question="Low baseline test",
-            constraints={
-                "expected_effect_size": 0.05,
-                "power": 0.80,
-                "baseline_rate": 0.05
-            }
+            constraints={"expected_effect_size": 0.05, "power": 0.80, "baseline_rate": 0.05},
         )
         state_low["status"] = "calculating"
         state_low["outcomes"] = [{"name": "Y", "metric_type": "binary", "is_primary": True}]
@@ -322,11 +268,7 @@ class TestBinaryOutcomePowerAnalysis:
         # High baseline rate
         state_high = create_initial_state(
             business_question="High baseline test",
-            constraints={
-                "expected_effect_size": 0.05,
-                "power": 0.80,
-                "baseline_rate": 0.50
-            }
+            constraints={"expected_effect_size": 0.05, "power": 0.80, "baseline_rate": 0.50},
         )
         state_high["status"] = "calculating"
         state_high["outcomes"] = [{"name": "Y", "metric_type": "binary", "is_primary": True}]
@@ -348,10 +290,7 @@ class TestClusterRCTPowerAnalysis:
         # Individual RCT
         state_ind = create_initial_state(
             business_question="Individual RCT test",
-            constraints={
-                "expected_effect_size": 0.30,
-                "power": 0.80
-            }
+            constraints={"expected_effect_size": 0.30, "power": 0.80},
         )
         state_ind["status"] = "calculating"
         state_ind["design_type"] = "RCT"
@@ -365,8 +304,8 @@ class TestClusterRCTPowerAnalysis:
                 "expected_effect_size": 0.30,
                 "power": 0.80,
                 "cluster_size": 50,
-                "expected_icc": 0.05
-            }
+                "expected_icc": 0.05,
+            },
         )
         state_cluster["status"] = "calculating"
         state_cluster["design_type"] = "Cluster_RCT"
@@ -391,8 +330,8 @@ class TestClusterRCTPowerAnalysis:
                 "expected_effect_size": 0.30,
                 "power": 0.80,
                 "cluster_size": 50,
-                "expected_icc": 0.01
-            }
+                "expected_icc": 0.01,
+            },
         )
         state_low["status"] = "calculating"
         state_low["design_type"] = "Cluster_RCT"
@@ -406,8 +345,8 @@ class TestClusterRCTPowerAnalysis:
                 "expected_effect_size": 0.30,
                 "power": 0.80,
                 "cluster_size": 50,
-                "expected_icc": 0.10
-            }
+                "expected_icc": 0.10,
+            },
         )
         state_high["status"] = "calculating"
         state_high["design_type"] = "Cluster_RCT"
@@ -429,10 +368,7 @@ class TestSensitivityAnalysis:
         node = PowerAnalysisNode()
         state = create_initial_state(
             business_question="Sensitivity analysis test",
-            constraints={
-                "expected_effect_size": 0.30,
-                "power": 0.80
-            }
+            constraints={"expected_effect_size": 0.30, "power": 0.80},
         )
         state["status"] = "calculating"
         state["outcomes"] = [{"name": "Y", "metric_type": "continuous", "is_primary": True}]
@@ -453,10 +389,7 @@ class TestPowerAnalysisPerformance:
         node = PowerAnalysisNode()
         state = create_initial_state(
             business_question="Test latency performance",
-            constraints={
-                "expected_effect_size": 0.30,
-                "power": 0.80
-            }
+            constraints={"expected_effect_size": 0.30, "power": 0.80},
         )
         state["status"] = "calculating"
         state["outcomes"] = [{"name": "Y", "metric_type": "continuous", "is_primary": True}]
@@ -479,7 +412,7 @@ class TestPowerAnalysisEdgeCases:
             constraints={
                 "power": 0.80
                 # No expected_effect_size
-            }
+            },
         )
         state["status"] = "calculating"
         state["outcomes"] = [{"name": "Y", "metric_type": "continuous", "is_primary": True}]
@@ -495,10 +428,7 @@ class TestPowerAnalysisEdgeCases:
         node = PowerAnalysisNode()
         state = create_initial_state(
             business_question="Missing outcomes test",
-            constraints={
-                "expected_effect_size": 0.30,
-                "power": 0.80
-            }
+            constraints={"expected_effect_size": 0.30, "power": 0.80},
         )
         state["status"] = "calculating"
         # No outcomes
@@ -514,10 +444,7 @@ class TestPowerAnalysisEdgeCases:
         node = PowerAnalysisNode()
         state = create_initial_state(
             business_question="Very small effect test",
-            constraints={
-                "expected_effect_size": 0.01,
-                "power": 0.80
-            }
+            constraints={"expected_effect_size": 0.01, "power": 0.80},
         )
         state["status"] = "calculating"
         state["outcomes"] = [{"name": "Y", "metric_type": "continuous", "is_primary": True}]
@@ -534,15 +461,12 @@ class TestPowerAnalysisEdgeCases:
         node = PowerAnalysisNode()
         state = create_initial_state(
             business_question="No primary outcome test",
-            constraints={
-                "expected_effect_size": 0.30,
-                "power": 0.80
-            }
+            constraints={"expected_effect_size": 0.30, "power": 0.80},
         )
         state["status"] = "calculating"
         state["outcomes"] = [
             {"name": "Y1", "metric_type": "continuous", "is_primary": False},
-            {"name": "Y2", "metric_type": "binary", "is_primary": False}
+            {"name": "Y2", "metric_type": "binary", "is_primary": False},
         ]
 
         result = await node.execute(state)

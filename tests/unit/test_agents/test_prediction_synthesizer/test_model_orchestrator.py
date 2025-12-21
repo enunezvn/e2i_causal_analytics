@@ -3,6 +3,7 @@ E2I Prediction Synthesizer Agent - Model Orchestrator Node Tests
 """
 
 import pytest
+
 from src.agents.prediction_synthesizer.nodes.model_orchestrator import (
     ModelOrchestratorNode,
 )
@@ -31,9 +32,7 @@ class TestModelOrchestratorNode:
         assert result["orchestration_latency_ms"] >= 0
 
     @pytest.mark.asyncio
-    async def test_orchestrate_with_specified_models(
-        self, mock_model_clients, base_state
-    ):
+    async def test_orchestrate_with_specified_models(self, mock_model_clients, base_state):
         """Test orchestration with specific models requested."""
         base_state["models_to_use"] = ["churn_xgb", "churn_rf"]
 
@@ -48,9 +47,7 @@ class TestModelOrchestratorNode:
         assert "churn_rf" in model_ids
 
     @pytest.mark.asyncio
-    async def test_orchestrate_parallel_execution(
-        self, mock_model_clients, base_state
-    ):
+    async def test_orchestrate_parallel_execution(self, mock_model_clients, base_state):
         """Test that models are executed in parallel."""
         base_state["models_to_use"] = ["churn_xgb", "churn_rf", "churn_nn"]
 
@@ -65,9 +62,7 @@ class TestModelOrchestratorNode:
         assert len(result["individual_predictions"]) == 3
 
     @pytest.mark.asyncio
-    async def test_orchestrate_with_partial_failures(
-        self, failing_model_clients, base_state
-    ):
+    async def test_orchestrate_with_partial_failures(self, failing_model_clients, base_state):
         """Test handling when some models fail."""
         base_state["models_to_use"] = ["churn_xgb", "churn_rf", "churn_nn"]
 
@@ -113,9 +108,7 @@ class TestModelOrchestratorNode:
         assert result["status"] == "failed"
 
     @pytest.mark.asyncio
-    async def test_orchestrate_preserves_prediction_values(
-        self, mock_model_clients, base_state
-    ):
+    async def test_orchestrate_preserves_prediction_values(self, mock_model_clients, base_state):
         """Test that prediction values are correctly preserved."""
         base_state["models_to_use"] = ["churn_xgb"]
 
@@ -141,9 +134,7 @@ class TestModelOrchestratorNode:
         assert result["errors"] == [{"error": "Previous error"}]
 
     @pytest.mark.asyncio
-    async def test_orchestrate_uses_features(
-        self, mock_model_clients, base_state, sample_features
-    ):
+    async def test_orchestrate_uses_features(self, mock_model_clients, base_state, sample_features):
         """Test that features are passed to model clients."""
         from unittest.mock import AsyncMock
 

@@ -10,18 +10,19 @@ Tests cover end-to-end flows combining:
 Author: E2I Causal Analytics Team
 """
 
-import pytest
 import time
-from unittest.mock import Mock, MagicMock, AsyncMock, patch
-from typing import List, Dict, Any
+from typing import Any, Dict
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from src.rag.models.retrieval_models import RetrievalResult
 from src.rag.types import RetrievalSource
 
-
 # =============================================================================
 # HELPER FUNCTIONS
 # =============================================================================
+
 
 def create_retrieval_result(
     content: str,
@@ -29,7 +30,7 @@ def create_retrieval_result(
     source_id: str = "id_001",
     score: float = 0.9,
     retrieval_method: str = "dense",
-    metadata: Dict[str, Any] = None
+    metadata: Dict[str, Any] = None,
 ):
     """Create a RetrievalResult for testing."""
     # Map old source strings to RetrievalSource enum
@@ -53,13 +54,14 @@ def create_retrieval_result(
         source=source_enum,
         score=score,
         retrieval_method=retrieval_method,
-        metadata=result_metadata
+        metadata=result_metadata,
     )
 
 
 # =============================================================================
 # RETRIEVER + RERANKER INTEGRATION TESTS
 # =============================================================================
+
 
 class TestRetrieverRerankerIntegration:
     """Tests for HybridRetriever + CrossEncoderReranker integration."""
@@ -73,15 +75,15 @@ class TestRetrieverRerankerIntegration:
                 source="agent_activities",
                 source_id="act_001",
                 score=0.85,
-                metadata={"brand": "Kisqali"}
+                metadata={"brand": "Kisqali"},
             ),
             create_retrieval_result(
                 content="NRx growth driven by HCP targeting",
                 source="causal_paths",
                 source_id="path_002",
                 score=0.75,
-                metadata={"brand": "Kisqali"}
-            )
+                metadata={"brand": "Kisqali"},
+            ),
         ]
 
     def test_reranker_accepts_retrieval_results(self, mock_results):
@@ -124,6 +126,7 @@ class TestRetrieverRerankerIntegration:
 # QUERY OPTIMIZER + RETRIEVER INTEGRATION TESTS
 # =============================================================================
 
+
 class TestQueryOptimizerRetrieverIntegration:
     """Tests for QueryOptimizer + HybridRetriever integration."""
 
@@ -157,6 +160,7 @@ class TestQueryOptimizerRetrieverIntegration:
 # RERANKER + ENRICHER INTEGRATION TESTS
 # =============================================================================
 
+
 class TestRerankerEnricherIntegration:
     """Tests for CrossEncoderReranker + InsightEnricher integration."""
 
@@ -169,15 +173,15 @@ class TestRerankerEnricherIntegration:
                 source="agent_activities",
                 source_id="act_001",
                 score=0.92,
-                metadata={"brand": "Kisqali", "reranker_score": 0.92}
+                metadata={"brand": "Kisqali", "reranker_score": 0.92},
             ),
             create_retrieval_result(
                 content="Market share grew from 12% to 18%",
                 source="business_metrics",
                 source_id="met_002",
                 score=0.88,
-                metadata={"brand": "Kisqali", "reranker_score": 0.88}
-            )
+                metadata={"brand": "Kisqali", "reranker_score": 0.88},
+            ),
         ]
 
     @pytest.mark.asyncio
@@ -194,16 +198,15 @@ class TestRerankerEnricherIntegration:
             # Mock response parsing
             with patch.object(enricher, "_parse_response") as mock_parse:
                 from src.rag.models.insight_models import EnrichedInsight
+
                 mock_parse.return_value = EnrichedInsight(
                     summary="TRx increased due to territory expansion",
                     key_findings=["15% growth"],
-                    confidence=0.85
+                    confidence=0.85,
                 )
 
                 result = await enricher.enrich(
-                    retrieved=reranked_results,
-                    query="Why did TRx increase?",
-                    max_findings=5
+                    retrieved=reranked_results, query="Why did TRx increase?", max_findings=5
                 )
 
                 assert result is not None
@@ -217,11 +220,7 @@ class TestRerankerEnricherIntegration:
 
         enricher = InsightEnricher()
 
-        result = await enricher.enrich(
-            retrieved=[],
-            query="test query",
-            max_findings=5
-        )
+        result = await enricher.enrich(retrieved=[], query="test query", max_findings=5)
 
         # Should return an EnrichedInsight with empty/default data
         assert result is not None
@@ -231,6 +230,7 @@ class TestRerankerEnricherIntegration:
 # =============================================================================
 # FULL PIPELINE INTEGRATION TESTS
 # =============================================================================
+
 
 class TestFullPipelineIntegration:
     """End-to-end tests for complete RAG pipeline."""
@@ -244,22 +244,22 @@ class TestFullPipelineIntegration:
                 source="business_metrics",
                 source_id="met_001",
                 score=0.9,
-                metadata={"brand": "Kisqali", "kpi": "TRx"}
+                metadata={"brand": "Kisqali", "kpi": "TRx"},
             ),
             create_retrieval_result(
                 content="Territory expansion drove growth",
                 source="agent_activities",
                 source_id="act_001",
                 score=0.85,
-                metadata={"brand": "Kisqali"}
+                metadata={"brand": "Kisqali"},
             ),
             create_retrieval_result(
                 content="HCP targeting improved conversion",
                 source="causal_paths",
                 source_id="path_001",
                 score=0.75,
-                metadata={"brand": "Kisqali"}
-            )
+                metadata={"brand": "Kisqali"},
+            ),
         ]
 
     def test_pipeline_query_to_reranked_results(self, mock_retrieval_results):
@@ -294,13 +294,18 @@ class TestFullPipelineIntegration:
 
         # All results should preserve source_name in metadata
         for result in reranked:
-            assert result.metadata.get("source_name") in ["business_metrics", "agent_activities", "causal_paths"]
+            assert result.metadata.get("source_name") in [
+                "business_metrics",
+                "agent_activities",
+                "causal_paths",
+            ]
             assert hasattr(result, "metadata")
 
 
 # =============================================================================
 # CAUSAL RAG ORCHESTRATOR TESTS
 # =============================================================================
+
 
 class TestCausalRAGOrchestration:
     """Tests for CausalRAG orchestrator integration."""
@@ -311,9 +316,9 @@ class TestCausalRAGOrchestration:
 
         # Create mock vector retriever
         mock_vector = MagicMock()
-        mock_vector.search = MagicMock(return_value=[
-            create_retrieval_result("TRx increased 15%", score=0.9)
-        ])
+        mock_vector.search = MagicMock(
+            return_value=[create_retrieval_result("TRx increased 15%", score=0.9)]
+        )
 
         rag = CausalRAG(vector_retriever=mock_vector)
 
@@ -345,6 +350,7 @@ class TestCausalRAGOrchestration:
 # MEMORY INTEGRATION TESTS
 # =============================================================================
 
+
 class TestMemoryRAGIntegration:
     """Tests for Memory Backend + RAG pipeline integration."""
 
@@ -360,7 +366,7 @@ class TestMemoryRAGIntegration:
                 source_id="conv_001",
                 score=0.88,
                 retrieval_method="dense",
-                metadata={"turn_index": 5}
+                metadata={"turn_index": 5},
             )
         ]
 
@@ -382,7 +388,7 @@ class TestMemoryRAGIntegration:
                 source_id="edge_001",
                 score=0.92,
                 retrieval_method="graph",
-                metadata={"relationship_type": "causes"}
+                metadata={"relationship_type": "causes"},
             )
         ]
 
@@ -396,6 +402,7 @@ class TestMemoryRAGIntegration:
 # =============================================================================
 # PERFORMANCE SLA TESTS
 # =============================================================================
+
 
 class TestPerformanceSLA:
     """Tests for performance SLA compliance."""
@@ -417,7 +424,7 @@ class TestPerformanceSLA:
                 content=f"Document {i} content about pharmaceutical sales",
                 source="test",
                 source_id=f"id_{i}",
-                score=0.9 - i * 0.05
+                score=0.9 - i * 0.05,
             )
             for i in range(10)
         ]
@@ -459,7 +466,7 @@ class TestPerformanceSLA:
                 content=f"Content {i} about TRx metrics",
                 source="test",
                 source_id=f"id_{i}",
-                score=0.9
+                score=0.9,
             )
             for i in range(5)
         ]
@@ -471,9 +478,7 @@ class TestPerformanceSLA:
             mock_gen.return_value = "Summary of insights..."
             with patch.object(enricher, "_parse_response") as mock_parse:
                 mock_parse.return_value = EnrichedInsight(
-                    summary="Test summary",
-                    key_findings=[],
-                    confidence=0.9
+                    summary="Test summary", key_findings=[], confidence=0.9
                 )
 
                 start = time.time()
@@ -488,6 +493,7 @@ class TestPerformanceSLA:
 # ERROR HANDLING INTEGRATION TESTS
 # =============================================================================
 
+
 class TestErrorHandlingIntegration:
     """Tests for error handling across integrated components."""
 
@@ -497,10 +503,7 @@ class TestErrorHandlingIntegration:
 
         single_result = [
             create_retrieval_result(
-                content="Single document",
-                source="test",
-                source_id="id_001",
-                score=0.9
+                content="Single document", source="test", source_id="id_001", score=0.9
             )
         ]
 
@@ -521,7 +524,7 @@ class TestErrorHandlingIntegration:
                 source="test",
                 source_id="id_001",
                 score=0.9,
-                metadata={}  # Empty metadata
+                metadata={},  # Empty metadata
             )
         ]
 
@@ -551,6 +554,7 @@ class TestErrorHandlingIntegration:
 # COMPONENT INTEROPERABILITY TESTS
 # =============================================================================
 
+
 class TestComponentInteroperability:
     """Tests for component interoperability and type compatibility."""
 
@@ -561,7 +565,7 @@ class TestComponentInteroperability:
             source="agent_activities",
             source_id="act_001",
             score=0.9,
-            metadata={"brand": "Kisqali"}
+            metadata={"brand": "Kisqali"},
         )
 
         # Pydantic model uses model_dump() for dict conversion
@@ -595,6 +599,7 @@ class TestComponentInteroperability:
 # MULTI-HOP RETRIEVAL INTEGRATION TESTS
 # =============================================================================
 
+
 class TestMultiHopRetrievalIntegration:
     """Tests for multi-hop retrieval integration with cognitive workflow."""
 
@@ -603,14 +608,10 @@ class TestMultiHopRetrievalIntegration:
         from src.rag.cognitive_rag_dspy import Evidence, MemoryType
 
         # Simulate hop 1 (episodic) results
-        hop1_evidence = [
-            Evidence(MemoryType.EPISODIC, 1, "First hop result", 0.9)
-        ]
+        hop1_evidence = [Evidence(MemoryType.EPISODIC, 1, "First hop result", 0.9)]
 
         # Simulate hop 2 (semantic) results
-        hop2_evidence = [
-            Evidence(MemoryType.SEMANTIC, 2, "Second hop result", 0.85)
-        ]
+        hop2_evidence = [Evidence(MemoryType.SEMANTIC, 2, "Second hop result", 0.85)]
 
         # Combine evidence from multiple hops
         all_evidence = hop1_evidence + hop2_evidence
@@ -633,13 +634,14 @@ class TestMultiHopRetrievalIntegration:
         all_evidence = [evidence1, evidence2, evidence3]
 
         # Deduplicate by content
-        unique_contents = set(e.content for e in all_evidence)
+        unique_contents = {e.content for e in all_evidence}
         assert len(unique_contents) == 2  # "Duplicate content" and "Unique content"
 
 
 # =============================================================================
 # ENRICHED INSIGHT MODEL TESTS
 # =============================================================================
+
 
 class TestEnrichedInsightModel:
     """Tests for EnrichedInsight model integration."""
@@ -651,7 +653,7 @@ class TestEnrichedInsightModel:
         insight = EnrichedInsight(
             summary="TRx increased 15% in Q4 2024",
             key_findings=["Territory expansion", "HCP targeting improvement"],
-            confidence=0.85
+            confidence=0.85,
         )
 
         assert insight.summary == "TRx increased 15% in Q4 2024"
@@ -664,14 +666,14 @@ class TestEnrichedInsightModel:
 
         evidence = [
             create_retrieval_result("Evidence 1", score=0.9),
-            create_retrieval_result("Evidence 2", score=0.85)
+            create_retrieval_result("Evidence 2", score=0.85),
         ]
 
         insight = EnrichedInsight(
             summary="Summary",
             key_findings=["Finding 1"],
             supporting_evidence=evidence,
-            confidence=0.9
+            confidence=0.9,
         )
 
         assert len(insight.supporting_evidence) == 2

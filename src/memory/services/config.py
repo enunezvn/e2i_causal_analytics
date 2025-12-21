@@ -10,24 +10,27 @@ Usage:
     print(config.embeddings.model)
 """
 
-import os
 import logging
-from pathlib import Path
-from typing import Any, Dict, Optional
+import os
 from dataclasses import dataclass, field
 from functools import lru_cache
+from pathlib import Path
+from typing import Any, Dict, Optional
 
 import yaml
 
 logger = logging.getLogger(__name__)
 
 # Default config file location
-DEFAULT_CONFIG_PATH = Path(__file__).parent.parent.parent.parent / "config" / "005_memory_config.yaml"
+DEFAULT_CONFIG_PATH = (
+    Path(__file__).parent.parent.parent.parent / "config" / "005_memory_config.yaml"
+)
 
 
 @dataclass
 class WorkingMemoryConfig:
     """Configuration for Redis-backed working memory."""
+
     backend: str = "redis"
     connection: str = "redis://localhost:6382"
     checkpoint_prefix: str = "e2i:checkpoint:"
@@ -41,6 +44,7 @@ class WorkingMemoryConfig:
 @dataclass
 class EpisodicMemoryConfig:
     """Configuration for Supabase-backed episodic memory."""
+
     backend: str = "supabase"
     table: str = "episodic_memories"
     vector_column: str = "embedding"
@@ -51,6 +55,7 @@ class EpisodicMemoryConfig:
 @dataclass
 class SemanticMemoryConfig:
     """Configuration for FalkorDB-backed semantic memory."""
+
     backend: str = "falkordb"
     graph_name: str = "e2i_semantic"
     graphity_enabled: bool = True
@@ -62,6 +67,7 @@ class SemanticMemoryConfig:
 @dataclass
 class ProceduralMemoryConfig:
     """Configuration for Supabase-backed procedural memory."""
+
     backend: str = "supabase"
     table: str = "procedural_memories"
     vector_column: str = "trigger_embedding"
@@ -73,6 +79,7 @@ class ProceduralMemoryConfig:
 @dataclass
 class EmbeddingConfig:
     """Configuration for embedding service."""
+
     provider: str = "openai"
     model: str = "text-embedding-ada-002"
     dimensions: int = 1536
@@ -83,6 +90,7 @@ class EmbeddingConfig:
 @dataclass
 class LLMConfig:
     """Configuration for LLM service."""
+
     provider: str = "anthropic"
     model: str = "claude-3-5-sonnet-20241022"
     max_tokens: int = 4096
@@ -92,6 +100,7 @@ class LLMConfig:
 @dataclass
 class CognitiveWorkflowConfig:
     """Configuration for the cognitive workflow."""
+
     summarizer_compression_threshold: int = 10
     summarizer_keep_recent: int = 5
     investigator_max_hops: int = 4
@@ -107,6 +116,7 @@ class MemoryConfig:
     Main configuration container for the memory system.
     Provides typed access to all configuration sections.
     """
+
     environment: str = "local_pilot"
     schema_version: str = "1.1"
 
@@ -145,6 +155,7 @@ class MemoryConfig:
 
 def _expand_env_vars(config: Dict[str, Any]) -> Dict[str, Any]:
     """Recursively expand environment variables in config values."""
+
     def expand_value(value: Any) -> Any:
         if isinstance(value, str) and value.startswith("${") and value.endswith("}"):
             env_var = value[2:-1]

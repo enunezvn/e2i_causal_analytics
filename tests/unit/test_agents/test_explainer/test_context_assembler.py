@@ -3,7 +3,6 @@
 import pytest
 
 from src.agents.explainer.nodes.context_assembler import ContextAssemblerNode
-from src.agents.explainer.state import ExplainerState
 
 
 class TestContextAssemblerNode:
@@ -28,9 +27,7 @@ class TestContextAssemblerNode:
     # ========================================================================
 
     @pytest.mark.asyncio
-    async def test_execute_with_single_result(
-        self, base_explainer_state, sample_causal_analysis
-    ):
+    async def test_execute_with_single_result(self, base_explainer_state, sample_causal_analysis):
         """Test context assembly with single analysis result."""
         node = ContextAssemblerNode()
         state = {**base_explainer_state, "analysis_results": [sample_causal_analysis]}
@@ -92,9 +89,7 @@ class TestContextAssemblerNode:
         assert len(result["errors"]) > 0
 
     @pytest.mark.asyncio
-    async def test_execute_with_minimal_result(
-        self, base_explainer_state, minimal_analysis_result
-    ):
+    async def test_execute_with_minimal_result(self, base_explainer_state, minimal_analysis_result):
         """Test context assembly with minimal analysis result."""
         node = ContextAssemblerNode()
         state = {**base_explainer_state, "analysis_results": [minimal_analysis_result]}
@@ -149,9 +144,7 @@ class TestContextAssemblerNode:
     # ========================================================================
 
     @pytest.mark.asyncio
-    async def test_extracts_user_context(
-        self, base_explainer_state, sample_causal_analysis
-    ):
+    async def test_extracts_user_context(self, base_explainer_state, sample_causal_analysis):
         """Test that user context is extracted."""
         node = ContextAssemblerNode()
         state = {
@@ -168,9 +161,7 @@ class TestContextAssemblerNode:
         assert result["user_context"]["output_format"] == "brief"
 
     @pytest.mark.asyncio
-    async def test_preserves_user_expertise(
-        self, base_explainer_state, sample_causal_analysis
-    ):
+    async def test_preserves_user_expertise(self, base_explainer_state, sample_causal_analysis):
         """Test that user expertise level is preserved in state."""
         node = ContextAssemblerNode()
         state = {
@@ -184,9 +175,7 @@ class TestContextAssemblerNode:
         assert result["user_expertise"] == "executive"
 
     @pytest.mark.asyncio
-    async def test_preserves_focus_areas(
-        self, base_explainer_state, sample_causal_analysis
-    ):
+    async def test_preserves_focus_areas(self, base_explainer_state, sample_causal_analysis):
         """Test that focus areas are preserved."""
         node = ContextAssemblerNode()
         focus = ["sales", "regional"]
@@ -205,9 +194,7 @@ class TestContextAssemblerNode:
     # ========================================================================
 
     @pytest.mark.asyncio
-    async def test_tracks_assembly_latency(
-        self, base_explainer_state, sample_causal_analysis
-    ):
+    async def test_tracks_assembly_latency(self, base_explainer_state, sample_causal_analysis):
         """Test that assembly latency is tracked."""
         node = ContextAssemblerNode()
         state = {**base_explainer_state, "analysis_results": [sample_causal_analysis]}
@@ -222,9 +209,7 @@ class TestContextAssemblerNode:
     # ========================================================================
 
     @pytest.mark.asyncio
-    async def test_extracts_dict_key_findings(
-        self, base_explainer_state, sample_causal_analysis
-    ):
+    async def test_extracts_dict_key_findings(self, base_explainer_state, sample_causal_analysis):
         """Test extraction of dictionary-style key findings."""
         node = ContextAssemblerNode()
         state = {**base_explainer_state, "analysis_results": [sample_causal_analysis]}

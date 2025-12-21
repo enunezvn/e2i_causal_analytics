@@ -5,14 +5,14 @@ Tests for SearchLogger class and its integration with SearchStats.
 All external dependencies are mocked.
 """
 
-import pytest
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 from uuid import UUID, uuid4
+
+import pytest
 
 from src.rag.search_logger import SearchLogger
 from src.rag.types import SearchStats
-
 
 # ============================================================================
 # Fixtures
@@ -48,7 +48,7 @@ def sample_search_stats():
         graph_latency_ms=40.0,
         fusion_latency_ms=5.0,
         timestamp=datetime.now(timezone.utc),
-        errors=[]
+        errors=[],
     )
 
 
@@ -115,9 +115,7 @@ class TestSearchLoggerLogSearch:
         user_id = "user-123"
 
         log_id = await search_logger.log_search(
-            sample_search_stats,
-            session_id=session_id,
-            user_id=user_id
+            sample_search_stats, session_id=session_id, user_id=user_id
         )
 
         assert log_id is not None
@@ -129,9 +127,7 @@ class TestSearchLoggerLogSearch:
         assert params["p_user_id"] == user_id
 
     @pytest.mark.asyncio
-    async def test_log_search_disabled(
-        self, mock_supabase_client, sample_search_stats
-    ):
+    async def test_log_search_disabled(self, mock_supabase_client, sample_search_stats):
         """Test that logging is skipped when disabled."""
         logger = SearchLogger(supabase_client=mock_supabase_client, enabled=False)
 
@@ -166,9 +162,7 @@ class TestSearchLoggerLogSearch:
         entities = {"brands": ["Remibrutinib"], "kpis": ["TRx"]}
 
         log_id = await search_logger.log_search(
-            sample_search_stats,
-            config=config,
-            extracted_entities=entities
+            sample_search_stats, config=config, extracted_entities=entities
         )
 
         assert log_id is not None
@@ -187,9 +181,7 @@ class TestSearchLoggerBatchLog:
     """Tests for SearchLogger.log_search_batch method."""
 
     @pytest.mark.asyncio
-    async def test_log_batch_success(
-        self, mock_supabase_client, search_logger
-    ):
+    async def test_log_batch_success(self, mock_supabase_client, search_logger):
         """Test successful batch logging."""
         stats_list = [
             SearchStats(
@@ -199,7 +191,7 @@ class TestSearchLoggerBatchLog:
                 fulltext_count=3,
                 graph_count=2,
                 fused_count=8,
-                sources_used={"vector": True, "fulltext": True, "graph": False}
+                sources_used={"vector": True, "fulltext": True, "graph": False},
             )
             for i in range(3)
         ]
@@ -226,7 +218,7 @@ class TestSearchLoggerBatchLog:
                 fulltext_count=1,
                 graph_count=0,
                 fused_count=2,
-                sources_used={}
+                sources_used={},
             )
         ]
 
@@ -249,18 +241,12 @@ class TestSearchLoggerAnalytics:
         """Test retrieving slow queries."""
         mock_response = MagicMock()
         mock_response.data = [
-            {
-                "log_id": str(uuid4()),
-                "query": "slow query 1",
-                "total_latency_ms": 2000.0
-            },
-            {
-                "log_id": str(uuid4()),
-                "query": "slow query 2",
-                "total_latency_ms": 1500.0
-            }
+            {"log_id": str(uuid4()), "query": "slow query 1", "total_latency_ms": 2000.0},
+            {"log_id": str(uuid4()), "query": "slow query 2", "total_latency_ms": 1500.0},
         ]
-        mock_supabase_client.from_.return_value.select.return_value.gt.return_value.order.return_value.limit.return_value.execute.return_value = mock_response
+        mock_supabase_client.from_.return_value.select.return_value.gt.return_value.order.return_value.limit.return_value.execute.return_value = (
+            mock_response
+        )
 
         slow_queries = await search_logger.get_slow_queries(limit=10, threshold_ms=1000.0)
 
@@ -286,17 +272,19 @@ class TestSearchLoggerAnalytics:
                 "query_count": 100,
                 "avg_latency_ms": 150.0,
                 "p95_latency_ms": 400.0,
-                "error_count": 2
+                "error_count": 2,
             },
             {
                 "hour": "2025-12-20T09:00:00Z",
                 "query_count": 80,
                 "avg_latency_ms": 120.0,
                 "p95_latency_ms": 350.0,
-                "error_count": 1
-            }
+                "error_count": 1,
+            },
         ]
-        mock_supabase_client.from_.return_value.select.return_value.order.return_value.limit.return_value.execute.return_value = mock_response
+        mock_supabase_client.from_.return_value.select.return_value.order.return_value.limit.return_value.execute.return_value = (
+            mock_response
+        )
 
         summary = await search_logger.get_search_stats_summary(hours=24)
 
@@ -310,7 +298,9 @@ class TestSearchLoggerAnalytics:
         """Test stats summary with no data."""
         mock_response = MagicMock()
         mock_response.data = []
-        mock_supabase_client.from_.return_value.select.return_value.order.return_value.limit.return_value.execute.return_value = mock_response
+        mock_supabase_client.from_.return_value.select.return_value.order.return_value.limit.return_value.execute.return_value = (
+            mock_response
+        )
 
         summary = await search_logger.get_search_stats_summary(hours=24)
 
@@ -358,7 +348,7 @@ class TestSearchStatsIntegration:
             graph_count=0,
             fused_count=0,
             sources_used={"vector": False, "fulltext": False, "graph": False},
-            errors=["Vector timeout", "Graph connection failed"]
+            errors=["Vector timeout", "Graph connection failed"],
         )
 
         assert len(stats.errors) == 2

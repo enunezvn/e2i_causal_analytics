@@ -22,7 +22,7 @@ class RAGError(Exception):
         self,
         message: str,
         details: Optional[Dict[str, Any]] = None,
-        original_error: Optional[Exception] = None
+        original_error: Optional[Exception] = None,
     ):
         super().__init__(message)
         self.message = message
@@ -34,7 +34,7 @@ class RAGError(Exception):
         result = {
             "error_type": self.__class__.__name__,
             "message": self.message,
-            "details": self.details
+            "details": self.details,
         }
         if self.original_error:
             result["original_error"] = str(self.original_error)
@@ -50,6 +50,7 @@ class ConfigurationError(RAGError):
     - Missing required environment variables
     - Invalid timeout values
     """
+
     pass
 
 
@@ -70,7 +71,7 @@ class EmbeddingError(RAGError):
         model: Optional[str] = None,
         batch_size: Optional[int] = None,
         details: Optional[Dict[str, Any]] = None,
-        original_error: Optional[Exception] = None
+        original_error: Optional[Exception] = None,
     ):
         super().__init__(message, details, original_error)
         self.model = model
@@ -97,7 +98,7 @@ class RetrieverError(RAGError):
         source: Optional[str] = None,
         query: Optional[str] = None,
         details: Optional[Dict[str, Any]] = None,
-        original_error: Optional[Exception] = None
+        original_error: Optional[Exception] = None,
     ):
         super().__init__(message, details, original_error)
         self.source = source
@@ -120,7 +121,7 @@ class BackendTimeoutError(RetrieverError):
         backend: str,
         timeout_ms: float,
         query: Optional[str] = None,
-        original_error: Optional[Exception] = None
+        original_error: Optional[Exception] = None,
     ):
         message = f"{backend} search timed out after {timeout_ms}ms"
         super().__init__(
@@ -128,7 +129,7 @@ class BackendTimeoutError(RetrieverError):
             source=backend,
             query=query,
             details={"timeout_ms": timeout_ms},
-            original_error=original_error
+            original_error=original_error,
         )
         self.backend = backend
         self.timeout_ms = timeout_ms
@@ -144,18 +145,13 @@ class BackendUnavailableError(RetrieverError):
     - Backend is marked unhealthy
     """
 
-    def __init__(
-        self,
-        backend: str,
-        reason: str,
-        original_error: Optional[Exception] = None
-    ):
+    def __init__(self, backend: str, reason: str, original_error: Optional[Exception] = None):
         message = f"{backend} is unavailable: {reason}"
         super().__init__(
             message=message,
             source=backend,
             details={"reason": reason},
-            original_error=original_error
+            original_error=original_error,
         )
         self.backend = backend
         self.reason = reason
@@ -170,14 +166,14 @@ class VectorSearchError(RetrieverError):
         backend: str = "supabase_vector",
         query: Optional[str] = None,
         details: Optional[Dict[str, Any]] = None,
-        original_error: Optional[Exception] = None
+        original_error: Optional[Exception] = None,
     ):
         super().__init__(
             message=message,
             source=backend,
             query=query,
             details=details,
-            original_error=original_error
+            original_error=original_error,
         )
         self.backend = backend
 
@@ -191,14 +187,14 @@ class FulltextSearchError(RetrieverError):
         backend: str = "supabase_fulltext",
         query: Optional[str] = None,
         details: Optional[Dict[str, Any]] = None,
-        original_error: Optional[Exception] = None
+        original_error: Optional[Exception] = None,
     ):
         super().__init__(
             message=message,
             source=backend,
             query=query,
             details=details,
-            original_error=original_error
+            original_error=original_error,
         )
         self.backend = backend
 
@@ -213,7 +209,7 @@ class GraphSearchError(RetrieverError):
         query: Optional[str] = None,
         cypher_query: Optional[str] = None,
         details: Optional[Dict[str, Any]] = None,
-        original_error: Optional[Exception] = None
+        original_error: Optional[Exception] = None,
     ):
         merged_details = details or {}
         if cypher_query:
@@ -224,7 +220,7 @@ class GraphSearchError(RetrieverError):
             source=backend,
             query=query,
             details=merged_details,
-            original_error=original_error
+            original_error=original_error,
         )
         self.backend = backend
         self.cypher_query = cypher_query
@@ -241,10 +237,7 @@ class EntityExtractionError(RAGError):
     """
 
     def __init__(
-        self,
-        message: str,
-        query: Optional[str] = None,
-        original_error: Optional[Exception] = None
+        self, message: str, query: Optional[str] = None, original_error: Optional[Exception] = None
     ):
         details = {}
         if query:
@@ -261,6 +254,7 @@ class FusionError(RAGError):
     - No results from any backend
     - Score normalization error
     """
+
     pass
 
 
@@ -271,17 +265,12 @@ class HealthCheckError(RAGError):
     Includes which backend failed and why.
     """
 
-    def __init__(
-        self,
-        backend: str,
-        reason: str,
-        original_error: Optional[Exception] = None
-    ):
+    def __init__(self, backend: str, reason: str, original_error: Optional[Exception] = None):
         message = f"Health check failed for {backend}: {reason}"
         super().__init__(
             message=message,
             details={"backend": backend, "reason": reason},
-            original_error=original_error
+            original_error=original_error,
         )
         self.backend = backend
         self.reason = reason
@@ -293,6 +282,7 @@ class CacheError(RAGError):
 
     Non-fatal - the system should continue without cache.
     """
+
     pass
 
 
@@ -303,18 +293,10 @@ class CircuitBreakerOpenError(RAGError):
     The backend has failed too many times and is temporarily blocked.
     """
 
-    def __init__(
-        self,
-        backend: str,
-        reset_time_seconds: float
-    ):
+    def __init__(self, backend: str, reset_time_seconds: float):
         message = f"Circuit breaker open for {backend}, resets in {reset_time_seconds:.1f}s"
         super().__init__(
-            message=message,
-            details={
-                "backend": backend,
-                "reset_time_seconds": reset_time_seconds
-            }
+            message=message, details={"backend": backend, "reset_time_seconds": reset_time_seconds}
         )
         self.backend = backend
         self.reset_time_seconds = reset_time_seconds

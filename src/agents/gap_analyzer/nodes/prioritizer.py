@@ -11,13 +11,13 @@ Categorization Criteria:
 """
 
 import time
-from typing import Dict, List, Any, Literal
+from typing import Any, Dict, List, Literal
 
 from ..state import (
     GapAnalyzerState,
     PerformanceGap,
-    ROIEstimate,
     PrioritizedOpportunity,
+    ROIEstimate,
 )
 
 
@@ -89,9 +89,7 @@ class PrioritizerNode:
                 opportunities.append(opportunity)
 
             # Sort by expected ROI (descending)
-            opportunities.sort(
-                key=lambda o: o["roi_estimate"]["expected_roi"], reverse=True
-            )
+            opportunities.sort(key=lambda o: o["roi_estimate"]["expected_roi"], reverse=True)
 
             # Assign ranks
             for rank, opp in enumerate(opportunities, start=1):
@@ -253,9 +251,7 @@ class PrioritizerNode:
 
         return action
 
-    def _estimate_time_to_impact(
-        self, difficulty: Literal["low", "medium", "high"]
-    ) -> str:
+    def _estimate_time_to_impact(self, difficulty: Literal["low", "medium", "high"]) -> str:
         """Estimate time to see results.
 
         Args:
@@ -296,9 +292,7 @@ class PrioritizerNode:
         ]
 
         # Sort by ROI
-        quick_wins.sort(
-            key=lambda o: o["roi_estimate"]["expected_roi"], reverse=True
-        )
+        quick_wins.sort(key=lambda o: o["roi_estimate"]["expected_roi"], reverse=True)
 
         return quick_wins
 
@@ -327,8 +321,6 @@ class PrioritizerNode:
         ]
 
         # Sort by ROI
-        strategic_bets.sort(
-            key=lambda o: o["roi_estimate"]["expected_roi"], reverse=True
-        )
+        strategic_bets.sort(key=lambda o: o["roi_estimate"]["expected_roi"], reverse=True)
 
         return strategic_bets

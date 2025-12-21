@@ -5,6 +5,7 @@ Tests complete end-to-end workflows and input/output validation.
 
 import pytest
 from pydantic import ValidationError
+
 from src.agents.drift_monitor import DriftMonitorAgent, DriftMonitorInput, DriftMonitorOutput
 
 
@@ -23,8 +24,7 @@ class TestDriftMonitorAgent:
         """Test basic agent execution."""
         agent = DriftMonitorAgent()
         input_data = DriftMonitorInput(
-            query="Check for drift",
-            features_to_monitor=["feature1", "feature2"]
+            query="Check for drift", features_to_monitor=["feature1", "feature2"]
         )
 
         result = await agent.run(input_data)
@@ -38,9 +38,7 @@ class TestDriftMonitorAgent:
         """Test execution with model_id."""
         agent = DriftMonitorAgent()
         input_data = DriftMonitorInput(
-            query="Check model drift",
-            features_to_monitor=["feature1"],
-            model_id="model_v1"
+            query="Check model drift", features_to_monitor=["feature1"], model_id="model_v1"
         )
 
         result = await agent.run(input_data)
@@ -55,7 +53,7 @@ class TestDriftMonitorAgent:
         input_data = DriftMonitorInput(
             query="Check drift for Remibrutinib",
             features_to_monitor=["feature1"],
-            brand="Remibrutinib"
+            brand="Remibrutinib",
         )
 
         result = await agent.run(input_data)
@@ -67,9 +65,7 @@ class TestDriftMonitorAgent:
         """Test execution with custom time window."""
         agent = DriftMonitorAgent()
         input_data = DriftMonitorInput(
-            query="Check drift over 30 days",
-            features_to_monitor=["feature1"],
-            time_window="30d"
+            query="Check drift over 30 days", features_to_monitor=["feature1"], time_window="30d"
         )
 
         result = await agent.run(input_data)
@@ -82,8 +78,7 @@ class TestDriftMonitorAgent:
         agent = DriftMonitorAgent()
         features = [f"feature_{i}" for i in range(20)]
         input_data = DriftMonitorInput(
-            query="Check drift in all features",
-            features_to_monitor=features
+            query="Check drift in all features", features_to_monitor=features
         )
 
         result = await agent.run(input_data)
@@ -96,10 +91,7 @@ class TestDriftMonitorInput:
 
     def test_valid_input_minimal(self):
         """Test valid minimal input."""
-        input_data = DriftMonitorInput(
-            query="test",
-            features_to_monitor=["feature1"]
-        )
+        input_data = DriftMonitorInput(query="test", features_to_monitor=["feature1"])
 
         assert input_data.query == "test"
         assert input_data.features_to_monitor == ["feature1"]
@@ -119,7 +111,7 @@ class TestDriftMonitorInput:
             psi_threshold=0.15,
             check_data_drift=True,
             check_model_drift=False,
-            check_concept_drift=True
+            check_concept_drift=True,
         )
 
         assert input_data.model_id == "model_v1"
@@ -133,54 +125,39 @@ class TestDriftMonitorInput:
     def test_invalid_empty_features(self):
         """Test invalid empty features list."""
         with pytest.raises(ValidationError):
-            DriftMonitorInput(
-                query="test",
-                features_to_monitor=[]  # Empty list
-            )
+            DriftMonitorInput(query="test", features_to_monitor=[])  # Empty list
 
     def test_invalid_time_window_no_d(self):
         """Test invalid time window without 'd'."""
         with pytest.raises(ValidationError):
             DriftMonitorInput(
-                query="test",
-                features_to_monitor=["f1"],
-                time_window="7"  # Missing 'd'
+                query="test", features_to_monitor=["f1"], time_window="7"  # Missing 'd'
             )
 
     def test_invalid_time_window_too_large(self):
         """Test invalid time window too large."""
         with pytest.raises(ValidationError):
-            DriftMonitorInput(
-                query="test",
-                features_to_monitor=["f1"],
-                time_window="500d"  # > 365
-            )
+            DriftMonitorInput(query="test", features_to_monitor=["f1"], time_window="500d")  # > 365
 
     def test_invalid_significance_level_too_low(self):
         """Test invalid significance level too low."""
         with pytest.raises(ValidationError):
             DriftMonitorInput(
-                query="test",
-                features_to_monitor=["f1"],
-                significance_level=0.005  # < 0.01
+                query="test", features_to_monitor=["f1"], significance_level=0.005  # < 0.01
             )
 
     def test_invalid_significance_level_too_high(self):
         """Test invalid significance level too high."""
         with pytest.raises(ValidationError):
             DriftMonitorInput(
-                query="test",
-                features_to_monitor=["f1"],
-                significance_level=0.15  # > 0.10
+                query="test", features_to_monitor=["f1"], significance_level=0.15  # > 0.10
             )
 
     def test_invalid_psi_threshold_negative(self):
         """Test invalid PSI threshold negative."""
         with pytest.raises(ValidationError):
             DriftMonitorInput(
-                query="test",
-                features_to_monitor=["f1"],
-                psi_threshold=-0.1  # Negative
+                query="test", features_to_monitor=["f1"], psi_threshold=-0.1  # Negative
             )
 
 
@@ -191,10 +168,7 @@ class TestDriftMonitorOutput:
     async def test_output_structure(self):
         """Test output structure."""
         agent = DriftMonitorAgent()
-        input_data = DriftMonitorInput(
-            query="test",
-            features_to_monitor=["feature1"]
-        )
+        input_data = DriftMonitorInput(query="test", features_to_monitor=["feature1"])
 
         result = await agent.run(input_data)
 
@@ -217,10 +191,7 @@ class TestDriftMonitorOutput:
     async def test_output_drift_score_range(self):
         """Test drift score is in valid range."""
         agent = DriftMonitorAgent()
-        input_data = DriftMonitorInput(
-            query="test",
-            features_to_monitor=["feature1"]
-        )
+        input_data = DriftMonitorInput(query="test", features_to_monitor=["feature1"])
 
         result = await agent.run(input_data)
 
@@ -230,10 +201,7 @@ class TestDriftMonitorOutput:
     async def test_output_alerts_structure(self):
         """Test alerts structure."""
         agent = DriftMonitorAgent()
-        input_data = DriftMonitorInput(
-            query="test",
-            features_to_monitor=["feature1"]
-        )
+        input_data = DriftMonitorInput(query="test", features_to_monitor=["feature1"])
 
         result = await agent.run(input_data)
 
@@ -252,10 +220,7 @@ class TestDriftMonitorOutput:
     async def test_output_drift_summary_exists(self):
         """Test drift summary is generated."""
         agent = DriftMonitorAgent()
-        input_data = DriftMonitorInput(
-            query="test",
-            features_to_monitor=["feature1"]
-        )
+        input_data = DriftMonitorInput(query="test", features_to_monitor=["feature1"])
 
         result = await agent.run(input_data)
 
@@ -265,10 +230,7 @@ class TestDriftMonitorOutput:
     async def test_output_recommended_actions_exists(self):
         """Test recommended actions are generated."""
         agent = DriftMonitorAgent()
-        input_data = DriftMonitorInput(
-            query="test",
-            features_to_monitor=["feature1"]
-        )
+        input_data = DriftMonitorInput(query="test", features_to_monitor=["feature1"])
 
         result = await agent.run(input_data)
 
@@ -287,7 +249,7 @@ class TestEndToEndWorkflows:
             features_to_monitor=["feature1", "feature2"],
             check_data_drift=True,
             check_model_drift=False,
-            check_concept_drift=False
+            check_concept_drift=False,
         )
 
         result = await agent.run(input_data)
@@ -306,7 +268,7 @@ class TestEndToEndWorkflows:
             model_id="model_v1",
             check_data_drift=False,
             check_model_drift=True,
-            check_concept_drift=False
+            check_concept_drift=False,
         )
 
         result = await agent.run(input_data)
@@ -325,7 +287,7 @@ class TestEndToEndWorkflows:
             model_id="model_v1",
             check_data_drift=True,
             check_model_drift=True,
-            check_concept_drift=True
+            check_concept_drift=True,
         )
 
         result = await agent.run(input_data)
@@ -342,9 +304,7 @@ class TestEndToEndWorkflows:
 
         for brand in ["Remibrutinib", "Fabhalta", "Kisqali"]:
             input_data = DriftMonitorInput(
-                query=f"Check drift for {brand}",
-                features_to_monitor=["feature1"],
-                brand=brand
+                query=f"Check drift for {brand}", features_to_monitor=["feature1"], brand=brand
             )
 
             result = await agent.run(input_data)
@@ -360,7 +320,7 @@ class TestEndToEndWorkflows:
             input_data = DriftMonitorInput(
                 query=f"Check drift over {window}",
                 features_to_monitor=["feature1"],
-                time_window=window
+                time_window=window,
             )
 
             result = await agent.run(input_data)
@@ -373,10 +333,7 @@ class TestEndToEndWorkflows:
         agent = DriftMonitorAgent()
         features = [f"feature_{i}" for i in range(50)]
 
-        input_data = DriftMonitorInput(
-            query="Latency test",
-            features_to_monitor=features
-        )
+        input_data = DriftMonitorInput(query="Latency test", features_to_monitor=features)
 
         result = await agent.run(input_data)
 

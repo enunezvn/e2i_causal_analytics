@@ -7,9 +7,9 @@ be used by the Tool Composer. Tools are exposed by agents and
 registered at startup.
 """
 
-from typing import Optional, Callable
-from .schemas import ToolSchema, ToolCategory
+from typing import Optional
 
+from .schemas import ToolCategory, ToolSchema
 
 # Domain to category mapping
 DOMAIN_TO_CATEGORY = {
@@ -25,7 +25,7 @@ DOMAIN_TO_CATEGORY = {
 class ToolRegistry:
     """
     Central registry for composable tools.
-    
+
     Provides registration, lookup, and dependency information
     for tools exposed by agents.
     """
@@ -33,9 +33,7 @@ class ToolRegistry:
     def __init__(self):
         """Initialize empty registry."""
         self._tools: dict[str, ToolSchema] = {}
-        self._by_category: dict[ToolCategory, list[str]] = {
-            cat: [] for cat in ToolCategory
-        }
+        self._by_category: dict[ToolCategory, list[str]] = {cat: [] for cat in ToolCategory}
         self._by_agent: dict[str, list[str]] = {}
         self._dependencies: dict[str, list[str]] = {}  # tool -> can_consume_from
 
@@ -46,7 +44,7 @@ class ToolRegistry:
     def register(self, tool: ToolSchema) -> None:
         """
         Register a tool in the registry.
-        
+
         Args:
             tool: Tool schema to register
         """
@@ -54,15 +52,15 @@ class ToolRegistry:
             raise ValueError(f"Tool '{tool.name}' already registered")
 
         self._tools[tool.name] = tool
-        
+
         # Index by category
         self._by_category[tool.category].append(tool.name)
-        
+
         # Index by agent
         if tool.source_agent not in self._by_agent:
             self._by_agent[tool.source_agent] = []
         self._by_agent[tool.source_agent].append(tool.name)
-        
+
         # Store dependencies
         self._dependencies[tool.name] = tool.can_consume_from
 
@@ -75,9 +73,9 @@ class ToolRegistry:
         """Remove a tool from the registry."""
         if tool_name not in self._tools:
             return
-            
+
         tool = self._tools[tool_name]
-        
+
         # Remove from indices
         self._by_category[tool.category].remove(tool_name)
         self._by_agent[tool.source_agent].remove(tool_name)
@@ -142,38 +140,38 @@ class ToolRegistry:
     def select_for_domains(self, domains: list[str]) -> list[ToolSchema]:
         """
         Select best tools for given domains.
-        
+
         Args:
             domains: List of domain names
-            
+
         Returns:
             List of tools that cover the domains
         """
         selected = []
         seen = set()
-        
+
         for domain in domains:
             tools = self.get_by_domain(domain)
             for tool in tools:
                 if tool.name not in seen and tool.composable:
                     selected.append(tool)
                     seen.add(tool.name)
-        
+
         return selected
 
     def get_execution_order(self, tool_names: list[str]) -> list[list[str]]:
         """
         Get tools in execution order based on dependencies.
         Returns groups that can be executed in parallel.
-        
+
         Args:
             tool_names: Tools to order
-            
+
         Returns:
             List of groups (each group can run in parallel)
         """
         # Build dependency graph
-        in_degree = {name: 0 for name in tool_names}
+        in_degree = dict.fromkeys(tool_names, 0)
         for name in tool_names:
             for dep in self._dependencies.get(name, []):
                 if dep in tool_names:
@@ -182,26 +180,22 @@ class ToolRegistry:
         # Topological sort with level tracking
         levels = []
         remaining = set(tool_names)
-        
+
         while remaining:
             # Find tools with no dependencies in remaining set
             level = [
-                name for name in remaining
-                if all(
-                    dep not in remaining
-                    for dep in self._dependencies.get(name, [])
-                )
+                name
+                for name in remaining
+                if all(dep not in remaining for dep in self._dependencies.get(name, []))
             ]
-            
+
             if not level:
                 # Circular dependency detected
-                raise ValueError(
-                    f"Circular dependency detected among: {remaining}"
-                )
-            
+                raise ValueError(f"Circular dependency detected among: {remaining}")
+
             levels.append(level)
             remaining -= set(level)
-        
+
         return levels
 
 
@@ -209,10 +203,11 @@ class ToolRegistry:
 # DEFAULT TOOL DEFINITIONS
 # =============================================================================
 
+
 def create_default_tools() -> list[ToolSchema]:
     """
     Create default tool definitions.
-    
+
     Note: fn (callable) is set to None here and must be
     populated when agents register their actual implementations.
     """
@@ -293,7 +288,6 @@ def create_default_tools() -> list[ToolSchema]:
             },
             can_consume_from=["causal_effect_estimator"],
         ),
-
         # =====================================================================
         # HETEROGENEOUS OPTIMIZER TOOLS
         # =====================================================================
@@ -344,7 +338,6 @@ def create_default_tools() -> list[ToolSchema]:
             },
             can_consume_from=["cate_analyzer"],
         ),
-
         # =====================================================================
         # GAP ANALYZER TOOLS
         # =====================================================================
@@ -359,7 +352,10 @@ def create_default_tools() -> list[ToolSchema]:
                     "entity_type": {"type": "string"},
                     "metric": {"type": "string"},
                     "group_by": {"type": "string"},
-                    "benchmark": {"type": "string", "enum": ["mean", "median", "top_decile", "target"]},
+                    "benchmark": {
+                        "type": "string",
+                        "enum": ["mean", "median", "top_decile", "target"],
+                    },
                 },
                 "required": ["entity_type", "metric"],
             },
@@ -399,7 +395,6 @@ def create_default_tools() -> list[ToolSchema]:
             },
             can_consume_from=["gap_calculator"],
         ),
-
         # =====================================================================
         # EXPERIMENT DESIGNER TOOLS
         # =====================================================================
@@ -457,7 +452,6 @@ def create_default_tools() -> list[ToolSchema]:
             },
             can_consume_from=["causal_effect_estimator", "cate_analyzer", "gap_calculator"],
         ),
-
         # =====================================================================
         # PREDICTION SYNTHESIZER TOOLS
         # =====================================================================
@@ -509,7 +503,6 @@ def create_default_tools() -> list[ToolSchema]:
             },
             can_consume_from=[],
         ),
-
         # =====================================================================
         # DRIFT MONITOR TOOLS
         # =====================================================================

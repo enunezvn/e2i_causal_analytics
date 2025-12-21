@@ -18,22 +18,26 @@ Contract: .claude/contracts/tier3-contracts.md lines 349-562
 """
 
 from typing import Optional
+
 from pydantic import BaseModel, Field, field_validator
 
-from src.agents.drift_monitor.state import DriftMonitorState, ErrorDetails
 from src.agents.drift_monitor.graph import drift_monitor_graph
-
+from src.agents.drift_monitor.state import DriftMonitorState
 
 # ===== INPUT/OUTPUT MODELS =====
+
 
 class DriftMonitorInput(BaseModel):
     """Input model for Drift Monitor Agent.
 
     Contract: .claude/contracts/tier3-contracts.md lines 355-393
     """
+
     # Required fields
     query: str = Field(..., description="User query or description of drift check")
-    features_to_monitor: list[str] = Field(..., min_length=1, description="Features to check for drift")
+    features_to_monitor: list[str] = Field(
+        ..., min_length=1, description="Features to check for drift"
+    )
 
     # Optional fields
     model_id: Optional[str] = Field(None, description="Model ID for model drift checks")
@@ -41,7 +45,9 @@ class DriftMonitorInput(BaseModel):
     brand: Optional[str] = Field(None, description="Brand filter")
 
     # Configuration
-    significance_level: float = Field(0.05, ge=0.01, le=0.10, description="Statistical significance level")
+    significance_level: float = Field(
+        0.05, ge=0.01, le=0.10, description="Statistical significance level"
+    )
     psi_threshold: float = Field(0.1, ge=0.0, le=1.0, description="PSI warning threshold")
     check_data_drift: bool = Field(True, description="Whether to check data drift")
     check_model_drift: bool = Field(True, description="Whether to check model drift")
@@ -67,6 +73,7 @@ class DriftMonitorOutput(BaseModel):
 
     Contract: .claude/contracts/tier3-contracts.md lines 395-445
     """
+
     # Detection results
     data_drift_results: list[dict] = Field(..., description="Data drift detection results")
     model_drift_results: list[dict] = Field(..., description="Model drift detection results")
@@ -90,6 +97,7 @@ class DriftMonitorOutput(BaseModel):
 
 
 # ===== MAIN AGENT =====
+
 
 class DriftMonitorAgent:
     """Drift Monitor Agent - Detects data, model, and concept drift.
@@ -163,14 +171,12 @@ class DriftMonitorAgent:
             "features_to_monitor": input_data.features_to_monitor,
             "time_window": input_data.time_window,
             "brand": input_data.brand,
-
             # Configuration
             "significance_level": input_data.significance_level,
             "psi_threshold": input_data.psi_threshold,
             "check_data_drift": input_data.check_data_drift,
             "check_model_drift": input_data.check_model_drift,
             "check_concept_drift": input_data.check_concept_drift,
-
             # Error handling
             "errors": [],
             "warnings": [],
@@ -193,20 +199,17 @@ class DriftMonitorAgent:
             data_drift_results=state.get("data_drift_results", []),
             model_drift_results=state.get("model_drift_results", []),
             concept_drift_results=state.get("concept_drift_results", []),
-
             # Aggregated outputs
             overall_drift_score=state.get("overall_drift_score", 0.0),
             features_with_drift=state.get("features_with_drift", []),
             alerts=state.get("alerts", []),
-
             # Summary
             drift_summary=state.get("drift_summary", "No summary available"),
             recommended_actions=state.get("recommended_actions", []),
-
             # Metadata
             detection_latency_ms=state.get("detection_latency_ms", 0),
             features_checked=state.get("features_checked", 0),
             baseline_timestamp=state.get("baseline_timestamp", ""),
             current_timestamp=state.get("current_timestamp", ""),
-            warnings=state.get("warnings", [])
+            warnings=state.get("warnings", []),
         )

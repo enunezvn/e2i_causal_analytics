@@ -5,9 +5,9 @@ Pure computation - no LLM needed.
 """
 
 import time
-from typing import List, Dict, Any
+from typing import Any, Dict, List
 
-from ..state import HeterogeneousOptimizerState, SegmentProfile, CATEResult
+from ..state import CATEResult, HeterogeneousOptimizerState, SegmentProfile
 
 
 class SegmentAnalyzerNode:
@@ -21,9 +21,7 @@ class SegmentAnalyzerNode:
         self.high_responder_threshold = 1.5  # 1.5x ATE
         self.low_responder_threshold = 0.5  # 0.5x ATE
 
-    async def execute(
-        self, state: HeterogeneousOptimizerState
-    ) -> HeterogeneousOptimizerState:
+    async def execute(self, state: HeterogeneousOptimizerState) -> HeterogeneousOptimizerState:
         """Execute segment analysis."""
         start_time = time.time()
 
@@ -123,9 +121,7 @@ class SegmentAnalyzerNode:
                     }
                 ],
                 size=result["sample_size"],
-                size_percentage=result["sample_size"] / total_size * 100
-                if total_size > 0
-                else 0,
+                size_percentage=result["sample_size"] / total_size * 100 if total_size > 0 else 0,
                 recommendation=self._generate_recommendation(
                     seg["segment_var"], result, responder_type
                 ),
@@ -161,7 +157,10 @@ class SegmentAnalyzerNode:
             return f"De-prioritize treatment for {segment_var}={segment_value} (CATE: {cate:.3f}). Consider alternative interventions."
 
     def _create_comparison(
-        self, high_responders: List[SegmentProfile], low_responders: List[SegmentProfile], ate: float
+        self,
+        high_responders: List[SegmentProfile],
+        low_responders: List[SegmentProfile],
+        ate: float,
     ) -> Dict[str, Any]:
         """Create comparison summary between high and low responders.
 
@@ -189,9 +188,7 @@ class SegmentAnalyzerNode:
             "overall_ate": ate,
             "high_responder_avg_cate": high_avg_cate,
             "low_responder_avg_cate": low_avg_cate,
-            "effect_ratio": high_avg_cate / low_avg_cate
-            if low_avg_cate != 0
-            else float("inf"),
+            "effect_ratio": high_avg_cate / low_avg_cate if low_avg_cate != 0 else float("inf"),
             "high_responder_count": len(high_responders),
             "low_responder_count": len(low_responders),
         }

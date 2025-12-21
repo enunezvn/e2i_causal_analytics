@@ -6,10 +6,10 @@ Handles:
 3. Traffic management
 """
 
-import uuid
 import time
-from typing import Dict, Any
+import uuid
 from datetime import datetime
+from typing import Any, Dict
 
 
 async def package_model(state: Dict[str, Any]) -> Dict[str, Any]:

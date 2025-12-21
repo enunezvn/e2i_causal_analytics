@@ -1,6 +1,7 @@
 """Tests for Prioritizer Node."""
 
 import pytest
+
 from src.agents.gap_analyzer.nodes.prioritizer import PrioritizerNode
 from src.agents.gap_analyzer.state import (
     GapAnalyzerState,
@@ -28,9 +29,7 @@ class TestPrioritizerNode:
             "gap_type": "vs_target",
         }
 
-    def _create_test_roi(
-        self, gap_id: str, roi: float = 3.0, cost: float = 10000.0
-    ) -> ROIEstimate:
+    def _create_test_roi(self, gap_id: str, roi: float = 3.0, cost: float = 10000.0) -> ROIEstimate:
         """Create test ROI estimate."""
         revenue = cost * (roi + 1)  # revenue = cost * (1 + ROI)
         return {
@@ -43,9 +42,7 @@ class TestPrioritizerNode:
             "assumptions": ["Test assumption"],
         }
 
-    def _create_test_state(
-        self, gaps: list, roi_estimates: list
-    ) -> GapAnalyzerState:
+    def _create_test_state(self, gaps: list, roi_estimates: list) -> GapAnalyzerState:
         """Create test state."""
         return {
             "query": "test",
@@ -87,9 +84,7 @@ class TestPrioritizerNode:
         roi1 = self._create_test_roi(gap1["gap_id"], roi=5.0)
         roi2 = self._create_test_roi(gap2["gap_id"], roi=3.0)
 
-        state = self._create_test_state(
-            gaps=[gap1, gap2], roi_estimates=[roi1, roi2]
-        )
+        state = self._create_test_state(gaps=[gap1, gap2], roi_estimates=[roi1, roi2])
 
         result = await node.execute(state)
 
@@ -118,9 +113,7 @@ class TestPrioritizerNode:
         roi2 = self._create_test_roi(gap2["gap_id"], roi=5.0)  # Highest
         roi3 = self._create_test_roi(gap3["gap_id"], roi=3.0)
 
-        state = self._create_test_state(
-            gaps=[gap1, gap2, gap3], roi_estimates=[roi1, roi2, roi3]
-        )
+        state = self._create_test_state(gaps=[gap1, gap2, gap3], roi_estimates=[roi1, roi2, roi3])
 
         result = await node.execute(state)
 
@@ -142,9 +135,7 @@ class TestPrioritizerNode:
         roi1 = self._create_test_roi(gap1["gap_id"], roi=5.0)
         roi2 = self._create_test_roi(gap2["gap_id"], roi=3.0)
 
-        state = self._create_test_state(
-            gaps=[gap1, gap2], roi_estimates=[roi1, roi2]
-        )
+        state = self._create_test_state(gaps=[gap1, gap2], roi_estimates=[roi1, roi2])
 
         result = await node.execute(state)
 
@@ -169,8 +160,7 @@ class TestPrioritizerNode:
             gaps.append(gap)
 
         roi_estimates = [
-            self._create_test_roi(gap["gap_id"], roi=float(i + 1))
-            for i, gap in enumerate(gaps)
+            self._create_test_roi(gap["gap_id"], roi=float(i + 1)) for i, gap in enumerate(gaps)
         ]
 
         state = self._create_test_state(gaps=gaps, roi_estimates=roi_estimates)
@@ -208,14 +198,10 @@ class TestPrioritizerNode:
         roi_qw = self._create_test_roi(gap_qw["gap_id"], roi=2.0, cost=5000.0)
 
         # Create high-difficulty gap
-        gap_hard = self._create_test_gap(
-            metric="market_share", gap_size=200.0, gap_percentage=40.0
-        )
+        gap_hard = self._create_test_gap(metric="market_share", gap_size=200.0, gap_percentage=40.0)
         roi_hard = self._create_test_roi(gap_hard["gap_id"], roi=2.0, cost=100000.0)
 
-        state = self._create_test_state(
-            gaps=[gap_qw, gap_hard], roi_estimates=[roi_qw, roi_hard]
-        )
+        state = self._create_test_state(gaps=[gap_qw, gap_hard], roi_estimates=[roi_qw, roi_hard])
 
         result = await node.execute(state)
 
@@ -252,9 +238,7 @@ class TestPrioritizerNode:
         node = PrioritizerNode()
 
         # Create high-difficulty, high-ROI gap
-        gap = self._create_test_gap(
-            metric="market_share", gap_size=200.0, gap_percentage=40.0
-        )
+        gap = self._create_test_gap(metric="market_share", gap_size=200.0, gap_percentage=40.0)
         roi = self._create_test_roi(gap["gap_id"], roi=3.0, cost=100000.0)  # High cost
 
         state = self._create_test_state(gaps=[gap], roi_estimates=[roi])
@@ -269,18 +253,14 @@ class TestPrioritizerNode:
         node = PrioritizerNode()
 
         # Strategic bet: high difficulty, high ROI, high cost
-        gap_sb = self._create_test_gap(
-            metric="market_share", gap_size=200.0, gap_percentage=40.0
-        )
+        gap_sb = self._create_test_gap(metric="market_share", gap_size=200.0, gap_percentage=40.0)
         roi_sb = self._create_test_roi(gap_sb["gap_id"], roi=3.0, cost=100000.0)
 
         # Not strategic bet: low ROI
         gap_low = self._create_test_gap(metric="trx", gap_size=200.0)
         roi_low = self._create_test_roi(gap_low["gap_id"], roi=1.0, cost=100000.0)
 
-        state = self._create_test_state(
-            gaps=[gap_sb, gap_low], roi_estimates=[roi_sb, roi_low]
-        )
+        state = self._create_test_state(gaps=[gap_sb, gap_low], roi_estimates=[roi_sb, roi_low])
 
         result = await node.execute(state)
 
@@ -430,9 +410,7 @@ class TestPrioritizerEdgeCases:
             "assumptions": [],
         }
 
-    def _create_test_state(
-        self, gaps: list, roi_estimates: list
-    ) -> GapAnalyzerState:
+    def _create_test_state(self, gaps: list, roi_estimates: list) -> GapAnalyzerState:
         """Create test state."""
         return {
             "query": "test",

@@ -43,24 +43,14 @@ class HealthScoreInput(BaseModel):
 class HealthScoreOutput(BaseModel):
     """Output contract for Health Score agent"""
 
-    overall_health_score: float = Field(
-        description="Overall health score (0-100)"
-    )
+    overall_health_score: float = Field(description="Overall health score (0-100)")
     health_grade: str = Field(description="Letter grade (A-F)")
-    component_health_score: float = Field(
-        description="Component health score (0-1)"
-    )
+    component_health_score: float = Field(description="Component health score (0-1)")
     model_health_score: float = Field(description="Model health score (0-1)")
-    pipeline_health_score: float = Field(
-        description="Pipeline health score (0-1)"
-    )
+    pipeline_health_score: float = Field(description="Pipeline health score (0-1)")
     agent_health_score: float = Field(description="Agent health score (0-1)")
-    critical_issues: List[str] = Field(
-        default_factory=list, description="List of critical issues"
-    )
-    warnings: List[str] = Field(
-        default_factory=list, description="List of warnings"
-    )
+    critical_issues: List[str] = Field(default_factory=list, description="List of critical issues")
+    warnings: List[str] = Field(default_factory=list, description="List of warnings")
     health_summary: str = Field(description="Human-readable health summary")
     check_latency_ms: int = Field(description="Total check latency in ms")
     timestamp: str = Field(description="Timestamp of health check")
@@ -183,9 +173,7 @@ class HealthScoreAgent:
                 agent_health_score=result.get("agent_health_score", 1.0),
                 critical_issues=result.get("critical_issues", []),
                 warnings=result.get("warnings", []),
-                health_summary=result.get(
-                    "health_summary", "Health check completed"
-                ),
+                health_summary=result.get("health_summary", "Health check completed"),
                 check_latency_ms=result.get("check_latency_ms", 0),
                 timestamp=result.get("timestamp", datetime.now(timezone.utc).isoformat()),
             )
@@ -261,36 +249,24 @@ class HealthScoreAgent:
             "warnings": output.warnings,
             "recommendations": self._generate_recommendations(output),
             "requires_further_analysis": output.health_grade in ["D", "F"],
-            "suggested_next_agent": (
-                "drift_monitor" if output.model_health_score < 0.8 else None
-            ),
+            "suggested_next_agent": ("drift_monitor" if output.model_health_score < 0.8 else None),
         }
 
-    def _generate_recommendations(
-        self, output: HealthScoreOutput
-    ) -> List[str]:
+    def _generate_recommendations(self, output: HealthScoreOutput) -> List[str]:
         """Generate recommendations based on health status."""
         recommendations = []
 
         if output.component_health_score < 0.8:
-            recommendations.append(
-                "Investigate unhealthy components and restore services"
-            )
+            recommendations.append("Investigate unhealthy components and restore services")
 
         if output.model_health_score < 0.8:
-            recommendations.append(
-                "Review model performance metrics and consider retraining"
-            )
+            recommendations.append("Review model performance metrics and consider retraining")
 
         if output.pipeline_health_score < 0.8:
-            recommendations.append(
-                "Check data pipeline freshness and resolve any failures"
-            )
+            recommendations.append("Check data pipeline freshness and resolve any failures")
 
         if output.agent_health_score < 0.8:
-            recommendations.append(
-                "Verify agent availability and address any connectivity issues"
-            )
+            recommendations.append("Verify agent availability and address any connectivity issues")
 
         if not recommendations:
             recommendations.append("Continue monitoring - system is healthy")

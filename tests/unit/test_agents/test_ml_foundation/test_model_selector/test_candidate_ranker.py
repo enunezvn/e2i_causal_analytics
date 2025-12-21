@@ -1,11 +1,12 @@
 """Tests for candidate_ranker.py ranking and selection logic."""
 
 import pytest
+
 from src.agents.ml_foundation.model_selector.nodes.candidate_ranker import (
-    rank_candidates,
-    select_primary_candidate,
     _compute_selection_score,
     _get_algorithm_class,
+    rank_candidates,
+    select_primary_candidate,
 )
 
 
@@ -47,9 +48,7 @@ class TestComputeSelectionScore:
         success_rates = {"CausalForest": 0.5, "XGBoost": 0.5}
 
         score_causal = _compute_selection_score(candidate_causal, success_rates, [], 1000)
-        score_non_causal = _compute_selection_score(
-            candidate_non_causal, success_rates, [], 1000
-        )
+        score_non_causal = _compute_selection_score(candidate_non_causal, success_rates, [], 1000)
 
         # Causal should have ~0.10 higher score
         assert score_causal > score_non_causal
@@ -67,9 +66,7 @@ class TestComputeSelectionScore:
         success_rates = {"XGBoost": 0.5}
 
         score_without_pref = _compute_selection_score(candidate, success_rates, [], 1000)
-        score_with_pref = _compute_selection_score(
-            candidate, success_rates, ["XGBoost"], 1000
-        )
+        score_with_pref = _compute_selection_score(candidate, success_rates, ["XGBoost"], 1000)
 
         # Preference should add 0.10
         assert score_with_pref > score_without_pref
@@ -117,9 +114,7 @@ class TestComputeSelectionScore:
         success_rates = {"LinearDML": 0.5, "CausalForest": 0.5}
 
         score_low_mem = _compute_selection_score(candidate_low_mem, success_rates, [], 1000)
-        score_high_mem = _compute_selection_score(
-            candidate_high_mem, success_rates, [], 1000
-        )
+        score_high_mem = _compute_selection_score(candidate_high_mem, success_rates, [], 1000)
 
         assert score_low_mem > score_high_mem
 
@@ -144,9 +139,7 @@ class TestComputeSelectionScore:
         score_interpretable = _compute_selection_score(
             candidate_interpretable, success_rates, [], 1000
         )
-        score_black_box = _compute_selection_score(
-            candidate_black_box, success_rates, [], 1000
-        )
+        score_black_box = _compute_selection_score(candidate_black_box, success_rates, [], 1000)
 
         assert score_interpretable > score_black_box
 
@@ -444,18 +437,12 @@ class TestGetAlgorithmClass:
     def test_random_forest_class_path(self):
         """RandomForest should map to sklearn.ensemble.RandomForestClassifier."""
         candidate = {"name": "RandomForest", "framework": "sklearn"}
-        assert (
-            _get_algorithm_class(candidate)
-            == "sklearn.ensemble.RandomForestClassifier"
-        )
+        assert _get_algorithm_class(candidate) == "sklearn.ensemble.RandomForestClassifier"
 
     def test_logistic_regression_class_path(self):
         """LogisticRegression should map to sklearn.linear_model.LogisticRegression."""
         candidate = {"name": "LogisticRegression", "framework": "sklearn"}
-        assert (
-            _get_algorithm_class(candidate)
-            == "sklearn.linear_model.LogisticRegression"
-        )
+        assert _get_algorithm_class(candidate) == "sklearn.linear_model.LogisticRegression"
 
     def test_ridge_class_path(self):
         """Ridge should map to sklearn.linear_model.Ridge."""

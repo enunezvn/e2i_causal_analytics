@@ -4,34 +4,32 @@ Unit tests for E2I Graphiti Service.
 Tests the main Graphiti service wrapper for automatic entity/relationship extraction.
 """
 
-import asyncio
-import pytest
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
-from dataclasses import asdict
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
+from src.memory.graphiti_config import (
+    E2IEntityType,
+    E2IRelationshipType,
+    GraphitiConfig,
+)
 from src.memory.graphiti_service import (
     E2IGraphitiService,
+    EpisodeResult,
     ExtractedEntity,
     ExtractedRelationship,
-    EpisodeResult,
     SearchResult,
     SubgraphResult,
     get_graphiti_service,
     reset_graphiti_service,
     reset_graphiti_service_async,
 )
-from src.memory.graphiti_config import (
-    E2IEntityType,
-    E2IRelationshipType,
-    GraphitiConfig,
-)
 from src.memory.services.factories import ServiceConnectionError
-
 
 # ============================================================================
 # Fixtures
 # ============================================================================
+
 
 @pytest.fixture
 def mock_config():
@@ -66,7 +64,9 @@ def mock_falkordb_client(mock_graph):
 @pytest.fixture
 def graphiti_service(mock_config, mock_falkordb_client):
     """Create a service instance with mocked dependencies."""
-    with patch('src.memory.graphiti_service.get_falkordb_client', return_value=mock_falkordb_client):
+    with patch(
+        "src.memory.graphiti_service.get_falkordb_client", return_value=mock_falkordb_client
+    ):
         service = E2IGraphitiService(config=mock_config)
         service._falkordb = mock_falkordb_client
         service._graph = mock_falkordb_client.select_graph()
@@ -92,6 +92,7 @@ def reset_singleton():
 # ============================================================================
 # Dataclass Tests
 # ============================================================================
+
 
 class TestExtractedEntity:
     """Tests for ExtractedEntity dataclass."""
@@ -242,6 +243,7 @@ class TestSubgraphResult:
 # E2IGraphitiService Tests
 # ============================================================================
 
+
 class TestE2IGraphitiServiceInit:
     """Tests for E2IGraphitiService initialization."""
 
@@ -255,9 +257,9 @@ class TestE2IGraphitiServiceInit:
 
     def test_init_without_config(self):
         """Test initialization loads default config."""
-        with patch('src.memory.graphiti_service.get_graphiti_config') as mock_get_config:
+        with patch("src.memory.graphiti_service.get_graphiti_config") as mock_get_config:
             mock_get_config.return_value = MagicMock()
-            service = E2IGraphitiService()
+            E2IGraphitiService()
             mock_get_config.assert_called_once()
 
 
@@ -267,11 +269,13 @@ class TestE2IGraphitiServiceInitialize:
     @pytest.mark.asyncio
     async def test_initialize_success(self, mock_config, mock_falkordb_client):
         """Test successful initialization."""
-        with patch('src.memory.graphiti_service.get_falkordb_client', return_value=mock_falkordb_client):
+        with patch(
+            "src.memory.graphiti_service.get_falkordb_client", return_value=mock_falkordb_client
+        ):
             service = E2IGraphitiService(config=mock_config)
 
             # Mock Graphiti initialization to avoid external dependencies
-            with patch.object(service, '_init_graphiti', new_callable=AsyncMock):
+            with patch.object(service, "_init_graphiti", new_callable=AsyncMock):
                 await service.initialize()
 
                 assert service._initialized is True
@@ -291,7 +295,10 @@ class TestE2IGraphitiServiceInitialize:
     @pytest.mark.asyncio
     async def test_initialize_connection_error(self, mock_config):
         """Test initialization handles connection errors."""
-        with patch('src.memory.graphiti_service.get_falkordb_client', side_effect=Exception("Connection failed")):
+        with patch(
+            "src.memory.graphiti_service.get_falkordb_client",
+            side_effect=Exception("Connection failed"),
+        ):
             service = E2IGraphitiService(config=mock_config)
 
             with pytest.raises(ServiceConnectionError):
@@ -328,17 +335,25 @@ class TestRelationshipTypeMapping:
         """Test mapping of known relationship types."""
         assert graphiti_service._map_relationship_type("CAUSES") == E2IRelationshipType.CAUSES
         assert graphiti_service._map_relationship_type("IMPACTS") == E2IRelationshipType.IMPACTS
-        assert graphiti_service._map_relationship_type("PRESCRIBES") == E2IRelationshipType.PRESCRIBES
-        assert graphiti_service._map_relationship_type("DISCOVERED") == E2IRelationshipType.DISCOVERED
+        assert (
+            graphiti_service._map_relationship_type("PRESCRIBES") == E2IRelationshipType.PRESCRIBES
+        )
+        assert (
+            graphiti_service._map_relationship_type("DISCOVERED") == E2IRelationshipType.DISCOVERED
+        )
 
     def test_map_with_spaces(self, graphiti_service):
         """Test mapping handles spaces (converted to underscores)."""
-        assert graphiti_service._map_relationship_type("RELATES TO") == E2IRelationshipType.RELATES_TO
+        assert (
+            graphiti_service._map_relationship_type("RELATES TO") == E2IRelationshipType.RELATES_TO
+        )
         assert graphiti_service._map_relationship_type("MEMBER OF") == E2IRelationshipType.MEMBER_OF
 
     def test_map_unknown_relationship_type(self, graphiti_service):
         """Test unknown relationship types default to RELATES_TO."""
-        assert graphiti_service._map_relationship_type("CUSTOM_REL") == E2IRelationshipType.RELATES_TO
+        assert (
+            graphiti_service._map_relationship_type("CUSTOM_REL") == E2IRelationshipType.RELATES_TO
+        )
         assert graphiti_service._map_relationship_type("UNKNOWN") == E2IRelationshipType.RELATES_TO
 
 
@@ -503,10 +518,7 @@ class TestSearch:
         graphiti_service._graphiti = mock_graphiti
 
         # Filter for only HCPs
-        results = await graphiti_service.search(
-            "treatment",
-            entity_types=[E2IEntityType.HCP]
-        )
+        results = await graphiti_service.search("treatment", entity_types=[E2IEntityType.HCP])
 
         assert len(results) == 1
         assert results[0].entity_type == "HCP"
@@ -677,15 +689,21 @@ class TestClose:
 # Singleton Function Tests
 # ============================================================================
 
+
 class TestGetGraphitiService:
     """Tests for get_graphiti_service function."""
 
     @pytest.mark.asyncio
     async def test_creates_singleton(self, mock_config, mock_falkordb_client):
         """Test that get_graphiti_service creates a singleton."""
-        with patch('src.memory.graphiti_service.get_falkordb_client', return_value=mock_falkordb_client):
-            with patch('src.memory.graphiti_service.get_graphiti_config', return_value=mock_config):
-                with patch('src.memory.graphiti_service.E2IGraphitiService._init_graphiti', new_callable=AsyncMock):
+        with patch(
+            "src.memory.graphiti_service.get_falkordb_client", return_value=mock_falkordb_client
+        ):
+            with patch("src.memory.graphiti_service.get_graphiti_config", return_value=mock_config):
+                with patch(
+                    "src.memory.graphiti_service.E2IGraphitiService._init_graphiti",
+                    new_callable=AsyncMock,
+                ):
                     service1 = await get_graphiti_service()
                     service2 = await get_graphiti_service()
 
@@ -703,17 +721,25 @@ class TestResetGraphitiService:
     @pytest.mark.asyncio
     async def test_async_reset(self, mock_config, mock_falkordb_client):
         """Test async reset function."""
-        with patch('src.memory.graphiti_service.get_falkordb_client', return_value=mock_falkordb_client):
-            with patch('src.memory.graphiti_service.get_graphiti_config', return_value=mock_config):
-                with patch('src.memory.graphiti_service.E2IGraphitiService._init_graphiti', new_callable=AsyncMock):
+        with patch(
+            "src.memory.graphiti_service.get_falkordb_client", return_value=mock_falkordb_client
+        ):
+            with patch("src.memory.graphiti_service.get_graphiti_config", return_value=mock_config):
+                with patch(
+                    "src.memory.graphiti_service.E2IGraphitiService._init_graphiti",
+                    new_callable=AsyncMock,
+                ):
                     service = await get_graphiti_service()
                     assert service is not None
 
                     await reset_graphiti_service_async()
 
                     # After reset, a new call should create new service
-                    with patch('src.memory.graphiti_service.E2IGraphitiService.close', new_callable=AsyncMock):
-                        new_service = await get_graphiti_service()
+                    with patch(
+                        "src.memory.graphiti_service.E2IGraphitiService.close",
+                        new_callable=AsyncMock,
+                    ):
+                        await get_graphiti_service()
                         # Note: We can't easily verify it's a new instance without
                         # more complex tracking, but the reset should have cleared it
 
@@ -721,6 +747,7 @@ class TestResetGraphitiService:
 # ============================================================================
 # Conversion Method Tests
 # ============================================================================
+
 
 class TestConvertGraphitiEntities:
     """Tests for _convert_graphiti_entities method."""

@@ -9,11 +9,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from datetime import datetime
 from typing import Any, Dict, List, Optional, Protocol
 
-from ..state import HealthScoreState, ModelMetrics
 from ..metrics import DEFAULT_THRESHOLDS
+from ..state import HealthScoreState, ModelMetrics
 
 logger = logging.getLogger(__name__)
 
@@ -25,9 +24,7 @@ class MetricsStore(Protocol):
         """Get list of active model IDs"""
         ...
 
-    async def get_model_metrics(
-        self, model_id: str, time_window: str
-    ) -> Dict[str, Any]:
+    async def get_model_metrics(self, model_id: str, time_window: str) -> Dict[str, Any]:
         """Get metrics for a specific model"""
         ...
 
@@ -79,10 +76,7 @@ class ModelHealthNode:
 
                 # Fetch metrics for each model in parallel
                 if active_models:
-                    tasks = [
-                        self._get_model_metrics(model_id)
-                        for model_id in active_models
-                    ]
+                    tasks = [self._get_model_metrics(model_id) for model_id in active_models]
                     metrics_list = await asyncio.gather(*tasks)
                 else:
                     metrics_list = []

@@ -1,8 +1,9 @@
 """Tests for preprocessor node."""
 
-import pytest
 import numpy as np
 import pandas as pd
+import pytest
+
 from src.agents.ml_foundation.model_trainer.nodes.preprocessor import fit_preprocessing
 
 

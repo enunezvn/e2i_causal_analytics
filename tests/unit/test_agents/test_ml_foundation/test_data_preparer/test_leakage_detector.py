@@ -1,12 +1,13 @@
 """Unit tests for leakage_detector node."""
 
-import pytest
-import pandas as pd
 import numpy as np
+import pandas as pd
+import pytest
+
 from src.agents.ml_foundation.data_preparer.nodes.leakage_detector import (
-    detect_leakage,
     check_target_leakage,
     check_train_test_contamination,
+    detect_leakage,
 )
 
 
@@ -14,11 +15,13 @@ from src.agents.ml_foundation.data_preparer.nodes.leakage_detector import (
 def mock_state_no_leakage():
     """Create mock state with no leakage."""
     np.random.seed(42)
-    train_df = pd.DataFrame({
-        "feature1": np.random.randn(100),
-        "feature2": np.random.randn(100),
-        "target": np.random.binomial(1, 0.3, 100),
-    })
+    train_df = pd.DataFrame(
+        {
+            "feature1": np.random.randn(100),
+            "feature2": np.random.randn(100),
+            "target": np.random.binomial(1, 0.3, 100),
+        }
+    )
     # Use non-overlapping indices to avoid train-test contamination
     validation_df = pd.DataFrame(
         {
@@ -50,11 +53,13 @@ def mock_state_target_leakage():
     # Create a feature that's almost identical to target (leakage!)
     leaky_feature = target + np.random.randn(100) * 0.01
 
-    train_df = pd.DataFrame({
-        "feature1": np.random.randn(100),
-        "leaky_feature": leaky_feature,
-        "target": target,
-    })
+    train_df = pd.DataFrame(
+        {
+            "feature1": np.random.randn(100),
+            "leaky_feature": leaky_feature,
+            "target": target,
+        }
+    )
 
     return {
         "experiment_id": "exp_test_123",
@@ -71,10 +76,12 @@ def mock_state_target_leakage():
 def mock_state_train_test_contamination():
     """Create mock state with train-test contamination."""
     # Create overlapping indices
-    train_df = pd.DataFrame({
-        "feature1": [1, 2, 3, 4, 5],
-        "target": [0, 1, 0, 1, 0],
-    })
+    train_df = pd.DataFrame(
+        {
+            "feature1": [1, 2, 3, 4, 5],
+            "target": [0, 1, 0, 1, 0],
+        }
+    )
     # Validation has overlapping indices 3 and 4!
     validation_df = pd.DataFrame(
         {
@@ -170,11 +177,13 @@ async def test_leakage_adds_to_blocking_issues(mock_state_target_leakage):
 def test_check_target_leakage_direct():
     """Test check_target_leakage function directly."""
     # Create data with perfect correlation (leakage!)
-    df = pd.DataFrame({
-        "leaky": [1, 2, 3, 4, 5],
-        "target": [1, 2, 3, 4, 5],  # Perfect correlation!
-        "clean": [5, 4, 3, 2, 1],
-    })
+    df = pd.DataFrame(
+        {
+            "leaky": [1, 2, 3, 4, 5],
+            "target": [1, 2, 3, 4, 5],  # Perfect correlation!
+            "clean": [5, 4, 3, 2, 1],
+        }
+    )
 
     issues = check_target_leakage(df, "target", ["leaky", "clean"])
 

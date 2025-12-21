@@ -1,7 +1,8 @@
 """Tests for hyperparameter tuner node."""
 
-import pytest
 import numpy as np
+import pytest
+
 from src.agents.ml_foundation.model_trainer.nodes.hyperparameter_tuner import tune_hyperparameters
 
 
@@ -28,7 +29,9 @@ class TestTuneHyperparameters:
             "enable_hpo": True,
             "hpo_trials": 10,
             "default_hyperparameters": {"n_estimators": 100},
-            "hyperparameter_search_space": {"n_estimators": {"type": "int", "low": 50, "high": 200}},
+            "hyperparameter_search_space": {
+                "n_estimators": {"type": "int", "low": 50, "high": 200}
+            },
             "X_train_preprocessed": np.random.rand(100, 5),
             "X_validation_preprocessed": np.random.rand(30, 5),
             "train_data": {"y": np.random.randint(0, 2, 100)},

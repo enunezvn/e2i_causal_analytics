@@ -4,30 +4,27 @@ Tests for RAGAS evaluation framework.
 Tests the evaluation pipeline, metrics, and MLflow integration.
 """
 
-import asyncio
 import json
-import os
 import tempfile
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from src.rag.evaluation import (
+    DEFAULT_THRESHOLDS,
     EvaluationConfig,
     EvaluationReport,
     EvaluationResult,
     EvaluationSample,
     RAGASEvaluator,
     RAGEvaluationPipeline,
-    DEFAULT_THRESHOLDS,
     create_evaluation_sample,
     get_default_evaluation_dataset,
     load_evaluation_dataset,
     quick_evaluate,
     save_evaluation_dataset,
 )
-
 
 # =============================================================================
 # Test Fixtures

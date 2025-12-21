@@ -1,12 +1,13 @@
 """Tests for scope specification builder."""
 
 import pytest
+
 from src.agents.ml_foundation.scope_definer.nodes.scope_builder import (
-    build_scope_spec,
-    _define_target_population,
-    _define_inclusion_criteria,
-    _define_excluded_features,
     _calculate_minimum_samples,
+    _define_excluded_features,
+    _define_inclusion_criteria,
+    _define_target_population,
+    build_scope_spec,
 )
 
 

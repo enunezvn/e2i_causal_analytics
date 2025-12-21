@@ -8,12 +8,13 @@ agent responses with:
 - Causal graph paths
 """
 
-import time
 import logging
-from typing import Dict, Any, List, Optional
+import time
+from typing import Any, Dict, List, Optional
+
+from src.rag.types import ExtractedEntities, RetrievalResult
 
 from ..state import OrchestratorState
-from src.rag.types import ExtractedEntities, RetrievalResult
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +40,7 @@ class RAGContextNode:
         self,
         retriever: Optional[Any] = None,
         embedding_service: Optional[Any] = None,
-        entity_extractor: Optional[Any] = None
+        entity_extractor: Optional[Any] = None,
     ):
         """Initialize RAG context node.
 
@@ -65,6 +66,7 @@ class RAGContextNode:
         try:
             if self._retriever is None:
                 from src.api.dependencies import get_rag_dependencies
+
                 deps = await get_rag_dependencies()
                 self._retriever = deps.get("retriever")
                 self._embedding_service = deps.get("embedding_service")
@@ -125,7 +127,7 @@ class RAGContextNode:
                 embedding=embedding,
                 entities=entities,
                 filters=filters,
-                top_k=self.DEFAULT_TOP_K
+                top_k=self.DEFAULT_TOP_K,
             )
 
             # Format context for agents
@@ -133,9 +135,7 @@ class RAGContextNode:
 
             rag_latency_ms = int((time.time() - start_time) * 1000)
 
-            logger.info(
-                f"RAG context retrieved: {len(results)} results in {rag_latency_ms}ms"
-            )
+            logger.info(f"RAG context retrieved: {len(results)} results in {rag_latency_ms}ms")
 
             return {
                 **state,
@@ -158,9 +158,7 @@ class RAGContextNode:
             }
 
     async def _extract_entities(
-        self,
-        query: str,
-        state: OrchestratorState
+        self, query: str, state: OrchestratorState
     ) -> Optional[ExtractedEntities]:
         """Extract entities from query.
 
@@ -176,7 +174,7 @@ class RAGContextNode:
                 agents=existing.get("agents", []),
                 journey_stages=existing.get("journey_stages", []),
                 time_references=existing.get("time_references", []),
-                hcp_segments=existing.get("hcp_segments", [])
+                hcp_segments=existing.get("hcp_segments", []),
             )
 
         # Extract entities
@@ -199,10 +197,7 @@ class RAGContextNode:
             logger.warning(f"Embedding generation failed: {e}")
             return None
 
-    def _build_filters_from_entities(
-        self,
-        entities: Optional[ExtractedEntities]
-    ) -> Dict[str, Any]:
+    def _build_filters_from_entities(self, entities: Optional[ExtractedEntities]) -> Dict[str, Any]:
         """Build search filters from extracted entities."""
         if not entities:
             return {}
@@ -231,12 +226,7 @@ class RAGContextNode:
             - sources: Source attribution
         """
         if not results:
-            return {
-                "summary": "",
-                "insights": [],
-                "causal_paths": [],
-                "sources": []
-            }
+            return {"summary": "", "insights": [], "causal_paths": [], "sources": []}
 
         # Group by source type
         insights = []
@@ -245,31 +235,38 @@ class RAGContextNode:
 
         for result in results:
             # Add to insights
-            insights.append({
-                "content": result.content[:500],  # Truncate for context
-                "score": result.score,
-                "source": result.source.value,
-                "metadata": {
-                    k: v for k, v in result.metadata.items()
-                    if k in ["brand", "kpi", "region", "source_table", "agent_name"]
+            insights.append(
+                {
+                    "content": result.content[:500],  # Truncate for context
+                    "score": result.score,
+                    "source": result.source.value,
+                    "metadata": {
+                        k: v
+                        for k, v in result.metadata.items()
+                        if k in ["brand", "kpi", "region", "source_table", "agent_name"]
+                    },
                 }
-            })
+            )
 
             # Extract causal paths if present
             if result.graph_context:
                 for path in result.graph_context.paths:
-                    causal_paths.append({
-                        "path": " → ".join(path.node_names) if path.node_names else str(path),
-                        "relationship": path.relationship_type if hasattr(path, "relationship_type") else None,
-                        "strength": path.weight if hasattr(path, "weight") else 1.0
-                    })
+                    causal_paths.append(
+                        {
+                            "path": " → ".join(path.node_names) if path.node_names else str(path),
+                            "relationship": (
+                                path.relationship_type
+                                if hasattr(path, "relationship_type")
+                                else None
+                            ),
+                            "strength": path.weight if hasattr(path, "weight") else 1.0,
+                        }
+                    )
 
             # Track sources
-            sources.append({
-                "id": result.id,
-                "source": result.source.value,
-                "relevance": result.score
-            })
+            sources.append(
+                {"id": result.id, "source": result.source.value, "relevance": result.score}
+            )
 
         # Build summary from top insights
         summary_parts = [r.content[:100] for r in results[:3]]
@@ -279,7 +276,7 @@ class RAGContextNode:
             "summary": summary,
             "insights": insights,
             "causal_paths": causal_paths[:5],  # Top 5 causal paths
-            "sources": sources
+            "sources": sources,
         }
 
     def _result_to_dict(self, result: RetrievalResult) -> Dict[str, Any]:
@@ -289,7 +286,7 @@ class RAGContextNode:
             "content": result.content,
             "score": result.score,
             "source": result.source.value,
-            "metadata": result.metadata
+            "metadata": result.metadata,
         }
 
     def _entities_to_dict(self, entities: ExtractedEntities) -> Dict[str, List[str]]:
@@ -301,7 +298,7 @@ class RAGContextNode:
             "agents": entities.agents or [],
             "journey_stages": entities.journey_stages or [],
             "time_references": entities.time_references or [],
-            "hcp_segments": entities.hcp_segments or []
+            "hcp_segments": entities.hcp_segments or [],
         }
 
 

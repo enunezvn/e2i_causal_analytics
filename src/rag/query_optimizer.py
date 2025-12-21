@@ -16,17 +16,17 @@ import hashlib
 import logging
 import os
 import time
-from typing import Dict, List, Optional, Any, Union
+from typing import Any, Dict, List, Optional, Union
 
 import anthropic
 from tenacity import (
     retry,
+    retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
-    retry_if_exception_type,
 )
 
-from src.nlp.typo_handler import TypoHandler, CorrectionResult
+from src.nlp.typo_handler import CorrectionResult, TypoHandler
 
 logger = logging.getLogger(__name__)
 
@@ -145,7 +145,7 @@ class QueryOptimizer:
         Returns:
             Expanded query string
         """
-        query_text = query.text if hasattr(query, 'text') else str(query)
+        query_text = query.text if hasattr(query, "text") else str(query)
         query_lower = query_text.lower()
 
         expansions = []
@@ -206,7 +206,7 @@ class QueryOptimizer:
                 - corrections: List of corrections made
                 - latency_ms: Processing time
         """
-        query_text = query.text if hasattr(query, 'text') else str(query)
+        query_text = query.text if hasattr(query, "text") else str(query)
 
         if not self._typo_handler:
             return {
@@ -318,8 +318,7 @@ class QueryOptimizer:
         # Evict oldest entries if cache is full
         if len(_EXPANSION_CACHE) >= _CACHE_MAX_SIZE:
             oldest_key = min(
-                _EXPANSION_CACHE.keys(),
-                key=lambda k: _EXPANSION_CACHE[k]["timestamp"]
+                _EXPANSION_CACHE.keys(), key=lambda k: _EXPANSION_CACHE[k]["timestamp"]
             )
             del _EXPANSION_CACHE[oldest_key]
 
@@ -368,7 +367,7 @@ class QueryOptimizer:
         Returns:
             LLM-expanded query string
         """
-        query_text = query.text if hasattr(query, 'text') else str(query)
+        query_text = query.text if hasattr(query, "text") else str(query)
 
         # Check cache first
         cache_key = self._build_cache_key(query_text, "llm_expand")
@@ -381,7 +380,7 @@ class QueryOptimizer:
             expanded = self._call_llm(prompt)
 
             # Clean up response (remove quotes, extra whitespace)
-            expanded = expanded.strip().strip('"\'')
+            expanded = expanded.strip().strip("\"'")
 
             # Cache successful result
             self._cache_result(cache_key, expanded)
@@ -408,7 +407,7 @@ class QueryOptimizer:
         Returns:
             LLM-expanded query string
         """
-        query_text = query.text if hasattr(query, 'text') else str(query)
+        query_text = query.text if hasattr(query, "text") else str(query)
 
         # Check cache first
         cache_key = self._build_cache_key(query_text, "llm_expand")
@@ -421,7 +420,7 @@ class QueryOptimizer:
             expanded = await self._call_llm_async(prompt)
 
             # Clean up response
-            expanded = expanded.strip().strip('"\'')
+            expanded = expanded.strip().strip("\"'")
 
             # Cache successful result
             self._cache_result(cache_key, expanded)
@@ -479,7 +478,7 @@ Expanded query:"""
         Returns:
             Hypothetical document text for embedding
         """
-        query_text = query.text if hasattr(query, 'text') else str(query)
+        query_text = query.text if hasattr(query, "text") else str(query)
 
         # Check cache first
         cache_key = self._build_cache_key(f"{query_text}:{document_type}", "hyde")
@@ -517,7 +516,7 @@ Expanded query:"""
         Returns:
             Hypothetical document text for embedding
         """
-        query_text = query.text if hasattr(query, 'text') else str(query)
+        query_text = query.text if hasattr(query, "text") else str(query)
 
         # Check cache first
         cache_key = self._build_cache_key(f"{query_text}:{document_type}", "hyde")
@@ -598,7 +597,7 @@ Write a realistic {document_type} that directly answers this question using spec
                 - hyde_document: HyDE document (if use_hyde=True)
                 - recommended: Best expansion to use for retrieval
         """
-        query_text = query.text if hasattr(query, 'text') else str(query)
+        query_text = query.text if hasattr(query, "text") else str(query)
 
         result = {
             "original": query_text,

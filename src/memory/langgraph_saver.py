@@ -18,17 +18,14 @@ Usage:
     compiled = workflow.compile(checkpointer=checkpointer)
 """
 
-import os
 import logging
-from typing import Optional, Union
+import os
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 
-def create_checkpointer(
-    redis_url: Optional[str] = None,
-    fallback_to_memory: bool = True
-):
+def create_checkpointer(redis_url: Optional[str] = None, fallback_to_memory: bool = True):
     """
     Create a LangGraph checkpointer.
 
@@ -63,15 +60,12 @@ def create_checkpointer(
             ) from e
 
         logger.warning(
-            "langgraph-checkpoint-redis not installed, "
-            "falling back to in-memory checkpointer"
+            "langgraph-checkpoint-redis not installed, " "falling back to in-memory checkpointer"
         )
 
     except Exception as e:
         if not fallback_to_memory:
-            raise ConnectionError(
-                f"Failed to connect to Redis at {url}: {e}"
-            ) from e
+            raise ConnectionError(f"Failed to connect to Redis at {url}: {e}") from e
 
         logger.warning(f"Redis connection failed, falling back to in-memory: {e}")
 
@@ -82,10 +76,7 @@ def create_checkpointer(
     return MemorySaver()
 
 
-def create_async_checkpointer(
-    redis_url: Optional[str] = None,
-    fallback_to_memory: bool = True
-):
+def create_async_checkpointer(redis_url: Optional[str] = None, fallback_to_memory: bool = True):
     """
     Create an async LangGraph checkpointer.
 
@@ -115,15 +106,12 @@ def create_async_checkpointer(
             ) from e
 
         logger.warning(
-            "langgraph-checkpoint-redis not installed, "
-            "falling back to in-memory checkpointer"
+            "langgraph-checkpoint-redis not installed, " "falling back to in-memory checkpointer"
         )
 
     except Exception as e:
         if not fallback_to_memory:
-            raise ConnectionError(
-                f"Failed to connect to Redis at {url}: {e}"
-            ) from e
+            raise ConnectionError(f"Failed to connect to Redis at {url}: {e}") from e
 
         logger.warning(f"Redis connection failed, falling back to in-memory: {e}")
 
@@ -150,7 +138,7 @@ class CheckpointerConfig:
         redis_url: Optional[str] = None,
         checkpoint_prefix: str = "e2i:checkpoint:",
         ttl_seconds: Optional[int] = 86400,
-        fallback_to_memory: bool = True
+        fallback_to_memory: bool = True,
     ):
         self.redis_url = redis_url or os.environ.get("REDIS_URL", "redis://localhost:6382")
         self.checkpoint_prefix = checkpoint_prefix
@@ -160,13 +148,11 @@ class CheckpointerConfig:
     def create_checkpointer(self):
         """Create a checkpointer using this configuration."""
         return create_checkpointer(
-            redis_url=self.redis_url,
-            fallback_to_memory=self.fallback_to_memory
+            redis_url=self.redis_url, fallback_to_memory=self.fallback_to_memory
         )
 
     def create_async_checkpointer(self):
         """Create an async checkpointer using this configuration."""
         return create_async_checkpointer(
-            redis_url=self.redis_url,
-            fallback_to_memory=self.fallback_to_memory
+            redis_url=self.redis_url, fallback_to_memory=self.fallback_to_memory
         )

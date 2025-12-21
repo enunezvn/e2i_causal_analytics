@@ -12,17 +12,15 @@ Note: These tests use mocked external services by default.
 Set E2E_USE_REAL_SERVICES=true to test with real backends.
 """
 
-import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
-from datetime import datetime, timezone
-import asyncio
 import os
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 from src.api.main import app
 from src.rag.models.retrieval_models import RetrievalResult
-
 
 # =============================================================================
 # CONFIGURATION
@@ -37,16 +35,19 @@ client = TestClient(app)
 # FIXTURES
 # =============================================================================
 
+
 @pytest.fixture
 def mock_all_services():
     """Mock all external services for isolated E2E testing."""
-    with patch("src.api.routes.memory.hybrid_search") as mock_search, \
-         patch("src.api.routes.memory.insert_episodic_memory_with_text") as mock_insert, \
-         patch("src.api.routes.memory.get_memory_by_id") as mock_get, \
-         patch("src.api.routes.memory.update_procedure_outcome") as mock_update, \
-         patch("src.api.routes.memory.record_learning_signal") as mock_signal, \
-         patch("src.api.routes.memory.get_procedure_by_id") as mock_proc, \
-         patch("src.api.routes.memory.get_semantic_memory") as mock_semantic:
+    with (
+        patch("src.api.routes.memory.hybrid_search") as mock_search,
+        patch("src.api.routes.memory.insert_episodic_memory_with_text") as mock_insert,
+        patch("src.api.routes.memory.get_memory_by_id") as mock_get,
+        patch("src.api.routes.memory.update_procedure_outcome") as mock_update,
+        patch("src.api.routes.memory.record_learning_signal") as mock_signal,
+        patch("src.api.routes.memory.get_procedure_by_id") as mock_proc,
+        patch("src.api.routes.memory.get_semantic_memory") as mock_semantic,
+    ):
 
         # Configure mock responses
         mock_search.return_value = [
@@ -56,7 +57,7 @@ def mock_all_services():
                 source_id="mem_001",
                 score=0.85,
                 retrieval_method="dense",
-                metadata={"brand": "Kisqali", "region": "northeast"}
+                metadata={"brand": "Kisqali", "region": "northeast"},
             ),
             RetrievalResult(
                 content="Causal path: HCP visits -> Script volume -> TRx",
@@ -64,8 +65,8 @@ def mock_all_services():
                 source_id="path_001",
                 score=0.78,
                 retrieval_method="graph",
-                metadata={}
-            )
+                metadata={},
+            ),
         ]
         mock_insert.return_value = "mem_e2e_001"
         mock_get.return_value = {
@@ -77,21 +78,21 @@ def mock_all_services():
             "brand": "Kisqali",
             "region": "northeast",
             "raw_content": {},
-            "occurred_at": datetime.now(timezone.utc).isoformat()
+            "occurred_at": datetime.now(timezone.utc).isoformat(),
         }
         mock_update.return_value = None
         mock_signal.return_value = "signal_e2e_001"
         mock_proc.return_value = {
             "procedure_id": "proc_e2e",
             "usage_count": 20,
-            "success_count": 18
+            "success_count": 18,
         }
         mock_semantic_instance = MagicMock()
         mock_semantic_instance.find_causal_paths_for_kpi.return_value = [
             {
                 "nodes": ["HCP engagement", "Script volume", "TRx"],
                 "confidence": 0.85,
-                "path_id": "path_e2e"
+                "path_id": "path_e2e",
             }
         ]
         mock_semantic.return_value = mock_semantic_instance
@@ -103,24 +104,24 @@ def mock_all_services():
             "update": mock_update,
             "signal": mock_signal,
             "proc": mock_proc,
-            "semantic": mock_semantic_instance
+            "semantic": mock_semantic_instance,
         }
 
 
 @pytest.fixture
 def mock_cognitive_service():
     """Mock cognitive service for E2E testing."""
-    with patch("src.api.routes.cognitive.get_working_memory") as mock_memory, \
-         patch("src.api.routes.cognitive.hybrid_search") as mock_search:
+    with (
+        patch("src.api.routes.cognitive.get_working_memory") as mock_memory,
+        patch("src.api.routes.cognitive.hybrid_search") as mock_search,
+    ):
 
         # Mock working memory
         mock_wm = MagicMock()
         mock_wm.create_session = AsyncMock(return_value={"session_id": "sess_e2e"})
-        mock_wm.get_session = AsyncMock(return_value={
-            "user_id": "user_e2e",
-            "context": {"brand": "Kisqali"},
-            "state": "active"
-        })
+        mock_wm.get_session = AsyncMock(
+            return_value={"user_id": "user_e2e", "context": {"brand": "Kisqali"}, "state": "active"}
+        )
         mock_wm.add_message = AsyncMock(return_value=True)
         mock_wm.append_evidence = AsyncMock(return_value=True)
         mock_wm.get_evidence_trail = AsyncMock(return_value=[])
@@ -134,7 +135,7 @@ def mock_cognitive_service():
                 source_id="mem_001",
                 score=0.85,
                 retrieval_method="dense",
-                metadata={"brand": "Kisqali"}
+                metadata={"brand": "Kisqali"},
             )
         ]
 
@@ -144,6 +145,7 @@ def mock_cognitive_service():
 # =============================================================================
 # FULL CYCLE E2E TESTS
 # =============================================================================
+
 
 class TestFullCognitiveE2E:
     """End-to-end tests for complete cognitive cycles."""
@@ -157,8 +159,8 @@ class TestFullCognitiveE2E:
                 "query": "Why did TRx drop in the northeast region for Kisqali?",
                 "brand": "Kisqali",
                 "region": "northeast",
-                "include_evidence": True
-            }
+                "include_evidence": True,
+            },
         )
 
         assert response.status_code == 200
@@ -173,11 +175,7 @@ class TestFullCognitiveE2E:
     def test_prediction_query_full_cycle(self, mock_all_services, mock_cognitive_service):
         """Test complete prediction query cycle through API."""
         response = client.post(
-            "/cognitive/query",
-            json={
-                "query": "What will TRx be next quarter?",
-                "brand": "Kisqali"
-            }
+            "/cognitive/query", json={"query": "What will TRx be next quarter?", "brand": "Kisqali"}
         )
 
         assert response.status_code == 200
@@ -187,10 +185,7 @@ class TestFullCognitiveE2E:
         # First query creates session
         response1 = client.post(
             "/cognitive/query",
-            json={
-                "query": "What are the current TRx trends?",
-                "brand": "Kisqali"
-            }
+            json={"query": "What are the current TRx trends?", "brand": "Kisqali"},
         )
 
         assert response1.status_code == 200
@@ -199,11 +194,7 @@ class TestFullCognitiveE2E:
 
         # Second query reuses session
         response2 = client.post(
-            "/cognitive/query",
-            json={
-                "query": "Why is this happening?",
-                "session_id": session_id
-            }
+            "/cognitive/query", json={"query": "Why is this happening?", "session_id": session_id}
         )
 
         assert response2.status_code == 200
@@ -214,6 +205,7 @@ class TestFullCognitiveE2E:
 # =============================================================================
 # MEMORY INTEGRATION E2E TESTS
 # =============================================================================
+
 
 class TestMemoryIntegrationE2E:
     """End-to-end tests for memory system integration."""
@@ -229,8 +221,8 @@ class TestMemoryIntegrationE2E:
                 "session_id": "sess_e2e",
                 "agent_name": "orchestrator",
                 "brand": "Kisqali",
-                "region": "northeast"
-            }
+                "region": "northeast",
+            },
         )
 
         assert create_response.status_code == 200
@@ -248,11 +240,7 @@ class TestMemoryIntegrationE2E:
         """Test hybrid search returns relevant memories."""
         response = client.post(
             "/memory/search",
-            json={
-                "query": "Why did TRx drop?",
-                "k": 10,
-                "filters": {"brand": "Kisqali"}
-            }
+            json={"query": "Why did TRx drop?", "k": 10, "filters": {"brand": "Kisqali"}},
         )
 
         assert response.status_code == 200
@@ -269,8 +257,8 @@ class TestMemoryIntegrationE2E:
                 "outcome": "success",
                 "score": 0.95,
                 "feedback_text": "Analysis was highly accurate",
-                "agent_name": "feedback_learner"
-            }
+                "agent_name": "feedback_learner",
+            },
         )
 
         assert response.status_code == 200
@@ -282,8 +270,7 @@ class TestMemoryIntegrationE2E:
     def test_semantic_path_query(self, mock_all_services):
         """Test semantic graph path queries."""
         response = client.get(
-            "/memory/semantic/paths",
-            params={"kpi_name": "TRx", "min_confidence": 0.6}
+            "/memory/semantic/paths", params={"kpi_name": "TRx", "min_confidence": 0.6}
         )
 
         assert response.status_code == 200
@@ -294,6 +281,7 @@ class TestMemoryIntegrationE2E:
 # =============================================================================
 # LEARNING SIGNAL E2E TESTS
 # =============================================================================
+
 
 class TestLearningSignalE2E:
     """End-to-end tests for learning signal propagation."""
@@ -306,8 +294,8 @@ class TestLearningSignalE2E:
                 "procedure_id": "proc_test",
                 "outcome": "success",
                 "score": 0.9,
-                "agent_name": "causal_impact"
-            }
+                "agent_name": "causal_impact",
+            },
         )
 
         assert response.status_code == 200
@@ -324,8 +312,8 @@ class TestLearningSignalE2E:
                 "score": 0.7,
                 "feedback_text": "Partially correct analysis",
                 "session_id": "sess_meta",
-                "agent_name": "gap_analyzer"
-            }
+                "agent_name": "gap_analyzer",
+            },
         )
 
         assert response.status_code == 200
@@ -344,15 +332,13 @@ class TestLearningSignalE2E:
 # PERFORMANCE E2E TESTS
 # =============================================================================
 
+
 class TestPerformanceE2E:
     """End-to-end performance tests."""
 
     def test_search_latency_under_sla(self, mock_all_services):
         """Test that search latency is within SLA (<500ms)."""
-        response = client.post(
-            "/memory/search",
-            json={"query": "TRx trends", "k": 10}
-        )
+        response = client.post("/memory/search", json={"query": "TRx trends", "k": 10})
 
         assert response.status_code == 200
         latency = response.json()["search_latency_ms"]
@@ -362,10 +348,7 @@ class TestPerformanceE2E:
 
     def test_path_query_latency_under_sla(self, mock_all_services):
         """Test that semantic path query is within SLA (<500ms)."""
-        response = client.get(
-            "/memory/semantic/paths",
-            params={"kpi_name": "TRx"}
-        )
+        response = client.get("/memory/semantic/paths", params={"kpi_name": "TRx"})
 
         assert response.status_code == 200
         latency = response.json()["query_latency_ms"]
@@ -376,15 +359,13 @@ class TestPerformanceE2E:
 # ERROR HANDLING E2E TESTS
 # =============================================================================
 
+
 class TestErrorHandlingE2E:
     """End-to-end tests for error handling."""
 
     def test_invalid_query_returns_validation_error(self):
         """Test that empty query returns 422."""
-        response = client.post(
-            "/memory/search",
-            json={"query": ""}
-        )
+        response = client.post("/memory/search", json={"query": ""})
 
         assert response.status_code == 422
 
@@ -400,10 +381,7 @@ class TestErrorHandlingE2E:
         """Test that cognitive errors are handled gracefully."""
         # This should still return 200 with error info in response
         # because errors are caught and returned as error query_type
-        response = client.post(
-            "/cognitive/query",
-            json={"query": "Test query"}
-        )
+        response = client.post("/cognitive/query", json={"query": "Test query"})
 
         # Should return 200 even with internal error handling
         assert response.status_code in [200, 500]
@@ -413,6 +391,7 @@ class TestErrorHandlingE2E:
 # CONCURRENT ACCESS E2E TESTS
 # =============================================================================
 
+
 class TestConcurrentAccessE2E:
     """End-to-end tests for concurrent access patterns."""
 
@@ -421,10 +400,7 @@ class TestConcurrentAccessE2E:
         import concurrent.futures
 
         def make_search():
-            return client.post(
-                "/memory/search",
-                json={"query": "TRx analysis", "k": 5}
-            )
+            return client.post("/memory/search", json={"query": "TRx analysis", "k": 5})
 
         # Execute 5 concurrent searches
         with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
@@ -439,28 +415,17 @@ class TestConcurrentAccessE2E:
         """Test mixed read/write operations."""
         # Create episodic memory
         create_resp = client.post(
-            "/memory/episodic",
-            json={
-                "content": "Concurrent test memory",
-                "event_type": "action"
-            }
+            "/memory/episodic", json={"content": "Concurrent test memory", "event_type": "action"}
         )
         assert create_resp.status_code == 200
 
         # Search while creating
-        search_resp = client.post(
-            "/memory/search",
-            json={"query": "concurrent test"}
-        )
+        search_resp = client.post("/memory/search", json={"query": "concurrent test"})
         assert search_resp.status_code == 200
 
         # Record feedback
         feedback_resp = client.post(
             "/memory/procedural/feedback",
-            json={
-                "procedure_id": "proc_concurrent",
-                "outcome": "success",
-                "score": 0.8
-            }
+            json={"procedure_id": "proc_concurrent", "outcome": "success", "score": 0.8},
         )
         assert feedback_resp.status_code == 200

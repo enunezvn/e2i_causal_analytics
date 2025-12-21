@@ -11,12 +11,12 @@ from typing import Any, Optional
 
 from langgraph.graph import END, StateGraph
 
-from .state import HealthScoreState
+from .nodes.agent_health import AgentHealthNode
 from .nodes.component_health import ComponentHealthNode
 from .nodes.model_health import ModelHealthNode
 from .nodes.pipeline_health import PipelineHealthNode
-from .nodes.agent_health import AgentHealthNode
 from .nodes.score_composer import ScoreComposerNode
+from .state import HealthScoreState
 
 logger = logging.getLogger(__name__)
 

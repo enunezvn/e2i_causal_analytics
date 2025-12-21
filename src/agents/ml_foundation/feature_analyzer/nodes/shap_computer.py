@@ -6,9 +6,10 @@ This is a deterministic computation node with no LLM calls.
 
 import time
 import uuid
-from typing import Dict, Any
-import numpy as np
+from typing import Any, Dict
+
 import mlflow
+import numpy as np
 import shap
 
 
@@ -63,7 +64,9 @@ async def compute_shap(state: Dict[str, Any]) -> Dict[str, Any]:
             feature_names = list(loaded_model.feature_name_)
         else:
             # Fallback: use generic names
-            n_features = loaded_model.n_features_in_ if hasattr(loaded_model, "n_features_in_") else 10
+            n_features = (
+                loaded_model.n_features_in_ if hasattr(loaded_model, "n_features_in_") else 10
+            )
             feature_names = [f"feature_{i}" for i in range(n_features)]
 
         # Load sample data for SHAP computation
@@ -120,15 +123,12 @@ async def compute_shap(state: Dict[str, Any]) -> Dict[str, Any]:
         # Compute global importance (mean absolute SHAP values)
         global_importance_values = np.abs(shap_values).mean(axis=0)
         global_importance = {
-            feature_names[i]: float(global_importance_values[i])
-            for i in range(len(feature_names))
+            feature_names[i]: float(global_importance_values[i]) for i in range(len(feature_names))
         }
 
         # Rank features by importance
         global_importance_ranked = sorted(
-            global_importance.items(),
-            key=lambda x: x[1],
-            reverse=True
+            global_importance.items(), key=lambda x: x[1], reverse=True
         )
 
         # Get top 5 features
@@ -167,7 +167,9 @@ async def compute_shap(state: Dict[str, Any]) -> Dict[str, Any]:
             "y_sample": y_sample,
             "samples_analyzed": samples_analyzed,
             "shap_values": shap_values,
-            "base_value": float(base_value) if isinstance(base_value, (np.number, np.ndarray)) else base_value,
+            "base_value": (
+                float(base_value) if isinstance(base_value, (np.number, np.ndarray)) else base_value
+            ),
             "global_importance": global_importance,
             "global_importance_ranked": global_importance_ranked,
             "feature_directions": feature_directions,
@@ -198,12 +200,18 @@ def _select_explainer_type(model: Any) -> str:
 
     # Tree-based models
     tree_models = [
-        "RandomForestClassifier", "RandomForestRegressor",
-        "GradientBoostingClassifier", "GradientBoostingRegressor",
-        "XGBClassifier", "XGBRegressor",
-        "LGBMClassifier", "LGBMRegressor",
-        "CatBoostClassifier", "CatBoostRegressor",
-        "DecisionTreeClassifier", "DecisionTreeRegressor",
+        "RandomForestClassifier",
+        "RandomForestRegressor",
+        "GradientBoostingClassifier",
+        "GradientBoostingRegressor",
+        "XGBClassifier",
+        "XGBRegressor",
+        "LGBMClassifier",
+        "LGBMRegressor",
+        "CatBoostClassifier",
+        "CatBoostRegressor",
+        "DecisionTreeClassifier",
+        "DecisionTreeRegressor",
     ]
 
     if model_class in tree_models:
@@ -211,9 +219,13 @@ def _select_explainer_type(model: Any) -> str:
 
     # Linear models
     linear_models = [
-        "LinearRegression", "LogisticRegression",
-        "Ridge", "Lasso", "ElasticNet",
-        "SGDClassifier", "SGDRegressor",
+        "LinearRegression",
+        "LogisticRegression",
+        "Ridge",
+        "Lasso",
+        "ElasticNet",
+        "SGDClassifier",
+        "SGDRegressor",
     ]
 
     if model_class in linear_models:

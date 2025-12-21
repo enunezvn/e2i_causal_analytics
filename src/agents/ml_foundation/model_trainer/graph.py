@@ -1,17 +1,19 @@
 """LangGraph workflow for model_trainer agent."""
 
-from langgraph.graph import StateGraph, END
-from typing import Dict, Any
-from .state import ModelTrainerState
+from typing import Any, Dict
+
+from langgraph.graph import END, StateGraph
+
 from .nodes import (
     check_qc_gate,
-    load_splits,
     enforce_splits,
-    fit_preprocessing,
-    tune_hyperparameters,
-    train_model,
     evaluate_model,
+    fit_preprocessing,
+    load_splits,
+    train_model,
+    tune_hyperparameters,
 )
+from .state import ModelTrainerState
 
 
 def _should_proceed_after_qc(state: Dict[str, Any]) -> str:

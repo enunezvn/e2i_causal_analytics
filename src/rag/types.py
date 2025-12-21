@@ -11,13 +11,14 @@ Part of Phase 1, Checkpoint 1.1.
 """
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
-from datetime import datetime, timezone
 
 
 class RetrievalSource(Enum):
     """Track which backend returned each result."""
+
     VECTOR = "supabase_vector"
     FULLTEXT = "supabase_fulltext"
     GRAPH = "falkordb_graph"
@@ -28,6 +29,7 @@ class RetrievalSource(Enum):
 
 class BackendStatus(Enum):
     """Health status for each search backend."""
+
     HEALTHY = "healthy"
     DEGRADED = "degraded"
     UNHEALTHY = "unhealthy"
@@ -49,6 +51,7 @@ class RetrievalResult:
         query_latency_ms: Time taken for this specific query
         raw_score: Original score before normalization
     """
+
     id: str
     content: str
     source: RetrievalSource
@@ -75,7 +78,7 @@ class RetrievalResult:
             "metadata": self.metadata,
             "graph_context": self.graph_context,
             "query_latency_ms": self.query_latency_ms,
-            "raw_score": self.raw_score
+            "raw_score": self.raw_score,
         }
 
     @classmethod
@@ -89,7 +92,7 @@ class RetrievalResult:
             metadata=data.get("metadata", {}),
             graph_context=data.get("graph_context"),
             query_latency_ms=data.get("query_latency_ms", 0.0),
-            raw_score=data.get("raw_score", 0.0)
+            raw_score=data.get("raw_score", 0.0),
         )
 
 
@@ -101,6 +104,7 @@ class ExtractedEntities:
     These are E2I domain-specific entities, not clinical/medical entities.
     Used to build Cypher queries for FalkorDB.
     """
+
     brands: List[str] = field(default_factory=list)
     regions: List[str] = field(default_factory=list)
     kpis: List[str] = field(default_factory=list)
@@ -111,15 +115,17 @@ class ExtractedEntities:
 
     def is_empty(self) -> bool:
         """Check if no entities were extracted."""
-        return not any([
-            self.brands,
-            self.regions,
-            self.kpis,
-            self.agents,
-            self.journey_stages,
-            self.time_references,
-            self.hcp_segments
-        ])
+        return not any(
+            [
+                self.brands,
+                self.regions,
+                self.kpis,
+                self.agents,
+                self.journey_stages,
+                self.time_references,
+                self.hcp_segments,
+            ]
+        )
 
     def to_dict(self) -> Dict[str, List[str]]:
         """Convert to dictionary for Cypher query building."""
@@ -130,25 +136,28 @@ class ExtractedEntities:
             "agents": self.agents,
             "journey_stages": self.journey_stages,
             "time_references": self.time_references,
-            "hcp_segments": self.hcp_segments
+            "hcp_segments": self.hcp_segments,
         }
 
     def entity_count(self) -> int:
         """Total number of entities extracted."""
-        return sum([
-            len(self.brands),
-            len(self.regions),
-            len(self.kpis),
-            len(self.agents),
-            len(self.journey_stages),
-            len(self.time_references),
-            len(self.hcp_segments)
-        ])
+        return sum(
+            [
+                len(self.brands),
+                len(self.regions),
+                len(self.kpis),
+                len(self.agents),
+                len(self.journey_stages),
+                len(self.time_references),
+                len(self.hcp_segments),
+            ]
+        )
 
 
 @dataclass
 class BackendHealth:
     """Health status for a single backend."""
+
     status: BackendStatus
     latency_ms: float
     last_check: datetime
@@ -167,6 +176,7 @@ class SearchStats:
 
     Stored for debugging and performance monitoring.
     """
+
     query: str
     total_latency_ms: float
     vector_count: int
@@ -200,7 +210,7 @@ class SearchStats:
             "fulltext_latency_ms": self.fulltext_latency_ms,
             "graph_latency_ms": self.graph_latency_ms,
             "fusion_latency_ms": self.fusion_latency_ms,
-            "errors": self.errors
+            "errors": self.errors,
         }
 
 
@@ -211,6 +221,7 @@ class GraphPath:
 
     Used for graph context in RetrievalResult.
     """
+
     source_node: str
     target_node: str
     relationship_types: List[str]
@@ -226,5 +237,5 @@ class GraphPath:
             "relationship_types": self.relationship_types,
             "path_length": self.path_length,
             "nodes": self.nodes,
-            "properties": self.properties
+            "properties": self.properties,
         }

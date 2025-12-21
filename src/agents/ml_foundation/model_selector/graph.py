@@ -7,14 +7,15 @@ This module assembles the model_selector graph with 4 core nodes:
 4. generate_rationale - Generate selection explanation
 """
 
-from langgraph.graph import StateGraph, END
-from .state import ModelSelectorState
+from langgraph.graph import END, StateGraph
+
 from .nodes import (
     filter_algorithms,
+    generate_rationale,
     rank_candidates,
     select_primary_candidate,
-    generate_rationale,
 )
+from .state import ModelSelectorState
 
 
 def create_model_selector_graph() -> StateGraph:

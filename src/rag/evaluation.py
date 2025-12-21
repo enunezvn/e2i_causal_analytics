@@ -36,9 +36,7 @@ class EvaluationSample(BaseModel):
 
     query: str = Field(..., description="User query")
     ground_truth: str = Field(..., description="Expected answer or key points")
-    contexts: List[str] = Field(
-        default_factory=list, description="Reference context passages"
-    )
+    contexts: List[str] = Field(default_factory=list, description="Reference context passages")
     answer: Optional[str] = Field(None, description="Generated answer to evaluate")
     retrieved_contexts: List[str] = Field(
         default_factory=list, description="Contexts retrieved by RAG"
@@ -332,11 +330,12 @@ class RAGASEvaluator:
         """Check if RAGAS is available."""
         try:
             from ragas.metrics import (
-                faithfulness,
                 answer_relevancy,
                 context_precision,
                 context_recall,
+                faithfulness,
             )
+
             return True
         except ImportError:
             logger.warning("RAGAS not installed. Using fallback metrics.")
@@ -389,16 +388,16 @@ class RAGASEvaluator:
         """Evaluate using RAGAS library."""
         try:
             import openai
+            from datasets import Dataset
             from ragas import evaluate
+            from ragas.embeddings import OpenAIEmbeddings as RagasOpenAIEmbeddings
+            from ragas.llms import llm_factory
             from ragas.metrics import (
-                faithfulness,
                 answer_relevancy,
                 context_precision,
                 context_recall,
+                faithfulness,
             )
-            from ragas.embeddings import OpenAIEmbeddings as RagasOpenAIEmbeddings
-            from ragas.llms import llm_factory
-            from datasets import Dataset
 
             # Create a wrapper that adds embed_query interface to RAGAS embeddings
             # RAGAS 0.4.x internally calls embed_query but its embeddings use embed_text
@@ -455,6 +454,7 @@ class RAGASEvaluator:
 
             # Extract scores and handle NaN values
             import math
+
             scores = result.to_pandas().iloc[0].to_dict()
 
             def safe_score(value: float, default: float = 0.0) -> float:
@@ -471,12 +471,14 @@ class RAGASEvaluator:
             overall = (faith + relevancy + precision + recall) / 4
 
             # Check thresholds
-            passed = all([
-                faith >= self.config.thresholds.get("faithfulness", 0.85),
-                relevancy >= self.config.thresholds.get("answer_relevancy", 0.90),
-                precision >= self.config.thresholds.get("context_precision", 0.80),
-                recall >= self.config.thresholds.get("context_recall", 0.80),
-            ])
+            passed = all(
+                [
+                    faith >= self.config.thresholds.get("faithfulness", 0.85),
+                    relevancy >= self.config.thresholds.get("answer_relevancy", 0.90),
+                    precision >= self.config.thresholds.get("context_precision", 0.80),
+                    recall >= self.config.thresholds.get("context_recall", 0.80),
+                ]
+            )
 
             return EvaluationResult(
                 sample_id=sample_id,
@@ -545,12 +547,14 @@ class RAGASEvaluator:
 
         overall = (faith + relevancy + precision + recall) / 4
 
-        passed = all([
-            faith >= self.config.thresholds.get("faithfulness", 0.85),
-            relevancy >= self.config.thresholds.get("answer_relevancy", 0.90),
-            precision >= self.config.thresholds.get("context_precision", 0.80),
-            recall >= self.config.thresholds.get("context_recall", 0.80),
-        ])
+        passed = all(
+            [
+                faith >= self.config.thresholds.get("faithfulness", 0.85),
+                relevancy >= self.config.thresholds.get("answer_relevancy", 0.90),
+                precision >= self.config.thresholds.get("context_precision", 0.80),
+                recall >= self.config.thresholds.get("context_recall", 0.80),
+            ]
+        )
 
         return EvaluationResult(
             sample_id=sample_id,
@@ -750,7 +754,9 @@ class RAGEvaluationPipeline:
                     json.dump(report.model_dump(), f, indent=2)
                 mlflow.log_artifact(results_path)
 
-                logger.info(f"Logged evaluation results to MLflow experiment: {self.config.mlflow_experiment}")
+                logger.info(
+                    f"Logged evaluation results to MLflow experiment: {self.config.mlflow_experiment}"
+                )
 
         except Exception as e:
             logger.error(f"Failed to log to MLflow: {e}")
@@ -770,16 +776,12 @@ class RAGEvaluationPipeline:
         if report.avg_faithfulness is not None:
             threshold = self.config.thresholds.get("faithfulness", 0.85)
             if report.avg_faithfulness < threshold:
-                failures.append(
-                    f"Faithfulness {report.avg_faithfulness:.3f} < {threshold}"
-                )
+                failures.append(f"Faithfulness {report.avg_faithfulness:.3f} < {threshold}")
 
         if report.avg_answer_relevancy is not None:
             threshold = self.config.thresholds.get("answer_relevancy", 0.90)
             if report.avg_answer_relevancy < threshold:
-                failures.append(
-                    f"Answer Relevancy {report.avg_answer_relevancy:.3f} < {threshold}"
-                )
+                failures.append(f"Answer Relevancy {report.avg_answer_relevancy:.3f} < {threshold}")
 
         if report.avg_context_precision is not None:
             threshold = self.config.thresholds.get("context_precision", 0.80)
@@ -791,9 +793,7 @@ class RAGEvaluationPipeline:
         if report.avg_context_recall is not None:
             threshold = self.config.thresholds.get("context_recall", 0.80)
             if report.avg_context_recall < threshold:
-                failures.append(
-                    f"Context Recall {report.avg_context_recall:.3f} < {threshold}"
-                )
+                failures.append(f"Context Recall {report.avg_context_recall:.3f} < {threshold}")
 
         return len(failures) == 0, failures
 

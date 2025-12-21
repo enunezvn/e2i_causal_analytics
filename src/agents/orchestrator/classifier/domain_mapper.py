@@ -7,17 +7,16 @@ domains using weighted scoring. Each domain has specific signals that
 indicate relevance.
 """
 
-from typing import Optional
 
 from .schemas import (
     Domain,
-    DomainMatch,
     DomainMapping,
+    DomainMatch,
+    EntityFeatures,
     ExtractedFeatures,
     IntentSignals,
     StructuralFeatures,
     TemporalFeatures,
-    EntityFeatures,
 )
 
 
@@ -33,41 +32,41 @@ class DomainMapper:
 
     DOMAIN_WEIGHTS = {
         Domain.CAUSAL_ANALYSIS: {
-            "intent_keywords": 0.5,      # causal_keywords presence
+            "intent_keywords": 0.5,  # causal_keywords presence
             "structural_conditional": 0.2,  # has_conditional
-            "temporal_past": 0.1,        # has_past (analyzing what happened)
+            "temporal_past": 0.1,  # has_past (analyzing what happened)
             "base": 0.2,
         },
         Domain.HETEROGENEITY: {
-            "intent_keywords": 0.4,      # exploration_keywords
-            "entity_segments": 0.3,      # segment-related entities
+            "intent_keywords": 0.4,  # exploration_keywords
+            "entity_segments": 0.3,  # segment-related entities
             "structural_comparison": 0.2,
             "base": 0.1,
         },
         Domain.GAP_ANALYSIS: {
             "intent_keywords": 0.4,
-            "entity_regions": 0.3,       # region entities
+            "entity_regions": 0.3,  # region entities
             "structural_comparison": 0.2,
             "base": 0.1,
         },
         Domain.EXPERIMENTATION: {
-            "intent_keywords": 0.6,      # design_keywords are strong signal
+            "intent_keywords": 0.6,  # design_keywords are strong signal
             "structural_conditional": 0.2,
             "temporal_future": 0.1,
             "base": 0.1,
         },
         Domain.PREDICTION: {
-            "intent_keywords": 0.5,      # prediction_keywords
+            "intent_keywords": 0.5,  # prediction_keywords
             "structural_conditional": 0.2,
             "temporal_future": 0.2,
             "base": 0.1,
         },
         Domain.MONITORING: {
-            "intent_keywords": 0.6,      # monitoring_keywords
+            "intent_keywords": 0.6,  # monitoring_keywords
             "base": 0.4,
         },
         Domain.EXPLANATION: {
-            "intent_keywords": 0.7,      # explanation_keywords
+            "intent_keywords": 0.7,  # explanation_keywords
             "base": 0.3,
         },
     }
@@ -82,10 +81,10 @@ class DomainMapper:
     def map_domains(self, features: ExtractedFeatures) -> DomainMapping:
         """
         Map features to domains with confidence scores.
-        
+
         Args:
             features: Extracted features from Stage 1
-            
+
         Returns:
             DomainMapping with detected domains and confidences
         """
@@ -119,16 +118,14 @@ class DomainMapper:
     # DOMAIN SCORING
     # =========================================================================
 
-    def _score_domain(
-        self, domain: Domain, features: ExtractedFeatures
-    ) -> tuple[float, list[str]]:
+    def _score_domain(self, domain: Domain, features: ExtractedFeatures) -> tuple[float, list[str]]:
         """
         Calculate confidence score for a domain.
-        
+
         Args:
             domain: Domain to score
             features: Extracted features
-            
+
         Returns:
             Tuple of (confidence score, evidence list)
         """
@@ -144,25 +141,19 @@ class DomainMapper:
         evidence.extend(keyword_evidence)
 
         # Score based on structural features
-        structural_score, structural_evidence = self._score_structural(
-            domain, features.structural
-        )
+        structural_score, structural_evidence = self._score_structural(domain, features.structural)
         score += structural_score * weights.get("structural_conditional", 0)
         score += structural_score * weights.get("structural_comparison", 0)
         evidence.extend(structural_evidence)
 
         # Score based on temporal features
-        temporal_score, temporal_evidence = self._score_temporal(
-            domain, features.temporal
-        )
+        temporal_score, temporal_evidence = self._score_temporal(domain, features.temporal)
         score += temporal_score * weights.get("temporal_past", 0)
         score += temporal_score * weights.get("temporal_future", 0)
         evidence.extend(temporal_evidence)
 
         # Score based on entity features
-        entity_score, entity_evidence = self._score_entities(
-            domain, features.entities
-        )
+        entity_score, entity_evidence = self._score_entities(domain, features.entities)
         score += entity_score * weights.get("entity_segments", 0)
         score += entity_score * weights.get("entity_regions", 0)
         evidence.extend(entity_evidence)
@@ -179,7 +170,7 @@ class DomainMapper:
         self, domain: Domain, signals: IntentSignals
     ) -> tuple[float, list[str]]:
         """Score based on intent keywords."""
-        
+
         keyword_map = {
             Domain.CAUSAL_ANALYSIS: signals.causal_keywords,
             Domain.HETEROGENEITY: signals.exploration_keywords,
@@ -201,7 +192,7 @@ class DomainMapper:
         self, domain: Domain, structural: StructuralFeatures
     ) -> tuple[float, list[str]]:
         """Score based on structural features."""
-        
+
         evidence = []
         score = 0.0
 
@@ -221,7 +212,7 @@ class DomainMapper:
         self, domain: Domain, temporal: TemporalFeatures
     ) -> tuple[float, list[str]]:
         """Score based on temporal features."""
-        
+
         evidence = []
         score = 0.0
 
@@ -236,11 +227,9 @@ class DomainMapper:
 
         return min(score, 1.0), evidence
 
-    def _score_entities(
-        self, domain: Domain, entities: EntityFeatures
-    ) -> tuple[float, list[str]]:
+    def _score_entities(self, domain: Domain, entities: EntityFeatures) -> tuple[float, list[str]]:
         """Score based on entity features."""
-        
+
         evidence = []
         score = 0.0
 

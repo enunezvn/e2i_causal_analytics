@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
 from .models.composition_models import (
     ComposedResponse,
@@ -76,53 +76,48 @@ Return valid JSON only."""
 # SYNTHESIZER CLASS
 # ============================================================================
 
+
 class ResponseSynthesizer:
     """
     Synthesizes tool outputs into coherent responses.
-    
+
     This is Phase 4 of the Tool Composer pipeline.
     """
-    
+
     def __init__(
         self,
         llm_client: Any,
         model: str = "claude-sonnet-4-20250514",
         temperature: float = 0.4,
-        max_tokens: int = 2000
+        max_tokens: int = 2000,
     ):
         self.llm_client = llm_client
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
-    
-    async def synthesize(
-        self,
-        synthesis_input: SynthesisInput
-    ) -> ComposedResponse:
+
+    async def synthesize(self, synthesis_input: SynthesisInput) -> ComposedResponse:
         """
         Synthesize tool outputs into a response.
-        
+
         Args:
             synthesis_input: Contains original query, decomposition, and execution trace
-            
+
         Returns:
             ComposedResponse with the synthesized answer
         """
         logger.info(f"Synthesizing response for query: {synthesis_input.original_query[:50]}...")
-        
+
         try:
             # Format results for the prompt
             results_text = self._format_results(synthesis_input)
-            
+
             # Call LLM for synthesis
-            response = await self._call_llm(
-                synthesis_input.original_query,
-                results_text
-            )
-            
+            response = await self._call_llm(synthesis_input.original_query, results_text)
+
             # Parse response
             parsed = self._parse_response(response)
-            
+
             # Build ComposedResponse
             composed = ComposedResponse(
                 answer=parsed["answer"],
@@ -132,32 +127,32 @@ class ResponseSynthesizer:
                 caveats=parsed.get("caveats", []),
                 failed_components=parsed.get("failed_components", []),
                 synthesis_reasoning=parsed.get("reasoning", ""),
-                timestamp=datetime.now(timezone.utc)
+                timestamp=datetime.now(timezone.utc),
             )
-            
+
             logger.info(f"Synthesis complete, confidence: {composed.confidence}")
             return composed
-            
+
         except Exception as e:
             logger.error(f"Synthesis failed: {e}")
             # Return a fallback response
             return self._create_fallback_response(synthesis_input, str(e))
-    
+
     def _format_results(self, synthesis_input: SynthesisInput) -> str:
         """Format execution results for the synthesis prompt"""
         lines = []
-        
+
         # Get sub-questions
         sq_map = {sq.id: sq for sq in synthesis_input.decomposition.sub_questions}
-        
+
         for result in synthesis_input.execution_trace.step_results:
             sq = sq_map.get(result.sub_question_id)
             sq_text = sq.question if sq else "Unknown question"
-            
+
             lines.append(f"## Sub-Question: {sq_text}")
             lines.append(f"Tool: {result.tool_name}")
             lines.append(f"Status: {'SUCCESS' if result.output.is_success else 'FAILED'}")
-            
+
             if result.output.is_success and result.output.result:
                 # Format the output nicely
                 output_str = json.dumps(result.output.result, indent=2, default=str)
@@ -167,30 +162,25 @@ class ResponseSynthesizer:
                 lines.append(f"Output:\n{output_str}")
             elif result.output.error:
                 lines.append(f"Error: {result.output.error}")
-            
+
             lines.append("")
-        
+
         return "\n".join(lines)
-    
+
     async def _call_llm(self, query: str, results: str) -> str:
         """Call the LLM for synthesis"""
-        user_message = SYNTHESIS_USER_TEMPLATE.format(
-            query=query,
-            results=results
-        )
-        
+        user_message = SYNTHESIS_USER_TEMPLATE.format(query=query, results=results)
+
         response = await self.llm_client.messages.create(
             model=self.model,
             max_tokens=self.max_tokens,
             temperature=self.temperature,
             system=SYNTHESIS_SYSTEM_PROMPT,
-            messages=[
-                {"role": "user", "content": user_message}
-            ]
+            messages=[{"role": "user", "content": user_message}],
         )
-        
+
         return response.content[0].text
-    
+
     def _parse_response(self, response: str) -> Dict[str, Any]:
         """Parse JSON from LLM response"""
         if "```json" in response:
@@ -201,7 +191,7 @@ class ResponseSynthesizer:
             start = response.find("```") + 3
             end = response.find("```", start)
             response = response[start:end].strip()
-        
+
         try:
             return json.loads(response)
         except json.JSONDecodeError as e:
@@ -210,21 +200,18 @@ class ResponseSynthesizer:
             return {
                 "answer": response,
                 "confidence": 0.6,
-                "reasoning": "JSON parsing failed, using raw response"
+                "reasoning": "JSON parsing failed, using raw response",
             }
-    
+
     def _create_fallback_response(
-        self,
-        synthesis_input: SynthesisInput,
-        error: str
+        self, synthesis_input: SynthesisInput, error: str
     ) -> ComposedResponse:
         """Create a fallback response when synthesis fails"""
         # Try to extract key results
         successful_results = [
-            r for r in synthesis_input.execution_trace.step_results
-            if r.output.is_success
+            r for r in synthesis_input.execution_trace.step_results if r.output.is_success
         ]
-        
+
         if successful_results:
             # Build a basic response from successful results
             answer_parts = ["Based on the analysis:"]
@@ -240,21 +227,21 @@ class ResponseSynthesizer:
                             key_values.append(f"{k}: {v}")
                     if key_values:
                         answer_parts.append(f"- {r.tool_name}: {', '.join(key_values[:3])}")
-            
+
             answer = "\n".join(answer_parts)
         else:
             answer = f"Unable to fully answer the query. Error: {error}"
-        
+
         return ComposedResponse(
             answer=answer,
             confidence=0.3,
             caveats=[f"Synthesis encountered an error: {error}"],
             failed_components=[
-                r.sub_question_id 
+                r.sub_question_id
                 for r in synthesis_input.execution_trace.step_results
                 if not r.output.is_success
             ],
-            synthesis_reasoning="Fallback response due to synthesis error"
+            synthesis_reasoning="Fallback response due to synthesis error",
         )
 
 
@@ -262,34 +249,33 @@ class ResponseSynthesizer:
 # CONVENIENCE FUNCTION
 # ============================================================================
 
+
 async def synthesize_results(
     query: str,
     decomposition: DecompositionResult,
     execution_trace: ExecutionTrace,
     llm_client: Any,
-    **kwargs
+    **kwargs,
 ) -> ComposedResponse:
     """
     Convenience function to synthesize results.
-    
+
     Args:
         query: Original user query
         decomposition: Decomposition result from Phase 1
         execution_trace: Execution trace from Phase 3
         llm_client: LLM client for synthesis
         **kwargs: Additional arguments for ResponseSynthesizer
-        
+
     Returns:
         ComposedResponse with the synthesized answer
     """
     synthesizer = ResponseSynthesizer(llm_client=llm_client, **kwargs)
-    
+
     synthesis_input = SynthesisInput(
-        original_query=query,
-        decomposition=decomposition,
-        execution_trace=execution_trace
+        original_query=query, decomposition=decomposition, execution_trace=execution_trace
     )
-    
+
     return await synthesizer.synthesize(synthesis_input)
 
 
@@ -297,15 +283,12 @@ async def synthesize_results(
 # SYNC WRAPPER
 # ============================================================================
 
-def synthesize_sync(
-    synthesis_input: SynthesisInput,
-    llm_client: Any,
-    **kwargs
-) -> ComposedResponse:
+
+def synthesize_sync(synthesis_input: SynthesisInput, llm_client: Any, **kwargs) -> ComposedResponse:
     """
     Synchronous wrapper for synthesis.
     """
     import asyncio
-    
+
     synthesizer = ResponseSynthesizer(llm_client=llm_client, **kwargs)
     return asyncio.run(synthesizer.synthesize(synthesis_input))

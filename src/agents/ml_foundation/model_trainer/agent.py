@@ -4,9 +4,10 @@ This agent trains ML models with strict split enforcement, hyperparameter
 optimization, and MLflow logging.
 """
 
-from typing import Dict, Any
-from datetime import datetime
 import uuid
+from datetime import datetime
+from typing import Any, Dict
+
 from .graph import create_model_trainer_graph
 from .state import ModelTrainerState
 

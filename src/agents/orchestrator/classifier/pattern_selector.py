@@ -14,14 +14,13 @@ import time
 from typing import Optional
 
 from .schemas import (
-    Domain,
-    RoutingPattern,
     ClassificationResult,
-    ExtractedFeatures,
-    DomainMapping,
     DependencyAnalysis,
+    Domain,
+    DomainMapping,
+    ExtractedFeatures,
+    RoutingPattern,
 )
-
 
 # Agent mapping by domain
 DOMAIN_TO_AGENT = {
@@ -57,7 +56,7 @@ class PatternSelector:
     ) -> ClassificationResult:
         """
         Select routing pattern and build final classification result.
-        
+
         Args:
             features: Extracted features from Stage 1
             domain_mapping: Domain mapping from Stage 2
@@ -66,7 +65,7 @@ class PatternSelector:
             context_source: Source of context if follow-up
             classification_start_time: Start time for latency tracking
             used_llm: Whether LLM layer was used
-            
+
         Returns:
             ClassificationResult with routing decision
         """
@@ -205,12 +204,12 @@ class PatternSelector:
         """Calculate confidence for multi-domain classification."""
         if not domain_mapping.domains_detected:
             return 0.0
-        
+
         # Average of top domain confidences, weighted by position
         confidences = [dm.confidence for dm in domain_mapping.domains_detected[:3]]
-        weights = [0.5, 0.3, 0.2][:len(confidences)]
-        
-        weighted_sum = sum(c * w for c, w in zip(confidences, weights))
+        weights = [0.5, 0.3, 0.2][: len(confidences)]
+
+        weighted_sum = sum(c * w for c, w in zip(confidences, weights, strict=False))
         weight_sum = sum(weights)
-        
+
         return round(weighted_sum / weight_sum, 3)

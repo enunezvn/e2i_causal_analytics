@@ -14,14 +14,14 @@ Part of Phase 1, Checkpoint 1.2.
 import asyncio
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union
 
 import openai
 from openai import AsyncOpenAI, OpenAI
 
 from src.rag.config import EmbeddingConfig
-from src.rag.exceptions import EmbeddingError, ConfigurationError
+from src.rag.exceptions import ConfigurationError, EmbeddingError
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class EmbeddingUsageStats:
     """Track token usage and API call statistics."""
+
     total_tokens: int = 0
     total_requests: int = 0
     total_texts: int = 0
@@ -58,7 +59,8 @@ class EmbeddingUsageStats:
         """Convert to dictionary for logging."""
         avg_latency = (
             self.total_latency_ms / self.successful_requests
-            if self.successful_requests > 0 else 0.0
+            if self.successful_requests > 0
+            else 0.0
         )
         return {
             "total_tokens": self.total_tokens,
@@ -68,9 +70,7 @@ class EmbeddingUsageStats:
             "failed_requests": self.failed_requests,
             "retry_count": self.retry_count,
             "avg_latency_ms": round(avg_latency, 2),
-            "success_rate": round(
-                self.successful_requests / max(self.total_requests, 1) * 100, 2
-            )
+            "success_rate": round(self.successful_requests / max(self.total_requests, 1) * 100, 2),
         }
 
 
@@ -120,7 +120,7 @@ class OpenAIEmbeddingClient:
         config: Optional[EmbeddingConfig] = None,
         api_key: Optional[str] = None,
         model: Optional[str] = None,
-        base_url: Optional[str] = None
+        base_url: Optional[str] = None,
     ):
         """
         Initialize the OpenAI Embedding Client.
@@ -148,14 +148,8 @@ class OpenAIEmbeddingClient:
             )
 
         # Initialize clients
-        self._sync_client = OpenAI(
-            api_key=self._api_key,
-            base_url=self._base_url
-        )
-        self._async_client = AsyncOpenAI(
-            api_key=self._api_key,
-            base_url=self._base_url
-        )
+        self._sync_client = OpenAI(api_key=self._api_key, base_url=self._base_url)
+        self._async_client = AsyncOpenAI(api_key=self._api_key, base_url=self._base_url)
 
         # Usage tracking
         self._usage_stats = EmbeddingUsageStats()
@@ -170,9 +164,7 @@ class OpenAIEmbeddingClient:
     # =========================================================================
 
     def encode(
-        self,
-        text: Union[str, List[str]],
-        dimensions: Optional[int] = None
+        self, text: Union[str, List[str]], dimensions: Optional[int] = None
     ) -> Union[List[float], List[List[float]]]:
         """
         Generate embeddings for text(s) synchronously.
@@ -196,10 +188,7 @@ class OpenAIEmbeddingClient:
         return embeddings[0] if is_single else embeddings
 
     def encode_batch(
-        self,
-        texts: List[str],
-        batch_size: Optional[int] = None,
-        dimensions: Optional[int] = None
+        self, texts: List[str], batch_size: Optional[int] = None, dimensions: Optional[int] = None
     ) -> List[List[float]]:
         """
         Generate embeddings for a large batch of texts synchronously.
@@ -221,7 +210,7 @@ class OpenAIEmbeddingClient:
         all_embeddings: List[List[float]] = []
 
         for i in range(0, len(texts), batch_size):
-            batch = texts[i:i + batch_size]
+            batch = texts[i : i + batch_size]
             batch_embeddings = self._embed_with_retry(batch, dimensions)
             all_embeddings.extend(batch_embeddings)
 
@@ -233,9 +222,7 @@ class OpenAIEmbeddingClient:
         return all_embeddings
 
     def _embed_with_retry(
-        self,
-        texts: List[str],
-        dimensions: Optional[int] = None
+        self, texts: List[str], dimensions: Optional[int] = None
     ) -> List[List[float]]:
         """
         Generate embeddings with exponential backoff retry.
@@ -258,10 +245,7 @@ class OpenAIEmbeddingClient:
                 start_time = time.time()
 
                 # Build request parameters
-                params: Dict[str, Any] = {
-                    "input": texts,
-                    "model": self._model
-                }
+                params: Dict[str, Any] = {"input": texts, "model": self._model}
 
                 # Add dimensions if model supports it
                 dim = dimensions or self._dimension
@@ -278,9 +262,7 @@ class OpenAIEmbeddingClient:
 
                 # Track usage
                 self._usage_stats.record_success(
-                    tokens=response.usage.total_tokens,
-                    texts=len(texts),
-                    latency_ms=latency_ms
+                    tokens=response.usage.total_tokens, texts=len(texts), latency_ms=latency_ms
                 )
 
                 return embeddings
@@ -303,7 +285,7 @@ class OpenAIEmbeddingClient:
                     f"OpenAI API error: {e}",
                     model=self._model,
                     batch_size=len(texts),
-                    original_error=e
+                    original_error=e,
                 )
 
             except Exception as e:
@@ -314,7 +296,7 @@ class OpenAIEmbeddingClient:
                     f"Unexpected embedding error: {e}",
                     model=self._model,
                     batch_size=len(texts),
-                    original_error=e
+                    original_error=e,
                 )
 
         # All retries exhausted
@@ -324,7 +306,7 @@ class OpenAIEmbeddingClient:
             model=self._model,
             batch_size=len(texts),
             details={"last_error": str(last_error)},
-            original_error=last_error
+            original_error=last_error,
         )
 
     # =========================================================================
@@ -332,9 +314,7 @@ class OpenAIEmbeddingClient:
     # =========================================================================
 
     async def encode_async(
-        self,
-        text: Union[str, List[str]],
-        dimensions: Optional[int] = None
+        self, text: Union[str, List[str]], dimensions: Optional[int] = None
     ) -> Union[List[float], List[List[float]]]:
         """
         Generate embeddings for text(s) asynchronously.
@@ -361,7 +341,7 @@ class OpenAIEmbeddingClient:
         texts: List[str],
         batch_size: Optional[int] = None,
         dimensions: Optional[int] = None,
-        concurrency: int = 3
+        concurrency: int = 3,
     ) -> List[List[float]]:
         """
         Generate embeddings for a large batch of texts asynchronously.
@@ -380,10 +360,7 @@ class OpenAIEmbeddingClient:
         batch_size = batch_size or self._batch_size
 
         # Split into batches
-        batches = [
-            texts[i:i + batch_size]
-            for i in range(0, len(texts), batch_size)
-        ]
+        batches = [texts[i : i + batch_size] for i in range(0, len(texts), batch_size)]
 
         # Process batches with limited concurrency
         semaphore = asyncio.Semaphore(concurrency)
@@ -399,9 +376,7 @@ class OpenAIEmbeddingClient:
         return [emb for batch_result in results for emb in batch_result]
 
     async def _embed_with_retry_async(
-        self,
-        texts: List[str],
-        dimensions: Optional[int] = None
+        self, texts: List[str], dimensions: Optional[int] = None
     ) -> List[List[float]]:
         """
         Generate embeddings with exponential backoff retry (async).
@@ -424,10 +399,7 @@ class OpenAIEmbeddingClient:
                 start_time = time.time()
 
                 # Build request parameters
-                params: Dict[str, Any] = {
-                    "input": texts,
-                    "model": self._model
-                }
+                params: Dict[str, Any] = {"input": texts, "model": self._model}
 
                 # Add dimensions if model supports it
                 dim = dimensions or self._dimension
@@ -444,9 +416,7 @@ class OpenAIEmbeddingClient:
 
                 # Track usage
                 self._usage_stats.record_success(
-                    tokens=response.usage.total_tokens,
-                    texts=len(texts),
-                    latency_ms=latency_ms
+                    tokens=response.usage.total_tokens, texts=len(texts), latency_ms=latency_ms
                 )
 
                 return embeddings
@@ -469,7 +439,7 @@ class OpenAIEmbeddingClient:
                     f"OpenAI API error: {e}",
                     model=self._model,
                     batch_size=len(texts),
-                    original_error=e
+                    original_error=e,
                 )
 
             except Exception as e:
@@ -480,7 +450,7 @@ class OpenAIEmbeddingClient:
                     f"Unexpected embedding error: {e}",
                     model=self._model,
                     batch_size=len(texts),
-                    original_error=e
+                    original_error=e,
                 )
 
         # All retries exhausted
@@ -490,7 +460,7 @@ class OpenAIEmbeddingClient:
             model=self._model,
             batch_size=len(texts),
             details={"last_error": str(last_error)},
-            original_error=last_error
+            original_error=last_error,
         )
 
     # =========================================================================
@@ -527,9 +497,7 @@ class OpenAIEmbeddingClient:
 
 # Convenience function for quick embedding
 async def get_embedding(
-    text: str,
-    model: str = "text-embedding-3-small",
-    api_key: Optional[str] = None
+    text: str, model: str = "text-embedding-3-small", api_key: Optional[str] = None
 ) -> List[float]:
     """
     Quick utility function to get a single embedding.

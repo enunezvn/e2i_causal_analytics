@@ -20,27 +20,19 @@ import logging
 import time
 from collections import defaultdict
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
-from src.rag.backends import VectorBackend, FulltextBackend, GraphBackend
+from src.rag.backends import FulltextBackend, GraphBackend, VectorBackend
 from src.rag.config import (
-    HybridSearchConfig,
-    FalkorDBConfig,
     RAGConfig,
 )
 from src.rag.types import (
+    BackendHealth,
+    BackendStatus,
     ExtractedEntities,
     RetrievalResult,
     RetrievalSource,
-    BackendHealth,
-    BackendStatus,
     SearchStats,
-)
-from src.rag.exceptions import (
-    RAGError,
-    RetrieverError,
-    BackendUnavailableError,
-    FusionError,
 )
 
 logger = logging.getLogger(__name__)
@@ -97,7 +89,7 @@ class HybridRetriever:
         supabase_client: Any,
         falkordb_client: Any,
         config: Optional[RAGConfig] = None,
-        embedding_service: Optional[Any] = None
+        embedding_service: Optional[Any] = None,
     ):
         """
         Initialize the hybrid retriever.
@@ -113,17 +105,15 @@ class HybridRetriever:
 
         # Initialize backends
         self.vector_backend = VectorBackend(
-            supabase_client=supabase_client,
-            config=self.config.search
+            supabase_client=supabase_client, config=self.config.search
         )
         self.fulltext_backend = FulltextBackend(
-            supabase_client=supabase_client,
-            config=self.config.search
+            supabase_client=supabase_client, config=self.config.search
         )
         self.graph_backend = GraphBackend(
             falkordb_client=falkordb_client,
             falkordb_config=self.config.falkordb,
-            search_config=self.config.search
+            search_config=self.config.search,
         )
 
         # Track backend health
@@ -136,7 +126,7 @@ class HybridRetriever:
         embedding: Optional[List[float]] = None,
         entities: Optional[ExtractedEntities] = None,
         filters: Optional[Dict[str, Any]] = None,
-        top_k: Optional[int] = None
+        top_k: Optional[int] = None,
     ) -> List[RetrievalResult]:
         """
         Execute hybrid search across all backends.
@@ -173,10 +163,7 @@ class HybridRetriever:
 
         # Dispatch parallel searches
         backend_results = await self._dispatch_parallel_searches(
-            query=query,
-            embedding=embedding,
-            entities=entities,
-            filters=filters
+            query=query, embedding=embedding, entities=entities, filters=filters
         )
 
         # Check if all backends failed
@@ -194,11 +181,11 @@ class HybridRetriever:
                 sources_used={
                     "vector": embedding is not None,
                     "fulltext": bool(query and query.strip()),
-                    "graph": True
+                    "graph": True,
                 },
                 vector_latency_ms=self.vector_backend.last_latency_ms,
                 fulltext_latency_ms=self.fulltext_backend.last_latency_ms,
-                graph_latency_ms=self.graph_backend.last_latency_ms
+                graph_latency_ms=self.graph_backend.last_latency_ms,
             )
             return []
 
@@ -209,11 +196,7 @@ class HybridRetriever:
         boosted_results = self._apply_graph_boost(fused_results)
 
         # Sort by final score and limit
-        final_results = sorted(
-            boosted_results,
-            key=lambda x: x.score,
-            reverse=True
-        )[:top_k]
+        final_results = sorted(boosted_results, key=lambda x: x.score, reverse=True)[:top_k]
 
         # Update search stats
         total_latency_ms = (time.time() - start_time) * 1000
@@ -231,11 +214,11 @@ class HybridRetriever:
             sources_used={
                 "vector": embedding is not None,
                 "fulltext": bool(query and query.strip()),
-                "graph": True
+                "graph": True,
             },
             vector_latency_ms=self.vector_backend.last_latency_ms,
             fulltext_latency_ms=self.fulltext_backend.last_latency_ms,
-            graph_latency_ms=self.graph_backend.last_latency_ms
+            graph_latency_ms=self.graph_backend.last_latency_ms,
         )
 
         logger.info(
@@ -253,7 +236,7 @@ class HybridRetriever:
         query: str,
         embedding: Optional[List[float]],
         entities: ExtractedEntities,
-        filters: Dict[str, Any]
+        filters: Dict[str, Any],
     ) -> Dict[RetrievalSource, List[RetrievalResult]]:
         """
         Dispatch searches to all backends in parallel.
@@ -290,7 +273,7 @@ class HybridRetriever:
         if tasks:
             completed = await asyncio.gather(*tasks, return_exceptions=True)
 
-            for source, result in zip(task_sources, completed):
+            for source, result in zip(task_sources, completed, strict=False):
                 if isinstance(result, Exception):
                     logger.warning(f"{source.value} search failed: {result}")
                     results[source] = []
@@ -300,56 +283,37 @@ class HybridRetriever:
         return results
 
     async def _safe_vector_search(
-        self,
-        embedding: List[float],
-        filters: Dict[str, Any]
+        self, embedding: List[float], filters: Dict[str, Any]
     ) -> List[RetrievalResult]:
         """Execute vector search with error handling."""
         try:
-            return await self.vector_backend.search(
-                embedding=embedding,
-                filters=filters
-            )
+            return await self.vector_backend.search(embedding=embedding, filters=filters)
         except Exception as e:
             logger.error(f"Vector search error: {e}")
             return []
 
     async def _safe_fulltext_search(
-        self,
-        query: str,
-        filters: Dict[str, Any]
+        self, query: str, filters: Dict[str, Any]
     ) -> List[RetrievalResult]:
         """Execute fulltext search with error handling."""
         try:
-            return await self.fulltext_backend.search(
-                query=query,
-                filters=filters
-            )
+            return await self.fulltext_backend.search(query=query, filters=filters)
         except Exception as e:
             logger.error(f"Fulltext search error: {e}")
             return []
 
     async def _safe_graph_search(
-        self,
-        entities: ExtractedEntities,
-        query: str,
-        filters: Dict[str, Any]
+        self, entities: ExtractedEntities, query: str, filters: Dict[str, Any]
     ) -> List[RetrievalResult]:
         """Execute graph search with error handling."""
         try:
-            return await self.graph_backend.search(
-                entities=entities,
-                query=query,
-                filters=filters
-            )
+            return await self.graph_backend.search(entities=entities, query=query, filters=filters)
         except Exception as e:
             logger.error(f"Graph search error: {e}")
             return []
 
     def _apply_rrf_fusion(
-        self,
-        backend_results: Dict[RetrievalSource, List[RetrievalResult]],
-        top_k: int
+        self, backend_results: Dict[RetrievalSource, List[RetrievalResult]], top_k: int
     ) -> List[RetrievalResult]:
         """
         Apply Reciprocal Rank Fusion to combine results from multiple backends.
@@ -416,10 +380,7 @@ class HybridRetriever:
         sorted_ids = sorted(rrf_scores.keys(), key=lambda x: rrf_scores[x], reverse=True)
         return [id_to_result[rid] for rid in sorted_ids[:top_k]]
 
-    def _apply_graph_boost(
-        self,
-        results: List[RetrievalResult]
-    ) -> List[RetrievalResult]:
+    def _apply_graph_boost(self, results: List[RetrievalResult]) -> List[RetrievalResult]:
         """
         Apply graph boost to results that have causal graph context.
 
@@ -459,19 +420,16 @@ class HybridRetriever:
             ("graph", self.graph_backend.health_check()),
         ]
 
-        results = await asyncio.gather(
-            *[task for _, task in health_tasks],
-            return_exceptions=True
-        )
+        results = await asyncio.gather(*[task for _, task in health_tasks], return_exceptions=True)
 
         health = {}
-        for (name, _), result in zip(health_tasks, results):
+        for (name, _), result in zip(health_tasks, results, strict=False):
             if isinstance(result, Exception):
                 health[name] = BackendHealth(
                     status=BackendStatus.UNHEALTHY,
                     latency_ms=0.0,
                     last_check=datetime.now(timezone.utc),
-                    error_message=str(result)
+                    error_message=str(result),
                 )
             else:
                 # Convert string status to BackendStatus enum
@@ -485,7 +443,7 @@ class HybridRetriever:
                     status=status,
                     latency_ms=float(result.get("latency_ms", 0)),
                     last_check=datetime.now(timezone.utc),
-                    error_message=result.get("error")
+                    error_message=result.get("error"),
                 )
 
         self._backend_health = health
@@ -497,7 +455,7 @@ class HybridRetriever:
         node_types: Optional[List[str]] = None,
         relationship_types: Optional[List[str]] = None,
         max_depth: int = 2,
-        limit: int = 100
+        limit: int = 100,
     ) -> Dict[str, Any]:
         """
         Get a subgraph for visualization from FalkorDB/Graphiti.
@@ -519,14 +477,11 @@ class HybridRetriever:
             node_types=node_types,
             relationship_types=relationship_types,
             max_depth=max_depth,
-            limit=limit
+            limit=limit,
         )
 
     async def get_causal_path(
-        self,
-        source_id: str,
-        target_id: str,
-        max_length: int = 4
+        self, source_id: str, target_id: str, max_length: int = 4
     ) -> List[Any]:
         """
         Find causal paths between two nodes.
@@ -542,9 +497,7 @@ class HybridRetriever:
             List of GraphPath objects
         """
         return await self.graph_backend.get_causal_path(
-            source_id=source_id,
-            target_id=target_id,
-            max_length=max_length
+            source_id=source_id, target_id=target_id, max_length=max_length
         )
 
     @property

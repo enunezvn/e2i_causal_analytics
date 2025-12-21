@@ -3,12 +3,13 @@
 This module assembles the data preparation pipeline using LangGraph.
 """
 
-from typing import Dict, Any
-from langgraph.graph import StateGraph, END
 import logging
+from typing import Any, Dict
 
+from langgraph.graph import END, StateGraph
+
+from .nodes import compute_baseline_metrics, detect_leakage, run_quality_checks
 from .state import DataPreparerState
-from .nodes import run_quality_checks, compute_baseline_metrics, detect_leakage
 
 logger = logging.getLogger(__name__)
 
@@ -105,9 +106,7 @@ async def finalize_output(state: DataPreparerState) -> Dict[str, Any]:
         # Missing required features
         scope_spec = state.get("scope_spec", {})
         required_features = scope_spec.get("required_features", [])
-        missing_required_features = [
-            f for f in required_features if f not in available_features
-        ]
+        missing_required_features = [f for f in required_features if f not in available_features]
 
         # Data is ready if QC passed and no missing required features
         qc_passed = gate_passed
@@ -116,9 +115,7 @@ async def finalize_output(state: DataPreparerState) -> Dict[str, Any]:
         # Blockers (same as blocking_issues)
         blockers = blocking_issues.copy()
         if missing_required_features:
-            blockers.append(
-                f"Missing required features: {', '.join(missing_required_features)}"
-            )
+            blockers.append(f"Missing required features: {', '.join(missing_required_features)}")
 
         # Update state
         updates = {

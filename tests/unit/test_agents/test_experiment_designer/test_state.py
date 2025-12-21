@@ -3,21 +3,21 @@
 Tests TypedDict definitions and state initialization.
 """
 
-import pytest
 from typing import get_type_hints
-from src.agents.experiment_designer.state import (
-    ExperimentDesignState,
-    TreatmentDefinition,
-    OutcomeDefinition,
-    ValidityThreat,
-    MitigationRecommendation,
-    PowerAnalysisResult,
-    DoWhySpec,
-    ExperimentTemplate,
-    DesignIteration,
-    ErrorDetails,
-)
+
 from src.agents.experiment_designer.graph import create_initial_state
+from src.agents.experiment_designer.state import (
+    DesignIteration,
+    DoWhySpec,
+    ErrorDetails,
+    ExperimentDesignState,
+    ExperimentTemplate,
+    MitigationRecommendation,
+    OutcomeDefinition,
+    PowerAnalysisResult,
+    TreatmentDefinition,
+    ValidityThreat,
+)
 
 
 class TestTreatmentDefinition:
@@ -29,7 +29,7 @@ class TestTreatmentDefinition:
             "name": "Treatment A",
             "description": "Increased visit frequency",
             "implementation_details": "Weekly visits instead of bi-weekly",
-            "target_population": "All HCPs in territory"
+            "target_population": "All HCPs in territory",
         }
 
         assert treatment["name"] == "Treatment A"
@@ -43,7 +43,7 @@ class TestTreatmentDefinition:
             "implementation_details": "Weekly visits instead of bi-weekly",
             "target_population": "High-value HCPs in northeast region",
             "dosage_or_intensity": "2x baseline visits",
-            "duration": "12 weeks"
+            "duration": "12 weeks",
         }
 
         assert treatment["dosage_or_intensity"] == "2x baseline visits"
@@ -62,7 +62,7 @@ class TestOutcomeDefinition:
             "measurement_frequency": "weekly",
             "is_primary": True,
             "baseline_value": 45.0,
-            "expected_effect_size": 5.0
+            "expected_effect_size": 5.0,
         }
 
         assert outcome["metric_type"] == "continuous"
@@ -78,7 +78,7 @@ class TestOutcomeDefinition:
             "measurement_frequency": "monthly",
             "is_primary": True,
             "baseline_value": 0.15,
-            "expected_effect_size": 0.05
+            "expected_effect_size": 0.05,
         }
 
         assert outcome["metric_type"] == "binary"
@@ -90,7 +90,7 @@ class TestOutcomeDefinition:
             "metric_type": "time_to_event",
             "measurement_method": "Days from first contact to first Rx",
             "measurement_frequency": "continuous",
-            "is_primary": True
+            "is_primary": True,
         }
 
         assert outcome["metric_type"] == "time_to_event"
@@ -107,7 +107,7 @@ class TestValidityThreat:
             "description": "Non-random assignment to treatment groups",
             "severity": "high",
             "mitigation_possible": True,
-            "mitigation_strategy": "Use stratified randomization on baseline characteristics"
+            "mitigation_strategy": "Use stratified randomization on baseline characteristics",
         }
 
         assert threat["threat_type"] == "internal"
@@ -122,7 +122,7 @@ class TestValidityThreat:
             "description": "Results may not generalize to other regions",
             "severity": "medium",
             "mitigation_possible": True,
-            "mitigation_strategy": "Include diverse geographic regions in sample"
+            "mitigation_strategy": "Include diverse geographic regions in sample",
         }
 
         assert threat["threat_type"] == "external"
@@ -135,7 +135,7 @@ class TestValidityThreat:
             "description": "Insufficient sample size to detect expected effect",
             "severity": "critical",
             "mitigation_possible": True,
-            "mitigation_strategy": "Increase sample size or extend duration"
+            "mitigation_strategy": "Increase sample size or extend duration",
         }
 
         assert threat["threat_type"] == "statistical"
@@ -149,7 +149,7 @@ class TestValidityThreat:
                 "threat_name": "test",
                 "description": "Test threat",
                 "severity": severity,
-                "mitigation_possible": True
+                "mitigation_possible": True,
             }
             assert threat["severity"] == severity
 
@@ -167,8 +167,8 @@ class TestMitigationRecommendation:
             "implementation_steps": [
                 "Identify key stratification variables",
                 "Create balanced strata",
-                "Randomize within strata"
-            ]
+                "Randomize within strata",
+            ],
         }
 
         assert mitigation["threat_addressed"] == "selection_bias"
@@ -183,7 +183,7 @@ class TestMitigationRecommendation:
                 "recommendation": "Test mitigation",
                 "effectiveness_rating": rating,
                 "implementation_cost": "medium",
-                "implementation_steps": []
+                "implementation_steps": [],
             }
             assert mitigation["effectiveness_rating"] == rating
 
@@ -203,12 +203,12 @@ class TestPowerAnalysisResult:
             "assumptions": [
                 "Equal variances assumed",
                 "Normal distribution of outcome",
-                "No clustering effects"
+                "No clustering effects",
             ],
             "sensitivity_analysis": {
                 "power_at_smaller_effect": 0.65,
-                "power_at_larger_effect": 0.92
-            }
+                "power_at_larger_effect": 0.92,
+            },
         }
 
         assert power["required_sample_size"] == 500
@@ -225,7 +225,7 @@ class TestPowerAnalysisResult:
                 "minimum_detectable_effect": 0.3,
                 "alpha": 0.05,
                 "effect_size_type": es_type,
-                "assumptions": []
+                "assumptions": [],
             }
             assert power["effect_size_type"] == es_type
 
@@ -241,7 +241,7 @@ class TestDoWhySpec:
             "confounders": ["territory_size", "baseline_engagement", "hcp_specialty"],
             "instruments": ["random_assignment"],
             "effect_modifiers": ["hcp_experience", "region"],
-            "causal_graph_dot": "digraph { visit_frequency -> engagement_score; territory_size -> engagement_score; }"
+            "causal_graph_dot": "digraph { visit_frequency -> engagement_score; territory_size -> engagement_score; }",
         }
 
         assert spec["treatment_variable"] == "visit_frequency"
@@ -256,7 +256,7 @@ class TestDoWhySpec:
             "confounders": [],
             "instruments": [],
             "effect_modifiers": [],
-            "causal_graph_dot": ""
+            "causal_graph_dot": "",
         }
 
         assert spec["treatment_variable"] == "treatment"
@@ -272,9 +272,9 @@ class TestExperimentTemplate:
             "pre_registration_document": "# Pre-registration\n## Hypothesis...",
             "monitoring_dashboard_spec": {
                 "metrics": ["enrollment_rate", "dropout_rate"],
-                "alerts": ["low_enrollment", "high_dropout"]
+                "alerts": ["low_enrollment", "high_dropout"],
             },
-            "randomization_script": "import random\n# Randomization code..."
+            "randomization_script": "import random\n# Randomization code...",
         }
 
         assert "CausalModel" in template["analysis_code"]
@@ -286,7 +286,7 @@ class TestExperimentTemplate:
             "analysis_code": "# Code",
             "pre_registration_document": "# Doc",
             "monitoring_dashboard_spec": {},
-            "randomization_script": ""
+            "randomization_script": "",
         }
 
         assert template["monitoring_dashboard_spec"] == {}
@@ -304,7 +304,7 @@ class TestDesignIteration:
             "critical_threats": 1,
             "power_achieved": 0.75,
             "redesign_reason": "Insufficient power for primary outcome",
-            "timestamp": "2024-01-15T10:30:00Z"
+            "timestamp": "2024-01-15T10:30:00Z",
         }
 
         assert iteration["iteration_number"] == 1
@@ -321,7 +321,7 @@ class TestDesignIteration:
                 "critical_threats": 1 if i == 0 else 0,
                 "power_achieved": 0.75 + (i * 0.05),  # Increasing power
                 "redesign_reason": f"Iteration {i} reason",
-                "timestamp": f"2024-01-{15 + i}T10:30:00Z"
+                "timestamp": f"2024-01-{15 + i}T10:30:00Z",
             }
             iterations.append(iteration)
 
@@ -338,7 +338,7 @@ class TestErrorDetails:
             "node": "design_reasoning",
             "error": "LLM response parsing failed",
             "timestamp": "2024-01-15T10:30:00Z",
-            "recoverable": True
+            "recoverable": True,
         }
 
         assert error["node"] == "design_reasoning"
@@ -350,7 +350,7 @@ class TestErrorDetails:
             "node": "power_analysis",
             "error": "Invalid effect size",
             "timestamp": "2024-01-15T10:30:00Z",
-            "recoverable": False
+            "recoverable": False,
         }
 
         assert error["recoverable"] is False
@@ -361,9 +361,7 @@ class TestExperimentDesignState:
 
     def test_create_initial_state(self):
         """Test creating initial state."""
-        state = create_initial_state(
-            business_question="Does X impact Y?"
-        )
+        state = create_initial_state(business_question="Does X impact Y?")
 
         assert state["business_question"] == "Does X impact Y?"
         assert state["constraints"] == {}
@@ -379,13 +377,8 @@ class TestExperimentDesignState:
         """Test creating initial state with constraints."""
         state = create_initial_state(
             business_question="Test question here?",
-            constraints={
-                "expected_effect_size": 0.25,
-                "power": 0.80
-            },
-            available_data={
-                "variables": ["var1", "var2"]
-            }
+            constraints={"expected_effect_size": 0.25, "power": 0.80},
+            available_data={"variables": ["var1", "var2"]},
         )
 
         assert state["constraints"]["expected_effect_size"] == 0.25
@@ -394,8 +387,7 @@ class TestExperimentDesignState:
     def test_create_initial_state_custom_formality(self):
         """Test creating initial state with custom formality."""
         state = create_initial_state(
-            business_question="Test question here?",
-            preregistration_formality="heavy"
+            business_question="Test question here?", preregistration_formality="heavy"
         )
 
         assert state["preregistration_formality"] == "heavy"
@@ -403,8 +395,7 @@ class TestExperimentDesignState:
     def test_create_initial_state_custom_iterations(self):
         """Test creating initial state with custom iterations."""
         state = create_initial_state(
-            business_question="Test question here?",
-            max_redesign_iterations=5
+            business_question="Test question here?", max_redesign_iterations=5
         )
 
         assert state["max_redesign_iterations"] == 5
@@ -412,8 +403,7 @@ class TestExperimentDesignState:
     def test_create_initial_state_no_validity_audit(self):
         """Test creating initial state without validity audit."""
         state = create_initial_state(
-            business_question="Test question here?",
-            enable_validity_audit=False
+            business_question="Test question here?", enable_validity_audit=False
         )
 
         assert state["enable_validity_audit"] is False
@@ -433,7 +423,7 @@ class TestStateFieldTypes:
             "enable_validity_audit",
             "errors",
             "warnings",
-            "status"
+            "status",
         ]
 
         hints = get_type_hints(ExperimentDesignState)
@@ -451,7 +441,7 @@ class TestStateFieldTypes:
             "randomization_unit",
             "randomization_method",
             "stratification_variables",
-            "blocking_variables"
+            "blocking_variables",
         ]
 
         hints = get_type_hints(ExperimentDesignState)
@@ -461,11 +451,7 @@ class TestStateFieldTypes:
 
     def test_state_has_power_fields(self):
         """Test state has power analysis fields."""
-        power_fields = [
-            "power_analysis",
-            "sample_size_justification",
-            "duration_estimate_days"
-        ]
+        power_fields = ["power_analysis", "sample_size_justification", "duration_estimate_days"]
 
         hints = get_type_hints(ExperimentDesignState)
 
@@ -480,7 +466,7 @@ class TestStateFieldTypes:
             "overall_validity_score",
             "validity_confidence",
             "redesign_needed",
-            "redesign_recommendations"
+            "redesign_recommendations",
         ]
 
         hints = get_type_hints(ExperimentDesignState)
@@ -490,12 +476,7 @@ class TestStateFieldTypes:
 
     def test_state_has_template_fields(self):
         """Test state has template generation fields."""
-        template_fields = [
-            "dowhy_spec",
-            "causal_graph_dot",
-            "analysis_code",
-            "experiment_template"
-        ]
+        template_fields = ["dowhy_spec", "causal_graph_dot", "analysis_code", "experiment_template"]
 
         hints = get_type_hints(ExperimentDesignState)
 
@@ -504,11 +485,7 @@ class TestStateFieldTypes:
 
     def test_state_has_execution_fields(self):
         """Test state has execution metadata fields."""
-        execution_fields = [
-            "current_iteration",
-            "iteration_history",
-            "node_latencies_ms"
-        ]
+        execution_fields = ["current_iteration", "iteration_history", "node_latencies_ms"]
 
         hints = get_type_hints(ExperimentDesignState)
 

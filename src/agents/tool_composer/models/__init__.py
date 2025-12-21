@@ -3,27 +3,27 @@ E2I Tool Composer - Data Models
 """
 
 from .composition_models import (
+    ComposedResponse,
     # Enums
     CompositionPhase,
-    ExecutionStatus,
-    DependencyType,
-    # Phase 1 models
-    SubQuestion,
-    DecompositionResult,
-    # Phase 2 models
-    ToolMapping,
-    ExecutionStep,
-    ExecutionPlan,
-    # Phase 3 models
-    ToolInput,
-    ToolOutput,
-    StepResult,
-    ExecutionTrace,
-    # Phase 4 models
-    SynthesisInput,
-    ComposedResponse,
     # Top-level
     CompositionResult,
+    DecompositionResult,
+    DependencyType,
+    ExecutionPlan,
+    ExecutionStatus,
+    ExecutionStep,
+    ExecutionTrace,
+    StepResult,
+    # Phase 1 models
+    SubQuestion,
+    # Phase 4 models
+    SynthesisInput,
+    # Phase 3 models
+    ToolInput,
+    # Phase 2 models
+    ToolMapping,
+    ToolOutput,
 )
 
 __all__ = [

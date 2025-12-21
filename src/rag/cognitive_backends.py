@@ -19,14 +19,14 @@ Usage:
 import logging
 from typing import Any, Dict, List, Optional
 
-from src.rag.memory_connector import get_memory_connector
 from src.memory.procedural_memory import (
+    LearningSignalInput,
+    ProceduralMemoryInput,
     find_relevant_procedures_by_text,
     insert_procedural_memory,
     record_learning_signal,
-    ProceduralMemoryInput,
-    LearningSignalInput,
 )
+from src.rag.memory_connector import get_memory_connector
 
 logger = logging.getLogger(__name__)
 
@@ -49,11 +49,7 @@ class EpisodicMemoryBackend:
             self._connector = get_memory_connector()
         return self._connector
 
-    async def vector_search(
-        self,
-        query: str,
-        limit: int = 5
-    ) -> List[Dict[str, Any]]:
+    async def vector_search(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
         """
         Search episodic memories by semantic similarity.
 
@@ -66,9 +62,7 @@ class EpisodicMemoryBackend:
         """
         try:
             results = await self.connector.vector_search_by_text(
-                query_text=query,
-                k=limit,
-                min_similarity=0.5
+                query_text=query, k=limit, min_similarity=0.5
             )
 
             # Convert RetrievalResult to workflow-compatible dict format
@@ -78,7 +72,7 @@ class EpisodicMemoryBackend:
                     "source": r.source,
                     "source_id": r.source_id,
                     "score": r.score,
-                    "metadata": r.metadata
+                    "metadata": r.metadata,
                 }
                 for r in results
             ]
@@ -88,10 +82,7 @@ class EpisodicMemoryBackend:
             return []
 
     async def store_episode(
-        self,
-        content: str,
-        episode_type: str,
-        metadata: Optional[Dict[str, Any]] = None
+        self, content: str, episode_type: str, metadata: Optional[Dict[str, Any]] = None
     ) -> Optional[str]:
         """
         Store a new episode in episodic memory.
@@ -127,11 +118,7 @@ class SemanticMemoryBackend:
             self._connector = get_memory_connector()
         return self._connector
 
-    async def graph_query(
-        self,
-        query: str,
-        max_depth: int = 2
-    ) -> List[Dict[str, Any]]:
+    async def graph_query(self, query: str, max_depth: int = 2) -> List[Dict[str, Any]]:
         """
         Query semantic graph for related entities.
 
@@ -152,18 +139,13 @@ class SemanticMemoryBackend:
 
             if entity_id:
                 results = self.connector.graph_traverse(
-                    entity_id=entity_id,
-                    relationship="causal_path",
-                    max_depth=max_depth
+                    entity_id=entity_id, relationship="causal_path", max_depth=max_depth
                 )
             else:
                 # Fall back to KPI-based traversal if query mentions KPIs
                 kpi = self._extract_kpi(query)
                 if kpi:
-                    results = self.connector.graph_traverse_kpi(
-                        kpi_name=kpi,
-                        min_confidence=0.5
-                    )
+                    results = self.connector.graph_traverse_kpi(kpi_name=kpi, min_confidence=0.5)
                 else:
                     # No entity found, return empty
                     results = []
@@ -175,7 +157,7 @@ class SemanticMemoryBackend:
                     "source": r.source,
                     "source_id": r.source_id,
                     "score": r.score,
-                    "metadata": r.metadata
+                    "metadata": r.metadata,
                 }
                 for r in results
             ]
@@ -222,7 +204,7 @@ class SemanticMemoryBackend:
             "new prescriptions": "NRx",
             "conversion": "conversion_rate",
             "market share": "market_share",
-            "adoption": "adoption_rate"
+            "adoption": "adoption_rate",
         }
 
         for pattern, kpi_name in kpis.items():
@@ -236,7 +218,7 @@ class SemanticMemoryBackend:
         source_entity: str,
         target_entity: str,
         relationship_type: str,
-        properties: Optional[Dict[str, Any]] = None
+        properties: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """
         Store a new relationship in semantic graph.
@@ -263,11 +245,7 @@ class ProceduralMemoryBackend:
     for DSPy in-context learning.
     """
 
-    async def procedure_search(
-        self,
-        query: str,
-        limit: int = 3
-    ) -> List[Dict[str, Any]]:
+    async def procedure_search(self, query: str, limit: int = 3) -> List[Dict[str, Any]]:
         """
         Search for relevant procedures/patterns.
 
@@ -280,9 +258,7 @@ class ProceduralMemoryBackend:
         """
         try:
             results = await find_relevant_procedures_by_text(
-                query_text=query,
-                limit=limit,
-                min_similarity=0.5
+                query_text=query, limit=limit, min_similarity=0.5
             )
 
             # Convert to workflow-compatible format
@@ -299,17 +275,19 @@ class ProceduralMemoryBackend:
                 else:
                     content = procedure_name
 
-                formatted_results.append({
-                    "content": content,
-                    "source": "procedural_memory",
-                    "source_id": r.get("id", ""),
-                    "score": r.get("similarity", 0.7),
-                    "metadata": {
-                        "procedure_type": r.get("procedure_type"),
-                        "success_rate": r.get("success_rate", 0.0),
-                        "execution_count": r.get("execution_count", 0)
+                formatted_results.append(
+                    {
+                        "content": content,
+                        "source": "procedural_memory",
+                        "source_id": r.get("id", ""),
+                        "score": r.get("similarity", 0.7),
+                        "metadata": {
+                            "procedure_type": r.get("procedure_type"),
+                            "success_rate": r.get("success_rate", 0.0),
+                            "execution_count": r.get("execution_count", 0),
+                        },
                     }
-                })
+                )
 
             return formatted_results
 
@@ -323,7 +301,7 @@ class ProceduralMemoryBackend:
         tool_sequence: List[Dict[str, Any]],
         trigger_pattern: Optional[str] = None,
         intent: Optional[str] = None,
-        embedding: Optional[List[float]] = None
+        embedding: Optional[List[float]] = None,
     ) -> Optional[str]:
         """
         Store a new procedure in memory.
@@ -351,7 +329,7 @@ class ProceduralMemoryBackend:
                 procedure_name=procedure_name,
                 tool_sequence=tool_sequence,
                 trigger_pattern=trigger_pattern,
-                detected_intent=intent
+                detected_intent=intent,
             )
 
             result = await insert_procedural_memory(procedure, embedding)
@@ -373,10 +351,7 @@ class SignalCollector:
     def __init__(self):
         self._pending_signals: List[Dict[str, Any]] = []
 
-    async def collect(
-        self,
-        signals: List[Dict[str, Any]]
-    ) -> None:
+    async def collect(self, signals: List[Dict[str, Any]]) -> None:
         """
         Collect DSPy training signals.
 
@@ -397,12 +372,11 @@ class SignalCollector:
                     dspy_metric_value=signal.get("metric"),
                     training_input=str(signal.get("input", "")),
                     training_output=str(signal.get("output", "")),
-                    signal_details=signal
+                    signal_details=signal,
                 )
 
                 await record_learning_signal(
-                    signal=learning_signal,
-                    cycle_id=signal.get("cycle_id", "unknown")
+                    signal=learning_signal, cycle_id=signal.get("cycle_id", "unknown")
                 )
 
                 logger.debug(f"Collected signal for {signal.get('signature_name')}")
@@ -450,15 +424,7 @@ def get_cognitive_memory_backends() -> Dict[str, Any]:
     signal_collector = SignalCollector()
 
     return {
-        "readers": {
-            "episodic": episodic,
-            "semantic": semantic,
-            "procedural": procedural
-        },
-        "writers": {
-            "episodic": episodic,
-            "semantic": semantic,
-            "procedural": procedural
-        },
-        "signal_collector": signal_collector
+        "readers": {"episodic": episodic, "semantic": semantic, "procedural": procedural},
+        "writers": {"episodic": episodic, "semantic": semantic, "procedural": procedural},
+        "signal_collector": signal_collector,
     }

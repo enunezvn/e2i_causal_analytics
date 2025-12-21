@@ -3,13 +3,14 @@
 Assembles 5-node pipeline: graph_builder → estimation → refutation → sensitivity → interpretation
 """
 
-from langgraph.graph import StateGraph, END
-from src.agents.causal_impact.state import CausalImpactState
-from src.agents.causal_impact.nodes.graph_builder import build_causal_graph
+from langgraph.graph import END, StateGraph
+
 from src.agents.causal_impact.nodes.estimation import estimate_causal_effect
+from src.agents.causal_impact.nodes.graph_builder import build_causal_graph
+from src.agents.causal_impact.nodes.interpretation import interpret_results
 from src.agents.causal_impact.nodes.refutation import refute_causal_estimate
 from src.agents.causal_impact.nodes.sensitivity import analyze_sensitivity
-from src.agents.causal_impact.nodes.interpretation import interpret_results
+from src.agents.causal_impact.state import CausalImpactState
 
 
 def create_causal_impact_graph(enable_checkpointing: bool = False):

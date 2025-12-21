@@ -10,9 +10,10 @@ rather than being invoked in the main pipeline. The graph workflow is for
 collecting and returning metrics when explicitly requested.
 """
 
-from langgraph.graph import StateGraph, END
+from langgraph.graph import END, StateGraph
+
+from .nodes import aggregate_metrics, emit_spans
 from .state import ObservabilityConnectorState
-from .nodes import emit_spans, aggregate_metrics
 
 
 def create_observability_connector_graph() -> StateGraph:

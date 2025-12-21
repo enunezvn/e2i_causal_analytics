@@ -1,6 +1,7 @@
 """Tests for context_manager nodes (create_context, extract_context, inject_context)."""
 
 import pytest
+
 from src.agents.ml_foundation.observability_connector.nodes.context_manager import (
     create_context,
     extract_context,

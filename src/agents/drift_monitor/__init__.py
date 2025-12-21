@@ -41,9 +41,9 @@ from src.agents.drift_monitor.agent import (
     DriftMonitorOutput,
 )
 from src.agents.drift_monitor.state import (
+    DriftAlert,
     DriftMonitorState,
     DriftResult,
-    DriftAlert,
 )
 
 __all__ = [
