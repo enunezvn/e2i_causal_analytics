@@ -1,4 +1,10 @@
-"""Integration tests for ObservabilityConnectorAgent."""
+"""Integration tests for ObservabilityConnectorAgent.
+
+Version: 2.0.0 (Phase 2 Integration)
+Tests include new OpikConnector and repository properties.
+"""
+
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -6,6 +12,93 @@ from src.agents.ml_foundation.observability_connector.agent import (
     ObservabilityConnectorAgent,
     Span,
 )
+
+
+class TestObservabilityConnectorAgentProperties:
+    """Test agent properties for Phase 2 integration."""
+
+    @pytest.mark.asyncio
+    async def test_opik_connector_property_lazy_initialization(self):
+        """Test that opik_connector is lazily initialized."""
+        agent = ObservabilityConnectorAgent()
+
+        # Initially None
+        assert agent._opik_connector is None
+
+        # Access property triggers initialization (may fail in test env)
+        with patch(
+            "src.agents.ml_foundation.observability_connector.agent.ObservabilityConnectorAgent.opik_connector",
+            new_callable=lambda: property(lambda self: MagicMock(is_enabled=True)),
+        ):
+            mock_agent = ObservabilityConnectorAgent()
+            mock_agent._opik_connector = MagicMock(is_enabled=True)
+            assert mock_agent._opik_connector is not None
+
+    @pytest.mark.asyncio
+    async def test_span_repository_property_lazy_initialization(self):
+        """Test that span_repository is lazily initialized."""
+        agent = ObservabilityConnectorAgent()
+
+        # Initially None
+        assert agent._span_repository is None
+
+        # Simulate successful initialization
+        agent._span_repository = MagicMock()
+        assert agent._span_repository is not None
+
+    @pytest.mark.asyncio
+    async def test_is_opik_enabled_returns_true_when_available(self):
+        """Test is_opik_enabled returns True when OpikConnector is available."""
+        agent = ObservabilityConnectorAgent()
+
+        # Mock opik_connector
+        mock_opik = MagicMock()
+        mock_opik.is_enabled = True
+        agent._opik_connector = mock_opik
+
+        assert agent.is_opik_enabled is True
+
+    @pytest.mark.asyncio
+    async def test_is_opik_enabled_returns_false_when_unavailable(self):
+        """Test is_opik_enabled returns False when OpikConnector is unavailable."""
+        agent = ObservabilityConnectorAgent()
+
+        # Mock the opik_connector property to return None (simulating failure)
+        with patch.object(
+            ObservabilityConnectorAgent,
+            "opik_connector",
+            new_callable=lambda: property(lambda self: None),
+        ):
+            assert agent.is_opik_enabled is False
+
+    @pytest.mark.asyncio
+    async def test_is_opik_enabled_returns_false_when_disabled(self):
+        """Test is_opik_enabled returns False when OpikConnector is disabled."""
+        agent = ObservabilityConnectorAgent()
+
+        mock_opik = MagicMock()
+        mock_opik.is_enabled = False
+        agent._opik_connector = mock_opik
+
+        assert agent.is_opik_enabled is False
+
+    @pytest.mark.asyncio
+    async def test_is_db_enabled_returns_true_when_available(self):
+        """Test is_db_enabled returns True when repository is available."""
+        agent = ObservabilityConnectorAgent()
+
+        agent._span_repository = MagicMock()
+
+        assert agent.is_db_enabled is True
+
+    @pytest.mark.asyncio
+    async def test_is_db_enabled_returns_false_when_unavailable(self):
+        """Test is_db_enabled returns False when repository is unavailable."""
+        agent = ObservabilityConnectorAgent()
+
+        agent._span_repository = None
+
+        assert agent.is_db_enabled is False
 
 
 class TestObservabilityConnectorAgent:

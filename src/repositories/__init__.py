@@ -31,6 +31,7 @@ from src.repositories.causal_path import CausalPathRepository
 from src.repositories.causal_validation import CausalValidationRepository
 from src.repositories.conversation import ConversationRepository
 from src.repositories.expert_review import ExpertReviewRepository
+from src.repositories.observability_span import ObservabilitySpanRepository
 from src.repositories.patient_journey import PatientJourneyRepository
 from src.repositories.prediction import PredictionRepository
 from src.repositories.trigger import TriggerRepository
@@ -50,4 +51,5 @@ __all__ = [
     "UserSessionRepository",
     "CausalValidationRepository",
     "ExpertReviewRepository",
+    "ObservabilitySpanRepository",
 ]

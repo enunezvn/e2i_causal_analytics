@@ -14,6 +14,12 @@ Author: E2I Causal Analytics Team
 Version: 4.1.0
 """
 
+from .opik_connector import (
+    LLMSpanContext,
+    OpikConfig,
+    OpikConnector,
+    SpanContext,
+)
 from .shap_explainer_realtime import (
     ExplainerType,
     RealTimeSHAPExplainer,
@@ -22,10 +28,16 @@ from .shap_explainer_realtime import (
 )
 
 __all__ = [
+    # SHAP Explainer
     "RealTimeSHAPExplainer",
     "SHAPResult",
     "ExplainerType",
     "SHAPVisualization",
+    # Opik Connector
+    "OpikConnector",
+    "OpikConfig",
+    "SpanContext",
+    "LLMSpanContext",
 ]
 
 __version__ = "4.1.0"
