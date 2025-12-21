@@ -45,14 +45,14 @@ def create_retrieval_result(
     source_enum = source_map.get(source, RetrievalSource.VECTOR)
 
     result_metadata = metadata.copy() if metadata else {}
-    result_metadata["retrieval_method"] = retrieval_method
     result_metadata["source_name"] = source
 
     return RetrievalResult(
-        id=source_id,
+        source_id=source_id,
         content=content,
         source=source_enum,
         score=score,
+        retrieval_method=retrieval_method,
         metadata=result_metadata
     )
 
@@ -551,8 +551,8 @@ class TestComponentInteroperability:
             metadata={"brand": "Kisqali"}
         )
 
-        # Dataclass should have to_dict() method
-        result_dict = result.to_dict()
+        # Pydantic model uses model_dump() for dict conversion
+        result_dict = result.model_dump()
 
         assert result_dict["content"] == "Test content"
         assert result_dict["source"] == RetrievalSource.VECTOR.value

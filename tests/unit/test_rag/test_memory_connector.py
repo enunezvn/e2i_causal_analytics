@@ -13,6 +13,7 @@ from src.rag.memory_connector import (
     reset_memory_connector,
 )
 from src.rag.models.retrieval_models import RetrievalResult
+from src.rag.types import RetrievalSource
 
 
 # ============================================================================
@@ -86,9 +87,10 @@ class TestVectorSearch:
 
         assert len(results) == 1
         assert results[0].content == "Test memory content"
-        assert results[0].source == "episodic_memories"
+        assert results[0].source == RetrievalSource.VECTOR.value
         assert results[0].score == 0.85
         assert results[0].retrieval_method == "dense"
+        assert results[0].metadata.get("source_name") == "episodic_memories"
 
     @pytest.mark.asyncio
     async def test_vector_search_filters_by_similarity(self, mock_supabase):
@@ -187,8 +189,9 @@ class TestFulltextSearch:
 
         assert len(results) == 1
         assert results[0].content == "HCP engagement → TRx increase"
-        assert results[0].source == "causal_paths"
+        assert results[0].source == RetrievalSource.FULLTEXT.value
         assert results[0].retrieval_method == "sparse"
+        assert results[0].metadata.get("source_name") == "causal_paths"
 
     @pytest.mark.asyncio
     async def test_fulltext_search_normalizes_scores(self, mock_supabase):

@@ -65,11 +65,12 @@ def create_retrieval_result(
         source = source_map.get(retrieval_method, RetrievalSource.VECTOR)
 
     return RetrievalResult(
-        id=source_id,
+        source_id=source_id,
         content=content,
         source=source,
         score=score,
-        metadata={**(metadata or {}), "retrieval_method": retrieval_method}
+        retrieval_method=retrieval_method,
+        metadata=metadata or {}
     )
 
 

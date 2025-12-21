@@ -204,7 +204,7 @@ class TestVectorBackendSearch:
         # RPC is called as: client.rpc("hybrid_vector_search", {"query_embedding": ..., "filters": ...})
         mock_supabase_client.rpc.assert_called_once()
         call_args = mock_supabase_client.rpc.call_args
-        assert call_args[0][0] == "hybrid_vector_search"
+        assert call_args[0][0] == "rag_vector_search"
         # Second positional argument is the params dict
         rpc_params = call_args[0][1]
         assert rpc_params["filters"] == filters
