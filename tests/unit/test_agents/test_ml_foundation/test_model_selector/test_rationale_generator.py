@@ -1,14 +1,15 @@
 """Tests for rationale_generator.py selection explanation logic."""
 
 import pytest
+
 from src.agents.ml_foundation.model_selector.nodes.rationale_generator import (
-    generate_rationale,
-    _generate_primary_reason,
-    _generate_supporting_factors,
+    _build_rationale_text,
+    _check_constraint_compliance,
     _describe_alternatives,
     _explain_why_not_selected,
-    _check_constraint_compliance,
-    _build_rationale_text,
+    _generate_primary_reason,
+    _generate_supporting_factors,
+    generate_rationale,
 )
 
 
@@ -451,7 +452,11 @@ class TestBuildRationaleText:
     def test_rationale_limits_alternatives_to_3(self):
         """Rationale should show max 3 alternatives."""
         alternatives = [
-            {"algorithm_name": f"Alt{i}", "selection_score": 0.8 - i * 0.1, "reason_not_selected": "Lower score"}
+            {
+                "algorithm_name": f"Alt{i}",
+                "selection_score": 0.8 - i * 0.1,
+                "reason_not_selected": "Lower score",
+            }
             for i in range(5)
         ]
         text = _build_rationale_text("Primary", "Best", [], 0.90, alternatives)

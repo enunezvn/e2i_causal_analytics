@@ -2,8 +2,9 @@
 Tests for Knowledge Updater node.
 """
 
-import pytest
 from unittest.mock import AsyncMock
+
+import pytest
 
 from src.agents.feedback_learner.nodes.knowledge_updater import KnowledgeUpdaterNode
 

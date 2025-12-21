@@ -2,8 +2,9 @@
 Tests for Pattern Analyzer node.
 """
 
+from unittest.mock import AsyncMock
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock
 
 from src.agents.feedback_learner.nodes.pattern_analyzer import PatternAnalyzerNode
 
@@ -67,9 +68,7 @@ class TestPatternAnalyzerNode:
         patterns = result["detected_patterns"]
         assert len(patterns) > 0
         # Should detect accuracy issue from low ratings
-        accuracy_patterns = [
-            p for p in patterns if p["pattern_type"] == "accuracy_issue"
-        ]
+        accuracy_patterns = [p for p in patterns if p["pattern_type"] == "accuracy_issue"]
         assert len(accuracy_patterns) > 0
         assert accuracy_patterns[0]["severity"] in ["medium", "high"]
 
@@ -94,9 +93,7 @@ class TestPatternAnalyzerNode:
         patterns = result["detected_patterns"]
         assert len(patterns) > 0
         # Should detect accuracy issue from corrections
-        accuracy_patterns = [
-            p for p in patterns if p["pattern_type"] == "accuracy_issue"
-        ]
+        accuracy_patterns = [p for p in patterns if p["pattern_type"] == "accuracy_issue"]
         assert len(accuracy_patterns) > 0
 
     @pytest.mark.asyncio
@@ -120,9 +117,7 @@ class TestPatternAnalyzerNode:
         patterns = result["detected_patterns"]
         assert len(patterns) > 0
         # Should detect accuracy issue from prediction errors
-        accuracy_patterns = [
-            p for p in patterns if p["pattern_type"] == "accuracy_issue"
-        ]
+        accuracy_patterns = [p for p in patterns if p["pattern_type"] == "accuracy_issue"]
         assert len(accuracy_patterns) > 0
 
     @pytest.mark.asyncio
@@ -159,9 +154,7 @@ class TestPatternAnalyzerNode:
 
         patterns = result["detected_patterns"]
         # Should detect relevance issue for high negative rate agent
-        relevance_patterns = [
-            p for p in patterns if p["pattern_type"] == "relevance_issue"
-        ]
+        relevance_patterns = [p for p in patterns if p["pattern_type"] == "relevance_issue"]
         assert len(relevance_patterns) > 0
         assert "problematic_agent" in relevance_patterns[0]["affected_agents"]
 

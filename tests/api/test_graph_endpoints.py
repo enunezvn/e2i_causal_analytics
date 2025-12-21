@@ -10,12 +10,12 @@ Tests the knowledge graph endpoints:
 - POST /graph/search
 """
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
 from fastapi.testclient import TestClient
 
 from src.api.main import app
-
 
 client = TestClient(app)
 
@@ -24,100 +24,103 @@ client = TestClient(app)
 # FIXTURES
 # =============================================================================
 
+
 @pytest.fixture
 def mock_semantic_memory():
     """Mock FalkorDB semantic memory."""
     memory = MagicMock()
 
     # Mock list_nodes
-    memory.list_nodes = MagicMock(return_value=[
-        {
-            "id": "patient_001",
-            "type": "Patient",
-            "name": "Patient 001",
-            "journey_stage": "adoption",
-            "region": "Northeast"
-        },
-        {
-            "id": "patient_002",
-            "type": "Patient",
-            "name": "Patient 002",
-            "journey_stage": "awareness",
-            "region": "Midwest"
-        }
-    ])
+    memory.list_nodes = MagicMock(
+        return_value=[
+            {
+                "id": "patient_001",
+                "type": "Patient",
+                "name": "Patient 001",
+                "journey_stage": "adoption",
+                "region": "Northeast",
+            },
+            {
+                "id": "patient_002",
+                "type": "Patient",
+                "name": "Patient 002",
+                "journey_stage": "awareness",
+                "region": "Midwest",
+            },
+        ]
+    )
 
     # Mock count_nodes
     memory.count_nodes = MagicMock(return_value=5)
 
     # Mock get_node
-    memory.get_node = MagicMock(return_value={
-        "id": "patient_001",
-        "type": "Patient",
-        "name": "Patient 001",
-        "journey_stage": "adoption",
-        "region": "Northeast"
-    })
+    memory.get_node = MagicMock(
+        return_value={
+            "id": "patient_001",
+            "type": "Patient",
+            "name": "Patient 001",
+            "journey_stage": "adoption",
+            "region": "Northeast",
+        }
+    )
 
     # Mock get_patient_network
-    memory.get_patient_network = MagicMock(return_value={
-        "patient_id": "patient_001",
-        "hcps": [
-            {"id": "hcp_001", "properties": {"name": "Dr. Sarah Chen", "specialty": "Oncology"}}
-        ],
-        "treatments": [
-            {"id": "brand_kisqali", "properties": {"name": "Kisqali"}}
-        ],
-        "triggers": [
-            {"id": "trigger_001", "properties": {"type": "peer_influence"}}
-        ],
-        "causal_paths": [],
-        "brands": []
-    })
+    memory.get_patient_network = MagicMock(
+        return_value={
+            "patient_id": "patient_001",
+            "hcps": [
+                {"id": "hcp_001", "properties": {"name": "Dr. Sarah Chen", "specialty": "Oncology"}}
+            ],
+            "treatments": [{"id": "brand_kisqali", "properties": {"name": "Kisqali"}}],
+            "triggers": [{"id": "trigger_001", "properties": {"type": "peer_influence"}}],
+            "causal_paths": [],
+            "brands": [],
+        }
+    )
 
     # Mock get_hcp_influence_network
-    memory.get_hcp_influence_network = MagicMock(return_value={
-        "hcp_id": "hcp_001",
-        "influenced_hcps": [
-            {"id": "hcp_002", "properties": {"name": "Dr. James Wilson"}}
-        ],
-        "patients": [
-            {"id": "patient_001", "properties": {"journey_stage": "adoption"}}
-        ],
-        "brands_prescribed": [
-            {"id": "brand_kisqali", "properties": {"name": "Kisqali"}}
-        ]
-    })
+    memory.get_hcp_influence_network = MagicMock(
+        return_value={
+            "hcp_id": "hcp_001",
+            "influenced_hcps": [{"id": "hcp_002", "properties": {"name": "Dr. James Wilson"}}],
+            "patients": [{"id": "patient_001", "properties": {"journey_stage": "adoption"}}],
+            "brands_prescribed": [{"id": "brand_kisqali", "properties": {"name": "Kisqali"}}],
+        }
+    )
 
     # Mock list_relationships
-    memory.list_relationships = MagicMock(return_value=[
-        {
-            "id": "rel_001",
-            "type": "TREATED_BY",
-            "source_id": "patient_001",
-            "target_id": "hcp_001",
-            "confidence": 0.95
-        }
-    ])
+    memory.list_relationships = MagicMock(
+        return_value=[
+            {
+                "id": "rel_001",
+                "type": "TREATED_BY",
+                "source_id": "patient_001",
+                "target_id": "hcp_001",
+                "confidence": 0.95,
+            }
+        ]
+    )
 
     # Mock count_relationships
     memory.count_relationships = MagicMock(return_value=10)
 
     # Mock get_stats
-    memory.get_stats = MagicMock(return_value={
-        "total_nodes": 30,
-        "total_relationships": 22,
-        "nodes_by_type": {"Patient": 5, "HCP": 5, "Trigger": 3},
-        "relationships_by_type": {"TREATED_BY": 5, "PRESCRIBES": 5}
-    })
+    memory.get_stats = MagicMock(
+        return_value={
+            "total_nodes": 30,
+            "total_relationships": 22,
+            "nodes_by_type": {"Patient": 5, "HCP": 5, "Trigger": 3},
+            "relationships_by_type": {"TREATED_BY": 5, "PRESCRIBES": 5},
+        }
+    )
 
     # Mock traverse_from_node for generic traversal
-    memory.traverse_from_node = MagicMock(return_value={
-        "nodes": [
-            {"id": "node_001", "type": "Agent", "name": "orchestrator"}
-        ],
-        "relationships": []
-    })
+    memory.traverse_from_node = MagicMock(
+        return_value={
+            "nodes": [{"id": "node_001", "type": "Agent", "name": "orchestrator"}],
+            "relationships": [],
+        }
+    )
 
     return memory
 
@@ -126,12 +129,14 @@ def mock_semantic_memory():
 def mock_graphiti_service():
     """Mock Graphiti service."""
     service = AsyncMock()
-    service.get_graph_stats = AsyncMock(return_value={
-        "total_nodes": 30,
-        "total_edges": 22,
-        "nodes_by_type": {"Patient": 5, "HCP": 5},
-        "edges_by_type": {"TREATED_BY": 5}
-    })
+    service.get_graph_stats = AsyncMock(
+        return_value={
+            "total_nodes": 30,
+            "total_edges": 22,
+            "nodes_by_type": {"Patient": 5, "HCP": 5},
+            "edges_by_type": {"TREATED_BY": 5},
+        }
+    )
     service.search = AsyncMock(return_value=[])
     return service
 
@@ -140,13 +145,16 @@ def mock_graphiti_service():
 # GRAPH STATS TESTS
 # =============================================================================
 
+
 class TestGraphStats:
     """Tests for GET /graph/stats endpoint."""
 
     def test_get_stats_success(self, mock_semantic_memory, mock_graphiti_service):
         """Test successful retrieval of graph statistics."""
-        with patch("src.api.routes.graph._get_semantic_memory", return_value=mock_semantic_memory), \
-             patch("src.api.routes.graph._get_graphiti_service", return_value=mock_graphiti_service):
+        with (
+            patch("src.api.routes.graph._get_semantic_memory", return_value=mock_semantic_memory),
+            patch("src.api.routes.graph._get_graphiti_service", return_value=mock_graphiti_service),
+        ):
 
             response = client.get("/graph/stats")
 
@@ -159,8 +167,10 @@ class TestGraphStats:
 
     def test_get_stats_service_unavailable(self):
         """Test stats when graph service is unavailable."""
-        with patch("src.api.routes.graph._get_semantic_memory", return_value=None), \
-             patch("src.api.routes.graph._get_graphiti_service", return_value=None):
+        with (
+            patch("src.api.routes.graph._get_semantic_memory", return_value=None),
+            patch("src.api.routes.graph._get_graphiti_service", return_value=None),
+        ):
 
             response = client.get("/graph/stats")
 
@@ -173,6 +183,7 @@ class TestGraphStats:
 # =============================================================================
 # LIST NODES TESTS
 # =============================================================================
+
 
 class TestListNodes:
     """Tests for GET /graph/nodes endpoint."""
@@ -238,6 +249,7 @@ class TestListNodes:
 # GET NODE TESTS
 # =============================================================================
 
+
 class TestGetNode:
     """Tests for GET /graph/nodes/{node_id} endpoint."""
 
@@ -275,6 +287,7 @@ class TestGetNode:
 # NODE NETWORK TESTS
 # =============================================================================
 
+
 class TestNodeNetwork:
     """Tests for GET /graph/nodes/{node_id}/network endpoint."""
 
@@ -309,12 +322,14 @@ class TestNodeNetwork:
     def test_hcp_network_success(self, mock_semantic_memory):
         """Test successful retrieval of HCP network."""
         # Configure mock to return HCP node
-        mock_semantic_memory.get_node = MagicMock(return_value={
-            "id": "hcp_001",
-            "type": "HCP",
-            "name": "Dr. Sarah Chen",
-            "specialty": "Oncology"
-        })
+        mock_semantic_memory.get_node = MagicMock(
+            return_value={
+                "id": "hcp_001",
+                "type": "HCP",
+                "name": "Dr. Sarah Chen",
+                "specialty": "Oncology",
+            }
+        )
 
         with patch("src.api.routes.graph._get_semantic_memory", return_value=mock_semantic_memory):
 
@@ -346,9 +361,7 @@ class TestNodeNetwork:
             assert data["max_depth"] == 3
 
             # Verify max_depth was passed to the method
-            mock_semantic_memory.get_patient_network.assert_called_with(
-                "patient_001", max_depth=3
-            )
+            mock_semantic_memory.get_patient_network.assert_called_with("patient_001", max_depth=3)
 
     def test_network_max_depth_validation(self, mock_semantic_memory):
         """Test max_depth parameter validation."""
@@ -383,11 +396,9 @@ class TestNodeNetwork:
     def test_network_generic_node_type(self, mock_semantic_memory):
         """Test network for non-Patient/HCP node types uses generic traversal."""
         # Configure mock to return a Trigger node
-        mock_semantic_memory.get_node = MagicMock(return_value={
-            "id": "trigger_001",
-            "type": "Trigger",
-            "name": "Peer Influence Trigger"
-        })
+        mock_semantic_memory.get_node = MagicMock(
+            return_value={"id": "trigger_001", "type": "Trigger", "name": "Peer Influence Trigger"}
+        )
 
         with patch("src.api.routes.graph._get_semantic_memory", return_value=mock_semantic_memory):
 
@@ -403,14 +414,16 @@ class TestNodeNetwork:
 
     def test_network_empty_connections(self, mock_semantic_memory):
         """Test network with no connections."""
-        mock_semantic_memory.get_patient_network = MagicMock(return_value={
-            "patient_id": "patient_isolated",
-            "hcps": [],
-            "treatments": [],
-            "triggers": [],
-            "causal_paths": [],
-            "brands": []
-        })
+        mock_semantic_memory.get_patient_network = MagicMock(
+            return_value={
+                "patient_id": "patient_isolated",
+                "hcps": [],
+                "treatments": [],
+                "triggers": [],
+                "causal_paths": [],
+                "brands": [],
+            }
+        )
 
         with patch("src.api.routes.graph._get_semantic_memory", return_value=mock_semantic_memory):
 
@@ -424,6 +437,7 @@ class TestNodeNetwork:
 # =============================================================================
 # LIST RELATIONSHIPS TESTS
 # =============================================================================
+
 
 class TestListRelationships:
     """Tests for GET /graph/relationships endpoint."""
@@ -455,17 +469,20 @@ class TestListRelationships:
 # SEARCH TESTS
 # =============================================================================
 
+
 class TestGraphSearch:
     """Tests for POST /graph/search endpoint."""
 
     def test_search_success(self, mock_semantic_memory, mock_graphiti_service):
         """Test successful graph search."""
-        with patch("src.api.routes.graph._get_semantic_memory", return_value=mock_semantic_memory), \
-             patch("src.api.routes.graph._get_graphiti_service", return_value=mock_graphiti_service):
+        with (
+            patch("src.api.routes.graph._get_semantic_memory", return_value=mock_semantic_memory),
+            patch("src.api.routes.graph._get_graphiti_service", return_value=mock_graphiti_service),
+        ):
 
-            response = client.post("/graph/search", json={
-                "query": "What treatments does Dr. Chen prescribe?"
-            })
+            response = client.post(
+                "/graph/search", json={"query": "What treatments does Dr. Chen prescribe?"}
+            )
 
             assert response.status_code == 200
             data = response.json()
@@ -475,15 +492,15 @@ class TestGraphSearch:
 
     def test_search_with_parameters(self, mock_semantic_memory, mock_graphiti_service):
         """Test search with optional parameters."""
-        with patch("src.api.routes.graph._get_semantic_memory", return_value=mock_semantic_memory), \
-             patch("src.api.routes.graph._get_graphiti_service", return_value=mock_graphiti_service):
+        with (
+            patch("src.api.routes.graph._get_semantic_memory", return_value=mock_semantic_memory),
+            patch("src.api.routes.graph._get_graphiti_service", return_value=mock_graphiti_service),
+        ):
 
-            response = client.post("/graph/search", json={
-                "query": "Find HCPs",
-                "entity_types": ["HCP"],
-                "k": 5,
-                "min_score": 0.5
-            })
+            response = client.post(
+                "/graph/search",
+                json={"query": "Find HCPs", "entity_types": ["HCP"], "k": 5, "min_score": 0.5},
+            )
 
             assert response.status_code == 200
 
@@ -492,13 +509,16 @@ class TestGraphSearch:
 # HEALTH CHECK TESTS
 # =============================================================================
 
+
 class TestGraphHealth:
     """Tests for GET /graph/health endpoint."""
 
     def test_health_check_healthy(self, mock_semantic_memory, mock_graphiti_service):
         """Test health check when services are available."""
-        with patch("src.api.routes.graph._get_semantic_memory", return_value=mock_semantic_memory), \
-             patch("src.api.routes.graph._get_graphiti_service", return_value=mock_graphiti_service):
+        with (
+            patch("src.api.routes.graph._get_semantic_memory", return_value=mock_semantic_memory),
+            patch("src.api.routes.graph._get_graphiti_service", return_value=mock_graphiti_service),
+        ):
 
             response = client.get("/graph/health")
 
@@ -511,8 +531,10 @@ class TestGraphHealth:
 
     def test_health_check_degraded(self):
         """Test health check when services are unavailable."""
-        with patch("src.api.routes.graph._get_semantic_memory", return_value=None), \
-             patch("src.api.routes.graph._get_graphiti_service", return_value=None):
+        with (
+            patch("src.api.routes.graph._get_semantic_memory", return_value=None),
+            patch("src.api.routes.graph._get_graphiti_service", return_value=None),
+        ):
 
             response = client.get("/graph/health")
 

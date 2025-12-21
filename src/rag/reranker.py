@@ -6,7 +6,7 @@ for improved relevance.
 """
 
 import logging
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 from sentence_transformers import CrossEncoder
 
@@ -54,7 +54,7 @@ class CrossEncoderReranker:
                 self.model_name,
                 max_length=self.max_length,
             )
-            logger.info(f"Cross-encoder model loaded successfully")
+            logger.info("Cross-encoder model loaded successfully")
         return _MODEL_CACHE[self.model_name]
 
     def rerank(
@@ -80,19 +80,19 @@ class CrossEncoderReranker:
         if not results:
             return []
 
-        query_text = query.text if hasattr(query, 'text') else str(query)
+        query_text = query.text if hasattr(query, "text") else str(query)
 
         # Build query-document pairs for batch scoring
         pairs = []
         for result in results:
-            content = result.content if hasattr(result, 'content') else str(result)
+            content = result.content if hasattr(result, "content") else str(result)
             pairs.append((query_text, content))
 
         # Batch score all pairs
         scores = self._batch_score(pairs)
 
         # Combine scores with results
-        scored_results: List[Tuple[float, RetrievalResult]] = list(zip(scores, results))
+        scored_results: List[Tuple[float, RetrievalResult]] = list(zip(scores, results, strict=False))
 
         # Sort by score descending
         scored_results.sort(key=lambda x: x[0], reverse=True)
@@ -117,7 +117,8 @@ class CrossEncoderReranker:
         logger.debug(
             f"Reranked {len(results)} results to top {len(reranked)}, "
             f"score range: [{reranked[-1].score:.3f}, {reranked[0].score:.3f}]"
-            if reranked else ""
+            if reranked
+            else ""
         )
 
         return reranked
@@ -145,6 +146,7 @@ class CrossEncoderReranker:
 
             # Normalize scores to [0, 1] using sigmoid
             import numpy as np
+
             normalized_scores = 1 / (1 + np.exp(-raw_scores))
 
             return normalized_scores.tolist()

@@ -82,6 +82,4 @@ class ExplainerState(TypedDict):
     # === ERROR HANDLING ===
     errors: Annotated[List[Dict[str, Any]], operator.add]
     warnings: Annotated[List[str], operator.add]
-    status: Literal[
-        "pending", "assembling", "reasoning", "generating", "completed", "failed"
-    ]
+    status: Literal["pending", "assembling", "reasoning", "generating", "completed", "failed"]

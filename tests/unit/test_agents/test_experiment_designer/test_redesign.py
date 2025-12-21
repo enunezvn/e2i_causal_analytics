@@ -4,8 +4,9 @@ Tests the rule-based redesign functionality that incorporates validity audit fee
 """
 
 import pytest
-from src.agents.experiment_designer.nodes.redesign import RedesignNode
+
 from src.agents.experiment_designer.graph import create_initial_state
+from src.agents.experiment_designer.nodes.redesign import RedesignNode
 
 
 class TestRedesignNode:
@@ -28,7 +29,7 @@ class TestRedesignNode:
             "contamination",
             "measurement",
             "attrition",
-            "temporal"
+            "temporal",
         ]
 
         for rule in expected_rules:
@@ -38,9 +39,7 @@ class TestRedesignNode:
     async def test_execute_basic(self):
         """Test basic execution."""
         node = RedesignNode()
-        state = create_initial_state(
-            business_question="Test redesign"
-        )
+        state = create_initial_state(business_question="Test redesign")
         state["status"] = "redesigning"
         state["current_iteration"] = 0
         state["design_type"] = "RCT"
@@ -49,7 +48,7 @@ class TestRedesignNode:
                 "threat_type": "internal",
                 "threat_name": "selection_bias",
                 "severity": "high",
-                "mitigation_possible": True
+                "mitigation_possible": True,
             }
         ]
 
@@ -62,9 +61,7 @@ class TestRedesignNode:
     async def test_execute_increments_iteration(self):
         """Test that iteration counter is incremented."""
         node = RedesignNode()
-        state = create_initial_state(
-            business_question="Test iteration increment"
-        )
+        state = create_initial_state(business_question="Test iteration increment")
         state["status"] = "redesigning"
         state["current_iteration"] = 1
         state["validity_threats"] = []
@@ -77,9 +74,7 @@ class TestRedesignNode:
     async def test_execute_records_iteration_history(self):
         """Test that iteration history is recorded."""
         node = RedesignNode()
-        state = create_initial_state(
-            business_question="Test iteration history"
-        )
+        state = create_initial_state(business_question="Test iteration history")
         state["status"] = "redesigning"
         state["current_iteration"] = 0
         state["design_type"] = "RCT"
@@ -96,9 +91,7 @@ class TestRedesignNode:
     async def test_execute_skip_on_failed(self):
         """Test execution skips on failed status."""
         node = RedesignNode()
-        state = create_initial_state(
-            business_question="Test skip on failed"
-        )
+        state = create_initial_state(business_question="Test skip on failed")
         state["status"] = "failed"
 
         result = await node.execute(state)
@@ -109,9 +102,7 @@ class TestRedesignNode:
     async def test_execute_records_latency(self):
         """Test that node latency is recorded."""
         node = RedesignNode()
-        state = create_initial_state(
-            business_question="Test latency recording"
-        )
+        state = create_initial_state(business_question="Test latency recording")
         state["status"] = "redesigning"
         state["current_iteration"] = 0
         state["validity_threats"] = []
@@ -129,9 +120,7 @@ class TestMitigationApplication:
     async def test_selection_bias_adds_stratification(self):
         """Test that selection bias mitigation adds stratification variables."""
         node = RedesignNode()
-        state = create_initial_state(
-            business_question="Test selection bias mitigation"
-        )
+        state = create_initial_state(business_question="Test selection bias mitigation")
         state["status"] = "redesigning"
         state["current_iteration"] = 0
         state["stratification_variables"] = []
@@ -140,7 +129,7 @@ class TestMitigationApplication:
                 "threat_type": "internal",
                 "threat_name": "selection_bias",
                 "severity": "high",
-                "mitigation_possible": True
+                "mitigation_possible": True,
             }
         ]
 
@@ -153,9 +142,7 @@ class TestMitigationApplication:
     async def test_confounding_adds_blocking(self):
         """Test that confounding mitigation adds blocking variables."""
         node = RedesignNode()
-        state = create_initial_state(
-            business_question="Test confounding mitigation"
-        )
+        state = create_initial_state(business_question="Test confounding mitigation")
         state["status"] = "redesigning"
         state["current_iteration"] = 0
         state["blocking_variables"] = []
@@ -164,7 +151,7 @@ class TestMitigationApplication:
                 "threat_type": "internal",
                 "threat_name": "confounding",
                 "severity": "high",
-                "mitigation_possible": True
+                "mitigation_possible": True,
             }
         ]
 
@@ -177,21 +164,16 @@ class TestMitigationApplication:
     async def test_attrition_increases_sample(self):
         """Test that attrition mitigation increases sample size."""
         node = RedesignNode()
-        state = create_initial_state(
-            business_question="Test attrition mitigation"
-        )
+        state = create_initial_state(business_question="Test attrition mitigation")
         state["status"] = "redesigning"
         state["current_iteration"] = 0
-        state["power_analysis"] = {
-            "required_sample_size": 500,
-            "required_sample_size_per_arm": 250
-        }
+        state["power_analysis"] = {"required_sample_size": 500, "required_sample_size_per_arm": 250}
         state["validity_threats"] = [
             {
                 "threat_type": "internal",
                 "threat_name": "attrition",
                 "severity": "high",
-                "mitigation_possible": True
+                "mitigation_possible": True,
             }
         ]
 
@@ -205,9 +187,7 @@ class TestMitigationApplication:
     async def test_low_severity_skipped(self):
         """Test that low severity threats are skipped."""
         node = RedesignNode()
-        state = create_initial_state(
-            business_question="Test low severity skip"
-        )
+        state = create_initial_state(business_question="Test low severity skip")
         state["status"] = "redesigning"
         state["current_iteration"] = 0
         state["stratification_variables"] = []
@@ -216,7 +196,7 @@ class TestMitigationApplication:
                 "threat_type": "internal",
                 "threat_name": "selection_bias",
                 "severity": "low",  # Low severity
-                "mitigation_possible": True
+                "mitigation_possible": True,
             }
         ]
 
@@ -234,15 +214,11 @@ class TestIterationHistory:
     async def test_iteration_record_fields(self):
         """Test that iteration record has all fields."""
         node = RedesignNode()
-        state = create_initial_state(
-            business_question="Test iteration fields"
-        )
+        state = create_initial_state(business_question="Test iteration fields")
         state["status"] = "redesigning"
         state["current_iteration"] = 0
         state["design_type"] = "RCT"
-        state["validity_threats"] = [
-            {"severity": "critical", "threat_name": "test"}
-        ]
+        state["validity_threats"] = [{"severity": "critical", "threat_name": "test"}]
         state["power_analysis"] = {"achieved_power": 0.75}
 
         result = await node.execute(state)
@@ -262,9 +238,7 @@ class TestIterationHistory:
         node = RedesignNode()
 
         # First iteration
-        state = create_initial_state(
-            business_question="Test multiple iterations"
-        )
+        state = create_initial_state(business_question="Test multiple iterations")
         state["status"] = "redesigning"
         state["current_iteration"] = 0
         state["design_type"] = "RCT"
@@ -290,9 +264,7 @@ class TestRedesignReason:
     async def test_reason_from_recommendations(self):
         """Test reason from redesign recommendations."""
         node = RedesignNode()
-        state = create_initial_state(
-            business_question="Test reason from recommendations"
-        )
+        state = create_initial_state(business_question="Test reason from recommendations")
         state["status"] = "redesigning"
         state["current_iteration"] = 0
         state["validity_threats"] = []
@@ -307,15 +279,11 @@ class TestRedesignReason:
     async def test_reason_from_critical_threat(self):
         """Test reason from critical threat."""
         node = RedesignNode()
-        state = create_initial_state(
-            business_question="Test reason from critical threat"
-        )
+        state = create_initial_state(business_question="Test reason from critical threat")
         state["status"] = "redesigning"
         state["current_iteration"] = 0
         state["redesign_recommendations"] = []
-        state["validity_threats"] = [
-            {"severity": "critical", "threat_name": "selection_bias"}
-        ]
+        state["validity_threats"] = [{"severity": "critical", "threat_name": "selection_bias"}]
 
         result = await node.execute(state)
 
@@ -327,20 +295,19 @@ class TestRedesignReason:
     async def test_reason_from_high_threat(self):
         """Test reason from high severity threat."""
         node = RedesignNode()
-        state = create_initial_state(
-            business_question="Test reason from high threat"
-        )
+        state = create_initial_state(business_question="Test reason from high threat")
         state["status"] = "redesigning"
         state["current_iteration"] = 0
         state["redesign_recommendations"] = []
-        state["validity_threats"] = [
-            {"severity": "high", "threat_name": "confounding"}
-        ]
+        state["validity_threats"] = [{"severity": "high", "threat_name": "confounding"}]
 
         result = await node.execute(state)
 
         record = result["iteration_history"][0]
-        assert "High severity" in record["redesign_reason"] or "confounding" in record["redesign_reason"]
+        assert (
+            "High severity" in record["redesign_reason"]
+            or "confounding" in record["redesign_reason"]
+        )
 
 
 class TestCausalAssumptionsUpdate:
@@ -350,9 +317,7 @@ class TestCausalAssumptionsUpdate:
     async def test_causal_assumptions_added(self):
         """Test that causal assumptions are added during redesign."""
         node = RedesignNode()
-        state = create_initial_state(
-            business_question="Test causal assumptions"
-        )
+        state = create_initial_state(business_question="Test causal assumptions")
         state["status"] = "redesigning"
         state["current_iteration"] = 0
         state["causal_assumptions"] = ["Initial assumption"]
@@ -372,14 +337,10 @@ class TestRedesignPerformance:
     async def test_latency_under_target(self):
         """Test redesign completes under 100ms target."""
         node = RedesignNode()
-        state = create_initial_state(
-            business_question="Test latency performance"
-        )
+        state = create_initial_state(business_question="Test latency performance")
         state["status"] = "redesigning"
         state["current_iteration"] = 0
-        state["validity_threats"] = [
-            {"severity": "high", "threat_name": "selection_bias"}
-        ]
+        state["validity_threats"] = [{"severity": "high", "threat_name": "selection_bias"}]
         state["stratification_variables"] = []
         state["blocking_variables"] = []
 
@@ -396,9 +357,7 @@ class TestRedesignEdgeCases:
     async def test_empty_threats(self):
         """Test handling of empty threats list."""
         node = RedesignNode()
-        state = create_initial_state(
-            business_question="Test empty threats"
-        )
+        state = create_initial_state(business_question="Test empty threats")
         state["status"] = "redesigning"
         state["current_iteration"] = 0
         state["validity_threats"] = []
@@ -411,14 +370,10 @@ class TestRedesignEdgeCases:
     async def test_unknown_threat_name(self):
         """Test handling of unknown threat name."""
         node = RedesignNode()
-        state = create_initial_state(
-            business_question="Test unknown threat"
-        )
+        state = create_initial_state(business_question="Test unknown threat")
         state["status"] = "redesigning"
         state["current_iteration"] = 0
-        state["validity_threats"] = [
-            {"severity": "high", "threat_name": "unknown_threat_xyz"}
-        ]
+        state["validity_threats"] = [{"severity": "high", "threat_name": "unknown_threat_xyz"}]
 
         result = await node.execute(state)
 
@@ -429,15 +384,11 @@ class TestRedesignEdgeCases:
     async def test_preserves_existing_stratification(self):
         """Test that existing stratification variables are preserved."""
         node = RedesignNode()
-        state = create_initial_state(
-            business_question="Test preserve stratification"
-        )
+        state = create_initial_state(business_question="Test preserve stratification")
         state["status"] = "redesigning"
         state["current_iteration"] = 0
         state["stratification_variables"] = ["existing_var"]
-        state["validity_threats"] = [
-            {"severity": "high", "threat_name": "selection_bias"}
-        ]
+        state["validity_threats"] = [{"severity": "high", "threat_name": "selection_bias"}]
 
         result = await node.execute(state)
 
@@ -448,15 +399,11 @@ class TestRedesignEdgeCases:
     async def test_no_duplicate_variables(self):
         """Test that duplicate variables are not added."""
         node = RedesignNode()
-        state = create_initial_state(
-            business_question="Test no duplicates"
-        )
+        state = create_initial_state(business_question="Test no duplicates")
         state["status"] = "redesigning"
         state["current_iteration"] = 0
         state["stratification_variables"] = ["baseline_engagement"]  # Already present
-        state["validity_threats"] = [
-            {"severity": "high", "threat_name": "selection_bias"}
-        ]
+        state["validity_threats"] = [{"severity": "high", "threat_name": "selection_bias"}]
 
         result = await node.execute(state)
 
@@ -468,9 +415,7 @@ class TestRedesignEdgeCases:
     async def test_error_handling(self):
         """Test error handling during execution."""
         node = RedesignNode()
-        state = create_initial_state(
-            business_question="Test error handling"
-        )
+        state = create_initial_state(business_question="Test error handling")
         state["status"] = "redesigning"
         state["current_iteration"] = 0
         # Invalid validity_threats structure

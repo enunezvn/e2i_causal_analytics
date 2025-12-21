@@ -4,9 +4,9 @@ Tests for Tool Composer Pydantic models.
 Validates data models for all 4 phases of the composition pipeline.
 """
 
-import pytest
 from datetime import datetime, timezone
-from uuid import UUID
+
+import pytest
 
 from src.agents.tool_composer.models.composition_models import (
     ComposedResponse,
@@ -62,7 +62,7 @@ class TestSubQuestion:
             question="What is the causal effect?",
             intent="CAUSAL",
             entities=["treatment", "outcome"],
-            depends_on=[]
+            depends_on=[],
         )
         assert sq.id == "sq_1"
         assert sq.question == "What is the causal effect?"
@@ -72,30 +72,20 @@ class TestSubQuestion:
 
     def test_sub_question_auto_id(self):
         """Test auto-generated ID"""
-        sq = SubQuestion(
-            question="Test question",
-            intent="DESCRIPTIVE"
-        )
+        sq = SubQuestion(question="Test question", intent="DESCRIPTIVE")
         assert sq.id.startswith("sq_")
         assert len(sq.id) == 11  # sq_ + 8 hex chars
 
     def test_sub_question_with_dependencies(self):
         """Test sub-question with dependencies"""
         sq = SubQuestion(
-            id="sq_2",
-            question="How does it vary?",
-            intent="COMPARATIVE",
-            depends_on=["sq_1"]
+            id="sq_2", question="How does it vary?", intent="COMPARATIVE", depends_on=["sq_1"]
         )
         assert sq.depends_on == ["sq_1"]
 
     def test_sub_question_immutable(self):
         """Test that SubQuestion is frozen (immutable)"""
-        sq = SubQuestion(
-            id="sq_1",
-            question="Test",
-            intent="DESCRIPTIVE"
-        )
+        sq = SubQuestion(id="sq_1", question="Test", intent="DESCRIPTIVE")
         with pytest.raises(Exception):
             sq.question = "Changed"
 
@@ -108,7 +98,7 @@ class TestDecompositionResult:
         result = DecompositionResult(
             original_query="Test query",
             sub_questions=sample_sub_questions,
-            decomposition_reasoning="Test reasoning"
+            decomposition_reasoning="Test reasoning",
         )
         assert result.original_query == "Test query"
         assert len(result.sub_questions) == 2
@@ -119,7 +109,7 @@ class TestDecompositionResult:
         result = DecompositionResult(
             original_query="Test",
             sub_questions=sample_sub_questions,
-            decomposition_reasoning="Test"
+            decomposition_reasoning="Test",
         )
         assert result.question_count == 2
 
@@ -128,7 +118,7 @@ class TestDecompositionResult:
         result = DecompositionResult(
             original_query="Test",
             sub_questions=sample_sub_questions,
-            decomposition_reasoning="Test"
+            decomposition_reasoning="Test",
         )
         roots = result.get_root_questions()
         assert len(roots) == 1
@@ -139,7 +129,7 @@ class TestDecompositionResult:
         result = DecompositionResult(
             original_query="Test",
             sub_questions=sample_sub_questions,
-            decomposition_reasoning="Test"
+            decomposition_reasoning="Test",
         )
         assert result.timestamp is not None
         assert isinstance(result.timestamp, datetime)
@@ -155,7 +145,7 @@ class TestToolMapping:
             tool_name="causal_effect_estimator",
             source_agent="causal_impact",
             confidence=0.95,
-            reasoning="Good match"
+            reasoning="Good match",
         )
         assert mapping.sub_question_id == "sq_1"
         assert mapping.tool_name == "causal_effect_estimator"
@@ -169,7 +159,7 @@ class TestToolMapping:
             tool_name="test",
             source_agent="test",
             confidence=0.5,
-            reasoning="Test"
+            reasoning="Test",
         )
         assert mapping.confidence == 0.5
 
@@ -180,7 +170,7 @@ class TestToolMapping:
                 tool_name="test",
                 source_agent="test",
                 confidence=1.5,  # Invalid: > 1.0
-                reasoning="Test"
+                reasoning="Test",
             )
 
 
@@ -196,18 +186,14 @@ class TestExecutionStep:
             source_agent="causal_impact",
             input_mapping={"treatment": "rep_visits"},
             dependency_type=DependencyType.PARALLEL,
-            depends_on_steps=[]
+            depends_on_steps=[],
         )
         assert step.step_id == "step_1"
         assert step.status == ExecutionStatus.PENDING
 
     def test_execution_step_auto_id(self):
         """Test auto-generated step ID"""
-        step = ExecutionStep(
-            sub_question_id="sq_1",
-            tool_name="test",
-            source_agent="test"
-        )
+        step = ExecutionStep(sub_question_id="sq_1", tool_name="test", source_agent="test")
         assert step.step_id.startswith("step_")
 
     def test_execution_step_with_dependencies(self):
@@ -219,7 +205,7 @@ class TestExecutionStep:
             source_agent="heterogeneous_optimizer",
             input_mapping={"effect": "$step_1.effect"},
             dependency_type=DependencyType.SEQUENTIAL,
-            depends_on_steps=["step_1"]
+            depends_on_steps=["step_1"],
         )
         assert step.depends_on_steps == ["step_1"]
         assert step.dependency_type == DependencyType.SEQUENTIAL
@@ -228,13 +214,15 @@ class TestExecutionStep:
 class TestExecutionPlan:
     """Tests for ExecutionPlan model"""
 
-    def test_create_execution_plan(self, sample_decomposition, sample_execution_steps, sample_tool_mappings):
+    def test_create_execution_plan(
+        self, sample_decomposition, sample_execution_steps, sample_tool_mappings
+    ):
         """Test creating an execution plan"""
         plan = ExecutionPlan(
             decomposition=sample_decomposition,
             steps=sample_execution_steps,
             tool_mappings=sample_tool_mappings,
-            planning_reasoning="Test plan"
+            planning_reasoning="Test plan",
         )
         assert plan.plan_id.startswith("plan_")
         assert plan.step_count == 2
@@ -266,29 +254,18 @@ class TestToolOutput:
     def test_successful_output(self):
         """Test successful tool output"""
         output = ToolOutput(
-            tool_name="test",
-            success=True,
-            result={"effect": 0.15},
-            execution_time_ms=500
+            tool_name="test", success=True, result={"effect": 0.15}, execution_time_ms=500
         )
         assert output.is_success is True
 
     def test_failed_output(self):
         """Test failed tool output"""
-        output = ToolOutput(
-            tool_name="test",
-            success=False,
-            error="Tool failed"
-        )
+        output = ToolOutput(tool_name="test", success=False, error="Tool failed")
         assert output.is_success is False
 
     def test_output_with_none_result(self):
         """Test output with None result"""
-        output = ToolOutput(
-            tool_name="test",
-            success=True,
-            result=None
-        )
+        output = ToolOutput(tool_name="test", success=True, result=None)
         assert output.is_success is False  # success but no result
 
 
@@ -321,7 +298,7 @@ class TestExecutionTrace:
             output=ToolOutput(tool_name="test", success=False, error="Failed"),
             status=ExecutionStatus.FAILED,
             started_at=datetime.now(timezone.utc),
-            completed_at=datetime.now(timezone.utc)
+            completed_at=datetime.now(timezone.utc),
         )
         trace.add_result(failed_result)
         assert trace.tools_executed == 1
@@ -347,7 +324,7 @@ class TestComposedResponse:
             confidence=0.85,
             supporting_data={"effect": 0.15},
             citations=["step_1"],
-            caveats=["Observational data"]
+            caveats=["Observational data"],
         )
         assert response.response_id.startswith("resp_")
         assert response.confidence == 0.85
@@ -355,10 +332,7 @@ class TestComposedResponse:
     def test_response_confidence_bounds(self):
         """Test confidence value bounds"""
         with pytest.raises(ValueError):
-            ComposedResponse(
-                answer="Test",
-                confidence=1.5  # Invalid
-            )
+            ComposedResponse(answer="Test", confidence=1.5)  # Invalid
 
 
 class TestSynthesisInput:
@@ -369,7 +343,7 @@ class TestSynthesisInput:
         synthesis = SynthesisInput(
             original_query="Test query",
             decomposition=sample_decomposition,
-            execution_trace=sample_execution_trace
+            execution_trace=sample_execution_trace,
         )
         assert synthesis.original_query == "Test query"
 
@@ -386,16 +360,10 @@ class TestCompositionResult:
     """Tests for CompositionResult model"""
 
     def test_create_composition_result(
-        self,
-        sample_decomposition,
-        sample_execution_plan,
-        sample_execution_trace
+        self, sample_decomposition, sample_execution_plan, sample_execution_trace
     ):
         """Test creating a composition result"""
-        response = ComposedResponse(
-            answer="Test answer",
-            confidence=0.85
-        )
+        response = ComposedResponse(answer="Test answer", confidence=0.85)
         result = CompositionResult(
             query="Test query",
             decomposition=sample_decomposition,
@@ -404,22 +372,14 @@ class TestCompositionResult:
             response=response,
             total_duration_ms=1500,
             phase_durations={"decompose": 100, "plan": 200, "execute": 1000, "synthesize": 200},
-            success=True
+            success=True,
         )
         assert result.composition_id.startswith("comp_")
         assert result.success is True
 
-    def test_to_summary(
-        self,
-        sample_decomposition,
-        sample_execution_plan,
-        sample_execution_trace
-    ):
+    def test_to_summary(self, sample_decomposition, sample_execution_plan, sample_execution_trace):
         """Test to_summary method"""
-        response = ComposedResponse(
-            answer="Test",
-            confidence=0.85
-        )
+        response = ComposedResponse(answer="Test", confidence=0.85)
         result = CompositionResult(
             query="Test query",
             decomposition=sample_decomposition,
@@ -427,7 +387,7 @@ class TestCompositionResult:
             execution=sample_execution_trace,
             response=response,
             total_duration_ms=1500,
-            success=True
+            success=True,
         )
         summary = result.to_summary()
         assert "composition_id" in summary

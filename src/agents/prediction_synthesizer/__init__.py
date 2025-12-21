@@ -15,13 +15,13 @@ from .agent import (
     PredictionSynthesizerOutput,
     synthesize_predictions,
 )
-from .state import (
-    PredictionSynthesizerState,
-    ModelPrediction,
-    EnsemblePrediction,
-    PredictionContext,
-)
 from .graph import build_prediction_synthesizer_graph
+from .state import (
+    EnsemblePrediction,
+    ModelPrediction,
+    PredictionContext,
+    PredictionSynthesizerState,
+)
 
 __all__ = [
     # Agent

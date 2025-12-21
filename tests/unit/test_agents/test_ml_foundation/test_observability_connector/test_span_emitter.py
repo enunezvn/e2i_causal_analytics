@@ -1,6 +1,7 @@
 """Tests for span_emitter node (emit_spans)."""
 
 import pytest
+
 from src.agents.ml_foundation.observability_connector.nodes.span_emitter import (
     emit_spans,
 )

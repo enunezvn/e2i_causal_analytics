@@ -5,10 +5,10 @@ No LLM calls - pure logic.
 """
 
 import time
-from typing import List, Dict, Any
 from collections import defaultdict
+from typing import Any, Dict, List
 
-from ..state import OrchestratorState, AgentDispatch
+from ..state import AgentDispatch, OrchestratorState
 
 
 class RouterNode:
@@ -152,9 +152,7 @@ class RouterNode:
             if key in self.MULTI_AGENT_PATTERNS:
                 pattern = self.MULTI_AGENT_PATTERNS[key]
                 for agent_name, priority in pattern:
-                    dispatch_plan.append(
-                        self._get_dispatch_for_agent(agent_name, priority)
-                    )
+                    dispatch_plan.append(self._get_dispatch_for_agent(agent_name, priority))
                 # Group by priority for parallel execution
                 parallel_groups = self._group_by_priority(dispatch_plan)
 
@@ -180,15 +178,12 @@ class RouterNode:
         return {
             **state,
             "dispatch_plan": dispatch_plan,
-            "parallel_groups": parallel_groups
-            or [[d["agent_name"] for d in dispatch_plan]],
+            "parallel_groups": parallel_groups or [[d["agent_name"] for d in dispatch_plan]],
             "routing_latency_ms": routing_time,
             "current_phase": "dispatching",
         }
 
-    def _default_routing(
-        self, state: OrchestratorState, start_time: float
-    ) -> OrchestratorState:
+    def _default_routing(self, state: OrchestratorState, start_time: float) -> OrchestratorState:
         """Default routing when intent classification fails.
 
         Args:
@@ -218,9 +213,7 @@ class RouterNode:
             "current_phase": "dispatching",
         }
 
-    def _get_dispatch_for_agent(
-        self, agent_name: str, priority: int
-    ) -> AgentDispatch:
+    def _get_dispatch_for_agent(self, agent_name: str, priority: int) -> AgentDispatch:
         """Get dispatch config for a specific agent.
 
         Args:

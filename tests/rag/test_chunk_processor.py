@@ -4,17 +4,18 @@ Tests for ChunkProcessor.
 Tests the semantic chunking of agent outputs for RAG indexing.
 """
 
-import pytest
 from dataclasses import dataclass
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
+
+import pytest
 
 from src.rag.chunk_processor import ChunkProcessor
 from src.rag.models.insight_models import Chunk
 
-
 # ============================================================================
 # Test Fixtures
 # ============================================================================
+
 
 @pytest.fixture
 def chunk_processor():
@@ -31,6 +32,7 @@ def custom_chunk_processor():
 @dataclass
 class MockAgentActivity:
     """Mock agent activity for testing."""
+
     id: str
     agent_id: str
     analysis_results: str
@@ -39,6 +41,7 @@ class MockAgentActivity:
 @dataclass
 class MockAgentActivityWithContent:
     """Mock agent activity with content field."""
+
     id: str
     agent_id: str
     content: str
@@ -47,6 +50,7 @@ class MockAgentActivityWithContent:
 @dataclass
 class MockCausalPath:
     """Mock causal path for testing."""
+
     id: str
     cause: str
     effect: str
@@ -56,21 +60,19 @@ class MockCausalPath:
 @dataclass
 class MockKPISnapshot:
     """Mock KPI snapshot for testing."""
+
     kpi_name: str
     timestamp: str
     value: float
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
-            "kpi_name": self.kpi_name,
-            "timestamp": self.timestamp,
-            "value": self.value
-        }
+        return {"kpi_name": self.kpi_name, "timestamp": self.timestamp, "value": self.value}
 
 
 # ============================================================================
 # ChunkProcessor Initialization Tests
 # ============================================================================
+
 
 class TestChunkProcessorInit:
     """Test ChunkProcessor initialization."""
@@ -100,6 +102,7 @@ class TestChunkProcessorInit:
 # Chunk Agent Output Tests
 # ============================================================================
 
+
 class TestChunkAgentOutput:
     """Test chunk_agent_output method."""
 
@@ -108,7 +111,7 @@ class TestChunkAgentOutput:
         activity = MockAgentActivity(
             id="act-123",
             agent_id="causal_impact",
-            analysis_results="This is a test analysis. It contains findings about Kisqali adoption."
+            analysis_results="This is a test analysis. It contains findings about Kisqali adoption.",
         )
 
         chunks = chunk_processor.chunk_agent_output(activity)
@@ -124,7 +127,7 @@ class TestChunkAgentOutput:
         activity = MockAgentActivityWithContent(
             id="act-456",
             agent_id="gap_analyzer",
-            content="Gap analysis report for Q3 2024. Multiple opportunities identified."
+            content="Gap analysis report for Q3 2024. Multiple opportunities identified.",
         )
 
         chunks = chunk_processor.chunk_agent_output(activity)
@@ -146,9 +149,7 @@ class TestChunkAgentOutput:
         # Create text with many sentences to trigger splitting
         sentences = ". ".join([f"Sentence number {i} with some content" for i in range(100)])
         activity = MockAgentActivity(
-            id="act-789",
-            agent_id="prediction",
-            analysis_results=sentences
+            id="act-789", agent_id="prediction", analysis_results=sentences
         )
 
         # Use small chunk size to force multiple chunks
@@ -161,7 +162,7 @@ class TestChunkAgentOutput:
         activity = MockAgentActivity(
             id="act-multi",
             agent_id="test",
-            analysis_results="Sentence one. Sentence two. Sentence three. " * 50
+            analysis_results="Sentence one. Sentence two. Sentence three. " * 50,
         )
 
         chunks = chunk_processor.chunk_agent_output(activity, chunk_size=20)
@@ -173,11 +174,7 @@ class TestChunkAgentOutput:
 
     def test_chunk_agent_output_empty_analysis(self, chunk_processor):
         """Test chunking with empty analysis results."""
-        activity = MockAgentActivity(
-            id="act-empty",
-            agent_id="test",
-            analysis_results=""
-        )
+        activity = MockAgentActivity(id="act-empty", agent_id="test", analysis_results="")
 
         chunks = chunk_processor.chunk_agent_output(activity)
 
@@ -185,11 +182,7 @@ class TestChunkAgentOutput:
 
     def test_chunk_agent_output_embedding_is_none(self, chunk_processor):
         """Test that embedding is None (generated during indexing)."""
-        activity = MockAgentActivity(
-            id="act-emb",
-            agent_id="test",
-            analysis_results="Test content"
-        )
+        activity = MockAgentActivity(id="act-emb", agent_id="test", analysis_results="Test content")
 
         chunks = chunk_processor.chunk_agent_output(activity)
 
@@ -200,6 +193,7 @@ class TestChunkAgentOutput:
 # Chunk Causal Path Tests
 # ============================================================================
 
+
 class TestChunkCausalPath:
     """Test chunk_causal_path method."""
 
@@ -209,7 +203,7 @@ class TestChunkCausalPath:
             id="path-123",
             cause="Increased sales rep visits",
             effect="Higher TRx volume",
-            path_description="Sales rep visits lead to higher TRx through improved HCP awareness."
+            path_description="Sales rep visits lead to higher TRx through improved HCP awareness.",
         )
 
         chunks = chunk_processor.chunk_causal_path(path)
@@ -224,6 +218,7 @@ class TestChunkCausalPath:
 
     def test_chunk_causal_path_without_description(self, chunk_processor):
         """Test chunking path without path_description field."""
+
         @dataclass
         class MinimalPath:
             id: str
@@ -237,12 +232,7 @@ class TestChunkCausalPath:
 
     def test_chunk_causal_path_embedding_none(self, chunk_processor):
         """Test that causal path chunks have no embedding."""
-        path = MockCausalPath(
-            id="path-emb",
-            cause="A",
-            effect="B",
-            path_description="A causes B"
-        )
+        path = MockCausalPath(id="path-emb", cause="A", effect="B", path_description="A causes B")
 
         chunks = chunk_processor.chunk_causal_path(path)
 
@@ -253,16 +243,13 @@ class TestChunkCausalPath:
 # Chunk KPI Snapshot Tests
 # ============================================================================
 
+
 class TestChunkKPISnapshot:
     """Test chunk_kpi_snapshot method."""
 
     def test_chunk_kpi_snapshot_with_to_dict(self, chunk_processor):
         """Test chunking KPI snapshot with to_dict method."""
-        snapshot = MockKPISnapshot(
-            kpi_name="TRx",
-            timestamp="2024-Q3",
-            value=15000.5
-        )
+        snapshot = MockKPISnapshot(kpi_name="TRx", timestamp="2024-Q3", value=15000.5)
 
         chunks = chunk_processor.chunk_kpi_snapshot(snapshot)
 
@@ -276,6 +263,7 @@ class TestChunkKPISnapshot:
 
     def test_chunk_kpi_snapshot_without_to_dict(self, chunk_processor):
         """Test chunking snapshot without to_dict method."""
+
         @dataclass
         class SimpleSnapshot:
             kpi_name: str
@@ -290,11 +278,7 @@ class TestChunkKPISnapshot:
 
     def test_chunk_kpi_snapshot_metadata(self, chunk_processor):
         """Test KPI snapshot metadata extraction."""
-        snapshot = MockKPISnapshot(
-            kpi_name="conversion_rate",
-            timestamp="2024-12-01",
-            value=0.15
-        )
+        snapshot = MockKPISnapshot(kpi_name="conversion_rate", timestamp="2024-12-01", value=0.15)
 
         chunks = chunk_processor.chunk_kpi_snapshot(snapshot)
 
@@ -303,6 +287,7 @@ class TestChunkKPISnapshot:
 
     def test_chunk_kpi_snapshot_missing_attributes(self, chunk_processor):
         """Test KPI snapshot with missing optional attributes."""
+
         @dataclass
         class PartialSnapshot:
             value: float
@@ -318,6 +303,7 @@ class TestChunkKPISnapshot:
 # ============================================================================
 # Semantic Split Tests
 # ============================================================================
+
 
 class TestSemanticSplit:
     """Test _semantic_split method."""
@@ -347,7 +333,7 @@ class TestSemanticSplit:
 
         # Should split on sentence boundaries
         for chunk in result:
-            assert chunk.endswith('.')
+            assert chunk.endswith(".")
 
     def test_semantic_split_long_text(self, chunk_processor):
         """Test splitting long text into multiple chunks."""
@@ -371,8 +357,8 @@ class TestSemanticSplit:
             # Check for overlap by looking for repeated content
             # Due to overlap, some sentences should appear in consecutive chunks
             for i in range(len(result) - 1):
-                current_chunk = result[i]
-                next_chunk = result[i + 1]
+                result[i]
+                result[i + 1]
                 # With overlap of 2 sentences, there should be some overlap
                 # This is a soft test since overlap is based on last 2 sentences
 
@@ -383,7 +369,7 @@ class TestSemanticSplit:
 
         assert len(result) >= 1
         # Newlines should be converted to spaces
-        assert '\n' not in result[0]
+        assert "\n" not in result[0]
 
     def test_semantic_split_multiple_periods(self, chunk_processor):
         """Test text with multiple periods."""
@@ -407,6 +393,7 @@ class TestSemanticSplit:
 # Edge Cases and Error Handling
 # ============================================================================
 
+
 class TestEdgeCases:
     """Test edge cases and error handling."""
 
@@ -414,11 +401,7 @@ class TestEdgeCases:
         """Test chunking a very large single sentence."""
         # A single sentence with 1000 words
         text = "word " * 1000
-        activity = MockAgentActivity(
-            id="large",
-            agent_id="test",
-            analysis_results=text
-        )
+        activity = MockAgentActivity(id="large", agent_id="test", analysis_results=text)
 
         chunks = chunk_processor.chunk_agent_output(activity, chunk_size=100)
 
@@ -431,7 +414,7 @@ class TestEdgeCases:
         activity = MockAgentActivity(
             id="unicode",
             agent_id="test",
-            analysis_results="Analysis: Café résumé 日本語テスト. More content here."
+            analysis_results="Analysis: Café résumé 日本語テスト. More content here.",
         )
 
         chunks = chunk_processor.chunk_agent_output(activity)
@@ -445,7 +428,7 @@ class TestEdgeCases:
         activity = MockAgentActivity(
             id="special",
             agent_id="test",
-            analysis_results="Price: $100. Rate: 15%. Formula: a + b = c."
+            analysis_results="Price: $100. Rate: 15%. Formula: a + b = c.",
         )
 
         chunks = chunk_processor.chunk_agent_output(activity)
@@ -456,17 +439,14 @@ class TestEdgeCases:
 
     def test_chunk_with_none_optional_fields(self, chunk_processor):
         """Test chunking output with None optional fields."""
+
         @dataclass
         class OutputWithNone:
             id: Optional[str]
             agent_id: Optional[str]
             analysis_results: str
 
-        activity = OutputWithNone(
-            id=None,
-            agent_id=None,
-            analysis_results="Some analysis text."
-        )
+        activity = OutputWithNone(id=None, agent_id=None, analysis_results="Some analysis text.")
 
         chunks = chunk_processor.chunk_agent_output(activity)
 
@@ -479,25 +459,24 @@ class TestEdgeCases:
 # Chunk Model Validation Tests
 # ============================================================================
 
+
 class TestChunkModel:
     """Test Chunk model structure."""
 
     def test_chunk_has_required_fields(self, chunk_processor):
         """Test that chunks have all required fields."""
         activity = MockAgentActivity(
-            id="test",
-            agent_id="test",
-            analysis_results="Test content for validation."
+            id="test", agent_id="test", analysis_results="Test content for validation."
         )
 
         chunks = chunk_processor.chunk_agent_output(activity)
         chunk = chunks[0]
 
         # Verify all fields exist
-        assert hasattr(chunk, 'content')
-        assert hasattr(chunk, 'source_type')
-        assert hasattr(chunk, 'embedding')
-        assert hasattr(chunk, 'metadata')
+        assert hasattr(chunk, "content")
+        assert hasattr(chunk, "source_type")
+        assert hasattr(chunk, "embedding")
+        assert hasattr(chunk, "metadata")
 
     def test_chunk_source_types(self, chunk_processor):
         """Test that source types are correctly assigned."""
@@ -517,6 +496,7 @@ class TestChunkModel:
 # ============================================================================
 # Integration-style Tests
 # ============================================================================
+
 
 class TestChunkProcessorIntegration:
     """Integration-style tests for chunk processor."""

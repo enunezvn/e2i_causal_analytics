@@ -12,21 +12,18 @@ Tests cover:
 - Performance (<50ms latency)
 """
 
-import pytest
 import time
-from unittest.mock import patch, MagicMock
 
 from src.nlp.typo_handler import (
-    TypoHandler,
-    CorrectionResult,
-    correct_term,
-    correct_query,
-    get_typo_handler,
-    CANONICAL_VOCABULARY,
     ABBREVIATION_EXPANSIONS,
+    CANONICAL_VOCABULARY,
+    CorrectionResult,
+    TypoHandler,
     _levenshtein_distance,
     _normalized_edit_similarity,
-    _CORRECTION_CACHE,
+    correct_query,
+    correct_term,
+    get_typo_handler,
 )
 
 
@@ -280,7 +277,7 @@ class TestTermCorrection:
         handler = TypoHandler(cache_enabled=False)
 
         # Without category hint, might match anything
-        result_no_hint = handler.correct_term("ne")
+        handler.correct_term("ne")
 
         # With category hint
         result_with_hint = handler.correct_term("ne", category="regions")
@@ -328,10 +325,7 @@ class TestQueryCorrection:
         handler = TypoHandler(cache_enabled=False)
 
         # With correct_all_words=True, should attempt more corrections
-        _, corrections = handler.correct_query(
-            "show me the data",
-            correct_all_words=True
-        )
+        _, corrections = handler.correct_query("show me the data", correct_all_words=True)
         # May or may not have corrections, but should process all words
 
 
@@ -395,7 +389,7 @@ class TestSuggestions:
 
         # Suggestions should be from brands category
         brand_terms = [s.lower() for s in CANONICAL_VOCABULARY["brands"]]
-        for term, score in suggestions:
+        for term, _score in suggestions:
             assert term.lower() in brand_terms
 
 

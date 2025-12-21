@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 import redis
 from supabase import Client
 
-from .models import EntityFeatures, FreshnessStatus
+from .models import EntityFeatures
 
 logger = logging.getLogger(__name__)
 
@@ -67,9 +67,7 @@ class FeatureRetriever:
             EntityFeatures object
         """
         # Generate cache key
-        cache_key = self._generate_cache_key(
-            entity_values, feature_group, feature_names
-        )
+        cache_key = self._generate_cache_key(entity_values, feature_group, feature_names)
 
         # Try cache first
         if use_cache and self.redis_client:
@@ -172,9 +170,7 @@ class FeatureRetriever:
             # Filter by feature names if specified
             if feature_names:
                 return [
-                    record
-                    for record in response.data
-                    if record["feature_name"] in feature_names
+                    record for record in response.data if record["feature_name"] in feature_names
                 ]
 
             return response.data
@@ -253,9 +249,7 @@ class FeatureRetriever:
 
             # Serialize to JSON
             cache_data = entity_features.model_dump(mode="json")
-            self.redis_client.setex(
-                cache_key, self.cache_ttl_seconds, json.dumps(cache_data)
-            )
+            self.redis_client.setex(cache_key, self.cache_ttl_seconds, json.dumps(cache_data))
 
         except Exception as e:
             logger.warning(f"Cache write error: {e}")

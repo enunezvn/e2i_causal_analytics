@@ -4,9 +4,9 @@ Tests the RAG context node that enriches orchestrator state with
 relevant context from the hybrid RAG system.
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from datetime import datetime
+
+import pytest
 
 from src.agents.orchestrator.nodes.rag_context import (
     RAGContextNode,
@@ -144,6 +144,7 @@ class TestRAGContextNode:
             # Simulate some processing time
             async def slow_search(*args, **kwargs):
                 import asyncio
+
                 await asyncio.sleep(0.01)  # 10ms
                 return []
 
@@ -174,11 +175,13 @@ class TestRetrieveRAGContextFunction:
         # Mock the RAGContextNode
         with patch("src.agents.orchestrator.nodes.rag_context.RAGContextNode") as MockNode:
             mock_instance = MagicMock()
-            mock_instance.execute = AsyncMock(return_value={
-                **state,
-                "rag_context": {"summary": "Test"},
-                "rag_latency_ms": 50,
-            })
+            mock_instance.execute = AsyncMock(
+                return_value={
+                    **state,
+                    "rag_context": {"summary": "Test"},
+                    "rag_latency_ms": 50,
+                }
+            )
             MockNode.return_value = mock_instance
 
             result = await retrieve_rag_context(state)

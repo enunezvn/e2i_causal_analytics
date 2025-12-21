@@ -1,6 +1,7 @@
 """Tests for intent_classifier node."""
 
 import pytest
+
 from src.agents.orchestrator.nodes.intent_classifier import (
     IntentClassifierNode,
     classify_intent,
@@ -39,9 +40,7 @@ class TestIntentClassifierNode:
         """Test pattern matching for segment analysis queries."""
         classifier = IntentClassifierNode()
 
-        result = classifier._pattern_classify(
-            "which segments respond best to our messaging?"
-        )
+        result = classifier._pattern_classify("which segments respond best to our messaging?")
 
         assert result["primary_intent"] == "segment_analysis"
         assert result["confidence"] >= 0.8
@@ -51,9 +50,7 @@ class TestIntentClassifierNode:
         """Test pattern matching for experiment design queries."""
         classifier = IntentClassifierNode()
 
-        result = classifier._pattern_classify(
-            "help me design an a/b test for our campaign"
-        )
+        result = classifier._pattern_classify("help me design an a/b test for our campaign")
 
         assert result["primary_intent"] == "experiment_design"
         assert result["confidence"] >= 0.8
@@ -73,9 +70,7 @@ class TestIntentClassifierNode:
         """Test pattern matching for resource allocation queries."""
         classifier = IntentClassifierNode()
 
-        result = classifier._pattern_classify(
-            "how should we allocate our budget across regions?"
-        )
+        result = classifier._pattern_classify("how should we allocate our budget across regions?")
 
         assert result["primary_intent"] == "resource_allocation"
         assert result["confidence"] >= 0.8
@@ -203,9 +198,7 @@ class TestPatternMatching:
         """Test partial word matching."""
         classifier = IntentClassifierNode()
 
-        result = classifier._pattern_classify(
-            "i want to understand what is impacting our results"
-        )
+        result = classifier._pattern_classify("i want to understand what is impacting our results")
 
         assert result["primary_intent"] == "causal_effect"
 

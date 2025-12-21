@@ -30,7 +30,7 @@ Respond in JSON format:
     "dependencies": [
         {{
             "from": "Q1",
-            "to": "Q2", 
+            "to": "Q2",
             "type": "REFERENCE_CHAIN",
             "reason": "Q2 uses 'those HCPs' referring to Q1 results"
         }}
@@ -75,7 +75,7 @@ Respond in JSON format:
             "primary_domain": "CAUSAL_ANALYSIS"
         }},
         {{
-            "id": "Q2", 
+            "id": "Q2",
             "text": "Which HCP segments responded best?",
             "domains": ["HETEROGENEITY", "CAUSAL_ANALYSIS"],
             "primary_domain": "HETEROGENEITY"

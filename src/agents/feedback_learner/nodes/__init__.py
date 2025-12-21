@@ -4,9 +4,9 @@ Version: 4.2
 """
 
 from .feedback_collector import FeedbackCollectorNode
-from .pattern_analyzer import PatternAnalyzerNode
-from .learning_extractor import LearningExtractorNode
 from .knowledge_updater import KnowledgeUpdaterNode
+from .learning_extractor import LearningExtractorNode
+from .pattern_analyzer import PatternAnalyzerNode
 
 __all__ = [
     "FeedbackCollectorNode",

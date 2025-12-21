@@ -18,17 +18,18 @@ Deployment pipeline:
   Node 7: Rollback Availability Check
 """
 
-from langgraph.graph import StateGraph, END
-from .state import ModelDeployerState
+from langgraph.graph import END, StateGraph
+
 from .nodes import (
-    register_model,
-    validate_promotion,
-    promote_stage,
-    package_model,
-    deploy_to_endpoint,
     check_health,
     check_rollback_availability,
+    deploy_to_endpoint,
+    package_model,
+    promote_stage,
+    register_model,
+    validate_promotion,
 )
+from .state import ModelDeployerState
 
 
 def create_model_deployer_graph() -> StateGraph:
@@ -76,50 +77,29 @@ def create_model_deployer_graph() -> StateGraph:
     workflow.add_conditional_edges(
         "register_model",
         _should_continue_after_registration,
-        {
-            "validate_promotion": "validate_promotion",
-            "end": END
-        }
+        {"validate_promotion": "validate_promotion", "end": END},
     )
 
     # Validation → Promotion (if allowed)
     workflow.add_conditional_edges(
-        "validate_promotion",
-        _should_promote,
-        {
-            "promote_stage": "promote_stage",
-            "end": END
-        }
+        "validate_promotion", _should_promote, {"promote_stage": "promote_stage", "end": END}
     )
 
     # Promotion → Packaging
     workflow.add_conditional_edges(
-        "promote_stage",
-        _should_deploy,
-        {
-            "package_model": "package_model",
-            "end": END
-        }
+        "promote_stage", _should_deploy, {"package_model": "package_model", "end": END}
     )
 
     # Packaging → Deployment
     workflow.add_conditional_edges(
         "package_model",
         _should_continue_after_packaging,
-        {
-            "deploy_to_endpoint": "deploy_to_endpoint",
-            "end": END
-        }
+        {"deploy_to_endpoint": "deploy_to_endpoint", "end": END},
     )
 
     # Deployment → Health Check
     workflow.add_conditional_edges(
-        "deploy_to_endpoint",
-        _should_health_check,
-        {
-            "check_health": "check_health",
-            "end": END
-        }
+        "deploy_to_endpoint", _should_health_check, {"check_health": "check_health", "end": END}
     )
 
     # Health Check → Rollback Check

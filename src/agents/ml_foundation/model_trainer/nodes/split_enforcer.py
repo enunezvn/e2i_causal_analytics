@@ -3,7 +3,7 @@
 This module validates ML split ratios and detects potential data leakage.
 """
 
-from typing import Dict, Any
+from typing import Any, Dict
 
 
 async def enforce_splits(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -120,9 +120,7 @@ async def enforce_splits(state: Dict[str, Any]) -> Dict[str, Any]:
 
     # Check holdout - warn if zero (holdout is optional but important for final validation)
     if holdout_samples == 0 and holdout_ratio > 0:
-        leakage_warnings.append(
-            f"Holdout split has 0 samples but ratio is {holdout_ratio:.2%}"
-        )
+        leakage_warnings.append(f"Holdout split has 0 samples but ratio is {holdout_ratio:.2%}")
         ratios_valid = False
     elif holdout_samples == 0:
         leakage_warnings.append(

@@ -6,9 +6,9 @@ Hybrid pipeline with 3 nodes:
 3. NL Interpretation (LLM) - importance_narrator.py
 """
 
-from .shap_computer import compute_shap
-from .interaction_detector import detect_interactions
 from .importance_narrator import narrate_importance
+from .interaction_detector import detect_interactions
+from .shap_computer import compute_shap
 
 __all__ = [
     "compute_shap",

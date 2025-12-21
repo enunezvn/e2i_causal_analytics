@@ -1,6 +1,6 @@
 """State definition for observability_connector agent."""
 
-from typing import TypedDict, Optional, Dict, Any, List
+from typing import Any, Dict, List, Optional, TypedDict
 
 
 class ObservabilityConnectorState(TypedDict, total=False):

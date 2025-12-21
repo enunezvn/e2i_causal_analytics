@@ -2,11 +2,12 @@
 Tests for Score Composer Node
 """
 
-import pytest
 from datetime import datetime
 
+import pytest
+
+from src.agents.health_score.metrics import ScoreWeights
 from src.agents.health_score.nodes.score_composer import ScoreComposerNode
-from src.agents.health_score.metrics import ScoreWeights, GradeThresholds
 
 
 class TestScoreComposerNode:

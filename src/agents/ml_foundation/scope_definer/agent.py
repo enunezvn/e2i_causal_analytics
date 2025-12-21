@@ -4,8 +4,7 @@ Transforms business objectives into formal ML problem specifications with
 measurable success criteria.
 """
 
-from typing import Dict, Any, Optional
-from datetime import datetime
+from typing import Any, Dict
 
 from .graph import create_scope_definer_graph
 from .state import ScopeDefinerState

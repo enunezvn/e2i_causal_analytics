@@ -18,11 +18,11 @@ from typing import Optional
 
 from anthropic import Anthropic
 
-from .feature_extractor import FeatureExtractor
-from .domain_mapper import DomainMapper
 from .dependency_detector import DependencyDetector
+from .domain_mapper import DomainMapper
+from .feature_extractor import FeatureExtractor
 from .pattern_selector import PatternSelector
-from .schemas import ClassificationResult, ExtractedFeatures, DomainMapping
+from .schemas import ClassificationResult, DomainMapping, ExtractedFeatures
 
 
 class ClassificationPipeline:
@@ -42,7 +42,7 @@ class ClassificationPipeline:
     ):
         """
         Initialize pipeline components.
-        
+
         Args:
             llm_client: Anthropic client for LLM-based classification
             enable_llm_layer: Whether to use LLM for complex queries
@@ -51,7 +51,7 @@ class ClassificationPipeline:
         self.domain_mapper = DomainMapper()
         self.dependency_detector = DependencyDetector(llm_client=llm_client)
         self.pattern_selector = PatternSelector()
-        
+
         self.llm_client = llm_client
         self.enable_llm_layer = enable_llm_layer
 
@@ -64,13 +64,13 @@ class ClassificationPipeline:
     ) -> ClassificationResult:
         """
         Run full classification pipeline.
-        
+
         Args:
             query: User query text
             context: Optional conversation context
             is_followup: Whether this is a follow-up query
             context_source: Source of context if follow-up
-            
+
         Returns:
             ClassificationResult with routing decision
         """
@@ -101,7 +101,7 @@ class ClassificationPipeline:
             domain_mapping=domain_mapping,
             use_llm=needs_llm and self.enable_llm_layer,
         )
-        
+
         if needs_llm and self.enable_llm_layer:
             used_llm = True
 
@@ -130,27 +130,26 @@ class ClassificationPipeline:
         """
         Synchronous version of classify for non-async contexts.
         Note: This version cannot use LLM layer.
-        
+
         Args:
             query: User query text
             context: Optional conversation context
             is_followup: Whether this is a follow-up query
             context_source: Source of context if follow-up
-            
+
         Returns:
             ClassificationResult with routing decision
         """
         import asyncio
-        
+
         # Try to get existing event loop, create new one if needed
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
                 # We're in an async context, use run_coroutine_threadsafe
-                import concurrent.futures
+
                 future = asyncio.run_coroutine_threadsafe(
-                    self.classify(query, context, is_followup, context_source),
-                    loop
+                    self.classify(query, context, is_followup, context_source), loop
                 )
                 return future.result(timeout=30)
             else:
@@ -159,9 +158,7 @@ class ClassificationPipeline:
                 )
         except RuntimeError:
             # No event loop, create a new one
-            return asyncio.run(
-                self.classify(query, context, is_followup, context_source)
-            )
+            return asyncio.run(self.classify(query, context, is_followup, context_source))
 
     def _should_use_llm(
         self,
@@ -194,10 +191,10 @@ class ClassificationPipeline:
     def get_features(self, query: str) -> ExtractedFeatures:
         """
         Extract features only (for debugging/analysis).
-        
+
         Args:
             query: User query text
-            
+
         Returns:
             ExtractedFeatures
         """
@@ -206,10 +203,10 @@ class ClassificationPipeline:
     def get_domain_mapping(self, query: str) -> DomainMapping:
         """
         Get domain mapping only (for debugging/analysis).
-        
+
         Args:
             query: User query text
-            
+
         Returns:
             DomainMapping
         """

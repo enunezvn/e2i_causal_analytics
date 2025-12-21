@@ -9,12 +9,13 @@ Tests cover:
 - Score normalization
 """
 
-import pytest
-from unittest.mock import Mock, patch, MagicMock
-import numpy as np
+from unittest.mock import MagicMock, Mock, patch
 
-from src.rag.reranker import CrossEncoderReranker, _MODEL_CACHE
+import numpy as np
+import pytest
+
 from src.rag.models.retrieval_models import RetrievalResult
+from src.rag.reranker import _MODEL_CACHE, CrossEncoderReranker
 from src.rag.types import RetrievalSource
 
 
@@ -162,7 +163,7 @@ class TestCrossEncoderReranker:
         query.text = "parsed query text"
 
         reranker = CrossEncoderReranker()
-        reranked = reranker.rerank(sample_results, query)
+        reranker.rerank(sample_results, query)
 
         # Verify the query text was extracted correctly
         call_args = mock_cross_encoder.predict.call_args[0][0]

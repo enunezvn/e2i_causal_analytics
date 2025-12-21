@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from ..state import AllocationResult, ResourceOptimizerState
 
@@ -21,9 +21,7 @@ class OptimizerNode:
     Solves the formulated problem using appropriate solver.
     """
 
-    async def execute(
-        self, state: ResourceOptimizerState
-    ) -> ResourceOptimizerState:
+    async def execute(self, state: ResourceOptimizerState) -> ResourceOptimizerState:
         """Execute optimization."""
         start_time = time.time()
 
@@ -95,13 +93,13 @@ class OptimizerNode:
         start = time.time()
 
         try:
-            from scipy.optimize import linprog
             import numpy as np
+            from scipy.optimize import linprog
 
             # Negate c for maximization (linprog minimizes)
             c = np.array([-x for x in problem["c"]])
 
-            bounds = list(zip(problem["lb"], problem["ub"]))
+            bounds = list(zip(problem["lb"], problem["ub"], strict=False))
 
             # Convert constraints
             a_ub = np.array(problem["a_ub"]) if problem["a_ub"] else None
@@ -129,11 +127,7 @@ class OptimizerNode:
                     "solve_time_ms": solve_time,
                 }
             else:
-                status = (
-                    "infeasible"
-                    if "infeasible" in str(result.message).lower()
-                    else "failed"
-                )
+                status = "infeasible" if "infeasible" in str(result.message).lower() else "failed"
                 return {
                     "status": status,
                     "x": None,
@@ -154,15 +148,15 @@ class OptimizerNode:
         start = time.time()
 
         try:
-            from scipy.optimize import minimize
             import numpy as np
+            from scipy.optimize import minimize
 
             c = np.array(problem["c"])
 
             def objective(x):
                 return -np.dot(c, x)  # Negate for maximization
 
-            bounds = list(zip(problem["lb"], problem["ub"]))
+            bounds = list(zip(problem["lb"], problem["ub"], strict=False))
             x0 = [t.get("current_allocation", 1.0) for t in problem["targets"]]
 
             # Build constraints
@@ -202,7 +196,7 @@ class OptimizerNode:
         """Fallback solver using proportional allocation."""
         start = time.time()
 
-        targets = problem["targets"]
+        problem["targets"]
         n = problem["n"]
         c = problem["c"]
 

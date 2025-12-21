@@ -5,23 +5,20 @@ Tests the RAG API endpoints using FastAPI TestClient with mocked backends.
 Verifies request/response handling, error cases, and endpoint behavior.
 """
 
-import pytest
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 from fastapi.testclient import TestClient
 
 from src.api.main import app
-from src.api.routes.rag import get_rag_service, RAGService
+from src.api.routes.rag import RAGService, get_rag_service
 from src.rag.types import (
+    ExtractedEntities,
     RetrievalResult,
     RetrievalSource,
-    ExtractedEntities,
-    BackendHealth,
-    BackendStatus,
     SearchStats,
-    GraphPath,
 )
-
 
 # =============================================================================
 # Fixtures
@@ -41,27 +38,22 @@ def mock_search_results():
                 "brand": "Kisqali",
                 "kpi": "trx",
                 "region": "northeast",
-                "time_period": "Q3_2024"
-            }
+                "time_period": "Q3_2024",
+            },
         ),
         RetrievalResult(
             id="doc_002",
             content="Causal analysis shows HCP targeting changes impacted adoption",
             score=0.85,
             source=RetrievalSource.GRAPH,
-            metadata={
-                "causal_chain": "hcp_targeting -> adoption -> trx",
-                "brand": "Kisqali"
-            }
+            metadata={"causal_chain": "hcp_targeting -> adoption -> trx", "brand": "Kisqali"},
         ),
         RetrievalResult(
             id="doc_003",
             content="Regional TRx patterns in Q3 2024",
             score=0.78,
             source=RetrievalSource.FULLTEXT,
-            metadata={
-                "time_period": "Q3_2024"
-            }
+            metadata={"time_period": "Q3_2024"},
         ),
     ]
 
@@ -79,7 +71,7 @@ def mock_search_stats():
         sources_used={"vector": True, "fulltext": True, "graph": True},
         vector_latency_ms=80.0,
         fulltext_latency_ms=30.0,
-        graph_latency_ms=45.0
+        graph_latency_ms=45.0,
     )
 
 
@@ -93,7 +85,7 @@ def mock_extracted_entities():
         agents=[],
         journey_stages=[],
         time_references=["Q3"],
-        hcp_segments=[]
+        hcp_segments=[],
     )
 
 
@@ -104,28 +96,18 @@ def mock_backend_health():
         "status": "healthy",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "backends": {
-            "vector": {
-                "status": "healthy",
-                "latency_ms": 45.2,
-                "available": True
-            },
-            "fulltext": {
-                "status": "healthy",
-                "latency_ms": 12.5,
-                "available": True
-            },
-            "graph": {
-                "status": "healthy",
-                "latency_ms": 28.7,
-                "available": True
-            }
+            "vector": {"status": "healthy", "latency_ms": 45.2, "available": True},
+            "fulltext": {"status": "healthy", "latency_ms": 12.5, "available": True},
+            "graph": {"status": "healthy", "latency_ms": 28.7, "available": True},
         },
-        "monitoring_enabled": True
+        "monitoring_enabled": True,
     }
 
 
 @pytest.fixture
-def mock_rag_service(mock_search_results, mock_search_stats, mock_extracted_entities, mock_backend_health):
+def mock_rag_service(
+    mock_search_results, mock_search_stats, mock_extracted_entities, mock_backend_health
+):
     """Create a fully mocked RAG service."""
     service = MagicMock(spec=RAGService)
 
@@ -145,12 +127,14 @@ def mock_rag_service(mock_search_results, mock_search_stats, mock_extracted_enti
 
     # Mock search logger
     service._search_logger = MagicMock()
-    service._search_logger.get_stats = MagicMock(return_value={
-        "total_searches": 1250,
-        "searches_today": 45,
-        "avg_latency_ms": 156.3,
-        "cache_hit_rate": 0.68
-    })
+    service._search_logger.get_stats = MagicMock(
+        return_value={
+            "total_searches": 1250,
+            "searches_today": 45,
+            "avg_latency_ms": 156.3,
+            "cache_hit_rate": 0.68,
+        }
+    )
 
     # Mock the search method
     async def mock_search(*args, **kwargs):
@@ -185,11 +169,7 @@ class TestSearchEndpoint:
     def test_search_basic_query(self, client):
         """Test basic hybrid search query."""
         response = client.post(
-            "/api/v1/rag/search",
-            json={
-                "query": "Why did Kisqali TRx drop in Q3?",
-                "top_k": 5
-            }
+            "/api/v1/rag/search", json={"query": "Why did Kisqali TRx drop in Q3?", "top_k": 5}
         )
 
         assert response.status_code == 200
@@ -208,11 +188,8 @@ class TestSearchEndpoint:
             json={
                 "query": "Show TRx trends",
                 "top_k": 10,
-                "filters": {
-                    "brands": ["Kisqali"],
-                    "regions": ["northeast", "west"]
-                }
-            }
+                "filters": {"brands": ["Kisqali"], "regions": ["northeast", "west"]},
+            },
         )
 
         assert response.status_code == 200
@@ -222,37 +199,21 @@ class TestSearchEndpoint:
     def test_search_vector_only_mode(self, client):
         """Test vector-only search mode."""
         response = client.post(
-            "/api/v1/rag/search",
-            json={
-                "query": "Semantic search query",
-                "mode": "vector"
-            }
+            "/api/v1/rag/search", json={"query": "Semantic search query", "mode": "vector"}
         )
 
         assert response.status_code == 200
 
     def test_search_empty_query(self, client):
         """Test search with empty query returns validation error."""
-        response = client.post(
-            "/api/v1/rag/search",
-            json={
-                "query": "",
-                "top_k": 5
-            }
-        )
+        response = client.post("/api/v1/rag/search", json={"query": "", "top_k": 5})
 
         # FastAPI validation should reject empty query
         assert response.status_code in [400, 422]
 
     def test_search_invalid_top_k(self, client):
         """Test search with invalid top_k value."""
-        response = client.post(
-            "/api/v1/rag/search",
-            json={
-                "query": "Valid query",
-                "top_k": 0
-            }
-        )
+        response = client.post("/api/v1/rag/search", json={"query": "Valid query", "top_k": 0})
 
         assert response.status_code == 422  # Validation error
 
@@ -269,7 +230,7 @@ class TestEntityExtractEndpoint:
         """Test successful entity extraction."""
         response = client.get(
             "/api/v1/rag/entities",
-            params={"query": "Why did Kisqali TRx drop in the Northeast during Q3?"}
+            params={"query": "Why did Kisqali TRx drop in the Northeast during Q3?"},
         )
 
         assert response.status_code == 200
@@ -286,10 +247,7 @@ class TestEntityExtractEndpoint:
 
     def test_extract_entities_empty_query(self, client):
         """Test entity extraction with empty query."""
-        response = client.get(
-            "/api/v1/rag/entities",
-            params={"query": ""}
-        )
+        response = client.get("/api/v1/rag/entities", params={"query": ""})
 
         # Should either return empty or validation error
         assert response.status_code in [200, 400, 422]
@@ -345,21 +303,14 @@ class TestRequestValidation:
 
     def test_missing_required_field(self, client):
         """Test that missing required fields return validation error."""
-        response = client.post(
-            "/api/v1/rag/search",
-            json={}  # Missing query field
-        )
+        response = client.post("/api/v1/rag/search", json={})  # Missing query field
 
         assert response.status_code == 422
 
     def test_invalid_search_mode(self, client):
         """Test that invalid search mode returns validation error."""
         response = client.post(
-            "/api/v1/rag/search",
-            json={
-                "query": "Valid query",
-                "mode": "invalid_mode"
-            }
+            "/api/v1/rag/search", json={"query": "Valid query", "mode": "invalid_mode"}
         )
 
         assert response.status_code == 422
@@ -367,11 +318,7 @@ class TestRequestValidation:
     def test_top_k_out_of_range(self, client):
         """Test that top_k out of valid range returns validation error."""
         response = client.post(
-            "/api/v1/rag/search",
-            json={
-                "query": "Valid query",
-                "top_k": 1000  # Too high
-            }
+            "/api/v1/rag/search", json={"query": "Valid query", "top_k": 1000}  # Too high
         )
 
         assert response.status_code == 422
@@ -387,10 +334,7 @@ class TestResponseFormats:
 
     def test_search_response_has_required_fields(self, client):
         """Test search response has all required fields."""
-        response = client.post(
-            "/api/v1/rag/search",
-            json={"query": "Test query"}
-        )
+        response = client.post("/api/v1/rag/search", json={"query": "Test query"})
 
         assert response.status_code == 200
         data = response.json()
@@ -403,10 +347,7 @@ class TestResponseFormats:
 
     def test_search_result_item_format(self, client):
         """Test individual search result item has correct format."""
-        response = client.post(
-            "/api/v1/rag/search",
-            json={"query": "Test query"}
-        )
+        response = client.post("/api/v1/rag/search", json={"query": "Test query"})
 
         assert response.status_code == 200
         data = response.json()
@@ -421,10 +362,7 @@ class TestResponseFormats:
 
     def test_entity_response_format(self, client):
         """Test entity extraction response format."""
-        response = client.get(
-            "/api/v1/rag/entities",
-            params={"query": "Test Kisqali"}
-        )
+        response = client.get("/api/v1/rag/entities", params={"query": "Test Kisqali"})
 
         assert response.status_code == 200
         data = response.json()

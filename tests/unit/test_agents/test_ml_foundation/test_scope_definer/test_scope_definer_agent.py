@@ -1,6 +1,7 @@
 """Integration tests for ScopeDefinerAgent."""
 
 import pytest
+
 from src.agents.ml_foundation.scope_definer import ScopeDefinerAgent
 
 
@@ -23,24 +24,30 @@ async def test_scope_definer_missing_required_fields():
 
     # Missing problem_description
     with pytest.raises(ValueError, match="problem_description"):
-        await agent.run({
-            "business_objective": "Test",
-            "target_outcome": "Test",
-        })
+        await agent.run(
+            {
+                "business_objective": "Test",
+                "target_outcome": "Test",
+            }
+        )
 
     # Missing business_objective
     with pytest.raises(ValueError, match="business_objective"):
-        await agent.run({
-            "problem_description": "Test",
-            "target_outcome": "Test",
-        })
+        await agent.run(
+            {
+                "problem_description": "Test",
+                "target_outcome": "Test",
+            }
+        )
 
     # Missing target_outcome
     with pytest.raises(ValueError, match="target_outcome"):
-        await agent.run({
-            "problem_description": "Test",
-            "business_objective": "Test",
-        })
+        await agent.run(
+            {
+                "problem_description": "Test",
+                "business_objective": "Test",
+            }
+        )
 
 
 @pytest.mark.asyncio
@@ -101,7 +108,10 @@ async def test_scope_definer_full_pipeline_regression():
     # Check problem type
     scope_spec = output["scope_spec"]
     assert scope_spec["problem_type"] == "regression"
-    assert "prescription" in scope_spec["prediction_target"].lower() or "trx" in scope_spec["prediction_target"].lower()
+    assert (
+        "prescription" in scope_spec["prediction_target"].lower()
+        or "trx" in scope_spec["prediction_target"].lower()
+    )
 
     # Check success criteria
     success_criteria = output["success_criteria"]

@@ -11,8 +11,8 @@ from typing import Any, Optional
 
 from langgraph.graph import END, StateGraph
 
-from .state import ExplainerState
 from .nodes import ContextAssemblerNode, DeepReasonerNode, NarrativeGeneratorNode
+from .state import ExplainerState
 
 logger = logging.getLogger(__name__)
 

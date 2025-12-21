@@ -5,20 +5,16 @@ Tests for VectorBackend, FulltextBackend, and GraphBackend.
 All external dependencies are mocked.
 """
 
-import asyncio
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-from typing import Any, Dict, List
+from unittest.mock import MagicMock
 
-from src.rag.backends import VectorBackend, FulltextBackend, GraphBackend
-from src.rag.config import HybridSearchConfig, FalkorDBConfig
-from src.rag.types import RetrievalResult, RetrievalSource, ExtractedEntities
+import pytest
+
+from src.rag.backends import FulltextBackend, GraphBackend, VectorBackend
+from src.rag.config import FalkorDBConfig, HybridSearchConfig
 from src.rag.exceptions import (
     VectorSearchError,
-    FulltextSearchError,
-    GraphSearchError,
 )
-
+from src.rag.types import ExtractedEntities, RetrievalSource
 
 # ============================================================================
 # Fixtures
@@ -86,19 +82,13 @@ class TestVectorBackendInit:
 
     def test_init_with_custom_config(self, mock_supabase_client, search_config):
         """Test initialization with custom config."""
-        backend = VectorBackend(
-            supabase_client=mock_supabase_client,
-            config=search_config
-        )
+        backend = VectorBackend(supabase_client=mock_supabase_client, config=search_config)
         assert backend.config == search_config
         assert backend.config.vector_top_k == 10
 
     def test_repr(self, mock_supabase_client, search_config):
         """Test string representation."""
-        backend = VectorBackend(
-            supabase_client=mock_supabase_client,
-            config=search_config
-        )
+        backend = VectorBackend(supabase_client=mock_supabase_client, config=search_config)
         repr_str = repr(backend)
         assert "VectorBackend" in repr_str
         assert "top_k=10" in repr_str
@@ -117,21 +107,18 @@ class TestVectorBackendSearch:
                 "id": "doc-1",
                 "content": "Test content 1",
                 "similarity": 0.95,
-                "metadata": {"brand": "Remibrutinib"}
+                "metadata": {"brand": "Remibrutinib"},
             },
             {
                 "id": "doc-2",
                 "content": "Test content 2",
                 "similarity": 0.85,
-                "metadata": {"brand": "Kisqali"}
-            }
+                "metadata": {"brand": "Kisqali"},
+            },
         ]
         mock_supabase_client.rpc.return_value.execute.return_value = mock_response
 
-        backend = VectorBackend(
-            supabase_client=mock_supabase_client,
-            config=search_config
-        )
+        backend = VectorBackend(supabase_client=mock_supabase_client, config=search_config)
 
         embedding = [0.1] * 1536
         results = await backend.search(embedding=embedding)
@@ -147,14 +134,16 @@ class TestVectorBackendSearch:
         mock_response = MagicMock()
         mock_response.data = [
             {"id": "doc-1", "content": "High sim", "similarity": 0.9, "metadata": {}},
-            {"id": "doc-2", "content": "Low sim", "similarity": 0.3, "metadata": {}},  # Below threshold
+            {
+                "id": "doc-2",
+                "content": "Low sim",
+                "similarity": 0.3,
+                "metadata": {},
+            },  # Below threshold
         ]
         mock_supabase_client.rpc.return_value.execute.return_value = mock_response
 
-        backend = VectorBackend(
-            supabase_client=mock_supabase_client,
-            config=search_config
-        )
+        backend = VectorBackend(supabase_client=mock_supabase_client, config=search_config)
 
         results = await backend.search(embedding=[0.1] * 1536)
 
@@ -175,10 +164,7 @@ class TestVectorBackendSearch:
 
         # Use very short timeout (50ms)
         search_config.vector_timeout_ms = 50
-        backend = VectorBackend(
-            supabase_client=mock_supabase_client,
-            config=search_config
-        )
+        backend = VectorBackend(supabase_client=mock_supabase_client, config=search_config)
 
         with pytest.raises(VectorSearchError) as exc_info:
             await backend.search(embedding=[0.1] * 1536)
@@ -192,10 +178,7 @@ class TestVectorBackendSearch:
         mock_response.data = []
         mock_supabase_client.rpc.return_value.execute.return_value = mock_response
 
-        backend = VectorBackend(
-            supabase_client=mock_supabase_client,
-            config=search_config
-        )
+        backend = VectorBackend(supabase_client=mock_supabase_client, config=search_config)
 
         filters = {"brand": "Remibrutinib", "region": "West"}
         await backend.search(embedding=[0.1] * 1536, filters=filters)
@@ -220,10 +203,7 @@ class TestVectorBackendHealthCheck:
         mock_response.data = []
         mock_supabase_client.rpc.return_value.execute.return_value = mock_response
 
-        backend = VectorBackend(
-            supabase_client=mock_supabase_client,
-            config=search_config
-        )
+        backend = VectorBackend(supabase_client=mock_supabase_client, config=search_config)
 
         health = await backend.health_check()
 
@@ -234,12 +214,11 @@ class TestVectorBackendHealthCheck:
     @pytest.mark.asyncio
     async def test_health_check_unhealthy(self, mock_supabase_client, search_config):
         """Test unhealthy backend."""
-        mock_supabase_client.rpc.return_value.execute.side_effect = Exception("DB connection failed")
-
-        backend = VectorBackend(
-            supabase_client=mock_supabase_client,
-            config=search_config
+        mock_supabase_client.rpc.return_value.execute.side_effect = Exception(
+            "DB connection failed"
         )
+
+        backend = VectorBackend(supabase_client=mock_supabase_client, config=search_config)
 
         health = await backend.health_check()
 
@@ -263,10 +242,7 @@ class TestFulltextBackendInit:
 
     def test_repr(self, mock_supabase_client, search_config):
         """Test string representation."""
-        backend = FulltextBackend(
-            supabase_client=mock_supabase_client,
-            config=search_config
-        )
+        backend = FulltextBackend(supabase_client=mock_supabase_client, config=search_config)
         repr_str = repr(backend)
         assert "FulltextBackend" in repr_str
 
@@ -284,15 +260,12 @@ class TestFulltextBackendSearch:
                 "content": "TRx conversion rate improved",
                 "rank": 0.8,
                 "metadata": {},
-                "source_table": "causal_paths"
+                "source_table": "causal_paths",
             }
         ]
         mock_supabase_client.rpc.return_value.execute.return_value = mock_response
 
-        backend = FulltextBackend(
-            supabase_client=mock_supabase_client,
-            config=search_config
-        )
+        backend = FulltextBackend(supabase_client=mock_supabase_client, config=search_config)
 
         results = await backend.search(query="TRx conversion")
 
@@ -303,10 +276,7 @@ class TestFulltextBackendSearch:
     @pytest.mark.asyncio
     async def test_search_empty_query_returns_empty(self, mock_supabase_client, search_config):
         """Test that empty query returns empty results."""
-        backend = FulltextBackend(
-            supabase_client=mock_supabase_client,
-            config=search_config
-        )
+        backend = FulltextBackend(supabase_client=mock_supabase_client, config=search_config)
 
         results = await backend.search(query="")
         assert results == []
@@ -324,10 +294,7 @@ class TestFulltextBackendSearch:
         ]
         mock_supabase_client.rpc.return_value.execute.return_value = mock_response
 
-        backend = FulltextBackend(
-            supabase_client=mock_supabase_client,
-            config=search_config
-        )
+        backend = FulltextBackend(supabase_client=mock_supabase_client, config=search_config)
 
         results = await backend.search(query="test")
 
@@ -350,14 +317,12 @@ class TestGraphBackendInit:
         assert backend.falkordb_config is not None
         assert backend.search_config is not None
 
-    def test_init_with_custom_configs(
-        self, mock_falkordb_client, falkordb_config, search_config
-    ):
+    def test_init_with_custom_configs(self, mock_falkordb_client, falkordb_config, search_config):
         """Test initialization with custom configs."""
         backend = GraphBackend(
             falkordb_client=mock_falkordb_client,
             falkordb_config=falkordb_config,
-            search_config=search_config
+            search_config=search_config,
         )
         assert backend.falkordb_config.graph_name == "test_graph"
         assert backend.search_config.graph_top_k == 10
@@ -367,7 +332,7 @@ class TestGraphBackendInit:
         backend = GraphBackend(
             falkordb_client=mock_falkordb_client,
             falkordb_config=falkordb_config,
-            search_config=search_config
+            search_config=search_config,
         )
         repr_str = repr(backend)
         assert "GraphBackend" in repr_str
@@ -393,11 +358,11 @@ class TestGraphBackendSearch:
         backend = GraphBackend(
             falkordb_client=mock_falkordb_client,
             falkordb_config=falkordb_config,
-            search_config=search_config
+            search_config=search_config,
         )
 
         entities = ExtractedEntities(brands=["Remibrutinib"])
-        results = await backend.search(entities=entities)
+        await backend.search(entities=entities)
 
         assert mock_graph.query.called
         # Check that a Cypher query was built with brand match
@@ -416,7 +381,7 @@ class TestGraphBackendSearch:
         backend = GraphBackend(
             falkordb_client=mock_falkordb_client,
             falkordb_config=falkordb_config,
-            search_config=search_config
+            search_config=search_config,
         )
 
         entities = ExtractedEntities()  # Empty
@@ -456,7 +421,7 @@ class TestGraphBackendCausalSubgraph:
         backend = GraphBackend(
             falkordb_client=mock_falkordb_client,
             falkordb_config=falkordb_config,
-            search_config=search_config
+            search_config=search_config,
         )
 
         result = await backend.get_causal_subgraph(max_depth=2, limit=50)
@@ -470,9 +435,7 @@ class TestGraphBackendHealthCheck:
     """Tests for GraphBackend health check."""
 
     @pytest.mark.asyncio
-    async def test_health_check_healthy(
-        self, mock_falkordb_client, falkordb_config, search_config
-    ):
+    async def test_health_check_healthy(self, mock_falkordb_client, falkordb_config, search_config):
         """Test healthy graph backend."""
         mock_graph = MagicMock()
         mock_graph.query.return_value = MagicMock(result_set=[[100]])
@@ -481,7 +444,7 @@ class TestGraphBackendHealthCheck:
         backend = GraphBackend(
             falkordb_client=mock_falkordb_client,
             falkordb_config=falkordb_config,
-            search_config=search_config
+            search_config=search_config,
         )
 
         health = await backend.health_check()
@@ -500,7 +463,7 @@ class TestGraphBackendHealthCheck:
         backend = GraphBackend(
             falkordb_client=mock_falkordb_client,
             falkordb_config=falkordb_config,
-            search_config=search_config
+            search_config=search_config,
         )
 
         health = await backend.health_check()

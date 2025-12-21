@@ -4,7 +4,6 @@ import pytest
 
 from src.agents.explainer.nodes.context_assembler import ContextAssemblerNode
 from src.agents.explainer.nodes.deep_reasoner import DeepReasonerNode
-from src.agents.explainer.state import ExplainerState
 
 
 class TestDeepReasonerNode:
@@ -41,13 +40,9 @@ class TestDeepReasonerNode:
     # ========================================================================
 
     @pytest.mark.asyncio
-    async def test_execute_extracts_insights(
-        self, base_explainer_state, sample_causal_analysis
-    ):
+    async def test_execute_extracts_insights(self, base_explainer_state, sample_causal_analysis):
         """Test that insights are extracted from assembled context."""
-        assembled = await self._get_assembled_state(
-            base_explainer_state, [sample_causal_analysis]
-        )
+        assembled = await self._get_assembled_state(base_explainer_state, [sample_causal_analysis])
 
         node = DeepReasonerNode(use_llm=False)
         result = await node.execute(assembled)
@@ -62,9 +57,7 @@ class TestDeepReasonerNode:
         self, base_explainer_state, sample_causal_analysis
     ):
         """Test that narrative structure is created."""
-        assembled = await self._get_assembled_state(
-            base_explainer_state, [sample_causal_analysis]
-        )
+        assembled = await self._get_assembled_state(base_explainer_state, [sample_causal_analysis])
 
         node = DeepReasonerNode(use_llm=False)
         result = await node.execute(assembled)
@@ -74,13 +67,9 @@ class TestDeepReasonerNode:
         assert len(result["narrative_structure"]) > 0
 
     @pytest.mark.asyncio
-    async def test_execute_identifies_themes(
-        self, base_explainer_state, sample_causal_analysis
-    ):
+    async def test_execute_identifies_themes(self, base_explainer_state, sample_causal_analysis):
         """Test that key themes are identified."""
-        assembled = await self._get_assembled_state(
-            base_explainer_state, [sample_causal_analysis]
-        )
+        assembled = await self._get_assembled_state(base_explainer_state, [sample_causal_analysis])
 
         node = DeepReasonerNode(use_llm=False)
         result = await node.execute(assembled)
@@ -93,13 +82,9 @@ class TestDeepReasonerNode:
     # ========================================================================
 
     @pytest.mark.asyncio
-    async def test_insight_has_required_fields(
-        self, base_explainer_state, sample_causal_analysis
-    ):
+    async def test_insight_has_required_fields(self, base_explainer_state, sample_causal_analysis):
         """Test that extracted insights have required fields."""
-        assembled = await self._get_assembled_state(
-            base_explainer_state, [sample_causal_analysis]
-        )
+        assembled = await self._get_assembled_state(base_explainer_state, [sample_causal_analysis])
 
         node = DeepReasonerNode(use_llm=False)
         result = await node.execute(assembled)
@@ -111,13 +96,9 @@ class TestDeepReasonerNode:
             assert "confidence" in insight
 
     @pytest.mark.asyncio
-    async def test_insight_categories_valid(
-        self, base_explainer_state, sample_causal_analysis
-    ):
+    async def test_insight_categories_valid(self, base_explainer_state, sample_causal_analysis):
         """Test that insight categories are valid."""
-        assembled = await self._get_assembled_state(
-            base_explainer_state, [sample_causal_analysis]
-        )
+        assembled = await self._get_assembled_state(base_explainer_state, [sample_causal_analysis])
 
         node = DeepReasonerNode(use_llm=False)
         valid_categories = {"finding", "recommendation", "warning", "opportunity"}
@@ -128,13 +109,9 @@ class TestDeepReasonerNode:
             assert insight["category"] in valid_categories
 
     @pytest.mark.asyncio
-    async def test_insights_have_priority(
-        self, base_explainer_state, sample_causal_analysis
-    ):
+    async def test_insights_have_priority(self, base_explainer_state, sample_causal_analysis):
         """Test that insights are prioritized."""
-        assembled = await self._get_assembled_state(
-            base_explainer_state, [sample_causal_analysis]
-        )
+        assembled = await self._get_assembled_state(base_explainer_state, [sample_causal_analysis])
 
         node = DeepReasonerNode(use_llm=False)
         result = await node.execute(assembled)
@@ -144,13 +121,9 @@ class TestDeepReasonerNode:
         assert all(1 <= p <= 5 for p in priorities)
 
     @pytest.mark.asyncio
-    async def test_insights_have_actionability(
-        self, base_explainer_state, sample_causal_analysis
-    ):
+    async def test_insights_have_actionability(self, base_explainer_state, sample_causal_analysis):
         """Test that insights have actionability assessment."""
-        assembled = await self._get_assembled_state(
-            base_explainer_state, [sample_causal_analysis]
-        )
+        assembled = await self._get_assembled_state(base_explainer_state, [sample_causal_analysis])
 
         node = DeepReasonerNode(use_llm=False)
         valid_actionability = {"immediate", "short_term", "long_term", "informational"}
@@ -184,9 +157,7 @@ class TestDeepReasonerNode:
         assert any("Executive" in s or "Summary" in s for s in structure)
 
     @pytest.mark.asyncio
-    async def test_analyst_narrative_structure(
-        self, base_explainer_state, sample_causal_analysis
-    ):
+    async def test_analyst_narrative_structure(self, base_explainer_state, sample_causal_analysis):
         """Test narrative structure for analyst audience."""
         state = {
             **base_explainer_state,
@@ -253,13 +224,9 @@ class TestDeepReasonerNode:
     # ========================================================================
 
     @pytest.mark.asyncio
-    async def test_tracks_reasoning_latency(
-        self, base_explainer_state, sample_causal_analysis
-    ):
+    async def test_tracks_reasoning_latency(self, base_explainer_state, sample_causal_analysis):
         """Test that reasoning latency is tracked."""
-        assembled = await self._get_assembled_state(
-            base_explainer_state, [sample_causal_analysis]
-        )
+        assembled = await self._get_assembled_state(base_explainer_state, [sample_causal_analysis])
 
         node = DeepReasonerNode(use_llm=False)
         result = await node.execute(assembled)
@@ -272,13 +239,9 @@ class TestDeepReasonerNode:
     # ========================================================================
 
     @pytest.mark.asyncio
-    async def test_tracks_model_used(
-        self, base_explainer_state, sample_causal_analysis
-    ):
+    async def test_tracks_model_used(self, base_explainer_state, sample_causal_analysis):
         """Test that model used is tracked."""
-        assembled = await self._get_assembled_state(
-            base_explainer_state, [sample_causal_analysis]
-        )
+        assembled = await self._get_assembled_state(base_explainer_state, [sample_causal_analysis])
 
         node = DeepReasonerNode(use_llm=False)
         result = await node.execute(assembled)
@@ -290,13 +253,9 @@ class TestDeepReasonerNode:
     # ========================================================================
 
     @pytest.mark.asyncio
-    async def test_theme_extraction(
-        self, base_explainer_state, sample_causal_analysis
-    ):
+    async def test_theme_extraction(self, base_explainer_state, sample_causal_analysis):
         """Test theme extraction from analysis results."""
-        assembled = await self._get_assembled_state(
-            base_explainer_state, [sample_causal_analysis]
-        )
+        assembled = await self._get_assembled_state(base_explainer_state, [sample_causal_analysis])
 
         node = DeepReasonerNode(use_llm=False)
         result = await node.execute(assembled)
@@ -311,9 +270,7 @@ class TestDeepReasonerNode:
     # ========================================================================
 
     @pytest.mark.asyncio
-    async def test_focus_areas_affect_priority(
-        self, base_explainer_state
-    ):
+    async def test_focus_areas_affect_priority(self, base_explainer_state):
         """Test that focus areas influence insight priority."""
         # Create analysis with specific content
         analysis = {

@@ -1,9 +1,11 @@
 """Unit tests for baseline_computer node."""
 
-import pytest
-import pandas as pd
-import numpy as np
 from datetime import datetime
+
+import numpy as np
+import pandas as pd
+import pytest
+
 from src.agents.ml_foundation.data_preparer.nodes.baseline_computer import (
     compute_baseline_metrics,
 )
@@ -12,12 +14,14 @@ from src.agents.ml_foundation.data_preparer.nodes.baseline_computer import (
 @pytest.fixture
 def mock_state_regression():
     """Create mock state for regression problem."""
-    train_df = pd.DataFrame({
-        "feature1": np.random.randn(100),
-        "feature2": np.random.randn(100),
-        "feature3": ["cat1", "cat2", "cat1", "cat2"] * 25,
-        "target": np.random.randn(100),
-    })
+    train_df = pd.DataFrame(
+        {
+            "feature1": np.random.randn(100),
+            "feature2": np.random.randn(100),
+            "feature3": ["cat1", "cat2", "cat1", "cat2"] * 25,
+            "target": np.random.randn(100),
+        }
+    )
 
     return {
         "experiment_id": "exp_regression_123",
@@ -34,11 +38,13 @@ def mock_state_regression():
 def mock_state_classification():
     """Create mock state for binary classification problem."""
     np.random.seed(42)
-    train_df = pd.DataFrame({
-        "feature1": np.random.randn(100),
-        "feature2": np.random.randn(100),
-        "target": np.random.binomial(1, 0.3, 100),
-    })
+    train_df = pd.DataFrame(
+        {
+            "feature1": np.random.randn(100),
+            "feature2": np.random.randn(100),
+            "target": np.random.binomial(1, 0.3, 100),
+        }
+    )
 
     return {
         "experiment_id": "exp_classification_123",
@@ -115,8 +121,8 @@ async def test_compute_baseline_metrics_correlation_matrix(mock_state_regression
     assert "feature3" not in corr_matrix  # Categorical, excluded
 
     # Check correlation values in valid range
-    for feature, correlations in corr_matrix.items():
-        for corr_feature, corr_value in correlations.items():
+    for _feature, correlations in corr_matrix.items():
+        for _corr_feature, corr_value in correlations.items():
             assert -1.0 <= corr_value <= 1.0
 
 

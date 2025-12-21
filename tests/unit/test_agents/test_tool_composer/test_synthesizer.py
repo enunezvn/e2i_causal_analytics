@@ -6,25 +6,24 @@ into coherent natural language responses.
 """
 
 import json
-import pytest
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
+import pytest
+
+from src.agents.tool_composer.models.composition_models import (
+    ComposedResponse,
+    ExecutionStatus,
+    ExecutionTrace,
+    StepResult,
+    SynthesisInput,
+    ToolInput,
+    ToolOutput,
+)
 from src.agents.tool_composer.synthesizer import (
     ResponseSynthesizer,
     synthesize_results,
     synthesize_sync,
-)
-from src.agents.tool_composer.models.composition_models import (
-    ComposedResponse,
-    DecompositionResult,
-    ExecutionStatus,
-    ExecutionTrace,
-    StepResult,
-    SubQuestion,
-    SynthesisInput,
-    ToolInput,
-    ToolOutput,
 )
 
 
@@ -44,7 +43,7 @@ class TestResponseSynthesizerInit:
             llm_client=mock_llm_client,
             model="claude-3-5-haiku-latest",
             temperature=0.7,
-            max_tokens=3000
+            max_tokens=3000,
         )
         assert synthesizer.model == "claude-3-5-haiku-latest"
         assert synthesizer.temperature == 0.7
@@ -67,13 +66,17 @@ class TestBasicSynthesis:
     @pytest.mark.asyncio
     async def test_synthesis_with_citations(self, mock_llm_client, sample_synthesis_input):
         """Test that synthesis includes citations"""
-        mock_llm_client.set_synthesis_response(json.dumps({
-            "answer": "Test answer",
-            "confidence": 0.85,
-            "citations": ["step_1", "step_2"],
-            "caveats": [],
-            "reasoning": "Test reasoning"
-        }))
+        mock_llm_client.set_synthesis_response(
+            json.dumps(
+                {
+                    "answer": "Test answer",
+                    "confidence": 0.85,
+                    "citations": ["step_1", "step_2"],
+                    "caveats": [],
+                    "reasoning": "Test reasoning",
+                }
+            )
+        )
 
         synthesizer = ResponseSynthesizer(llm_client=mock_llm_client)
         response = await synthesizer.synthesize(sample_synthesis_input)
@@ -84,12 +87,16 @@ class TestBasicSynthesis:
     @pytest.mark.asyncio
     async def test_synthesis_with_caveats(self, mock_llm_client, sample_synthesis_input):
         """Test that synthesis includes caveats"""
-        mock_llm_client.set_synthesis_response(json.dumps({
-            "answer": "Test answer",
-            "confidence": 0.7,
-            "caveats": ["Observational data only", "Limited sample size"],
-            "reasoning": "Test reasoning"
-        }))
+        mock_llm_client.set_synthesis_response(
+            json.dumps(
+                {
+                    "answer": "Test answer",
+                    "confidence": 0.7,
+                    "caveats": ["Observational data only", "Limited sample size"],
+                    "reasoning": "Test reasoning",
+                }
+            )
+        )
 
         synthesizer = ResponseSynthesizer(llm_client=mock_llm_client)
         response = await synthesizer.synthesize(sample_synthesis_input)
@@ -100,16 +107,16 @@ class TestBasicSynthesis:
     @pytest.mark.asyncio
     async def test_synthesis_with_supporting_data(self, mock_llm_client, sample_synthesis_input):
         """Test that synthesis includes supporting data"""
-        mock_llm_client.set_synthesis_response(json.dumps({
-            "answer": "Test answer",
-            "confidence": 0.85,
-            "supporting_data": {
-                "effect_size": 0.15,
-                "p_value": 0.02,
-                "sample_size": 1000
-            },
-            "reasoning": "Test reasoning"
-        }))
+        mock_llm_client.set_synthesis_response(
+            json.dumps(
+                {
+                    "answer": "Test answer",
+                    "confidence": 0.85,
+                    "supporting_data": {"effect_size": 0.15, "p_value": 0.02, "sample_size": 1000},
+                    "reasoning": "Test reasoning",
+                }
+            )
+        )
 
         synthesizer = ResponseSynthesizer(llm_client=mock_llm_client)
         response = await synthesizer.synthesize(sample_synthesis_input)
@@ -131,13 +138,11 @@ class TestMixedResults:
                 tool_name="causal_effect_estimator",
                 input=ToolInput(tool_name="causal_effect_estimator", parameters={}),
                 output=ToolOutput(
-                    tool_name="causal_effect_estimator",
-                    success=True,
-                    result={"effect": 0.15}
+                    tool_name="causal_effect_estimator", success=True, result={"effect": 0.15}
                 ),
                 status=ExecutionStatus.COMPLETED,
                 started_at=datetime.now(timezone.utc),
-                completed_at=datetime.now(timezone.utc)
+                completed_at=datetime.now(timezone.utc),
             ),
             StepResult(
                 step_id="step_2",
@@ -145,14 +150,12 @@ class TestMixedResults:
                 tool_name="cate_analyzer",
                 input=ToolInput(tool_name="cate_analyzer", parameters={}),
                 output=ToolOutput(
-                    tool_name="cate_analyzer",
-                    success=False,
-                    error="Model training failed"
+                    tool_name="cate_analyzer", success=False, error="Model training failed"
                 ),
                 status=ExecutionStatus.FAILED,
                 started_at=datetime.now(timezone.utc),
-                completed_at=datetime.now(timezone.utc)
-            )
+                completed_at=datetime.now(timezone.utc),
+            ),
         ]
 
         trace = ExecutionTrace(plan_id="plan_123")
@@ -160,9 +163,7 @@ class TestMixedResults:
             trace.add_result(result)
 
         return SynthesisInput(
-            original_query="Test query",
-            decomposition=sample_decomposition,
-            execution_trace=trace
+            original_query="Test query", decomposition=sample_decomposition, execution_trace=trace
         )
 
     @pytest.mark.asyncio
@@ -170,13 +171,17 @@ class TestMixedResults:
         self, mock_llm_client, synthesis_input_with_failures
     ):
         """Test that synthesis acknowledges failed components"""
-        mock_llm_client.set_synthesis_response(json.dumps({
-            "answer": "Partial answer based on available data",
-            "confidence": 0.6,
-            "failed_components": ["sq_2"],
-            "caveats": ["CATE analysis could not be completed"],
-            "reasoning": "One component failed"
-        }))
+        mock_llm_client.set_synthesis_response(
+            json.dumps(
+                {
+                    "answer": "Partial answer based on available data",
+                    "confidence": 0.6,
+                    "failed_components": ["sq_2"],
+                    "caveats": ["CATE analysis could not be completed"],
+                    "reasoning": "One component failed",
+                }
+            )
+        )
 
         synthesizer = ResponseSynthesizer(llm_client=mock_llm_client)
         response = await synthesizer.synthesize(synthesis_input_with_failures)
@@ -204,23 +209,17 @@ class TestResultFormatting:
             sub_question_id="sq_1",
             tool_name="test_tool",
             input=ToolInput(tool_name="test_tool", parameters={}),
-            output=ToolOutput(
-                tool_name="test_tool",
-                success=False,
-                error="Tool execution failed"
-            ),
+            output=ToolOutput(tool_name="test_tool", success=False, error="Tool execution failed"),
             status=ExecutionStatus.FAILED,
             started_at=datetime.now(timezone.utc),
-            completed_at=datetime.now(timezone.utc)
+            completed_at=datetime.now(timezone.utc),
         )
 
         trace = ExecutionTrace(plan_id="plan_123")
         trace.add_result(step_result)
 
         synthesis_input = SynthesisInput(
-            original_query="Test",
-            decomposition=sample_decomposition,
-            execution_trace=trace
+            original_query="Test", decomposition=sample_decomposition, execution_trace=trace
         )
 
         synthesizer = ResponseSynthesizer(llm_client=mock_llm_client)
@@ -239,23 +238,17 @@ class TestResultFormatting:
             sub_question_id="sq_1",
             tool_name="test_tool",
             input=ToolInput(tool_name="test_tool", parameters={}),
-            output=ToolOutput(
-                tool_name="test_tool",
-                success=True,
-                result=long_result
-            ),
+            output=ToolOutput(tool_name="test_tool", success=True, result=long_result),
             status=ExecutionStatus.COMPLETED,
             started_at=datetime.now(timezone.utc),
-            completed_at=datetime.now(timezone.utc)
+            completed_at=datetime.now(timezone.utc),
         )
 
         trace = ExecutionTrace(plan_id="plan_123")
         trace.add_result(step_result)
 
         synthesis_input = SynthesisInput(
-            original_query="Test",
-            decomposition=sample_decomposition,
-            execution_trace=trace
+            original_query="Test", decomposition=sample_decomposition, execution_trace=trace
         )
 
         synthesizer = ResponseSynthesizer(llm_client=mock_llm_client)
@@ -270,11 +263,9 @@ class TestResponseParsing:
     def test_parse_plain_json(self, mock_llm_client):
         """Test parsing plain JSON response"""
         synthesizer = ResponseSynthesizer(llm_client=mock_llm_client)
-        response = json.dumps({
-            "answer": "Test answer",
-            "confidence": 0.85,
-            "reasoning": "Test reasoning"
-        })
+        response = json.dumps(
+            {"answer": "Test answer", "confidence": 0.85, "reasoning": "Test reasoning"}
+        )
 
         parsed = synthesizer._parse_response(response)
 
@@ -332,9 +323,7 @@ class TestFallbackResponse:
     @pytest.mark.asyncio
     async def test_fallback_on_llm_error(self, mock_llm_client, sample_synthesis_input):
         """Test fallback response when LLM fails"""
-        mock_llm_client.messages.create = AsyncMock(
-            side_effect=Exception("LLM connection error")
-        )
+        mock_llm_client.messages.create = AsyncMock(side_effect=Exception("LLM connection error"))
 
         synthesizer = ResponseSynthesizer(llm_client=mock_llm_client)
         response = await synthesizer.synthesize(sample_synthesis_input)
@@ -343,15 +332,10 @@ class TestFallbackResponse:
         assert response.confidence <= 0.5  # Low confidence for fallback
         assert "error" in response.synthesis_reasoning.lower() or len(response.caveats) > 0
 
-    def test_fallback_extracts_successful_results(
-        self, mock_llm_client, sample_synthesis_input
-    ):
+    def test_fallback_extracts_successful_results(self, mock_llm_client, sample_synthesis_input):
         """Test that fallback extracts key values from successful results"""
         synthesizer = ResponseSynthesizer(llm_client=mock_llm_client)
-        fallback = synthesizer._create_fallback_response(
-            sample_synthesis_input,
-            "Test error"
-        )
+        fallback = synthesizer._create_fallback_response(sample_synthesis_input, "Test error")
 
         assert isinstance(fallback, ComposedResponse)
         assert fallback.confidence <= 0.5
@@ -363,30 +347,21 @@ class TestFallbackResponse:
             sub_question_id="sq_1",
             tool_name="test_tool",
             input=ToolInput(tool_name="test_tool", parameters={}),
-            output=ToolOutput(
-                tool_name="test_tool",
-                success=False,
-                error="Failed"
-            ),
+            output=ToolOutput(tool_name="test_tool", success=False, error="Failed"),
             status=ExecutionStatus.FAILED,
             started_at=datetime.now(timezone.utc),
-            completed_at=datetime.now(timezone.utc)
+            completed_at=datetime.now(timezone.utc),
         )
 
         trace = ExecutionTrace(plan_id="plan_123")
         trace.add_result(step_result)
 
         synthesis_input = SynthesisInput(
-            original_query="Test",
-            decomposition=sample_decomposition,
-            execution_trace=trace
+            original_query="Test", decomposition=sample_decomposition, execution_trace=trace
         )
 
         synthesizer = ResponseSynthesizer(llm_client=mock_llm_client)
-        fallback = synthesizer._create_fallback_response(
-            synthesis_input,
-            "All tools failed"
-        )
+        fallback = synthesizer._create_fallback_response(synthesis_input, "All tools failed")
 
         assert "Unable to" in fallback.answer or "error" in fallback.answer.lower()
         assert "sq_1" in fallback.failed_components
@@ -396,15 +371,10 @@ class TestLLMInteraction:
     """Tests for LLM client interaction"""
 
     @pytest.mark.asyncio
-    async def test_llm_called_with_correct_params(
-        self, mock_llm_client, sample_synthesis_input
-    ):
+    async def test_llm_called_with_correct_params(self, mock_llm_client, sample_synthesis_input):
         """Test that LLM is called with correct parameters"""
         synthesizer = ResponseSynthesizer(
-            llm_client=mock_llm_client,
-            model="test-model",
-            temperature=0.5,
-            max_tokens=1500
+            llm_client=mock_llm_client, model="test-model", temperature=0.5, max_tokens=1500
         )
         await synthesizer.synthesize(sample_synthesis_input)
 
@@ -415,9 +385,7 @@ class TestLLMInteraction:
         assert call["max_tokens"] == 1500
 
     @pytest.mark.asyncio
-    async def test_query_included_in_message(
-        self, mock_llm_client, sample_synthesis_input
-    ):
+    async def test_query_included_in_message(self, mock_llm_client, sample_synthesis_input):
         """Test that original query is included in message"""
         synthesizer = ResponseSynthesizer(llm_client=mock_llm_client)
         await synthesizer.synthesize(sample_synthesis_input)
@@ -427,9 +395,7 @@ class TestLLMInteraction:
         assert sample_synthesis_input.original_query in message_content
 
     @pytest.mark.asyncio
-    async def test_system_prompt_used(
-        self, mock_llm_client, sample_synthesis_input
-    ):
+    async def test_system_prompt_used(self, mock_llm_client, sample_synthesis_input):
         """Test that system prompt is included"""
         synthesizer = ResponseSynthesizer(llm_client=mock_llm_client)
         await synthesizer.synthesize(sample_synthesis_input)
@@ -451,7 +417,7 @@ class TestConvenienceFunction:
             query="Test query",
             decomposition=sample_decomposition,
             execution_trace=sample_execution_trace,
-            llm_client=mock_llm_client
+            llm_client=mock_llm_client,
         )
 
         assert isinstance(response, ComposedResponse)
@@ -467,7 +433,7 @@ class TestConvenienceFunction:
             execution_trace=sample_execution_trace,
             llm_client=mock_llm_client,
             model="custom-model",
-            temperature=0.3
+            temperature=0.3,
         )
 
         assert isinstance(response, ComposedResponse)
@@ -483,15 +449,10 @@ class TestSyncWrapper:
 
         assert isinstance(response, ComposedResponse)
 
-    def test_synthesize_sync_with_custom_params(
-        self, mock_llm_client, sample_synthesis_input
-    ):
+    def test_synthesize_sync_with_custom_params(self, mock_llm_client, sample_synthesis_input):
         """Test sync wrapper with custom parameters"""
         response = synthesize_sync(
-            sample_synthesis_input,
-            mock_llm_client,
-            model="custom-model",
-            temperature=0.6
+            sample_synthesis_input, mock_llm_client, model="custom-model", temperature=0.6
         )
 
         assert isinstance(response, ComposedResponse)
@@ -502,9 +463,7 @@ class TestTimestampHandling:
     """Tests for timestamp handling in synthesis"""
 
     @pytest.mark.asyncio
-    async def test_response_has_timestamp(
-        self, mock_llm_client, sample_synthesis_input
-    ):
+    async def test_response_has_timestamp(self, mock_llm_client, sample_synthesis_input):
         """Test that response includes timestamp"""
         synthesizer = ResponseSynthesizer(llm_client=mock_llm_client)
         response = await synthesizer.synthesize(sample_synthesis_input)
@@ -513,9 +472,7 @@ class TestTimestampHandling:
         assert isinstance(response.timestamp, datetime)
 
     @pytest.mark.asyncio
-    async def test_timestamp_is_recent(
-        self, mock_llm_client, sample_synthesis_input
-    ):
+    async def test_timestamp_is_recent(self, mock_llm_client, sample_synthesis_input):
         """Test that timestamp is recent"""
         before = datetime.now(timezone.utc)
         synthesizer = ResponseSynthesizer(llm_client=mock_llm_client)
@@ -534,9 +491,7 @@ class TestEdgeCases:
         empty_trace = ExecutionTrace(plan_id="plan_123")
 
         synthesis_input = SynthesisInput(
-            original_query="Test",
-            decomposition=sample_decomposition,
-            execution_trace=empty_trace
+            original_query="Test", decomposition=sample_decomposition, execution_trace=empty_trace
         )
 
         synthesizer = ResponseSynthesizer(llm_client=mock_llm_client)
@@ -554,7 +509,7 @@ class TestEdgeCases:
         long_input = SynthesisInput(
             original_query=long_query,
             decomposition=sample_synthesis_input.decomposition,
-            execution_trace=sample_synthesis_input.execution_trace
+            execution_trace=sample_synthesis_input.execution_trace,
         )
 
         synthesizer = ResponseSynthesizer(llm_client=mock_llm_client)
@@ -563,9 +518,7 @@ class TestEdgeCases:
         assert isinstance(response, ComposedResponse)
 
     @pytest.mark.asyncio
-    async def test_special_characters_in_results(
-        self, mock_llm_client, sample_decomposition
-    ):
+    async def test_special_characters_in_results(self, mock_llm_client, sample_decomposition):
         """Test synthesis with special characters in results"""
         step_result = StepResult(
             step_id="step_1",
@@ -575,20 +528,18 @@ class TestEdgeCases:
             output=ToolOutput(
                 tool_name="test_tool",
                 success=True,
-                result={"text": "Special chars: <>&\"'{}[]$#@!"}
+                result={"text": "Special chars: <>&\"'{}[]$#@!"},
             ),
             status=ExecutionStatus.COMPLETED,
             started_at=datetime.now(timezone.utc),
-            completed_at=datetime.now(timezone.utc)
+            completed_at=datetime.now(timezone.utc),
         )
 
         trace = ExecutionTrace(plan_id="plan_123")
         trace.add_result(step_result)
 
         synthesis_input = SynthesisInput(
-            original_query="Test",
-            decomposition=sample_decomposition,
-            execution_trace=trace
+            original_query="Test", decomposition=sample_decomposition, execution_trace=trace
         )
 
         synthesizer = ResponseSynthesizer(llm_client=mock_llm_client)

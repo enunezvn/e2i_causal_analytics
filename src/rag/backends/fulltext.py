@@ -16,8 +16,8 @@ import time
 from typing import Any, Dict, List, Optional
 
 from src.rag.config import HybridSearchConfig
-from src.rag.types import RetrievalResult, RetrievalSource
 from src.rag.exceptions import FulltextSearchError
+from src.rag.types import RetrievalResult, RetrievalSource
 
 logger = logging.getLogger(__name__)
 
@@ -48,11 +48,7 @@ class FulltextBackend:
         ```
     """
 
-    def __init__(
-        self,
-        supabase_client: Any,
-        config: Optional[HybridSearchConfig] = None
-    ):
+    def __init__(self, supabase_client: Any, config: Optional[HybridSearchConfig] = None):
         """
         Initialize the full-text backend.
 
@@ -65,10 +61,7 @@ class FulltextBackend:
         self._last_latency_ms: float = 0.0
 
     async def search(
-        self,
-        query: str,
-        filters: Optional[Dict[str, Any]] = None,
-        top_k: Optional[int] = None
+        self, query: str, filters: Optional[Dict[str, Any]] = None, top_k: Optional[int] = None
     ) -> List[RetrievalResult]:
         """
         Execute full-text search.
@@ -96,13 +89,8 @@ class FulltextBackend:
         try:
             # Execute RPC call with timeout
             response = await asyncio.wait_for(
-                asyncio.to_thread(
-                    self._execute_rpc,
-                    query.strip(),
-                    top_k,
-                    filters or {}
-                ),
-                timeout=timeout_seconds
+                asyncio.to_thread(self._execute_rpc, query.strip(), top_k, filters or {}),
+                timeout=timeout_seconds,
             )
 
             self._last_latency_ms = (time.time() - start_time) * 1000
@@ -115,18 +103,20 @@ class FulltextBackend:
                 if rank < self.config.fulltext_min_rank:
                     continue
 
-                results.append(RetrievalResult(
-                    id=str(row["id"]),
-                    content=row.get("content", ""),
-                    source=RetrievalSource.FULLTEXT,
-                    score=rank,
-                    metadata={
-                        **row.get("metadata", {}),
-                        "source_table": row.get("source_table", "unknown")
-                    },
-                    query_latency_ms=self._last_latency_ms,
-                    raw_score=rank
-                ))
+                results.append(
+                    RetrievalResult(
+                        id=str(row["id"]),
+                        content=row.get("content", ""),
+                        source=RetrievalSource.FULLTEXT,
+                        score=rank,
+                        metadata={
+                            **row.get("metadata", {}),
+                            "source_table": row.get("source_table", "unknown"),
+                        },
+                        query_latency_ms=self._last_latency_ms,
+                        raw_score=rank,
+                    )
+                )
 
             logger.debug(
                 f"Full-text search returned {len(results)} results "
@@ -137,13 +127,11 @@ class FulltextBackend:
 
         except asyncio.TimeoutError:
             self._last_latency_ms = self.config.fulltext_timeout_ms
-            logger.warning(
-                f"Full-text search timeout after {self.config.fulltext_timeout_ms}ms"
-            )
+            logger.warning(f"Full-text search timeout after {self.config.fulltext_timeout_ms}ms")
             raise FulltextSearchError(
                 message=f"Full-text search timeout after {self.config.fulltext_timeout_ms}ms",
                 backend="supabase_fulltext",
-                details={"timeout_ms": self.config.fulltext_timeout_ms}
+                details={"timeout_ms": self.config.fulltext_timeout_ms},
             )
 
         except Exception as e:
@@ -152,15 +140,10 @@ class FulltextBackend:
             raise FulltextSearchError(
                 message=f"Full-text search failed: {e}",
                 backend="supabase_fulltext",
-                original_error=e
+                original_error=e,
             )
 
-    def _execute_rpc(
-        self,
-        search_query: str,
-        match_count: int,
-        filters: Dict[str, Any]
-    ) -> Any:
+    def _execute_rpc(self, search_query: str, match_count: int, filters: Dict[str, Any]) -> Any:
         """
         Execute the Supabase RPC call synchronously.
 
@@ -168,11 +151,7 @@ class FulltextBackend:
         """
         return self.client.rpc(
             "rag_fulltext_search",
-            {
-                "search_query": search_query,
-                "match_count": match_count,
-                "filters": filters
-            }
+            {"search_query": search_query, "match_count": match_count, "filters": filters},
         ).execute()
 
     async def health_check(self) -> Dict[str, Any]:
@@ -185,37 +164,19 @@ class FulltextBackend:
         try:
             start_time = time.time()
 
-            response = await asyncio.wait_for(
-                asyncio.to_thread(
-                    self._execute_rpc,
-                    "health_check_query",
-                    1,
-                    {}
-                ),
-                timeout=3.0
+            await asyncio.wait_for(
+                asyncio.to_thread(self._execute_rpc, "health_check_query", 1, {}), timeout=3.0
             )
 
             latency_ms = (time.time() - start_time) * 1000
 
-            return {
-                "status": "healthy",
-                "latency_ms": latency_ms,
-                "error": None
-            }
+            return {"status": "healthy", "latency_ms": latency_ms, "error": None}
 
         except asyncio.TimeoutError:
-            return {
-                "status": "unhealthy",
-                "latency_ms": 3000,
-                "error": "Health check timeout"
-            }
+            return {"status": "unhealthy", "latency_ms": 3000, "error": "Health check timeout"}
 
         except Exception as e:
-            return {
-                "status": "unhealthy",
-                "latency_ms": 0,
-                "error": str(e)
-            }
+            return {"status": "unhealthy", "latency_ms": 0, "error": str(e)}
 
     @property
     def last_latency_ms(self) -> float:

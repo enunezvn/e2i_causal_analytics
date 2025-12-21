@@ -4,26 +4,27 @@ Tests for HybridRetriever and component retrievers.
 Tests the hybrid retrieval system combining dense, sparse, and graph retrieval.
 """
 
-import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
+from src.rag.models.retrieval_models import RetrievalResult
 from src.rag.retriever import (
-    DenseRetriever,
+    DENSE_WEIGHT,
+    GRAPH_WEIGHT,
+    SPARSE_WEIGHT,
     BM25Retriever,
+    DenseRetriever,
     GraphRetriever,
     HybridRetriever,
     hybrid_search,
-    DENSE_WEIGHT,
-    SPARSE_WEIGHT,
-    GRAPH_WEIGHT,
 )
-from src.rag.models.retrieval_models import RetrievalResult
 from src.rag.types import RetrievalSource
-
 
 # ============================================================================
 # Test Fixtures
 # ============================================================================
+
 
 @pytest.fixture
 def mock_memory_connector():
@@ -46,7 +47,7 @@ def sample_dense_results():
             source=RetrievalSource.VECTOR,
             score=0.95,
             retrieval_method="dense",
-            metadata={"brand": "Kisqali", "source_name": "episodic_memories"}
+            metadata={"brand": "Kisqali", "source_name": "episodic_memories"},
         ),
         RetrievalResult(
             source_id="dense-2",
@@ -54,7 +55,7 @@ def sample_dense_results():
             source=RetrievalSource.VECTOR,
             score=0.85,
             retrieval_method="dense",
-            metadata={"source_name": "procedural_memories"}
+            metadata={"source_name": "procedural_memories"},
         ),
     ]
 
@@ -69,7 +70,7 @@ def sample_sparse_results():
             source=RetrievalSource.FULLTEXT,
             score=0.9,
             retrieval_method="sparse",
-            metadata={"source_name": "causal_paths"}
+            metadata={"source_name": "causal_paths"},
         ),
         RetrievalResult(
             source_id="sparse-2",
@@ -77,7 +78,7 @@ def sample_sparse_results():
             source=RetrievalSource.FULLTEXT,
             score=0.7,
             retrieval_method="sparse",
-            metadata={"source_name": "agent_activities"}
+            metadata={"source_name": "agent_activities"},
         ),
     ]
 
@@ -92,7 +93,7 @@ def sample_graph_results():
             source=RetrievalSource.GRAPH,
             score=0.8,
             retrieval_method="graph",
-            metadata={"path_length": 2, "source_name": "semantic_graph"}
+            metadata={"path_length": 2, "source_name": "semantic_graph"},
         ),
     ]
 
@@ -100,6 +101,7 @@ def sample_graph_results():
 # ============================================================================
 # Default Weights Tests
 # ============================================================================
+
 
 class TestDefaultWeights:
     """Test default retrieval weights."""
@@ -120,6 +122,7 @@ class TestDefaultWeights:
 # DenseRetriever Tests
 # ============================================================================
 
+
 class TestDenseRetriever:
     """Test DenseRetriever class."""
 
@@ -133,10 +136,7 @@ class TestDenseRetriever:
         """Test basic dense search."""
         mock_memory_connector.vector_search_by_text.return_value = sample_dense_results
 
-        with patch(
-            "src.rag.retriever.get_memory_connector",
-            return_value=mock_memory_connector
-        ):
+        with patch("src.rag.retriever.get_memory_connector", return_value=mock_memory_connector):
             retriever = DenseRetriever()
             results = await retriever.search("Kisqali adoption trends", k=10)
 
@@ -149,15 +149,10 @@ class TestDenseRetriever:
         """Test dense search with filters."""
         mock_memory_connector.vector_search_by_text.return_value = []
 
-        with patch(
-            "src.rag.retriever.get_memory_connector",
-            return_value=mock_memory_connector
-        ):
+        with patch("src.rag.retriever.get_memory_connector", return_value=mock_memory_connector):
             retriever = DenseRetriever()
             await retriever.search(
-                "test query",
-                k=5,
-                filters={"brand": "Fabhalta", "region": "Northeast"}
+                "test query", k=5, filters={"brand": "Fabhalta", "region": "Northeast"}
             )
 
             call_kwargs = mock_memory_connector.vector_search_by_text.call_args.kwargs
@@ -169,10 +164,7 @@ class TestDenseRetriever:
         """Test dense search error handling."""
         mock_memory_connector.vector_search_by_text.side_effect = Exception("Embedding failed")
 
-        with patch(
-            "src.rag.retriever.get_memory_connector",
-            return_value=mock_memory_connector
-        ):
+        with patch("src.rag.retriever.get_memory_connector", return_value=mock_memory_connector):
             retriever = DenseRetriever()
             results = await retriever.search("test query")
 
@@ -183,6 +175,7 @@ class TestDenseRetriever:
 # BM25Retriever Tests
 # ============================================================================
 
+
 class TestBM25Retriever:
     """Test BM25Retriever class."""
 
@@ -191,10 +184,7 @@ class TestBM25Retriever:
         """Test basic sparse search."""
         mock_memory_connector.fulltext_search.return_value = sample_sparse_results
 
-        with patch(
-            "src.rag.retriever.get_memory_connector",
-            return_value=mock_memory_connector
-        ):
+        with patch("src.rag.retriever.get_memory_connector", return_value=mock_memory_connector):
             retriever = BM25Retriever()
             results = await retriever.search("TRx trend analysis", k=10)
 
@@ -206,16 +196,9 @@ class TestBM25Retriever:
         """Test sparse search with filters."""
         mock_memory_connector.fulltext_search.return_value = []
 
-        with patch(
-            "src.rag.retriever.get_memory_connector",
-            return_value=mock_memory_connector
-        ):
+        with patch("src.rag.retriever.get_memory_connector", return_value=mock_memory_connector):
             retriever = BM25Retriever()
-            await retriever.search(
-                "causal impact",
-                k=5,
-                filters={"brand": "Kisqali"}
-            )
+            await retriever.search("causal impact", k=5, filters={"brand": "Kisqali"})
 
             call_kwargs = mock_memory_connector.fulltext_search.call_args.kwargs
             assert call_kwargs["filters"] == {"brand": "Kisqali"}
@@ -225,10 +208,7 @@ class TestBM25Retriever:
         """Test sparse search error handling."""
         mock_memory_connector.fulltext_search.side_effect = Exception("Search failed")
 
-        with patch(
-            "src.rag.retriever.get_memory_connector",
-            return_value=mock_memory_connector
-        ):
+        with patch("src.rag.retriever.get_memory_connector", return_value=mock_memory_connector):
             retriever = BM25Retriever()
             results = await retriever.search("test")
 
@@ -239,6 +219,7 @@ class TestBM25Retriever:
 # GraphRetriever Tests
 # ============================================================================
 
+
 class TestGraphRetriever:
     """Test GraphRetriever class."""
 
@@ -246,15 +227,10 @@ class TestGraphRetriever:
         """Test graph traversal with single entity."""
         mock_memory_connector.graph_traverse.return_value = sample_graph_results
 
-        with patch(
-            "src.rag.retriever.get_memory_connector",
-            return_value=mock_memory_connector
-        ):
+        with patch("src.rag.retriever.get_memory_connector", return_value=mock_memory_connector):
             retriever = GraphRetriever()
             results = retriever.traverse(
-                entities=["entity-1"],
-                relationship="causal_path",
-                max_depth=3
+                entities=["entity-1"], relationship="causal_path", max_depth=3
             )
 
             assert len(results) == 1
@@ -262,6 +238,7 @@ class TestGraphRetriever:
 
     def test_traverse_multiple_entities(self, mock_memory_connector):
         """Test graph traversal with multiple entities."""
+
         # Return different results for different entities
         def mock_traverse(entity_id, relationship, max_depth):
             return [
@@ -271,21 +248,15 @@ class TestGraphRetriever:
                     source=RetrievalSource.GRAPH,
                     score=0.8,
                     retrieval_method="graph",
-                    metadata={"source_name": "semantic_graph"}
+                    metadata={"source_name": "semantic_graph"},
                 )
             ]
 
         mock_memory_connector.graph_traverse.side_effect = mock_traverse
 
-        with patch(
-            "src.rag.retriever.get_memory_connector",
-            return_value=mock_memory_connector
-        ):
+        with patch("src.rag.retriever.get_memory_connector", return_value=mock_memory_connector):
             retriever = GraphRetriever()
-            results = retriever.traverse(
-                entities=["e1", "e2", "e3"],
-                relationship="causal_path"
-            )
+            results = retriever.traverse(entities=["e1", "e2", "e3"], relationship="causal_path")
 
             assert len(results) == 3
 
@@ -297,14 +268,11 @@ class TestGraphRetriever:
             source=RetrievalSource.GRAPH,
             score=0.9,
             retrieval_method="graph",
-            metadata={"source_name": "semantic_graph"}
+            metadata={"source_name": "semantic_graph"},
         )
         mock_memory_connector.graph_traverse.return_value = [duplicate_result]
 
-        with patch(
-            "src.rag.retriever.get_memory_connector",
-            return_value=mock_memory_connector
-        ):
+        with patch("src.rag.retriever.get_memory_connector", return_value=mock_memory_connector):
             retriever = GraphRetriever()
             results = retriever.traverse(entities=["e1", "e2"])
 
@@ -313,6 +281,7 @@ class TestGraphRetriever:
 
     def test_traverse_error_handling(self, mock_memory_connector):
         """Test graph traversal error handling for one entity."""
+
         def mock_traverse(entity_id, relationship, max_depth):
             if entity_id == "bad":
                 raise Exception("Traversal failed")
@@ -323,16 +292,13 @@ class TestGraphRetriever:
                     source=RetrievalSource.GRAPH,
                     score=0.8,
                     retrieval_method="graph",
-                    metadata={"source_name": "semantic_graph"}
+                    metadata={"source_name": "semantic_graph"},
                 )
             ]
 
         mock_memory_connector.graph_traverse.side_effect = mock_traverse
 
-        with patch(
-            "src.rag.retriever.get_memory_connector",
-            return_value=mock_memory_connector
-        ):
+        with patch("src.rag.retriever.get_memory_connector", return_value=mock_memory_connector):
             retriever = GraphRetriever()
             # Should handle error for "bad" entity but continue with "good"
             results = retriever.traverse(entities=["bad", "good"])
@@ -344,27 +310,20 @@ class TestGraphRetriever:
         """Test KPI graph traversal."""
         mock_memory_connector.graph_traverse_kpi.return_value = sample_graph_results
 
-        with patch(
-            "src.rag.retriever.get_memory_connector",
-            return_value=mock_memory_connector
-        ):
+        with patch("src.rag.retriever.get_memory_connector", return_value=mock_memory_connector):
             retriever = GraphRetriever()
             results = retriever.traverse_kpi("TRx", min_confidence=0.5)
 
             assert len(results) == 1
             mock_memory_connector.graph_traverse_kpi.assert_called_with(
-                kpi_name="TRx",
-                min_confidence=0.5
+                kpi_name="TRx", min_confidence=0.5
             )
 
     def test_traverse_kpi_error_handling(self, mock_memory_connector):
         """Test KPI traversal error handling."""
         mock_memory_connector.graph_traverse_kpi.side_effect = Exception("KPI error")
 
-        with patch(
-            "src.rag.retriever.get_memory_connector",
-            return_value=mock_memory_connector
-        ):
+        with patch("src.rag.retriever.get_memory_connector", return_value=mock_memory_connector):
             retriever = GraphRetriever()
             results = retriever.traverse_kpi("NRx")
 
@@ -374,6 +333,7 @@ class TestGraphRetriever:
 # ============================================================================
 # HybridRetriever Tests
 # ============================================================================
+
 
 class TestHybridRetriever:
     """Test HybridRetriever class."""
@@ -391,22 +351,17 @@ class TestHybridRetriever:
         mock_memory_connector,
         sample_dense_results,
         sample_sparse_results,
-        sample_graph_results
+        sample_graph_results,
     ):
         """Test that search combines all retrieval methods."""
         mock_memory_connector.vector_search_by_text.return_value = sample_dense_results
         mock_memory_connector.fulltext_search.return_value = sample_sparse_results
         mock_memory_connector.graph_traverse.return_value = sample_graph_results
 
-        with patch(
-            "src.rag.retriever.get_memory_connector",
-            return_value=mock_memory_connector
-        ):
+        with patch("src.rag.retriever.get_memory_connector", return_value=mock_memory_connector):
             retriever = HybridRetriever()
             results = await retriever.search(
-                query="Kisqali TRx analysis",
-                k=10,
-                entities=["entity-1"]
+                query="Kisqali TRx analysis", k=10, entities=["entity-1"]
             )
 
             # Should have results from all methods (fused)
@@ -421,17 +376,10 @@ class TestHybridRetriever:
         mock_memory_connector.vector_search_by_text.return_value = []
         mock_memory_connector.fulltext_search.return_value = []
 
-        with patch(
-            "src.rag.retriever.get_memory_connector",
-            return_value=mock_memory_connector
-        ):
+        with patch("src.rag.retriever.get_memory_connector", return_value=mock_memory_connector):
             retriever = HybridRetriever()
             custom_weights = {"dense": 0.7, "sparse": 0.2, "graph": 0.1}
-            results = await retriever.search(
-                query="test",
-                weights=custom_weights,
-                k=5
-            )
+            results = await retriever.search(query="test", weights=custom_weights, k=5)
 
             # Should use custom weights (tested implicitly through execution)
             assert isinstance(results, list)
@@ -443,16 +391,9 @@ class TestHybridRetriever:
         mock_memory_connector.fulltext_search.return_value = []
         mock_memory_connector.graph_traverse_kpi.return_value = sample_graph_results
 
-        with patch(
-            "src.rag.retriever.get_memory_connector",
-            return_value=mock_memory_connector
-        ):
+        with patch("src.rag.retriever.get_memory_connector", return_value=mock_memory_connector):
             retriever = HybridRetriever()
-            results = await retriever.search(
-                query="TRx trends",
-                k=10,
-                kpi_name="TRx"
-            )
+            await retriever.search(query="TRx trends", k=10, kpi_name="TRx")
 
             mock_memory_connector.graph_traverse_kpi.assert_called_once()
 
@@ -479,10 +420,7 @@ class TestHybridRetriever:
         mock_memory_connector.vector_search_by_text = mock_vector_search
         mock_memory_connector.fulltext_search = mock_fulltext
 
-        with patch(
-            "src.rag.retriever.get_memory_connector",
-            return_value=mock_memory_connector
-        ):
+        with patch("src.rag.retriever.get_memory_connector", return_value=mock_memory_connector):
             retriever = HybridRetriever()
             await retriever.search("test", k=5)
 
@@ -499,17 +437,44 @@ class TestReciprocalRankFusion:
         retriever = HybridRetriever()
 
         results1 = [
-            RetrievalResult(source_id="1", content="A", source=RetrievalSource.VECTOR, score=0.9, retrieval_method="dense", metadata={}),
-            RetrievalResult(source_id="2", content="B", source=RetrievalSource.VECTOR, score=0.8, retrieval_method="dense", metadata={}),
+            RetrievalResult(
+                source_id="1",
+                content="A",
+                source=RetrievalSource.VECTOR,
+                score=0.9,
+                retrieval_method="dense",
+                metadata={},
+            ),
+            RetrievalResult(
+                source_id="2",
+                content="B",
+                source=RetrievalSource.VECTOR,
+                score=0.8,
+                retrieval_method="dense",
+                metadata={},
+            ),
         ]
         results2 = [
-            RetrievalResult(source_id="2", content="B", source=RetrievalSource.FULLTEXT, score=0.85, retrieval_method="sparse", metadata={}),
-            RetrievalResult(source_id="3", content="C", source=RetrievalSource.FULLTEXT, score=0.7, retrieval_method="sparse", metadata={}),
+            RetrievalResult(
+                source_id="2",
+                content="B",
+                source=RetrievalSource.FULLTEXT,
+                score=0.85,
+                retrieval_method="sparse",
+                metadata={},
+            ),
+            RetrievalResult(
+                source_id="3",
+                content="C",
+                source=RetrievalSource.FULLTEXT,
+                score=0.7,
+                retrieval_method="sparse",
+                metadata={},
+            ),
         ]
 
         fused = retriever._reciprocal_rank_fusion(
-            result_lists=[results1, results2],
-            weights=[0.6, 0.4]
+            result_lists=[results1, results2], weights=[0.6, 0.4]
         )
 
         # "B" should be ranked highest (appears in both lists)
@@ -520,8 +485,7 @@ class TestReciprocalRankFusion:
         retriever = HybridRetriever()
 
         fused = retriever._reciprocal_rank_fusion(
-            result_lists=[[], [], []],
-            weights=[0.5, 0.3, 0.2]
+            result_lists=[[], [], []], weights=[0.5, 0.3, 0.2]
         )
 
         assert fused == []
@@ -531,13 +495,17 @@ class TestReciprocalRankFusion:
         retriever = HybridRetriever()
 
         results = [
-            RetrievalResult(source_id="1", content="A", source=RetrievalSource.VECTOR, score=0.9, retrieval_method="dense", metadata={}),
+            RetrievalResult(
+                source_id="1",
+                content="A",
+                source=RetrievalSource.VECTOR,
+                score=0.9,
+                retrieval_method="dense",
+                metadata={},
+            ),
         ]
 
-        fused = retriever._reciprocal_rank_fusion(
-            result_lists=[results],
-            weights=[1.0]
-        )
+        fused = retriever._reciprocal_rank_fusion(result_lists=[results], weights=[1.0])
 
         assert len(fused) == 1
         assert fused[0].source_id == "1"
@@ -547,13 +515,17 @@ class TestReciprocalRankFusion:
         retriever = HybridRetriever()
 
         results = [
-            RetrievalResult(source_id="1", content="A", source=RetrievalSource.VECTOR, score=0.9, retrieval_method="dense", metadata={}),
+            RetrievalResult(
+                source_id="1",
+                content="A",
+                source=RetrievalSource.VECTOR,
+                score=0.9,
+                retrieval_method="dense",
+                metadata={},
+            ),
         ]
 
-        fused = retriever._reciprocal_rank_fusion(
-            result_lists=[results],
-            weights=[1.0]
-        )
+        fused = retriever._reciprocal_rank_fusion(result_lists=[results], weights=[1.0])
 
         assert "rrf_score" in fused[0].metadata
         assert "original_score" in fused[0].metadata
@@ -564,13 +536,17 @@ class TestReciprocalRankFusion:
         retriever = HybridRetriever()
 
         results = [
-            RetrievalResult(source_id="1", content="A", source=RetrievalSource.GRAPH, score=0.9, retrieval_method="graph", metadata={}),
+            RetrievalResult(
+                source_id="1",
+                content="A",
+                source=RetrievalSource.GRAPH,
+                score=0.9,
+                retrieval_method="graph",
+                metadata={},
+            ),
         ]
 
-        fused = retriever._reciprocal_rank_fusion(
-            result_lists=[results],
-            weights=[1.0]
-        )
+        fused = retriever._reciprocal_rank_fusion(result_lists=[results], weights=[1.0])
 
         assert fused[0].retrieval_method == "graph"
 
@@ -578,6 +554,7 @@ class TestReciprocalRankFusion:
 # ============================================================================
 # Convenience Function Tests
 # ============================================================================
+
 
 class TestHybridSearchFunction:
     """Test hybrid_search convenience function."""
@@ -588,14 +565,8 @@ class TestHybridSearchFunction:
         mock_memory_connector.vector_search_by_text.return_value = []
         mock_memory_connector.fulltext_search.return_value = []
 
-        with patch(
-            "src.rag.retriever.get_memory_connector",
-            return_value=mock_memory_connector
-        ):
-            results = await hybrid_search(
-                query="test query",
-                k=10
-            )
+        with patch("src.rag.retriever.get_memory_connector", return_value=mock_memory_connector):
+            results = await hybrid_search(query="test query", k=10)
 
             assert isinstance(results, list)
 
@@ -606,16 +577,13 @@ class TestHybridSearchFunction:
         mock_memory_connector.fulltext_search.return_value = []
         mock_memory_connector.graph_traverse_kpi.return_value = []
 
-        with patch(
-            "src.rag.retriever.get_memory_connector",
-            return_value=mock_memory_connector
-        ):
+        with patch("src.rag.retriever.get_memory_connector", return_value=mock_memory_connector):
             results = await hybrid_search(
                 query="TRx analysis for Kisqali",
                 k=5,
                 entities=None,
                 kpi_name="TRx",
-                filters={"brand": "Kisqali"}
+                filters={"brand": "Kisqali"},
             )
 
             assert isinstance(results, list)
@@ -624,6 +592,7 @@ class TestHybridSearchFunction:
 # ============================================================================
 # Integration-style Tests
 # ============================================================================
+
 
 class TestRetrieverIntegration:
     """Integration-style tests for retriever components."""
@@ -634,23 +603,20 @@ class TestRetrieverIntegration:
         mock_memory_connector,
         sample_dense_results,
         sample_sparse_results,
-        sample_graph_results
+        sample_graph_results,
     ):
         """Test complete retrieval flow."""
         mock_memory_connector.vector_search_by_text.return_value = sample_dense_results
         mock_memory_connector.fulltext_search.return_value = sample_sparse_results
         mock_memory_connector.graph_traverse.return_value = sample_graph_results
 
-        with patch(
-            "src.rag.retriever.get_memory_connector",
-            return_value=mock_memory_connector
-        ):
+        with patch("src.rag.retriever.get_memory_connector", return_value=mock_memory_connector):
             retriever = HybridRetriever()
             results = await retriever.search(
                 query="Why did Kisqali adoption increase?",
                 k=5,
                 entities=["kisqali-region-northeast"],
-                filters={"brand": "Kisqali"}
+                filters={"brand": "Kisqali"},
             )
 
             # Should return fused results
@@ -669,12 +635,19 @@ class TestRetrieverIntegration:
             source=RetrievalSource.VECTOR,
             score=0.9,
             retrieval_method="dense",
-            metadata={}
+            metadata={},
         )
 
         dense_results = [
             high_overlap_result,
-            RetrievalResult(source_id="d1", content="Dense only", source=RetrievalSource.VECTOR, score=0.8, retrieval_method="dense", metadata={})
+            RetrievalResult(
+                source_id="d1",
+                content="Dense only",
+                source=RetrievalSource.VECTOR,
+                score=0.8,
+                retrieval_method="dense",
+                metadata={},
+            ),
         ]
         sparse_results = [
             RetrievalResult(
@@ -683,17 +656,14 @@ class TestRetrieverIntegration:
                 source=RetrievalSource.FULLTEXT,
                 score=0.85,
                 retrieval_method="sparse",
-                metadata={}
+                metadata={},
             ),
         ]
 
         mock_memory_connector.vector_search_by_text.return_value = dense_results
         mock_memory_connector.fulltext_search.return_value = sparse_results
 
-        with patch(
-            "src.rag.retriever.get_memory_connector",
-            return_value=mock_memory_connector
-        ):
+        with patch("src.rag.retriever.get_memory_connector", return_value=mock_memory_connector):
             retriever = HybridRetriever()
             results = await retriever.search(query="test", k=10)
 

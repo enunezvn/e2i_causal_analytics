@@ -7,22 +7,15 @@ with RAG context enrichment to synthesized response.
 This validates Phase 2 Checkpoint 2.4 implementation.
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from datetime import datetime
+
+import pytest
 
 from src.agents.orchestrator.agent import OrchestratorAgent
 from src.agents.orchestrator.graph import create_orchestrator_graph
 from src.agents.orchestrator.nodes import (
-    classify_intent,
-    retrieve_rag_context,
-    route_to_agents,
-    dispatch_to_agents,
-    synthesize_response,
     RAGContextNode,
 )
-from src.agents.orchestrator.state import OrchestratorState
-
 
 # =============================================================================
 # Fixtures
@@ -33,41 +26,40 @@ from src.agents.orchestrator.state import OrchestratorState
 def mock_rag_retriever():
     """Create mock RAG retriever with sample results."""
     mock = AsyncMock()
-    mock.search = AsyncMock(return_value=[
-        MagicMock(
-            id="doc_001",
-            content="Kisqali TRx declined 15% in Q3 2024 in Northeast region",
-            score=0.92,
-            source=MagicMock(value="vector"),
-            metadata={
-                "brand": "Kisqali",
-                "kpi": "trx",
-                "region": "northeast",
-                "time_period": "Q3_2024"
-            }
-        ),
-        MagicMock(
-            id="doc_002",
-            content="Causal analysis: HCP engagement -> TRx (0.35 coefficient)",
-            score=0.88,
-            source=MagicMock(value="graph"),
-            metadata={
-                "causal_chain": "hcp_engagement -> trx",
-                "strength": 0.35,
-                "brand": "Kisqali"
-            }
-        ),
-        MagicMock(
-            id="doc_003",
-            content="Competitive pressure from alternative treatments increased",
-            score=0.75,
-            source=MagicMock(value="fulltext"),
-            metadata={
-                "brand": "Kisqali",
-                "time_period": "Q3_2024"
-            }
-        ),
-    ])
+    mock.search = AsyncMock(
+        return_value=[
+            MagicMock(
+                id="doc_001",
+                content="Kisqali TRx declined 15% in Q3 2024 in Northeast region",
+                score=0.92,
+                source=MagicMock(value="vector"),
+                metadata={
+                    "brand": "Kisqali",
+                    "kpi": "trx",
+                    "region": "northeast",
+                    "time_period": "Q3_2024",
+                },
+            ),
+            MagicMock(
+                id="doc_002",
+                content="Causal analysis: HCP engagement -> TRx (0.35 coefficient)",
+                score=0.88,
+                source=MagicMock(value="graph"),
+                metadata={
+                    "causal_chain": "hcp_engagement -> trx",
+                    "strength": 0.35,
+                    "brand": "Kisqali",
+                },
+            ),
+            MagicMock(
+                id="doc_003",
+                content="Competitive pressure from alternative treatments increased",
+                score=0.75,
+                source=MagicMock(value="fulltext"),
+                metadata={"brand": "Kisqali", "time_period": "Q3_2024"},
+            ),
+        ]
+    )
     return mock
 
 
@@ -78,8 +70,7 @@ def orchestrator_with_mock_rag(mock_rag_retriever):
 
     # Patch the RAG retriever in the rag_context node
     with patch(
-        "src.agents.orchestrator.nodes.rag_context.RAGContextNode._retriever",
-        mock_rag_retriever
+        "src.agents.orchestrator.nodes.rag_context.RAGContextNode._retriever", mock_rag_retriever
     ):
         yield orchestrator
 
@@ -184,7 +175,7 @@ class TestRAGContextEnrichment:
 
         result = await orchestrator.run(input_data)
 
-        rag_context = result.get("rag_context")
+        result.get("rag_context")
         # RAG context may be None if retriever not configured
         # But the field should exist
         assert "rag_context" in result
@@ -224,9 +215,9 @@ class TestRAGOrchestratorPerformance:
         )
 
         # Should be well under 2000ms with mock agents
-        assert orchestration_overhead < 2000, (
-            f"Orchestration overhead {orchestration_overhead}ms exceeds 2s target"
-        )
+        assert (
+            orchestration_overhead < 2000
+        ), f"Orchestration overhead {orchestration_overhead}ms exceeds 2s target"
 
     @pytest.mark.asyncio
     async def test_rag_latency_under_500ms(self):
@@ -238,9 +229,9 @@ class TestRAGOrchestratorPerformance:
         result = await orchestrator.run(input_data)
 
         # RAG should be fast (under 500ms target)
-        assert result["rag_latency_ms"] < 500, (
-            f"RAG latency {result['rag_latency_ms']}ms exceeds 500ms target"
-        )
+        assert (
+            result["rag_latency_ms"] < 500
+        ), f"RAG latency {result['rag_latency_ms']}ms exceeds 500ms target"
 
 
 class TestRAGGraphConfiguration:
@@ -300,15 +291,15 @@ class TestAgentRAGContextUsage:
     async def test_agent_receives_rag_context(self):
         """Test that dispatched agents receive RAG context in input."""
         mock_agent = MagicMock()
-        mock_agent.analyze = AsyncMock(return_value={
-            "narrative": "Test response with RAG context",
-            "recommendations": [],
-            "confidence": 0.9,
-        })
-
-        orchestrator = OrchestratorAgent(
-            agent_registry={"causal_impact": mock_agent}
+        mock_agent.analyze = AsyncMock(
+            return_value={
+                "narrative": "Test response with RAG context",
+                "recommendations": [],
+                "confidence": 0.9,
+            }
         )
+
+        orchestrator = OrchestratorAgent(agent_registry={"causal_impact": mock_agent})
 
         input_data = {"query": "what drives conversions?"}
 
@@ -335,11 +326,7 @@ class TestErrorHandling:
         orchestrator = OrchestratorAgent()
 
         # Mock RAG to fail
-        with patch.object(
-            RAGContextNode,
-            "execute",
-            side_effect=Exception("RAG retrieval failed")
-        ):
+        with patch.object(RAGContextNode, "execute", side_effect=Exception("RAG retrieval failed")):
             input_data = {"query": "Test with RAG failure"}
 
             # Should not raise, workflow should handle gracefully
@@ -371,18 +358,22 @@ class TestMultiAgentWithRAG:
     async def test_multi_agent_receives_same_rag_context(self):
         """Test that multiple agents receive the same RAG context."""
         mock_causal = MagicMock()
-        mock_causal.analyze = AsyncMock(return_value={
-            "narrative": "Causal analysis",
-            "recommendations": [],
-            "confidence": 0.9,
-        })
+        mock_causal.analyze = AsyncMock(
+            return_value={
+                "narrative": "Causal analysis",
+                "recommendations": [],
+                "confidence": 0.9,
+            }
+        )
 
         mock_gap = MagicMock()
-        mock_gap.analyze = AsyncMock(return_value={
-            "narrative": "Gap analysis",
-            "recommendations": [],
-            "confidence": 0.8,
-        })
+        mock_gap.analyze = AsyncMock(
+            return_value={
+                "narrative": "Gap analysis",
+                "recommendations": [],
+                "confidence": 0.8,
+            }
+        )
 
         orchestrator = OrchestratorAgent(
             agent_registry={

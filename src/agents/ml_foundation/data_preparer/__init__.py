@@ -4,8 +4,8 @@ This agent validates data quality and blocks downstream training if quality fail
 """
 
 from .agent import DataPreparerAgent
-from .state import DataPreparerState
 from .graph import create_data_preparer_graph
+from .state import DataPreparerState
 
 __all__ = [
     "DataPreparerAgent",

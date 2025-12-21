@@ -1,8 +1,8 @@
 """State definition for orchestrator agent."""
 
-from typing import TypedDict, Optional, Dict, Any, List, Literal, Annotated
 import operator
 from datetime import datetime
+from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
 
 
 class ParsedEntity(TypedDict, total=False):
@@ -84,9 +84,7 @@ class AgentResult(TypedDict, total=False):
 class Citation(TypedDict, total=False):
     """Source citation for response."""
 
-    source_type: Literal[
-        "causal_path", "agent_activity", "business_metric", "ml_model"
-    ]
+    source_type: Literal["causal_path", "agent_activity", "business_metric", "ml_model"]
     source_id: str
     relevance: float
 
@@ -177,9 +175,7 @@ class OrchestratorState(TypedDict, total=False):
     # ========================================================================
 
     # Current phase
-    current_phase: Literal[
-        "classifying", "routing", "dispatching", "synthesizing", "complete"
-    ]
+    current_phase: Literal["classifying", "routing", "dispatching", "synthesizing", "complete"]
 
     # Overall status
     status: Literal["pending", "processing", "completed", "failed"]

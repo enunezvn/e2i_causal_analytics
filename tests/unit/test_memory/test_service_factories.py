@@ -10,35 +10,33 @@ Tests focus on:
 
 import os
 from pathlib import Path
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import patch
+
 import pytest
 
 from src.memory.services.config import (
-    load_memory_config,
-    get_config,
-    clear_config_cache,
-    MemoryConfig,
-    WorkingMemoryConfig,
-    EpisodicMemoryConfig,
-    SemanticMemoryConfig,
-    ProceduralMemoryConfig,
     EmbeddingConfig,
+    EpisodicMemoryConfig,
     LLMConfig,
+    MemoryConfig,
+    ProceduralMemoryConfig,
+    SemanticMemoryConfig,
+    WorkingMemoryConfig,
+    clear_config_cache,
+    get_config,
+    load_memory_config,
 )
 from src.memory.services.factories import (
-    get_redis_client,
-    get_supabase_client,
-    get_falkordb_client,
-    get_embedding_service,
-    get_llm_service,
-    reset_all_clients,
-    ServiceConnectionError,
-    OpenAIEmbeddingService,
     AnthropicLLMService,
     BedrockEmbeddingService,
     BedrockLLMService,
+    OpenAIEmbeddingService,
+    ServiceConnectionError,
+    get_embedding_service,
+    get_llm_service,
+    get_supabase_client,
+    reset_all_clients,
 )
-
 
 # ============================================================================
 # CONFIG TESTS

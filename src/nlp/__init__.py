@@ -7,13 +7,13 @@ Provides natural language processing capabilities:
 """
 
 from src.nlp.typo_handler import (
-    TypoHandler,
-    CorrectionResult,
-    correct_term,
-    correct_query,
-    get_typo_handler,
-    CANONICAL_VOCABULARY,
     ABBREVIATION_EXPANSIONS,
+    CANONICAL_VOCABULARY,
+    CorrectionResult,
+    TypoHandler,
+    correct_query,
+    correct_term,
+    get_typo_handler,
 )
 
 __all__ = [

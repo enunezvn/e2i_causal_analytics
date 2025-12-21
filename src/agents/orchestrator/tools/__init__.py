@@ -19,10 +19,10 @@ Version: 4.1.0
 from .explain_tool import (
     ExplainAPITool,
     ExplainIntentHandler,
+    ExplainSubIntent,
+    ExplanationEntities,
     classify_explain_intent,
     extract_explanation_entities,
-    ExplanationEntities,
-    ExplainSubIntent
 )
 
 __all__ = [

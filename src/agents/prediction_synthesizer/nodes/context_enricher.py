@@ -25,9 +25,7 @@ class ContextStore(Protocol):
         """Find similar historical cases"""
         ...
 
-    async def get_accuracy(
-        self, prediction_target: str, entity_type: str
-    ) -> float:
+    async def get_accuracy(self, prediction_target: str, entity_type: str) -> float:
         """Get historical accuracy for prediction type"""
         ...
 
@@ -67,9 +65,7 @@ class ContextEnricherNode:
         self.context_store = context_store
         self.feature_store = feature_store
 
-    async def execute(
-        self, state: PredictionSynthesizerState
-    ) -> PredictionSynthesizerState:
+    async def execute(self, state: PredictionSynthesizerState) -> PredictionSynthesizerState:
         """Enrich prediction with context."""
         start_time = time.time()
 
@@ -77,9 +73,8 @@ class ContextEnricherNode:
             return state
 
         if not state.get("include_context", False):
-            total_time = (
-                state.get("orchestration_latency_ms", 0)
-                + state.get("ensemble_latency_ms", 0)
+            total_time = state.get("orchestration_latency_ms", 0) + state.get(
+                "ensemble_latency_ms", 0
             )
             return {
                 **state,
@@ -100,18 +95,10 @@ class ContextEnricherNode:
             similar, importance, accuracy, trend = results
 
             context = PredictionContext(
-                similar_cases=(
-                    similar if not isinstance(similar, Exception) else []
-                ),
-                feature_importance=(
-                    importance if not isinstance(importance, Exception) else {}
-                ),
-                historical_accuracy=(
-                    accuracy if not isinstance(accuracy, Exception) else 0.0
-                ),
-                trend_direction=(
-                    trend if not isinstance(trend, Exception) else "stable"
-                ),
+                similar_cases=(similar if not isinstance(similar, Exception) else []),
+                feature_importance=(importance if not isinstance(importance, Exception) else {}),
+                historical_accuracy=(accuracy if not isinstance(accuracy, Exception) else 0.0),
+                trend_direction=(trend if not isinstance(trend, Exception) else "stable"),
             )
 
             context_time = int((time.time() - start_time) * 1000)
@@ -136,9 +123,8 @@ class ContextEnricherNode:
 
         except Exception as e:
             logger.warning(f"Context enrichment failed: {e}")
-            total_time = (
-                state.get("orchestration_latency_ms", 0)
-                + state.get("ensemble_latency_ms", 0)
+            total_time = state.get("orchestration_latency_ms", 0) + state.get(
+                "ensemble_latency_ms", 0
             )
             return {
                 **state,
@@ -147,9 +133,7 @@ class ContextEnricherNode:
                 "status": "completed",  # Non-fatal
             }
 
-    async def _get_similar_cases(
-        self, state: PredictionSynthesizerState
-    ) -> List[Dict[str, Any]]:
+    async def _get_similar_cases(self, state: PredictionSynthesizerState) -> List[Dict[str, Any]]:
         """Find similar historical cases."""
         if not self.context_store:
             return []
@@ -160,9 +144,7 @@ class ContextEnricherNode:
             limit=5,
         )
 
-    async def _get_feature_importance(
-        self, state: PredictionSynthesizerState
-    ) -> Dict[str, float]:
+    async def _get_feature_importance(self, state: PredictionSynthesizerState) -> Dict[str, float]:
         """Get feature importance for prediction."""
         if not self.feature_store:
             return {}
@@ -173,9 +155,7 @@ class ContextEnricherNode:
 
         for pred in predictions:
             try:
-                model_importance = await self.feature_store.get_importance(
-                    pred["model_id"]
-                )
+                model_importance = await self.feature_store.get_importance(pred["model_id"])
                 for feature, importance in model_importance.items():
                     if feature in importances:
                         importances[feature] = (importances[feature] + importance) / 2
@@ -185,14 +165,10 @@ class ContextEnricherNode:
                 logger.debug(f"Failed to get importance for {pred['model_id']}: {e}")
 
         # Return top 10 features
-        sorted_features = sorted(
-            importances.items(), key=lambda x: x[1], reverse=True
-        )
+        sorted_features = sorted(importances.items(), key=lambda x: x[1], reverse=True)
         return dict(sorted_features[:10])
 
-    async def _get_historical_accuracy(
-        self, state: PredictionSynthesizerState
-    ) -> float:
+    async def _get_historical_accuracy(self, state: PredictionSynthesizerState) -> float:
         """Get historical accuracy for this prediction type."""
         if not self.context_store:
             return 0.0
@@ -202,9 +178,7 @@ class ContextEnricherNode:
             entity_type=state.get("entity_type", ""),
         )
 
-    async def _get_trend(
-        self, state: PredictionSynthesizerState
-    ) -> str:
+    async def _get_trend(self, state: PredictionSynthesizerState) -> str:
         """Determine trend direction."""
         if not self.context_store:
             return "stable"

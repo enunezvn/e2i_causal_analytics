@@ -3,10 +3,12 @@
 Tests the LLM-based adversarial validity assessment functionality.
 """
 
-import pytest
 import json
-from src.agents.experiment_designer.nodes.validity_audit import ValidityAuditNode
+
+import pytest
+
 from src.agents.experiment_designer.graph import create_initial_state
+from src.agents.experiment_designer.nodes.validity_audit import ValidityAuditNode
 
 
 class MockLLM:
@@ -29,7 +31,7 @@ class MockLLM:
                     "description": "Non-random assignment may occur",
                     "severity": "high",
                     "mitigation_possible": True,
-                    "mitigation_strategy": "Use stratified randomization"
+                    "mitigation_strategy": "Use stratified randomization",
                 },
                 {
                     "threat_type": "external",
@@ -37,8 +39,8 @@ class MockLLM:
                     "description": "Results may not generalize",
                     "severity": "medium",
                     "mitigation_possible": True,
-                    "mitigation_strategy": "Include diverse sample"
-                }
+                    "mitigation_strategy": "Include diverse sample",
+                },
             ],
             "mitigations": [
                 {
@@ -46,13 +48,13 @@ class MockLLM:
                     "recommendation": "Stratify on baseline characteristics",
                     "effectiveness_rating": "high",
                     "implementation_cost": "low",
-                    "implementation_steps": ["Define strata", "Balance allocation"]
+                    "implementation_steps": ["Define strata", "Balance allocation"],
                 }
             ],
             "overall_validity_score": 0.75,
             "validity_confidence": "medium",
             "redesign_needed": False,
-            "redesign_recommendations": []
+            "redesign_recommendations": [],
         }
 
     def invoke(self, prompt: str) -> str:
@@ -83,9 +85,7 @@ class TestValidityAuditNode:
     async def test_execute_basic(self):
         """Test basic execution."""
         node = ValidityAuditNode()
-        state = create_initial_state(
-            business_question="Test validity audit"
-        )
+        state = create_initial_state(business_question="Test validity audit")
         state["status"] = "auditing"
         state["design_type"] = "RCT"
         state["treatments"] = [{"name": "Treatment", "description": "Test"}]
@@ -100,9 +100,7 @@ class TestValidityAuditNode:
     async def test_execute_returns_threats(self):
         """Test that validity threats are returned."""
         node = ValidityAuditNode()
-        state = create_initial_state(
-            business_question="Test threats identification"
-        )
+        state = create_initial_state(business_question="Test threats identification")
         state["status"] = "auditing"
         state["design_type"] = "RCT"
         state["treatments"] = [{"name": "T", "description": "D"}]
@@ -117,9 +115,7 @@ class TestValidityAuditNode:
     async def test_execute_returns_validity_score(self):
         """Test that validity score is returned."""
         node = ValidityAuditNode()
-        state = create_initial_state(
-            business_question="Test validity score"
-        )
+        state = create_initial_state(business_question="Test validity score")
         state["status"] = "auditing"
         state["design_type"] = "RCT"
 
@@ -132,9 +128,7 @@ class TestValidityAuditNode:
     async def test_execute_returns_confidence(self):
         """Test that validity confidence is returned."""
         node = ValidityAuditNode()
-        state = create_initial_state(
-            business_question="Test validity confidence"
-        )
+        state = create_initial_state(business_question="Test validity confidence")
         state["status"] = "auditing"
         state["design_type"] = "RCT"
 
@@ -147,9 +141,7 @@ class TestValidityAuditNode:
     async def test_execute_returns_redesign_flag(self):
         """Test that redesign flag is returned."""
         node = ValidityAuditNode()
-        state = create_initial_state(
-            business_question="Test redesign flag"
-        )
+        state = create_initial_state(business_question="Test redesign flag")
         state["status"] = "auditing"
         state["design_type"] = "RCT"
 
@@ -162,9 +154,7 @@ class TestValidityAuditNode:
     async def test_execute_skip_on_failed(self):
         """Test execution skips on failed status."""
         node = ValidityAuditNode()
-        state = create_initial_state(
-            business_question="Test skip on failed"
-        )
+        state = create_initial_state(business_question="Test skip on failed")
         state["status"] = "failed"
 
         result = await node.execute(state)
@@ -176,8 +166,7 @@ class TestValidityAuditNode:
         """Test execution skips when validity audit disabled."""
         node = ValidityAuditNode()
         state = create_initial_state(
-            business_question="Test skip when disabled",
-            enable_validity_audit=False
+            business_question="Test skip when disabled", enable_validity_audit=False
         )
         state["status"] = "auditing"
         state["design_type"] = "RCT"
@@ -191,9 +180,7 @@ class TestValidityAuditNode:
     async def test_execute_records_latency(self):
         """Test that node latency is recorded."""
         node = ValidityAuditNode()
-        state = create_initial_state(
-            business_question="Test latency recording"
-        )
+        state = create_initial_state(business_question="Test latency recording")
         state["status"] = "auditing"
         state["design_type"] = "RCT"
 
@@ -210,9 +197,7 @@ class TestValidityThreatTypes:
     async def test_detects_internal_threats(self):
         """Test detection of internal validity threats."""
         node = ValidityAuditNode()
-        state = create_initial_state(
-            business_question="Test internal validity"
-        )
+        state = create_initial_state(business_question="Test internal validity")
         state["status"] = "auditing"
         state["design_type"] = "RCT"
         state["randomization_method"] = "simple"  # May have selection issues
@@ -228,9 +213,7 @@ class TestValidityThreatTypes:
     async def test_detects_external_threats(self):
         """Test detection of external validity threats."""
         node = ValidityAuditNode()
-        state = create_initial_state(
-            business_question="Test external validity"
-        )
+        state = create_initial_state(business_question="Test external validity")
         state["status"] = "auditing"
         state["design_type"] = "RCT"
 
@@ -244,14 +227,10 @@ class TestValidityThreatTypes:
     async def test_detects_statistical_threats(self):
         """Test detection of statistical validity threats."""
         node = ValidityAuditNode()
-        state = create_initial_state(
-            business_question="Test statistical validity"
-        )
+        state = create_initial_state(business_question="Test statistical validity")
         state["status"] = "auditing"
         state["design_type"] = "RCT"
-        state["power_analysis"] = {
-            "achieved_power": 0.60  # Low power
-        }
+        state["power_analysis"] = {"achieved_power": 0.60}  # Low power
 
         result = await node.execute(state)
 
@@ -267,9 +246,7 @@ class TestThreatSeverityLevels:
     async def test_severity_levels_valid(self):
         """Test that severity levels are valid."""
         node = ValidityAuditNode()
-        state = create_initial_state(
-            business_question="Test severity levels"
-        )
+        state = create_initial_state(business_question="Test severity levels")
         state["status"] = "auditing"
         state["design_type"] = "RCT"
 
@@ -287,9 +264,7 @@ class TestMitigationRecommendations:
     async def test_mitigations_returned(self):
         """Test that mitigations are returned."""
         node = ValidityAuditNode()
-        state = create_initial_state(
-            business_question="Test mitigations"
-        )
+        state = create_initial_state(business_question="Test mitigations")
         state["status"] = "auditing"
         state["design_type"] = "RCT"
 
@@ -302,9 +277,7 @@ class TestMitigationRecommendations:
     async def test_mitigation_structure(self):
         """Test mitigation structure."""
         node = ValidityAuditNode()
-        state = create_initial_state(
-            business_question="Test mitigation structure"
-        )
+        state = create_initial_state(business_question="Test mitigation structure")
         state["status"] = "auditing"
         state["design_type"] = "RCT"
 
@@ -322,9 +295,7 @@ class TestRedesignTriggers:
     async def test_redesign_triggered_on_critical_threat(self):
         """Test that redesign is triggered for critical threats."""
         node = ValidityAuditNode()
-        state = create_initial_state(
-            business_question="Test critical threat redesign"
-        )
+        state = create_initial_state(business_question="Test critical threat redesign")
         state["status"] = "auditing"
         state["design_type"] = "RCT"
         state["current_iteration"] = 0
@@ -334,8 +305,7 @@ class TestRedesignTriggers:
 
         # If critical threats exist, redesign might be needed
         critical_threats = [
-            t for t in result.get("validity_threats", [])
-            if t.get("severity") == "critical"
+            t for t in result.get("validity_threats", []) if t.get("severity") == "critical"
         ]
         if critical_threats:
             assert result.get("redesign_needed") is True
@@ -345,8 +315,7 @@ class TestRedesignTriggers:
         """Test that redesign is capped at max iterations."""
         node = ValidityAuditNode()
         state = create_initial_state(
-            business_question="Test max iterations",
-            max_redesign_iterations=2
+            business_question="Test max iterations", max_redesign_iterations=2
         )
         state["status"] = "auditing"
         state["design_type"] = "RCT"
@@ -366,9 +335,7 @@ class TestValidityAuditPerformance:
     async def test_latency_under_target(self):
         """Test validity audit completes under 30s target."""
         node = ValidityAuditNode()
-        state = create_initial_state(
-            business_question="Test latency performance"
-        )
+        state = create_initial_state(business_question="Test latency performance")
         state["status"] = "auditing"
         state["design_type"] = "RCT"
 
@@ -386,9 +353,7 @@ class TestValidityAuditEdgeCases:
     async def test_missing_design_type(self):
         """Test handling of missing design type."""
         node = ValidityAuditNode()
-        state = create_initial_state(
-            business_question="Test missing design type"
-        )
+        state = create_initial_state(business_question="Test missing design type")
         state["status"] = "auditing"
         # No design_type
 
@@ -401,9 +366,7 @@ class TestValidityAuditEdgeCases:
     async def test_quasi_experimental_design(self):
         """Test audit for quasi-experimental design."""
         node = ValidityAuditNode()
-        state = create_initial_state(
-            business_question="Test quasi-experimental audit"
-        )
+        state = create_initial_state(business_question="Test quasi-experimental audit")
         state["status"] = "auditing"
         state["design_type"] = "Quasi_Experimental"
 
@@ -416,9 +379,7 @@ class TestValidityAuditEdgeCases:
     async def test_observational_design(self):
         """Test audit for observational design."""
         node = ValidityAuditNode()
-        state = create_initial_state(
-            business_question="Test observational audit"
-        )
+        state = create_initial_state(business_question="Test observational audit")
         state["status"] = "auditing"
         state["design_type"] = "Observational"
 
@@ -435,9 +396,7 @@ class TestValidityScoreCalculation:
     async def test_score_in_valid_range(self):
         """Test that validity score is in valid range."""
         node = ValidityAuditNode()
-        state = create_initial_state(
-            business_question="Test score range"
-        )
+        state = create_initial_state(business_question="Test score range")
         state["status"] = "auditing"
         state["design_type"] = "RCT"
 
@@ -450,9 +409,7 @@ class TestValidityScoreCalculation:
     async def test_confidence_levels(self):
         """Test that confidence levels are valid."""
         node = ValidityAuditNode()
-        state = create_initial_state(
-            business_question="Test confidence levels"
-        )
+        state = create_initial_state(business_question="Test confidence levels")
         state["status"] = "auditing"
         state["design_type"] = "RCT"
 

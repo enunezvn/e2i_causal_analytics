@@ -16,10 +16,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 from src.agents.experiment_designer.state import (
-    ExperimentDesignState,
     ErrorDetails,
-    ValidityThreat,
+    ExperimentDesignState,
     MitigationRecommendation,
+    ValidityThreat,
 )
 
 
@@ -131,9 +131,7 @@ class ValidityAuditNode:
 
         # Skip if validity audit is disabled
         if not state.get("enable_validity_audit", True):
-            state["warnings"] = state.get("warnings", []) + [
-                "Validity audit skipped (disabled)"
-            ]
+            state["warnings"] = state.get("warnings", []) + ["Validity audit skipped (disabled)"]
             state["validity_confidence"] = "low"
             state["redesign_needed"] = False
             state["status"] = "generating"
@@ -153,9 +151,7 @@ class ValidityAuditNode:
                     timeout=90,
                 )
             except asyncio.TimeoutError:
-                state["warnings"] = state.get("warnings", []) + [
-                    "Validity audit timed out"
-                ]
+                state["warnings"] = state.get("warnings", []) + ["Validity audit timed out"]
                 state["validity_confidence"] = "low"
                 state["redesign_needed"] = False
                 state["status"] = "generating"
@@ -231,9 +227,7 @@ class ValidityAuditNode:
                 "recoverable": True,
             }
             state["errors"] = state.get("errors", []) + [error]
-            state["warnings"] = state.get("warnings", []) + [
-                f"Validity audit failed: {str(e)}"
-            ]
+            state["warnings"] = state.get("warnings", []) + [f"Validity audit failed: {str(e)}"]
             state["validity_confidence"] = "low"
             state["redesign_needed"] = False
             state["status"] = "generating"

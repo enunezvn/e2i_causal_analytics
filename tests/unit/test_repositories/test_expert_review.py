@@ -4,9 +4,10 @@ Version: 4.3
 Tests the expert review repository CRUD operations.
 """
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import date, timedelta
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from src.repositories.expert_review import ExpertReviewRepository
 
@@ -105,7 +106,9 @@ class TestExpertReviewRepository:
         mock_execute = AsyncMock(return_value=MagicMock(data=[{"review_id": "rev-123"}]))
         mock_query = MagicMock()
         mock_query.execute = mock_execute
-        mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.gte.return_value = mock_query
+        mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.gte.return_value = (
+            mock_query
+        )
 
         result = await repo.is_dag_approved("abc123")
 
@@ -117,7 +120,9 @@ class TestExpertReviewRepository:
         mock_execute = AsyncMock(return_value=MagicMock(data=[]))
         mock_query = MagicMock()
         mock_query.execute = mock_execute
-        mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.gte.return_value = mock_query
+        mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.gte.return_value = (
+            mock_query
+        )
 
         result = await repo.is_dag_approved("abc123")
 
@@ -147,7 +152,9 @@ class TestExpertReviewRepository:
         mock_query = MagicMock()
         mock_query.execute = mock_execute
         mock_query.limit.return_value = mock_query
-        mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.gte.return_value.order.return_value = mock_query
+        mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.gte.return_value.order.return_value = (
+            mock_query
+        )
 
         result = await repo.get_dag_approval("abc123")
 
@@ -165,7 +172,9 @@ class TestExpertReviewRepository:
         mock_query = MagicMock()
         mock_query.execute = mock_execute
         mock_query.limit.return_value = mock_query
-        mock_client.table.return_value.select.return_value.eq.return_value.order.return_value = mock_query
+        mock_client.table.return_value.select.return_value.eq.return_value.order.return_value = (
+            mock_query
+        )
 
         result = await repo.get_pending_reviews()
 
@@ -180,7 +189,9 @@ class TestExpertReviewRepository:
         mock_query.execute = mock_execute
         mock_query.limit.return_value = mock_query
         mock_query.eq.return_value = mock_query
-        mock_client.table.return_value.select.return_value.eq.return_value.order.return_value = mock_query
+        mock_client.table.return_value.select.return_value.eq.return_value.order.return_value = (
+            mock_query
+        )
 
         await repo.get_pending_reviews(brand="TestBrand")
 
@@ -199,7 +210,9 @@ class TestExpertReviewRepository:
         mock_execute = AsyncMock(return_value=MagicMock(data=expiring_data))
         mock_query = MagicMock()
         mock_query.execute = mock_execute
-        mock_client.table.return_value.select.return_value.eq.return_value.gte.return_value.lte.return_value.order.return_value = mock_query
+        mock_client.table.return_value.select.return_value.eq.return_value.gte.return_value.lte.return_value.order.return_value = (
+            mock_query
+        )
 
         result = await repo.get_expiring_reviews(days_until_expiry=14)
 
@@ -216,7 +229,9 @@ class TestExpertReviewRepository:
         mock_query = MagicMock()
         mock_query.execute = mock_execute
         mock_query.or_.return_value = mock_query
-        mock_client.table.return_value.select.return_value.eq.return_value.order.return_value = mock_query
+        mock_client.table.return_value.select.return_value.eq.return_value.order.return_value = (
+            mock_query
+        )
 
         result = await repo.get_reviews_for_dag("abc123")
 
@@ -253,6 +268,7 @@ class TestExpertReviewRepository:
     @pytest.mark.asyncio
     async def test_renew_review_not_found(self, repo, mock_client):
         """Test renewing non-existent review."""
+
         async def mock_get_by_id(review_id):
             return None
 
@@ -270,10 +286,19 @@ class TestExpertReviewRepository:
         """Test getting review summary."""
         reviews_data = [
             {"approval_status": "pending", "valid_until": None},
-            {"approval_status": "approved", "valid_until": (date.today() + timedelta(days=30)).isoformat()},
-            {"approval_status": "approved", "valid_until": (date.today() + timedelta(days=7)).isoformat()},
+            {
+                "approval_status": "approved",
+                "valid_until": (date.today() + timedelta(days=30)).isoformat(),
+            },
+            {
+                "approval_status": "approved",
+                "valid_until": (date.today() + timedelta(days=7)).isoformat(),
+            },
             {"approval_status": "rejected", "valid_until": None},
-            {"approval_status": "approved", "valid_until": (date.today() - timedelta(days=7)).isoformat()},
+            {
+                "approval_status": "approved",
+                "valid_until": (date.today() - timedelta(days=7)).isoformat(),
+            },
         ]
         mock_execute = AsyncMock(return_value=MagicMock(data=reviews_data))
         mock_query = MagicMock()
@@ -319,7 +344,9 @@ class TestExpertReviewRepositoryErrorHandling:
 
         mock_query = MagicMock()
         mock_query.execute = failing_execute
-        client.table.return_value.select.return_value.eq.return_value.eq.return_value.gte.return_value = mock_query
+        client.table.return_value.select.return_value.eq.return_value.eq.return_value.gte.return_value = (
+            mock_query
+        )
         client.table.return_value.insert.return_value.execute = failing_execute
 
         repo.client = client

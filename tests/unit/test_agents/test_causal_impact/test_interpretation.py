@@ -1,10 +1,11 @@
 """Tests for interpretation node."""
 
 import pytest
+
 from src.agents.causal_impact.nodes.interpretation import InterpretationNode
 from src.agents.causal_impact.state import (
-    CausalImpactState,
     CausalGraph,
+    CausalImpactState,
     EstimationResult,
     RefutationResults,
     SensitivityAnalysis,

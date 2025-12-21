@@ -21,23 +21,20 @@ Reference: docs/E2I_Causal_Validation_Protocol.html
 """
 
 import pytest
-import numpy as np
 
 from tests.synthetic.conftest import (
     SyntheticDataset,
-    generate_heterogeneous_cate,
-    estimate_ate_naive,
     estimate_ate_adjusted,
+    estimate_ate_naive,
     estimate_cate_by_segment,
+    generate_heterogeneous_cate,
 )
 
 
 class TestHeterogeneousCateBenchmark:
     """Benchmark tests for heterogeneous CATE DGP."""
 
-    def test_overall_ate_accurate(
-        self, heterogeneous_cate_dataset: SyntheticDataset
-    ):
+    def test_overall_ate_accurate(self, heterogeneous_cate_dataset: SyntheticDataset):
         """CI/CD test: Overall ATE should be recovered with adjustment."""
         dataset = heterogeneous_cate_dataset
 
@@ -56,9 +53,7 @@ class TestHeterogeneousCateBenchmark:
             f"tolerance: {dataset.tolerance:.4f})"
         )
 
-    def test_cate_ordering_preserved(
-        self, heterogeneous_cate_dataset: SyntheticDataset
-    ):
+    def test_cate_ordering_preserved(self, heterogeneous_cate_dataset: SyntheticDataset):
         """CI/CD test: CATE ordering should be preserved (low < medium < high)."""
         dataset = heterogeneous_cate_dataset
 
@@ -80,9 +75,7 @@ class TestHeterogeneousCateBenchmark:
             f"CATE(high)={estimated_cates['high']:.4f}"
         )
 
-    def test_cate_magnitudes_accurate(
-        self, heterogeneous_cate_dataset: SyntheticDataset
-    ):
+    def test_cate_magnitudes_accurate(self, heterogeneous_cate_dataset: SyntheticDataset):
         """CI/CD test: Individual CATE magnitudes should be accurate."""
         dataset = heterogeneous_cate_dataset
         true_cates = dataset.true_cate
@@ -107,9 +100,7 @@ class TestHeterogeneousCateBenchmark:
                 f"of true CATE {true_cate:.4f} (error: {error:.4f})"
             )
 
-    def test_heterogeneity_detection(
-        self, heterogeneous_cate_dataset: SyntheticDataset
-    ):
+    def test_heterogeneity_detection(self, heterogeneous_cate_dataset: SyntheticDataset):
         """CI/CD test: Should detect significant heterogeneity."""
         dataset = heterogeneous_cate_dataset
 
@@ -126,13 +117,9 @@ class TestHeterogeneousCateBenchmark:
         cate_range = max(cate_values) - min(cate_values)
 
         # Range should be substantial (true range is 0.40 - 0.10 = 0.30)
-        assert cate_range > 0.20, (
-            f"CATE range {cate_range:.4f} too small to indicate heterogeneity"
-        )
+        assert cate_range > 0.20, f"CATE range {cate_range:.4f} too small to indicate heterogeneity"
 
-    def test_naive_misses_true_ate(
-        self, heterogeneous_cate_dataset: SyntheticDataset
-    ):
+    def test_naive_misses_true_ate(self, heterogeneous_cate_dataset: SyntheticDataset):
         """Verify naive estimate is biased (expected behavior)."""
         dataset = heterogeneous_cate_dataset
 
@@ -154,9 +141,7 @@ class TestHeterogeneousCateBenchmark:
 class TestHeterogeneousCateDatasetProperties:
     """Test properties of the heterogeneous CATE dataset."""
 
-    def test_dataset_structure(
-        self, heterogeneous_cate_dataset: SyntheticDataset
-    ):
+    def test_dataset_structure(self, heterogeneous_cate_dataset: SyntheticDataset):
         """Verify dataset has expected structure."""
         dataset = heterogeneous_cate_dataset
 
@@ -168,9 +153,7 @@ class TestHeterogeneousCateDatasetProperties:
         assert len(dataset.data) == dataset.n_samples
         assert dataset.dgp_name == "heterogeneous_cate"
 
-    def test_segment_distribution(
-        self, heterogeneous_cate_dataset: SyntheticDataset
-    ):
+    def test_segment_distribution(self, heterogeneous_cate_dataset: SyntheticDataset):
         """Verify segments have expected distribution based on fixed cutoffs.
 
         Note: The DGP uses fixed cutoffs (-0.67, 0.67) on a standard normal,
@@ -191,9 +174,7 @@ class TestHeterogeneousCateDatasetProperties:
                 f"outside expected range (~{expected_prop:.2f})"
             )
 
-    def test_true_cates_defined(
-        self, heterogeneous_cate_dataset: SyntheticDataset
-    ):
+    def test_true_cates_defined(self, heterogeneous_cate_dataset: SyntheticDataset):
         """Verify true CATEs are defined for all segments."""
         dataset = heterogeneous_cate_dataset
 
@@ -215,8 +196,8 @@ class TestHeterogeneousCateCustomSegments:
         "segment_effects",
         [
             {"low": -0.20, "medium": 0.00, "high": 0.30},  # Strong heterogeneity
-            {"low": 0.00, "medium": 0.05, "high": 0.10},   # Weak heterogeneity
-            {"low": 0.10, "medium": 0.10, "high": 0.10},   # No heterogeneity (homogeneous)
+            {"low": 0.00, "medium": 0.05, "high": 0.10},  # Weak heterogeneity
+            {"low": 0.10, "medium": 0.10, "high": 0.10},  # No heterogeneity (homogeneous)
         ],
     )
     def test_custom_segment_effects(self, segment_effects: dict):
@@ -271,9 +252,7 @@ class TestHeterogeneousCateCustomSegments:
         cate_range = max(cate_values) - min(cate_values)
 
         # Range should be small (just noise)
-        assert cate_range < 0.10, (
-            f"CATE range {cate_range:.4f} too large for homogeneous effects"
-        )
+        assert cate_range < 0.10, f"CATE range {cate_range:.4f} too large for homogeneous effects"
 
 
 class TestHeterogeneousCateReproducibility:
@@ -311,9 +290,7 @@ class TestHeterogeneousCateReproducibility:
 
         # Check that high-segment CATE is consistently highest
         for cates in cate_estimates:
-            assert cates["high"] > cates["low"], (
-                "High segment should consistently have higher CATE"
-            )
+            assert cates["high"] > cates["low"], "High segment should consistently have higher CATE"
 
 
 class TestHeterogeneousCateEdgeCases:
@@ -350,6 +327,4 @@ class TestHeterogeneousCateEdgeCases:
         # With large sample, should be very close
         for segment, true_cate in dataset.true_cate.items():
             error = abs(estimated_cates[segment] - true_cate)
-            assert error < 0.03, (
-                f"Large sample CATE({segment}) error {error:.4f} too high"
-            )
+            assert error < 0.03, f"Large sample CATE({segment}) error {error:.4f} too high"

@@ -7,11 +7,12 @@ Core computational node with minimal LLM usage.
 import asyncio
 import time
 import traceback
-from typing import List, Dict, Any, Optional
-import pandas as pd
-import numpy as np
+from typing import Any, Dict, List, Optional
 
-from ..state import HeterogeneousOptimizerState, CATEResult
+import numpy as np
+import pandas as pd
+
+from ..state import CATEResult, HeterogeneousOptimizerState
 
 
 class MockDataConnector:
@@ -21,10 +22,7 @@ class MockDataConnector:
     """
 
     async def query(
-        self,
-        source: str,
-        columns: List[str],
-        filters: Optional[Dict[str, Any]] = None
+        self, source: str, columns: List[str], filters: Optional[Dict[str, Any]] = None
     ) -> pd.DataFrame:
         """Generate mock pharma CATE data."""
         np.random.seed(42)
@@ -34,17 +32,12 @@ class MockDataConnector:
         data = {
             # Segment variables
             "hcp_specialty": np.random.choice(
-                ["Oncology", "Cardiology", "Primary Care", "Rheumatology"],
-                n_samples
+                ["Oncology", "Cardiology", "Primary Care", "Rheumatology"], n_samples
             ),
             "patient_volume_decile": np.random.choice(
-                ["1-2", "3-4", "5-6", "7-8", "9-10"],
-                n_samples
+                ["1-2", "3-4", "5-6", "7-8", "9-10"], n_samples
             ),
-            "region": np.random.choice(
-                ["Northeast", "Southeast", "Midwest", "West"],
-                n_samples
-            ),
+            "region": np.random.choice(["Northeast", "Southeast", "Midwest", "West"], n_samples),
             # Effect modifiers
             "hcp_tenure": np.random.uniform(1, 30, n_samples),
             "competitive_pressure": np.random.uniform(0, 1, n_samples),
@@ -73,10 +66,10 @@ class MockDataConnector:
                     treatment_effect = 25 + np.random.normal(0, 10)
 
                 # Modify by tenure
-                treatment_effect *= (1 + data["hcp_tenure"][i] / 100)
+                treatment_effect *= 1 + data["hcp_tenure"][i] / 100
 
                 # Modify by competitive pressure (negative)
-                treatment_effect *= (1 - data["competitive_pressure"][i] * 0.3)
+                treatment_effect *= 1 - data["competitive_pressure"][i] * 0.3
 
             outcome[i] = base + treatment_effect
 
@@ -103,15 +96,13 @@ class CATEEstimatorNode:
         self.data_connector = data_connector or MockDataConnector()
         self.timeout_seconds = 180
 
-    async def execute(
-        self, state: HeterogeneousOptimizerState
-    ) -> HeterogeneousOptimizerState:
+    async def execute(self, state: HeterogeneousOptimizerState) -> HeterogeneousOptimizerState:
         """Execute CATE estimation."""
         start_time = time.time()
 
         try:
             from econml.dml import CausalForestDML
-            from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+            from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 
             # Fetch data
             df = await self._fetch_data(state)
@@ -119,11 +110,10 @@ class CATEEstimatorNode:
             if df is None or len(df) < 100:
                 return {
                     **state,
-                    "errors": [{
-                        "node": "cate_estimator",
-                        "error": "Insufficient data (need >= 100 rows)"
-                    }],
-                    "status": "failed"
+                    "errors": [
+                        {"node": "cate_estimator", "error": "Insufficient data (need >= 100 rows)"}
+                    ],
+                    "status": "failed",
                 }
 
             # Prepare data
@@ -145,9 +135,11 @@ class CATEEstimatorNode:
             is_binary_treatment = self._is_binary(T)
             cf = CausalForestDML(
                 model_y=RandomForestRegressor(n_estimators=50, random_state=42),
-                model_t=RandomForestClassifier(n_estimators=50, random_state=42)
-                if is_binary_treatment
-                else RandomForestRegressor(n_estimators=50, random_state=42),
+                model_t=(
+                    RandomForestClassifier(n_estimators=50, random_state=42)
+                    if is_binary_treatment
+                    else RandomForestRegressor(n_estimators=50, random_state=42)
+                ),
                 discrete_treatment=is_binary_treatment,
                 n_estimators=state.get("n_estimators", 100),
                 min_samples_leaf=state.get("min_samples_leaf", 10),
@@ -173,9 +165,11 @@ class CATEEstimatorNode:
             feature_importance = dict(
                 zip(
                     state["effect_modifiers"],
-                    cf.feature_importances_.tolist()
-                    if hasattr(cf, "feature_importances_")
-                    else [0] * len(state["effect_modifiers"]),
+                    (
+                        cf.feature_importances_.tolist()
+                        if hasattr(cf, "feature_importances_")
+                        else [0] * len(state["effect_modifiers"])
+                    ), strict=False,
                 )
             )
 
@@ -203,26 +197,21 @@ class CATEEstimatorNode:
         except asyncio.TimeoutError:
             return {
                 **state,
-                "errors": [{
-                    "node": "cate_estimator",
-                    "error": f"Timed out after {self.timeout_seconds}s"
-                }],
+                "errors": [
+                    {"node": "cate_estimator", "error": f"Timed out after {self.timeout_seconds}s"}
+                ],
                 "status": "failed",
             }
         except Exception as e:
             return {
                 **state,
-                "errors": [{
-                    "node": "cate_estimator",
-                    "error": str(e),
-                    "traceback": traceback.format_exc()
-                }],
+                "errors": [
+                    {"node": "cate_estimator", "error": str(e), "traceback": traceback.format_exc()}
+                ],
                 "status": "failed",
             }
 
-    async def _fetch_data(
-        self, state: HeterogeneousOptimizerState
-    ) -> pd.DataFrame:
+    async def _fetch_data(self, state: HeterogeneousOptimizerState) -> pd.DataFrame:
         """Fetch data for CATE estimation."""
         columns = (
             [state["treatment_var"], state["outcome_var"]]
@@ -255,7 +244,7 @@ class CATEEstimatorNode:
         result = df.copy()
 
         for col in result.columns:
-            if result[col].dtype == 'object' or str(result[col].dtype) == 'category':
+            if result[col].dtype == "object" or str(result[col].dtype) == "category":
                 # Label encode categorical columns
                 categories = result[col].unique()
                 cat_to_int = {cat: i for i, cat in enumerate(categories)}
@@ -263,9 +252,7 @@ class CATEEstimatorNode:
 
         return result.values
 
-    def _calculate_heterogeneity(
-        self, cate_individual: np.ndarray, ate: float
-    ) -> float:
+    def _calculate_heterogeneity(self, cate_individual: np.ndarray, ate: float) -> float:
         """Calculate heterogeneity score (coefficient of variation).
 
         Returns 0-1 score where higher = more heterogeneity.

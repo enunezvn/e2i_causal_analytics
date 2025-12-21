@@ -14,51 +14,47 @@ Author: E2I Causal Analytics Team
 Version: 4.1.0
 """
 
-import time
 import json
 import logging
-import asyncio
-from typing import Optional, List, Dict, Any
+import time
 from datetime import datetime, timezone
+from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Query
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 
 from src.api.models.graph import (
+    AddEpisodeRequest,
+    AddEpisodeResponse,
+    CausalChainRequest,
+    CausalChainResponse,
+    CypherQueryRequest,
+    CypherQueryResponse,
     # Enums
     EntityType,
-    RelationshipType,
-    SortOrder,
-    NodeSortField,
     # Base models
     GraphNode,
-    GraphRelationship,
     GraphPath,
-    # Request models
-    ListNodesRequest,
-    ListRelationshipsRequest,
-    TraverseRequest,
-    CausalChainRequest,
-    CypherQueryRequest,
-    AddEpisodeRequest,
-    SearchGraphRequest,
-    # Response models
-    ListNodesResponse,
-    ListRelationshipsResponse,
-    TraverseResponse,
-    CausalChainResponse,
-    CypherQueryResponse,
-    AddEpisodeResponse,
-    SearchGraphResponse,
+    GraphRelationship,
     GraphStatsResponse,
-    NodeNetworkResponse,
     GraphStreamMessage,
     GraphSubscription,
+    # Request models
+    ListNodesResponse,
+    ListRelationshipsResponse,
+    NodeNetworkResponse,
+    NodeSortField,
+    RelationshipType,
+    SearchGraphRequest,
+    SearchGraphResponse,
+    SortOrder,
+    TraverseRequest,
+    TraverseResponse,
 )
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/graph", tags=["Knowledge Graph"])
+
 
 # WebSocket connection manager for real-time updates
 class ConnectionManager:
@@ -120,10 +116,12 @@ manager = ConnectionManager()
 # HELPER FUNCTIONS
 # =============================================================================
 
+
 async def _get_graphiti_service():
     """Get the Graphiti service with proper error handling."""
     try:
         from src.memory.graphiti_service import get_graphiti_service
+
         return await get_graphiti_service()
     except ImportError:
         logger.warning("Graphiti service not available, using fallback")
@@ -137,6 +135,7 @@ async def _get_semantic_memory():
     """Get FalkorDB semantic memory."""
     try:
         from src.memory.semantic_memory import get_semantic_memory
+
         return get_semantic_memory()
     except ImportError:
         logger.warning("Semantic memory not available")
@@ -161,10 +160,23 @@ def _convert_to_graph_node(data: Dict[str, Any]) -> GraphNode:
         id=data.get("id", data.get("node_id", "")),
         type=entity_type,
         name=data.get("name", data.get("label", "")),
-        properties={k: v for k, v in data.items()
-                    if k not in ["id", "node_id", "type", "entity_type", "name", "label", "created_at", "updated_at"]},
+        properties={
+            k: v
+            for k, v in data.items()
+            if k
+            not in [
+                "id",
+                "node_id",
+                "type",
+                "entity_type",
+                "name",
+                "label",
+                "created_at",
+                "updated_at",
+            ]
+        },
         created_at=data.get("created_at"),
-        updated_at=data.get("updated_at")
+        updated_at=data.get("updated_at"),
     )
 
 
@@ -184,16 +196,32 @@ def _convert_to_graph_relationship(data: Dict[str, Any]) -> GraphRelationship:
         type=rel_type,
         source_id=data.get("source_id", data.get("from_id", "")),
         target_id=data.get("target_id", data.get("to_id", "")),
-        properties={k: v for k, v in data.items()
-                    if k not in ["id", "rel_id", "type", "relationship_type", "source_id", "from_id", "target_id", "to_id", "confidence", "created_at"]},
+        properties={
+            k: v
+            for k, v in data.items()
+            if k
+            not in [
+                "id",
+                "rel_id",
+                "type",
+                "relationship_type",
+                "source_id",
+                "from_id",
+                "target_id",
+                "to_id",
+                "confidence",
+                "created_at",
+            ]
+        },
         confidence=data.get("confidence"),
-        created_at=data.get("created_at")
+        created_at=data.get("created_at"),
     )
 
 
 # =============================================================================
 # NODE ENDPOINTS
 # =============================================================================
+
 
 @router.get("/nodes", response_model=ListNodesResponse)
 async def list_nodes(
@@ -223,7 +251,7 @@ async def list_nodes(
                 limit=limit,
                 offset=offset,
                 has_more=False,
-                query_latency_ms=0.0
+                query_latency_ms=0.0,
             )
 
         # Parse entity types
@@ -233,10 +261,7 @@ async def list_nodes(
 
         # Build and execute query
         nodes_data = semantic.list_nodes(
-            entity_types=types_filter,
-            search=search,
-            limit=limit,
-            offset=offset
+            entity_types=types_filter, search=search, limit=limit, offset=offset
         )
 
         # Convert to GraphNode objects
@@ -253,7 +278,7 @@ async def list_nodes(
             limit=limit,
             offset=offset,
             has_more=(offset + len(nodes)) < total_count,
-            query_latency_ms=latency_ms
+            query_latency_ms=latency_ms,
         )
 
     except Exception as e:
@@ -288,8 +313,7 @@ async def get_node(node_id: str) -> GraphNode:
 
 @router.get("/nodes/{node_id}/network", response_model=NodeNetworkResponse)
 async def get_node_network(
-    node_id: str,
-    max_depth: int = Query(2, ge=1, le=5, description="Maximum traversal depth")
+    node_id: str, max_depth: int = Query(2, ge=1, le=5, description="Maximum traversal depth")
 ) -> NodeNetworkResponse:
     """
     Get the relationship network around a node.
@@ -325,31 +349,32 @@ async def get_node_network(
                 "treatments": network.get("treatments", []),
                 "triggers": network.get("triggers", []),
                 "causal_paths": network.get("causal_paths", []),
-                "brands": network.get("brands", [])
+                "brands": network.get("brands", []),
             }
         elif node_type == EntityType.HCP:
             network = semantic.get_hcp_influence_network(node_id, max_depth=max_depth)
             connected_nodes = {
                 "influenced_hcps": network.get("influenced_hcps", []),
                 "patients": network.get("patients", []),
-                "brands_prescribed": network.get("brands_prescribed", [])
+                "brands_prescribed": network.get("brands_prescribed", []),
             }
         else:
             # Generic traversal for other node types
-            subgraph = semantic.traverse_from_node(
-                start_node_id=node_id,
-                max_depth=max_depth
-            )
+            subgraph = semantic.traverse_from_node(start_node_id=node_id, max_depth=max_depth)
             # Group nodes by type from traversal results
             connected_nodes = {}
             for node in subgraph.get("nodes", []):
                 n_type = node.get("type", node.get("entity_type", "other"))
                 if n_type not in connected_nodes:
                     connected_nodes[n_type] = []
-                connected_nodes[n_type].append({
-                    "id": node.get("id"),
-                    "properties": {k: v for k, v in node.items() if k not in ["id", "type", "entity_type"]}
-                })
+                connected_nodes[n_type].append(
+                    {
+                        "id": node.get("id"),
+                        "properties": {
+                            k: v for k, v in node.items() if k not in ["id", "type", "entity_type"]
+                        },
+                    }
+                )
 
         # Calculate total connections
         total_connections = sum(len(nodes) for nodes in connected_nodes.values())
@@ -362,7 +387,7 @@ async def get_node_network(
             connected_nodes=connected_nodes,
             total_connections=total_connections,
             max_depth=max_depth,
-            query_latency_ms=latency_ms
+            query_latency_ms=latency_ms,
         )
 
     except HTTPException:
@@ -376,9 +401,12 @@ async def get_node_network(
 # RELATIONSHIP ENDPOINTS
 # =============================================================================
 
+
 @router.get("/relationships", response_model=ListRelationshipsResponse)
 async def list_relationships(
-    relationship_types: Optional[str] = Query(None, description="Comma-separated relationship types"),
+    relationship_types: Optional[str] = Query(
+        None, description="Comma-separated relationship types"
+    ),
     source_id: Optional[str] = Query(None, description="Filter by source node"),
     target_id: Optional[str] = Query(None, description="Filter by target node"),
     min_confidence: Optional[float] = Query(None, ge=0.0, le=1.0, description="Minimum confidence"),
@@ -404,7 +432,7 @@ async def list_relationships(
                 limit=limit,
                 offset=offset,
                 has_more=False,
-                query_latency_ms=0.0
+                query_latency_ms=0.0,
             )
 
         # Parse relationship types
@@ -419,14 +447,12 @@ async def list_relationships(
             target_id=target_id,
             min_confidence=min_confidence,
             limit=limit,
-            offset=offset
+            offset=offset,
         )
 
         relationships = [_convert_to_graph_relationship(r) for r in rels_data]
         total_count = semantic.count_relationships(
-            relationship_types=types_filter,
-            source_id=source_id,
-            target_id=target_id
+            relationship_types=types_filter, source_id=source_id, target_id=target_id
         )
 
         latency_ms = (time.time() - start_time) * 1000
@@ -437,7 +463,7 @@ async def list_relationships(
             limit=limit,
             offset=offset,
             has_more=(offset + len(relationships)) < total_count,
-            query_latency_ms=latency_ms
+            query_latency_ms=latency_ms,
         )
 
     except Exception as e:
@@ -448,6 +474,7 @@ async def list_relationships(
 # =============================================================================
 # TRAVERSAL ENDPOINTS
 # =============================================================================
+
 
 @router.post("/traverse", response_model=TraverseResponse)
 async def traverse_graph(request: TraverseRequest) -> TraverseResponse:
@@ -466,23 +493,26 @@ async def traverse_graph(request: TraverseRequest) -> TraverseResponse:
         if graphiti:
             # Use Graphiti service for traversal
             result = await graphiti.get_entity_subgraph(
-                entity_id=request.start_node_id,
-                max_depth=request.max_depth
+                entity_id=request.start_node_id, max_depth=request.max_depth
             )
 
             nodes = [_convert_to_graph_node(n) for n in result.nodes]
-            relationships = [_convert_to_graph_relationship(r) for r in result.edges]  # edges, not relationships
+            relationships = [
+                _convert_to_graph_relationship(r) for r in result.edges
+            ]  # edges, not relationships
 
             latency_ms = (time.time() - start_time) * 1000
 
             return TraverseResponse(
-                subgraph={"nodes": [n.model_dump() for n in nodes],
-                          "relationships": [r.model_dump() for r in relationships]},
+                subgraph={
+                    "nodes": [n.model_dump() for n in nodes],
+                    "relationships": [r.model_dump() for r in relationships],
+                },
                 nodes=nodes,
                 relationships=relationships,
                 paths=[],
                 max_depth_reached=result.depth,
-                query_latency_ms=latency_ms
+                query_latency_ms=latency_ms,
             )
 
         # Fallback to semantic memory
@@ -492,14 +522,20 @@ async def traverse_graph(request: TraverseRequest) -> TraverseResponse:
 
         subgraph_data = semantic.traverse_from_node(
             start_node_id=request.start_node_id,
-            relationship_types=[r.value for r in request.relationship_types] if request.relationship_types else None,
+            relationship_types=(
+                [r.value for r in request.relationship_types]
+                if request.relationship_types
+                else None
+            ),
             direction=request.direction,
             max_depth=request.max_depth,
-            min_confidence=request.min_confidence
+            min_confidence=request.min_confidence,
         )
 
         nodes = [_convert_to_graph_node(n) for n in subgraph_data.get("nodes", [])]
-        relationships = [_convert_to_graph_relationship(r) for r in subgraph_data.get("relationships", [])]
+        relationships = [
+            _convert_to_graph_relationship(r) for r in subgraph_data.get("relationships", [])
+        ]
 
         latency_ms = (time.time() - start_time) * 1000
 
@@ -509,7 +545,7 @@ async def traverse_graph(request: TraverseRequest) -> TraverseResponse:
             relationships=relationships,
             paths=[],
             max_depth_reached=subgraph_data.get("max_depth_reached", request.max_depth),
-            query_latency_ms=latency_ms
+            query_latency_ms=latency_ms,
         )
 
     except HTTPException:
@@ -522,6 +558,7 @@ async def traverse_graph(request: TraverseRequest) -> TraverseResponse:
 # =============================================================================
 # CAUSAL CHAIN ENDPOINTS
 # =============================================================================
+
 
 @router.post("/causal-chains", response_model=CausalChainResponse)
 async def query_causal_chains(request: CausalChainRequest) -> CausalChainResponse:
@@ -543,7 +580,7 @@ async def query_causal_chains(request: CausalChainRequest) -> CausalChainRespons
             chains_data = await graphiti.get_causal_chains(
                 kpi_name=request.kpi_name,
                 max_depth=request.max_chain_length,
-                min_confidence=request.min_confidence
+                min_confidence=request.min_confidence,
             )
 
             # Convert to GraphPath objects
@@ -551,12 +588,14 @@ async def query_causal_chains(request: CausalChainRequest) -> CausalChainRespons
             for chain in chains_data:
                 nodes = [_convert_to_graph_node(n) for n in chain.get("nodes", [])]
                 rels = [_convert_to_graph_relationship(r) for r in chain.get("edges", [])]
-                chains.append(GraphPath(
-                    nodes=nodes,
-                    relationships=rels,
-                    total_confidence=chain.get("confidence"),
-                    path_length=chain.get("length", len(rels))
-                ))
+                chains.append(
+                    GraphPath(
+                        nodes=nodes,
+                        relationships=rels,
+                        total_confidence=chain.get("confidence"),
+                        path_length=chain.get("length", len(rels)),
+                    )
+                )
 
             strongest = None
             if chains:
@@ -569,7 +608,7 @@ async def query_causal_chains(request: CausalChainRequest) -> CausalChainRespons
                 total_chains=len(chains),
                 strongest_chain=strongest,
                 aggregate_effect=None,  # Not provided by graphiti service
-                query_latency_ms=latency_ms
+                query_latency_ms=latency_ms,
             )
 
         # Fallback to semantic memory
@@ -582,19 +621,21 @@ async def query_causal_chains(request: CausalChainRequest) -> CausalChainRespons
             source_entity_id=request.source_entity_id,
             target_entity_id=request.target_entity_id,
             max_length=request.max_chain_length,
-            min_confidence=request.min_confidence
+            min_confidence=request.min_confidence,
         )
 
         chains = []
         for chain in chains_data:
             nodes = [_convert_to_graph_node(n) for n in chain.get("nodes", [])]
             rels = [_convert_to_graph_relationship(r) for r in chain.get("relationships", [])]
-            chains.append(GraphPath(
-                nodes=nodes,
-                relationships=rels,
-                total_confidence=chain.get("confidence"),
-                path_length=len(rels)
-            ))
+            chains.append(
+                GraphPath(
+                    nodes=nodes,
+                    relationships=rels,
+                    total_confidence=chain.get("confidence"),
+                    path_length=len(rels),
+                )
+            )
 
         strongest = None
         if chains:
@@ -607,7 +648,7 @@ async def query_causal_chains(request: CausalChainRequest) -> CausalChainRespons
             total_chains=len(chains),
             strongest_chain=strongest,
             aggregate_effect=None,
-            query_latency_ms=latency_ms
+            query_latency_ms=latency_ms,
         )
 
     except HTTPException:
@@ -620,6 +661,7 @@ async def query_causal_chains(request: CausalChainRequest) -> CausalChainRespons
 # =============================================================================
 # CYPHER QUERY ENDPOINT
 # =============================================================================
+
 
 @router.post("/query", response_model=CypherQueryResponse)
 async def execute_cypher_query(request: CypherQueryRequest) -> CypherQueryResponse:
@@ -644,7 +686,7 @@ async def execute_cypher_query(request: CypherQueryRequest) -> CypherQueryRespon
                 if kw in query_upper:
                     raise HTTPException(
                         status_code=400,
-                        detail=f"Write operation '{kw}' not allowed in read-only mode"
+                        detail=f"Write operation '{kw}' not allowed in read-only mode",
                     )
 
         semantic = await _get_semantic_memory()
@@ -653,9 +695,7 @@ async def execute_cypher_query(request: CypherQueryRequest) -> CypherQueryRespon
 
         # Execute query with timeout
         results = semantic.execute_cypher(
-            query=request.query,
-            parameters=request.parameters,
-            timeout=request.timeout_seconds
+            query=request.query, parameters=request.parameters, timeout=request.timeout_seconds
         )
 
         # Extract column names from first result
@@ -668,7 +708,7 @@ async def execute_cypher_query(request: CypherQueryRequest) -> CypherQueryRespon
             columns=columns,
             row_count=len(results),
             query_latency_ms=latency_ms,
-            read_only=request.read_only
+            read_only=request.read_only,
         )
 
     except HTTPException:
@@ -681,6 +721,7 @@ async def execute_cypher_query(request: CypherQueryRequest) -> CypherQueryRespon
 # =============================================================================
 # EPISODE ENDPOINTS
 # =============================================================================
+
 
 @router.post("/episodes", response_model=AddEpisodeResponse)
 async def add_episode(request: AddEpisodeRequest) -> AddEpisodeResponse:
@@ -704,35 +745,56 @@ async def add_episode(request: AddEpisodeRequest) -> AddEpisodeResponse:
             content=request.content,
             source=request.source,
             session_id=request.session_id,
-            metadata=request.metadata
+            metadata=request.metadata,
         )
 
         latency_ms = (time.time() - start_time) * 1000
 
         # Broadcast to WebSocket subscribers
-        await manager.broadcast(GraphStreamMessage(
-            event_type="episode_added",
-            payload={
-                "episode_id": result.episode_id,
-                "source": request.source,
-                "entities_count": len(result.entities_extracted),
-                "relationships_count": len(result.relationships_extracted)
-            },
-            session_id=request.session_id
-        ))
+        await manager.broadcast(
+            GraphStreamMessage(
+                event_type="episode_added",
+                payload={
+                    "episode_id": result.episode_id,
+                    "source": request.source,
+                    "entities_count": len(result.entities_extracted),
+                    "relationships_count": len(result.relationships_extracted),
+                },
+                session_id=request.session_id,
+            )
+        )
 
         return AddEpisodeResponse(
             episode_id=result.episode_id,
             extracted_entities=[
-                {"type": e.entity_type.value if hasattr(e.entity_type, 'value') else str(e.entity_type), "name": e.name, "confidence": e.confidence}
+                {
+                    "type": (
+                        e.entity_type.value
+                        if hasattr(e.entity_type, "value")
+                        else str(e.entity_type)
+                    ),
+                    "name": e.name,
+                    "confidence": e.confidence,
+                }
                 for e in result.entities_extracted
             ],
             extracted_relationships=[
-                {"type": r.relationship_type.value if hasattr(r.relationship_type, 'value') else str(r.relationship_type), "source_id": r.source_id, "target_id": r.target_id, "confidence": r.confidence}
+                {
+                    "type": (
+                        r.relationship_type.value
+                        if hasattr(r.relationship_type, "value")
+                        else str(r.relationship_type)
+                    ),
+                    "source_id": r.source_id,
+                    "target_id": r.target_id,
+                    "confidence": r.confidence,
+                }
                 for r in result.relationships_extracted
             ],
-            content_summary=request.content[:200] + "..." if len(request.content) > 200 else request.content,
-            processing_latency_ms=latency_ms
+            content_summary=(
+                request.content[:200] + "..." if len(request.content) > 200 else request.content
+            ),
+            processing_latency_ms=latency_ms,
         )
 
     except HTTPException:
@@ -745,6 +807,7 @@ async def add_episode(request: AddEpisodeRequest) -> AddEpisodeResponse:
 # =============================================================================
 # SEARCH ENDPOINTS
 # =============================================================================
+
 
 @router.post("/search", response_model=SearchGraphResponse)
 async def search_graph(request: SearchGraphRequest) -> SearchGraphResponse:
@@ -765,7 +828,7 @@ async def search_graph(request: SearchGraphRequest) -> SearchGraphResponse:
                 query=request.query,
                 session_id=request.session_id,
                 entity_types=None,  # Service expects E2IEntityType, not str
-                limit=request.k  # 'limit' not 'k'
+                limit=request.k,  # 'limit' not 'k'
             )
 
             # Filter by min_score
@@ -782,13 +845,13 @@ async def search_graph(request: SearchGraphRequest) -> SearchGraphResponse:
                         "type": r.entity_type,
                         "score": r.score,
                         "properties": r.properties,
-                        "relationships": r.relationships
+                        "relationships": r.relationships,
                     }
                     for r in results
                 ],
                 total_results=len(results),
                 query=request.query,
-                query_latency_ms=latency_ms
+                query_latency_ms=latency_ms,
             )
 
         # Fallback to semantic memory search
@@ -799,7 +862,7 @@ async def search_graph(request: SearchGraphRequest) -> SearchGraphResponse:
         results = semantic.semantic_search(
             query=request.query,
             entity_types=[t.value for t in request.entity_types] if request.entity_types else None,
-            k=request.k
+            k=request.k,
         )
 
         latency_ms = (time.time() - start_time) * 1000
@@ -808,7 +871,7 @@ async def search_graph(request: SearchGraphRequest) -> SearchGraphResponse:
             results=results,
             total_results=len(results),
             query=request.query,
-            query_latency_ms=latency_ms
+            query_latency_ms=latency_ms,
         )
 
     except HTTPException:
@@ -821,6 +884,7 @@ async def search_graph(request: SearchGraphRequest) -> SearchGraphResponse:
 # =============================================================================
 # STATS ENDPOINT
 # =============================================================================
+
 
 @router.get("/stats", response_model=GraphStatsResponse)
 async def get_graph_stats() -> GraphStatsResponse:
@@ -844,7 +908,7 @@ async def get_graph_stats() -> GraphStatsResponse:
                 relationships_by_type=stats.get("edges_by_type", {}),  # edges -> relationships
                 total_episodes=stats.get("total_episodes", 0),
                 total_communities=stats.get("total_communities", 0),
-                last_updated=stats.get("last_updated")
+                last_updated=stats.get("last_updated"),
             )
 
         # Fallback to semantic memory
@@ -856,7 +920,7 @@ async def get_graph_stats() -> GraphStatsResponse:
                 nodes_by_type={},
                 relationships_by_type={},
                 total_episodes=0,
-                total_communities=0
+                total_communities=0,
             )
 
         stats = semantic.get_stats()
@@ -867,7 +931,7 @@ async def get_graph_stats() -> GraphStatsResponse:
             relationships_by_type=stats.get("relationships_by_type", {}),
             total_episodes=0,
             total_communities=0,
-            last_updated=stats.get("last_updated")
+            last_updated=stats.get("last_updated"),
         )
 
     except Exception as e:
@@ -878,6 +942,7 @@ async def get_graph_stats() -> GraphStatsResponse:
 # =============================================================================
 # WEBSOCKET ENDPOINT
 # =============================================================================
+
 
 @router.websocket("/stream")
 async def graph_stream(websocket: WebSocket, client_id: Optional[str] = None):
@@ -907,20 +972,13 @@ async def graph_stream(websocket: WebSocket, client_id: Optional[str] = None):
                 sub_data = json.loads(data)
                 subscription = GraphSubscription(**sub_data)
                 manager.set_subscription(client_id, subscription)
-                await websocket.send_json({
-                    "type": "subscription_updated",
-                    "message": "Subscription filters applied"
-                })
+                await websocket.send_json(
+                    {"type": "subscription_updated", "message": "Subscription filters applied"}
+                )
             except json.JSONDecodeError:
-                await websocket.send_json({
-                    "type": "error",
-                    "message": "Invalid JSON"
-                })
+                await websocket.send_json({"type": "error", "message": "Invalid JSON"})
             except Exception as e:
-                await websocket.send_json({
-                    "type": "error",
-                    "message": str(e)
-                })
+                await websocket.send_json({"type": "error", "message": str(e)})
 
     except WebSocketDisconnect:
         manager.disconnect(client_id)
@@ -932,6 +990,7 @@ async def graph_stream(websocket: WebSocket, client_id: Optional[str] = None):
 # =============================================================================
 # UTILITY ENDPOINTS
 # =============================================================================
+
 
 @router.get("/health")
 async def graph_health() -> Dict[str, Any]:
@@ -961,9 +1020,13 @@ async def graph_health() -> Dict[str, Any]:
         pass
 
     return {
-        "status": "healthy" if graphiti_status == "connected" or falkordb_status == "connected" else "degraded",
+        "status": (
+            "healthy"
+            if graphiti_status == "connected" or falkordb_status == "connected"
+            else "degraded"
+        ),
         "graphiti": graphiti_status,
         "falkordb": falkordb_status,
         "websocket_connections": len(manager.active_connections),
-        "timestamp": datetime.now(timezone.utc).isoformat()
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }

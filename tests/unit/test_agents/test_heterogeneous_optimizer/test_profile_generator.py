@@ -1,11 +1,10 @@
 """Tests for Profile Generator Node."""
 
 import pytest
+
 from src.agents.heterogeneous_optimizer.nodes.profile_generator import ProfileGeneratorNode
 from src.agents.heterogeneous_optimizer.state import (
     HeterogeneousOptimizerState,
-    CATEResult,
-    SegmentProfile,
 )
 
 
@@ -42,7 +41,9 @@ class TestProfileGeneratorNode:
                 "segment_id": "hcp_specialty_Oncology",
                 "responder_type": "high",
                 "cate_estimate": 0.50,
-                "defining_features": [{"variable": "hcp_specialty", "value": "Oncology", "effect_size": 2.0}],
+                "defining_features": [
+                    {"variable": "hcp_specialty", "value": "Oncology", "effect_size": 2.0}
+                ],
                 "size": 200,
                 "size_percentage": 20.0,
                 "recommendation": "Prioritize treatment",
@@ -54,7 +55,9 @@ class TestProfileGeneratorNode:
                 "segment_id": "hcp_specialty_Primary Care",
                 "responder_type": "low",
                 "cate_estimate": 0.10,
-                "defining_features": [{"variable": "hcp_specialty", "value": "Primary Care", "effect_size": 0.4}],
+                "defining_features": [
+                    {"variable": "hcp_specialty", "value": "Primary Care", "effect_size": 0.4}
+                ],
                 "size": 300,
                 "size_percentage": 30.0,
                 "recommendation": "De-prioritize treatment",
@@ -239,7 +242,10 @@ class TestProfileGeneratorNode:
 
         # Should have insights about treatment effect and heterogeneity
         assert any("treatment" in insight.lower() for insight in insights)
-        assert any("heterogeneity" in insight.lower() or "segment" in insight.lower() for insight in insights)
+        assert any(
+            "heterogeneity" in insight.lower() or "segment" in insight.lower()
+            for insight in insights
+        )
 
     @pytest.mark.asyncio
     async def test_status_remains_completed(self):
@@ -308,16 +314,16 @@ class TestProfileGeneratorEdgeCases:
     async def test_no_high_or_low_responders(self):
         """Test with no high or low responders."""
         node = ProfileGeneratorNode()
-        state = self._create_test_state(
-            high_responders=[],
-            low_responders=[]
-        )
+        state = self._create_test_state(high_responders=[], low_responders=[])
 
         result = await node.execute(state)
 
         # Should still generate summary
         assert result["executive_summary"] is not None
-        assert "uniform" in result["executive_summary"].lower() or "limited heterogeneity" in result["executive_summary"].lower()
+        assert (
+            "uniform" in result["executive_summary"].lower()
+            or "limited heterogeneity" in result["executive_summary"].lower()
+        )
 
     @pytest.mark.asyncio
     async def test_high_heterogeneity(self):
@@ -325,8 +331,28 @@ class TestProfileGeneratorEdgeCases:
         node = ProfileGeneratorNode()
         state = self._create_test_state(
             heterogeneity_score=0.9,
-            high_responders=[{"segment_id": "test", "cate_estimate": 0.50, "size_percentage": 10.0, "responder_type": "high", "defining_features": [], "size": 100, "recommendation": "test"}],
-            low_responders=[{"segment_id": "test2", "cate_estimate": 0.05, "size_percentage": 10.0, "responder_type": "low", "defining_features": [], "size": 100, "recommendation": "test"}]
+            high_responders=[
+                {
+                    "segment_id": "test",
+                    "cate_estimate": 0.50,
+                    "size_percentage": 10.0,
+                    "responder_type": "high",
+                    "defining_features": [],
+                    "size": 100,
+                    "recommendation": "test",
+                }
+            ],
+            low_responders=[
+                {
+                    "segment_id": "test2",
+                    "cate_estimate": 0.05,
+                    "size_percentage": 10.0,
+                    "responder_type": "low",
+                    "defining_features": [],
+                    "size": 100,
+                    "recommendation": "test",
+                }
+            ],
         )
 
         result = await node.execute(state)

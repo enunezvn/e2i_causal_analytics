@@ -8,7 +8,7 @@ This node generates the final output:
 """
 
 import time
-from typing import Dict, List, Any, Optional
+from typing import Any, Dict, List
 
 from ..state import GapAnalyzerState, PrioritizedOpportunity
 
@@ -63,10 +63,7 @@ class FormatterNode:
             formatting_latency_ms = int((time.time() - start_time) * 1000)
 
             total_latency_ms = (
-                detection_latency
-                + roi_latency
-                + prioritization_latency
-                + formatting_latency_ms
+                detection_latency + roi_latency + prioritization_latency + formatting_latency_ms
             )
 
             return {
@@ -184,9 +181,7 @@ class FormatterNode:
         )
 
         # Insight 2: Segment concentration
-        segment_distribution = self._analyze_segment_distribution(
-            prioritized_opportunities
-        )
+        segment_distribution = self._analyze_segment_distribution(prioritized_opportunities)
         if segment_distribution:
             top_segment, count = segment_distribution[0]
             insights.append(
@@ -195,9 +190,7 @@ class FormatterNode:
             )
 
         # Insight 3: Metric patterns
-        metric_distribution = self._analyze_metric_distribution(
-            prioritized_opportunities
-        )
+        metric_distribution = self._analyze_metric_distribution(prioritized_opportunities)
         if metric_distribution:
             top_metric, count = metric_distribution[0]
             insights.append(
@@ -215,7 +208,9 @@ class FormatterNode:
                 f"with ${total_qw_revenue:,.0f} total potential impact"
             )
         else:
-            insights.append("No quick wins identified; focus on medium/high difficulty opportunities")
+            insights.append(
+                "No quick wins identified; focus on medium/high difficulty opportunities"
+            )
 
         # Insight 5: Strategic focus
         if strategic_bets:
@@ -247,9 +242,7 @@ class FormatterNode:
             segment_counts[segment_value] = segment_counts.get(segment_value, 0) + 1
 
         # Sort by count descending
-        sorted_segments = sorted(
-            segment_counts.items(), key=lambda x: x[1], reverse=True
-        )
+        sorted_segments = sorted(segment_counts.items(), key=lambda x: x[1], reverse=True)
 
         return sorted_segments
 
@@ -271,8 +264,6 @@ class FormatterNode:
             metric_counts[metric] = metric_counts.get(metric, 0) + 1
 
         # Sort by count descending
-        sorted_metrics = sorted(
-            metric_counts.items(), key=lambda x: x[1], reverse=True
-        )
+        sorted_metrics = sorted(metric_counts.items(), key=lambda x: x[1], reverse=True)
 
         return sorted_metrics

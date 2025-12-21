@@ -3,8 +3,7 @@
 This module evaluates trained models on train/validation/test sets.
 """
 
-from typing import Dict, Any, Optional
-import numpy as np
+from typing import Any, Dict
 
 
 async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -79,9 +78,7 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
             y_validation_pred = trained_model.predict(X_validation_preprocessed)
             if problem_type in ["binary_classification", "multiclass_classification"]:
                 if hasattr(trained_model, "predict_proba"):
-                    y_validation_proba = trained_model.predict_proba(
-                        X_validation_preprocessed
-                    )
+                    y_validation_proba = trained_model.predict_proba(X_validation_preprocessed)
                 else:
                     y_validation_proba = None
             else:
@@ -135,9 +132,7 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     # Check success criteria
-    success_results = _check_success_criteria(
-        metrics_result["test_metrics"], success_criteria
-    )
+    success_results = _check_success_criteria(metrics_result["test_metrics"], success_criteria)
 
     # Merge results
     return {
@@ -166,9 +161,7 @@ def _compute_classification_metrics(
 
     # PLACEHOLDER: Mock metrics
     train_metrics = {"accuracy": 0.85, "loss": 0.35} if y_train_pred is not None else {}
-    validation_metrics = (
-        {"accuracy": 0.82, "loss": 0.42} if y_validation_pred is not None else {}
-    )
+    validation_metrics = {"accuracy": 0.82, "loss": 0.42} if y_validation_pred is not None else {}
     test_metrics = {"accuracy": 0.80, "loss": 0.45}
 
     # Problem-specific metrics for classification
@@ -229,9 +222,7 @@ def _compute_regression_metrics(
     # from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 
     # PLACEHOLDER: Mock metrics
-    train_metrics = (
-        {"mse": 0.12, "mae": 0.28, "r2": 0.78} if y_train_pred is not None else {}
-    )
+    train_metrics = {"mse": 0.12, "mae": 0.28, "r2": 0.78} if y_train_pred is not None else {}
     validation_metrics = (
         {"mse": 0.15, "mae": 0.31, "r2": 0.74} if y_validation_pred is not None else {}
     )

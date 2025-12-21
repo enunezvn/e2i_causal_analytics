@@ -3,12 +3,13 @@ E2I Prediction Synthesizer Agent - Integration Tests
 """
 
 import pytest
+
 from src.agents.prediction_synthesizer import (
     PredictionSynthesizerAgent,
     PredictionSynthesizerInput,
     PredictionSynthesizerOutput,
-    synthesize_predictions,
     build_prediction_synthesizer_graph,
+    synthesize_predictions,
 )
 
 
@@ -51,9 +52,7 @@ class TestPredictionSynthesizerAgent:
         assert result.total_latency_ms >= 0
 
     @pytest.mark.asyncio
-    async def test_quick_predict(
-        self, mock_model_clients, sample_features
-    ):
+    async def test_quick_predict(self, mock_model_clients, sample_features):
         """Test quick prediction without context."""
         agent = PredictionSynthesizerAgent(model_clients=mock_model_clients)
 
@@ -68,9 +67,7 @@ class TestPredictionSynthesizerAgent:
         assert result.prediction_context is None
 
     @pytest.mark.asyncio
-    async def test_synthesis_with_partial_failures(
-        self, failing_model_clients, sample_features
-    ):
+    async def test_synthesis_with_partial_failures(self, failing_model_clients, sample_features):
         """Test synthesis with some model failures."""
         agent = PredictionSynthesizerAgent(model_clients=failing_model_clients)
 
@@ -88,9 +85,7 @@ class TestPredictionSynthesizerAgent:
         assert result.status == "completed"
 
     @pytest.mark.asyncio
-    async def test_handoff_generation(
-        self, mock_model_clients, sample_features
-    ):
+    async def test_handoff_generation(self, mock_model_clients, sample_features):
         """Test handoff generation for orchestrator."""
         agent = PredictionSynthesizerAgent(model_clients=mock_model_clients)
 
@@ -112,9 +107,7 @@ class TestPredictionSynthesizerAgent:
         assert handoff["models"]["succeeded"] == 2
 
     @pytest.mark.asyncio
-    async def test_handoff_with_low_confidence(
-        self, sample_features
-    ):
+    async def test_handoff_with_low_confidence(self, sample_features):
         """Test handoff recommendations for low confidence."""
         from tests.unit.test_agents.test_prediction_synthesizer.conftest import (
             MockModelClient,
@@ -139,8 +132,10 @@ class TestPredictionSynthesizerAgent:
 
         # Should have recommendations for low confidence
         assert handoff["requires_further_analysis"] is True
-        assert any("confidence" in r.lower() or "agreement" in r.lower()
-                   for r in handoff["recommendations"])
+        assert any(
+            "confidence" in r.lower() or "agreement" in r.lower()
+            for r in handoff["recommendations"]
+        )
 
 
 class TestPredictionSynthesizerGraph:
@@ -235,9 +230,7 @@ class TestConvenienceFunctions:
     """Tests for convenience functions."""
 
     @pytest.mark.asyncio
-    async def test_synthesize_predictions_function(
-        self, mock_model_clients, sample_features
-    ):
+    async def test_synthesize_predictions_function(self, mock_model_clients, sample_features):
         """Test synthesize_predictions convenience function."""
         result = await synthesize_predictions(
             entity_id="hcp_123",

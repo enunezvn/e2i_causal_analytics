@@ -4,19 +4,12 @@ Version: 4.3
 Tests the RefutationNode integration with RefutationRunner.
 """
 
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.agents.causal_impact.nodes.refutation import RefutationNode, refute_causal_estimate
 from src.agents.causal_impact.state import CausalImpactState, EstimationResult
-from src.causal_engine import (
-    RefutationRunner,
-    RefutationSuite,
-    RefutationResult,
-    RefutationStatus,
-    GateDecision,
-    RefutationTestType,
-)
 
 
 class TestRefutationNode:
@@ -226,9 +219,11 @@ class TestRefutationNode:
     async def test_blocked_estimate_fails_workflow(self):
         """Test that blocked estimates set workflow status to failed."""
         # Create a node with very strict thresholds to force blocking
-        node = RefutationNode(thresholds={
-            "e_value_min": {"pass": 100.0, "warning": 50.0},  # Impossible threshold
-        })
+        node = RefutationNode(
+            thresholds={
+                "e_value_min": {"pass": 100.0, "warning": 50.0},  # Impossible threshold
+            }
+        )
 
         state: CausalImpactState = {
             "query": "test query",

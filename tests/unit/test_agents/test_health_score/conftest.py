@@ -4,11 +4,10 @@ Test fixtures for Health Score agent tests.
 Provides mock clients, sample data, and shared utilities.
 """
 
-import pytest
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
-from unittest.mock import AsyncMock
 
+import pytest
 
 # ============================================================================
 # MOCK HEALTH CLIENT
@@ -77,9 +76,7 @@ class MockMetricsStore:
         """Get list of active model IDs"""
         return self.models
 
-    async def get_model_metrics(
-        self, model_id: str, time_window: str
-    ) -> Dict[str, Any]:
+    async def get_model_metrics(self, model_id: str, time_window: str) -> Dict[str, Any]:
         """Get metrics for a specific model"""
         if model_id in self.metrics:
             return self.metrics[model_id]
@@ -189,9 +186,7 @@ def mock_pipeline_store():
 @pytest.fixture
 def stale_pipeline_store():
     """Create a mock pipeline store with stale/failed pipelines"""
-    store = MockPipelineStore(
-        pipelines=["healthy_pipeline", "stale_pipeline", "failed_pipeline"]
-    )
+    store = MockPipelineStore(pipelines=["healthy_pipeline", "stale_pipeline", "failed_pipeline"])
     now = datetime.now(timezone.utc)
 
     store.set_pipeline_status(
@@ -232,9 +227,7 @@ def stale_pipeline_store():
 class MockAgentRegistry:
     """Mock registry for agents"""
 
-    def __init__(
-        self, agents: List[Dict[str, Any]] = None, metrics: Dict[str, Dict] = None
-    ):
+    def __init__(self, agents: List[Dict[str, Any]] = None, metrics: Dict[str, Dict] = None):
         self.agents = agents or [
             {"name": "orchestrator", "tier": 1},
             {"name": "causal_impact", "tier": 2},

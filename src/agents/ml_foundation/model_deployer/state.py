@@ -8,7 +8,7 @@ This agent manages the model lifecycle from development through production:
 5. Rollback - Revert to previous version if needed
 """
 
-from typing import TypedDict, Dict, Any, List, Optional, Literal
+from typing import Any, Dict, List, Literal, Optional, TypedDict
 
 
 class ModelDeployerState(TypedDict, total=False):
@@ -65,7 +65,9 @@ class ModelDeployerState(TypedDict, total=False):
 
     # Promotion validation
     promotion_allowed: bool
-    promotion_target_stage: str  # Target stage for promotion (e.g., "Staging", "Shadow", "Production")
+    promotion_target_stage: (
+        str  # Target stage for promotion (e.g., "Staging", "Shadow", "Production")
+    )
     promotion_denial_reason: Optional[str]  # Reason if promotion denied
     validation_failures: List[str]  # Shadow mode validation failures
     promotion_validation_errors: List[str]

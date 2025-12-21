@@ -1,6 +1,7 @@
 """Tests for Gap Detector Node."""
 
 import pytest
+
 from src.agents.gap_analyzer.nodes.gap_detector import GapDetectorNode
 from src.agents.gap_analyzer.state import GapAnalyzerState
 
@@ -390,9 +391,7 @@ class TestMockDataConnectors:
 
         store = MockBenchmarkStore()
 
-        df = await store.get_targets(
-            brand="kisqali", metrics=["trx"], segments=["region"]
-        )
+        df = await store.get_targets(brand="kisqali", metrics=["trx"], segments=["region"])
 
         assert df is not None
         assert not df.empty

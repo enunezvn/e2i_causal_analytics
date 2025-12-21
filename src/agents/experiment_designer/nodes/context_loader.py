@@ -18,7 +18,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from src.agents.experiment_designer.state import ExperimentDesignState, ErrorDetails
+from src.agents.experiment_designer.state import ErrorDetails, ExperimentDesignState
 
 # Phase 4: Import ExperimentKnowledgeStore for learning from past failures
 try:
@@ -26,6 +26,7 @@ try:
         ExperimentKnowledgeStore,
         get_experiment_knowledge_store,
     )
+
     KNOWLEDGE_STORE_AVAILABLE = True
 except ImportError:
     KNOWLEDGE_STORE_AVAILABLE = False
@@ -85,9 +86,7 @@ class MockKnowledgeStore:
             "blocked_variables": ["region", "brand"],
         }
 
-    async def get_recent_assumption_violations(
-        self, limit: int = 5
-    ) -> list[dict[str, Any]]:
+    async def get_recent_assumption_violations(self, limit: int = 5) -> list[dict[str, Any]]:
         """Get recent experiments where key assumptions were violated."""
         return [
             {
@@ -191,25 +190,27 @@ class ContextLoaderNode:
             )
             organizational_defaults = await self.knowledge_store.get_organizational_defaults()
             recent_violations = await self.knowledge_store.get_recent_assumption_violations()
-            domain_knowledge = await self.knowledge_store.get_domain_knowledge(
-                state.get("brand")
-            )
+            domain_knowledge = await self.knowledge_store.get_domain_knowledge(state.get("brand"))
 
             # Phase 4: Enrich with validation failure learnings
             if self._experiment_knowledge_store is not None:
                 try:
                     # Get similar experiments from validation history
-                    validation_experiments = await self._experiment_knowledge_store.get_similar_experiments(
-                        state["business_question"],
-                        limit=3,
+                    validation_experiments = (
+                        await self._experiment_knowledge_store.get_similar_experiments(
+                            state["business_question"],
+                            limit=3,
+                        )
                     )
                     # Merge with mock experiments (validation experiments take priority)
                     if validation_experiments:
                         similar_experiments = validation_experiments + similar_experiments
 
                     # Get recent assumption violations from validation failures
-                    validation_violations = await self._experiment_knowledge_store.get_recent_assumption_violations(
-                        limit=3,
+                    validation_violations = (
+                        await self._experiment_knowledge_store.get_recent_assumption_violations(
+                            limit=3,
+                        )
                     )
                     if validation_violations:
                         recent_violations = validation_violations + recent_violations
@@ -218,9 +219,7 @@ class ContextLoaderNode:
                     # Non-fatal: log and continue with mock data
                     if "warnings" not in state:
                         state["warnings"] = []
-                    state["warnings"].append(
-                        f"Could not load validation learnings: {str(e)}"
-                    )
+                    state["warnings"].append(f"Could not load validation learnings: {str(e)}")
 
             # Update state with context
             state["historical_experiments"] = similar_experiments
@@ -230,15 +229,15 @@ class ContextLoaderNode:
             }
 
             # Extract regulatory requirements
-            state["regulatory_requirements"] = domain_knowledge.get(
-                "regulatory_constraints", []
-            )
+            state["regulatory_requirements"] = domain_knowledge.get("regulatory_constraints", [])
 
             # Store assumption violations for validity audit
             if "warnings" not in state:
                 state["warnings"] = []
 
-            for violation in recent_violations[:5]:  # Increased limit to include validation learnings
+            for violation in recent_violations[
+                :5
+            ]:  # Increased limit to include validation learnings
                 state["warnings"].append(
                     f"Past violation ({violation['violation_type']}): {violation['recommendation']}"
                 )
@@ -249,9 +248,11 @@ class ContextLoaderNode:
                 outcome_var = state.get("outcome_variable")
                 if treatment_var and outcome_var:
                     try:
-                        design_warnings = await self._experiment_knowledge_store.should_warn_for_design(
-                            treatment_variable=treatment_var,
-                            outcome_variable=outcome_var,
+                        design_warnings = (
+                            await self._experiment_knowledge_store.should_warn_for_design(
+                                treatment_variable=treatment_var,
+                                outcome_variable=outcome_var,
+                            )
                         )
                         state["warnings"].extend(design_warnings)
                     except Exception:

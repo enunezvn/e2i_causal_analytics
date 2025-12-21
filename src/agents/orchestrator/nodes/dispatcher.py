@@ -5,9 +5,9 @@ Parallel agent dispatch with timeout handling.
 
 import asyncio
 import time
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, Optional
 
-from ..state import OrchestratorState, AgentResult, AgentDispatch
+from ..state import AgentDispatch, AgentResult, OrchestratorState
 
 
 class DispatcherNode:
@@ -46,7 +46,7 @@ class DispatcherNode:
             group_results = await asyncio.gather(*tasks, return_exceptions=True)
 
             # Process results
-            for dispatch, result in zip(group_dispatches, group_results):
+            for dispatch, result in zip(group_dispatches, group_results, strict=False):
                 if isinstance(result, Exception):
                     # Handle unexpected exceptions from asyncio.gather
                     failed_result = AgentResult(
@@ -115,9 +115,7 @@ class DispatcherNode:
             agent_input = self._prepare_agent_input(state, dispatch)
 
             # Execute with timeout
-            result = await asyncio.wait_for(
-                agent.analyze(agent_input), timeout=timeout_ms / 1000
-            )
+            result = await asyncio.wait_for(agent.analyze(agent_input), timeout=timeout_ms / 1000)
 
             latency = int((time.time() - start_time) * 1000)
 
@@ -278,9 +276,7 @@ class DispatcherNode:
             "parameters": dispatch.get("parameters", {}),
         }
 
-    async def _dispatch_fallback(
-        self, agent_name: str, state: OrchestratorState
-    ) -> AgentResult:
+    async def _dispatch_fallback(self, agent_name: str, state: OrchestratorState) -> AgentResult:
         """Dispatch to fallback agent.
 
         Args:

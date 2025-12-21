@@ -1,11 +1,13 @@
 """Tests for SHAP computation node."""
 
-import pytest
+from unittest.mock import Mock, patch
+
 import numpy as np
-from unittest.mock import Mock, patch, MagicMock
+import pytest
+
 from src.agents.ml_foundation.feature_analyzer.nodes.shap_computer import (
-    compute_shap,
     _select_explainer_type,
+    compute_shap,
 )
 
 
@@ -37,7 +39,9 @@ class TestComputeSHAP:
 
     @patch("src.agents.ml_foundation.feature_analyzer.nodes.shap_computer.mlflow")
     @patch("src.agents.ml_foundation.feature_analyzer.nodes.shap_computer.shap")
-    async def test_computes_shap_for_tree_model(self, mock_shap, mock_mlflow, mock_random_forest_model):
+    async def test_computes_shap_for_tree_model(
+        self, mock_shap, mock_mlflow, mock_random_forest_model
+    ):
         """Should compute SHAP values for tree-based models using TreeExplainer."""
         # Setup
         state = {
@@ -48,8 +52,7 @@ class TestComputeSHAP:
 
         mock_mlflow.sklearn.load_model.return_value = mock_random_forest_model
         mock_mlflow.get_run.return_value = Mock(
-            info=Mock(run_id="abc123"),
-            data=Mock(params={"model_version": "v1"})
+            info=Mock(run_id="abc123"), data=Mock(params={"model_version": "v1"})
         )
 
         # Mock TreeExplainer
@@ -85,8 +88,7 @@ class TestComputeSHAP:
 
         mock_mlflow.sklearn.load_model.return_value = mock_linear_model
         mock_mlflow.get_run.return_value = Mock(
-            info=Mock(run_id="def456"),
-            data=Mock(params={"model_version": "v2"})
+            info=Mock(run_id="def456"), data=Mock(params={"model_version": "v2"})
         )
 
         # Mock LinearExplainer
@@ -129,10 +131,7 @@ class TestComputeSHAP:
         }
 
         mock_mlflow.sklearn.load_model.return_value = mock_random_forest_model
-        mock_mlflow.get_run.return_value = Mock(
-            info=Mock(run_id="ghi789"),
-            data=Mock(params={})
-        )
+        mock_mlflow.get_run.return_value = Mock(info=Mock(run_id="ghi789"), data=Mock(params={}))
 
         # Mock TreeExplainer
         mock_explainer = Mock()
@@ -148,7 +147,9 @@ class TestComputeSHAP:
 
     @patch("src.agents.ml_foundation.feature_analyzer.nodes.shap_computer.mlflow")
     @patch("src.agents.ml_foundation.feature_analyzer.nodes.shap_computer.shap")
-    async def test_determines_feature_directions(self, mock_shap, mock_mlflow, mock_random_forest_model):
+    async def test_determines_feature_directions(
+        self, mock_shap, mock_mlflow, mock_random_forest_model
+    ):
         """Should determine feature directions (positive/negative/mixed)."""
         # Setup
         state = {
@@ -158,17 +159,16 @@ class TestComputeSHAP:
         }
 
         mock_mlflow.sklearn.load_model.return_value = mock_random_forest_model
-        mock_mlflow.get_run.return_value = Mock(
-            info=Mock(run_id="jkl012"),
-            data=Mock(params={})
-        )
+        mock_mlflow.get_run.return_value = Mock(info=Mock(run_id="jkl012"), data=Mock(params={}))
 
         # Mock TreeExplainer with controlled SHAP values
-        shap_values = np.array([
-            [0.5, -0.3, 0.1, -0.1, 0.0],  # Positive, Negative, Mixed, Negative, Neutral
-            [0.6, -0.4, -0.2, -0.05, 0.0],
-            [0.4, -0.2, 0.3, -0.15, 0.0],
-        ])
+        shap_values = np.array(
+            [
+                [0.5, -0.3, 0.1, -0.1, 0.0],  # Positive, Negative, Mixed, Negative, Neutral
+                [0.6, -0.4, -0.2, -0.05, 0.0],
+                [0.4, -0.2, 0.3, -0.15, 0.0],
+            ]
+        )
         mock_explainer = Mock()
         mock_explainer.shap_values.return_value = shap_values
         mock_explainer.expected_value = 0.5
@@ -224,10 +224,7 @@ class TestComputeSHAP:
         }
 
         mock_mlflow.sklearn.load_model.return_value = mock_random_forest_model
-        mock_mlflow.get_run.return_value = Mock(
-            info=Mock(run_id="mno345"),
-            data=Mock(params={})
-        )
+        mock_mlflow.get_run.return_value = Mock(info=Mock(run_id="mno345"), data=Mock(params={}))
 
         mock_explainer = Mock()
         mock_explainer.shap_values.return_value = np.random.rand(100, 5)

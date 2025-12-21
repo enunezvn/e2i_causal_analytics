@@ -7,20 +7,20 @@ Tests the custom extraction logic for E2I-specific entities and relationships.
 import pytest
 
 from src.memory.extractors.e2i_extractor import (
+    ENTITY_PATTERNS,
+    RELATIONSHIP_TRIGGERS,
     E2IEntityExtractor,
     ExtractedMention,
     ExtractedRelationshipMention,
     extract_e2i_entities,
     extract_e2i_relationships,
-    ENTITY_PATTERNS,
-    RELATIONSHIP_TRIGGERS,
 )
 from src.memory.graphiti_config import E2IEntityType, E2IRelationshipType
-
 
 # ============================================================================
 # Fixtures
 # ============================================================================
+
 
 @pytest.fixture
 def extractor():
@@ -37,6 +37,7 @@ def strict_extractor():
 # ============================================================================
 # ExtractedMention Tests
 # ============================================================================
+
 
 class TestExtractedMention:
     """Tests for ExtractedMention dataclass."""
@@ -104,6 +105,7 @@ class TestExtractedRelationshipMention:
 # Pattern Tests
 # ============================================================================
 
+
 class TestEntityPatterns:
     """Tests for entity extraction patterns."""
 
@@ -163,6 +165,7 @@ class TestRelationshipTriggers:
 # ============================================================================
 # Entity Extraction Tests
 # ============================================================================
+
 
 class TestHCPExtraction:
     """Tests for HCP entity extraction."""
@@ -328,6 +331,7 @@ class TestMultipleEntityExtraction:
 # Relationship Extraction Tests
 # ============================================================================
 
+
 class TestRelationshipExtraction:
     """Tests for relationship extraction."""
 
@@ -345,8 +349,7 @@ class TestRelationshipExtraction:
         # If entities are found, check for relationships
         if len(hcp_entities) >= 1 and len(brand_entities) >= 1:
             prescribes_rels = [
-                r for r in relationships
-                if r.relationship_type == E2IRelationshipType.PRESCRIBES
+                r for r in relationships if r.relationship_type == E2IRelationshipType.PRESCRIBES
             ]
             if len(prescribes_rels) >= 1:
                 assert prescribes_rels[0].trigger_text == "prescribes"
@@ -359,8 +362,7 @@ class TestRelationshipExtraction:
 
         # May or may not find depending on entity extraction
         causes_rels = [
-            r for r in relationships
-            if r.relationship_type == E2IRelationshipType.CAUSES
+            r for r in relationships if r.relationship_type == E2IRelationshipType.CAUSES
         ]
         # Check trigger was found in relationships if any exist
         for rel in causes_rels:
@@ -372,8 +374,7 @@ class TestRelationshipExtraction:
         relationships = extractor.extract_relationships(text)
 
         impacts_rels = [
-            r for r in relationships
-            if r.relationship_type == E2IRelationshipType.IMPACTS
+            r for r in relationships if r.relationship_type == E2IRelationshipType.IMPACTS
         ]
         for rel in impacts_rels:
             assert rel.trigger_text == "impacts"
@@ -384,8 +385,7 @@ class TestRelationshipExtraction:
         relationships = extractor.extract_relationships(text)
 
         discovered_rels = [
-            r for r in relationships
-            if r.relationship_type == E2IRelationshipType.DISCOVERED
+            r for r in relationships if r.relationship_type == E2IRelationshipType.DISCOVERED
         ]
         for rel in discovered_rels:
             assert rel.trigger_text == "discovered"
@@ -412,6 +412,7 @@ class TestRelationshipExtraction:
 # ============================================================================
 # Confidence Tests
 # ============================================================================
+
 
 class TestConfidenceCalculation:
     """Tests for confidence score calculation."""
@@ -461,6 +462,7 @@ class TestConfidenceCalculation:
 # Normalization Tests
 # ============================================================================
 
+
 class TestEntityNormalization:
     """Tests for entity name normalization."""
 
@@ -488,6 +490,7 @@ class TestEntityNormalization:
 # Deduplication Tests
 # ============================================================================
 
+
 class TestDeduplication:
     """Tests for mention deduplication."""
 
@@ -499,7 +502,7 @@ class TestDeduplication:
 
         # Should not have completely overlapping mentions
         for i, e1 in enumerate(entities):
-            for e2 in entities[i + 1:]:
+            for e2 in entities[i + 1 :]:
                 # If overlapping, confidence should have resolved it
                 if e1.start < e2.end and e1.end > e2.start:
                     # One should be removed unless different entity types
@@ -520,6 +523,7 @@ class TestDeduplication:
 # ============================================================================
 # Convenience Function Tests
 # ============================================================================
+
 
 class TestConvenienceFunctions:
     """Tests for module-level convenience functions."""
@@ -560,6 +564,7 @@ class TestConvenienceFunctions:
 # ============================================================================
 # Edge Cases
 # ============================================================================
+
 
 class TestEdgeCases:
     """Tests for edge cases and error handling."""
@@ -611,6 +616,7 @@ class TestEdgeCases:
 # Relationship Confidence Tests
 # ============================================================================
 
+
 class TestRelationshipConfidence:
     """Tests for relationship confidence calculation."""
 
@@ -621,13 +627,14 @@ class TestRelationshipConfidence:
         relationships = extractor.extract_relationships(text, entities=entities)
 
         prescribes_rels = [
-            r for r in relationships
-            if r.relationship_type == E2IRelationshipType.PRESCRIBES
+            r for r in relationships if r.relationship_type == E2IRelationshipType.PRESCRIBES
         ]
         # HCP -> BRAND should get compatibility boost
         for rel in prescribes_rels:
-            if (rel.source_mention.entity_type == E2IEntityType.HCP and
-                rel.target_mention.entity_type == E2IEntityType.BRAND):
+            if (
+                rel.source_mention.entity_type == E2IEntityType.HCP
+                and rel.target_mention.entity_type == E2IEntityType.BRAND
+            ):
                 assert rel.confidence >= 0.7
 
     def test_strong_trigger_words(self, extractor):

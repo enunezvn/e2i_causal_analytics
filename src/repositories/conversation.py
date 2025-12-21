@@ -9,6 +9,7 @@ for vector similarity search.
 
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+
 from src.repositories.base import BaseRepository
 
 
@@ -110,9 +111,7 @@ class ConversationRepository(BaseRepository):
         if since:
             params["p_since"] = since.isoformat()
 
-        result = await self.client.rpc(
-            "get_conversations_with_feedback", params
-        ).execute()
+        result = await self.client.rpc("get_conversations_with_feedback", params).execute()
 
         return result.data if result.data else []
 
@@ -158,9 +157,7 @@ class ConversationRepository(BaseRepository):
 
         # Validate embedding dimensions
         if len(query_embedding) != 1536:
-            raise ValueError(
-                f"Embedding must be 1536 dimensions, got {len(query_embedding)}"
-            )
+            raise ValueError(f"Embedding must be 1536 dimensions, got {len(query_embedding)}")
 
         # Build RPC parameters
         params: Dict[str, Any] = {
@@ -175,9 +172,7 @@ class ConversationRepository(BaseRepository):
             params["filter_session_id"] = session_id
 
         # Call the pgvector RPC function
-        result = await self.client.rpc(
-            "search_similar_conversations", params
-        ).execute()
+        result = await self.client.rpc("search_similar_conversations", params).execute()
 
         return result.data if result.data else []
 
@@ -251,10 +246,7 @@ class ConversationRepository(BaseRepository):
             updates["feedback_score"] = feedback_score
 
         result = await (
-            self.client.table(self.table_name)
-            .update(updates)
-            .eq("cycle_id", cycle_id)
-            .execute()
+            self.client.table(self.table_name).update(updates).eq("cycle_id", cycle_id).execute()
         )
 
         return result.data[0] if result.data else None

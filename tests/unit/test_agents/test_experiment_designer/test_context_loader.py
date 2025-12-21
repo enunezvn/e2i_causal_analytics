@@ -3,13 +3,14 @@
 Tests the organizational learning context loading functionality.
 """
 
+
 import pytest
-from datetime import datetime
+
+from src.agents.experiment_designer.graph import create_initial_state
 from src.agents.experiment_designer.nodes.context_loader import (
     ContextLoaderNode,
     MockKnowledgeStore,
 )
-from src.agents.experiment_designer.graph import create_initial_state
 
 
 class TestContextLoaderNode:
@@ -33,9 +34,7 @@ class TestContextLoaderNode:
     async def test_execute_basic(self):
         """Test basic execution with default mock store."""
         node = ContextLoaderNode()
-        state = create_initial_state(
-            business_question="Test question here"
-        )
+        state = create_initial_state(business_question="Test question here")
 
         result = await node.execute(state)
 
@@ -49,9 +48,7 @@ class TestContextLoaderNode:
     async def test_execute_loads_historical_experiments(self):
         """Test that historical experiments are loaded."""
         node = ContextLoaderNode()
-        state = create_initial_state(
-            business_question="Test experiment question"
-        )
+        state = create_initial_state(business_question="Test experiment question")
 
         result = await node.execute(state)
 
@@ -62,9 +59,7 @@ class TestContextLoaderNode:
     async def test_execute_with_brand(self):
         """Test execution with brand filter."""
         node = ContextLoaderNode()
-        state = create_initial_state(
-            business_question="Test Remibrutinib experiment"
-        )
+        state = create_initial_state(business_question="Test Remibrutinib experiment")
         state["brand"] = "Remibrutinib"
 
         result = await node.execute(state)
@@ -75,9 +70,7 @@ class TestContextLoaderNode:
     async def test_execute_loads_defaults(self):
         """Test that organizational defaults are loaded."""
         node = ContextLoaderNode()
-        state = create_initial_state(
-            business_question="Test defaults loading"
-        )
+        state = create_initial_state(business_question="Test defaults loading")
 
         result = await node.execute(state)
 
@@ -89,9 +82,7 @@ class TestContextLoaderNode:
     async def test_execute_loads_violations(self):
         """Test that past violations are loaded as warnings."""
         node = ContextLoaderNode()
-        state = create_initial_state(
-            business_question="Test violations loading"
-        )
+        state = create_initial_state(business_question="Test violations loading")
 
         result = await node.execute(state)
 
@@ -104,9 +95,7 @@ class TestContextLoaderNode:
     async def test_execute_records_latency(self):
         """Test that node latency is recorded."""
         node = ContextLoaderNode()
-        state = create_initial_state(
-            business_question="Test latency recording"
-        )
+        state = create_initial_state(business_question="Test latency recording")
 
         result = await node.execute(state)
 
@@ -118,9 +107,7 @@ class TestContextLoaderNode:
     async def test_execute_updates_status(self):
         """Test that node updates status correctly."""
         node = ContextLoaderNode()
-        state = create_initial_state(
-            business_question="Test status update"
-        )
+        state = create_initial_state(business_question="Test status update")
 
         result = await node.execute(state)
 
@@ -131,9 +118,7 @@ class TestContextLoaderNode:
     async def test_execute_skip_on_failed(self):
         """Test execution skips on failed status."""
         node = ContextLoaderNode()
-        state = create_initial_state(
-            business_question="Test skip on failed"
-        )
+        state = create_initial_state(business_question="Test skip on failed")
         state["status"] = "failed"
 
         result = await node.execute(state)
@@ -143,20 +128,22 @@ class TestContextLoaderNode:
     @pytest.mark.asyncio
     async def test_execute_error_handling(self):
         """Test error handling during execution."""
+
         class FailingStore:
             async def get_similar_experiments(self, *args, **kwargs):
                 raise Exception("Store error")
+
             async def get_organizational_defaults(self, *args, **kwargs):
                 raise Exception("Store error")
+
             async def get_recent_assumption_violations(self, *args, **kwargs):
                 raise Exception("Store error")
+
             async def get_domain_knowledge(self, *args, **kwargs):
                 raise Exception("Store error")
 
         node = ContextLoaderNode(knowledge_store=FailingStore())
-        state = create_initial_state(
-            business_question="Test error handling"
-        )
+        state = create_initial_state(business_question="Test error handling")
 
         result = await node.execute(state)
 
@@ -175,10 +162,7 @@ class TestContextLoaderWithVariousInputs:
         node = ContextLoaderNode()
         state = create_initial_state(
             business_question="Test with constraints",
-            constraints={
-                "expected_effect_size": 0.25,
-                "power": 0.80
-            }
+            constraints={"expected_effect_size": 0.25, "power": 0.80},
         )
 
         result = await node.execute(state)
@@ -192,10 +176,7 @@ class TestContextLoaderWithVariousInputs:
         node = ContextLoaderNode()
         state = create_initial_state(
             business_question="Test with available data",
-            available_data={
-                "variables": ["var1", "var2"],
-                "sample_size": 5000
-            }
+            available_data={"variables": ["var1", "var2"], "sample_size": 5000},
         )
 
         result = await node.execute(state)
@@ -213,7 +194,7 @@ class TestContextLoaderWithVariousInputs:
             available_data={"variables": ["x", "y"]},
             preregistration_formality="heavy",
             max_redesign_iterations=3,
-            enable_validity_audit=False
+            enable_validity_audit=False,
         )
 
         result = await node.execute(state)
@@ -233,9 +214,7 @@ class TestContextLoaderPerformance:
     async def test_latency_under_target(self):
         """Test context loading completes under 100ms target."""
         node = ContextLoaderNode()
-        state = create_initial_state(
-            business_question="Test latency performance"
-        )
+        state = create_initial_state(business_question="Test latency performance")
 
         result = await node.execute(state)
 
@@ -246,9 +225,7 @@ class TestContextLoaderPerformance:
     async def test_latency_with_store(self):
         """Test context loading latency with knowledge store."""
         node = ContextLoaderNode()  # Uses default MockKnowledgeStore
-        state = create_initial_state(
-            business_question="Test latency with store"
-        )
+        state = create_initial_state(business_question="Test latency with store")
 
         result = await node.execute(state)
 

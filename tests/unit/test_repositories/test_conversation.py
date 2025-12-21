@@ -6,6 +6,7 @@ Tests vector similarity search and feedback retrieval using pgvector RPC.
 
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 
 from src.repositories.conversation import ConversationRepository
@@ -92,9 +93,7 @@ class TestGetSimilarQueries(TestConversationRepository):
         assert result[0]["similarity"] == 0.92
 
     @pytest.mark.asyncio
-    async def test_calls_rpc_with_correct_params(
-        self, repo, mock_client, sample_embedding
-    ):
+    async def test_calls_rpc_with_correct_params(self, repo, mock_client, sample_embedding):
         """Test that RPC is called with correct parameters."""
         mock_result = MagicMock()
         mock_result.data = []
@@ -118,9 +117,7 @@ class TestGetSimilarQueries(TestConversationRepository):
         )
 
     @pytest.mark.asyncio
-    async def test_includes_user_filter(
-        self, repo, mock_client, sample_embedding
-    ):
+    async def test_includes_user_filter(self, repo, mock_client, sample_embedding):
         """Test that user_id filter is passed to RPC."""
         mock_result = MagicMock()
         mock_result.data = []
@@ -137,9 +134,7 @@ class TestGetSimilarQueries(TestConversationRepository):
         assert call_args[0][1]["filter_user_id"] == "user-123"
 
     @pytest.mark.asyncio
-    async def test_includes_session_filter(
-        self, repo, mock_client, sample_embedding
-    ):
+    async def test_includes_session_filter(self, repo, mock_client, sample_embedding):
         """Test that session_id filter is passed to RPC."""
         mock_result = MagicMock()
         mock_result.data = []
@@ -182,9 +177,7 @@ class TestGetSimilarQueries(TestConversationRepository):
         assert result == []
 
     @pytest.mark.asyncio
-    async def test_handles_no_results(
-        self, repo, mock_client, sample_embedding
-    ):
+    async def test_handles_no_results(self, repo, mock_client, sample_embedding):
         """Test handling when no similar conversations found."""
         mock_result = MagicMock()
         mock_result.data = None
@@ -238,9 +231,7 @@ class TestGetWithFeedback(TestConversationRepository):
         assert result[0]["feedback_type"] == "positive"
 
     @pytest.mark.asyncio
-    async def test_filters_by_feedback_type(
-        self, repo, mock_client
-    ):
+    async def test_filters_by_feedback_type(self, repo, mock_client):
         """Test filtering by feedback type."""
         mock_result = MagicMock()
         mock_result.data = []
@@ -257,9 +248,7 @@ class TestGetWithFeedback(TestConversationRepository):
         assert call_args[0][1]["p_limit"] == 50
 
     @pytest.mark.asyncio
-    async def test_filters_by_user(
-        self, repo, mock_client
-    ):
+    async def test_filters_by_user(self, repo, mock_client):
         """Test filtering by user_id."""
         mock_result = MagicMock()
         mock_result.data = []
@@ -272,9 +261,7 @@ class TestGetWithFeedback(TestConversationRepository):
         assert call_args[0][1]["p_user_id"] == "user-123"
 
     @pytest.mark.asyncio
-    async def test_filters_by_date(
-        self, repo, mock_client
-    ):
+    async def test_filters_by_date(self, repo, mock_client):
         """Test filtering by since date."""
         mock_result = MagicMock()
         mock_result.data = []
@@ -323,9 +310,7 @@ class TestGetConversationContext(TestConversationRepository):
         assert result[0]["query"] == "What is TRx trend for Kisqali?"
 
     @pytest.mark.asyncio
-    async def test_uses_correct_similarity_threshold(
-        self, repo, mock_client, sample_embedding
-    ):
+    async def test_uses_correct_similarity_threshold(self, repo, mock_client, sample_embedding):
         """Test that min_similarity is passed correctly."""
         mock_result = MagicMock()
         mock_result.data = []
@@ -345,16 +330,12 @@ class TestRecordFeedback(TestConversationRepository):
     """Tests for record_feedback method."""
 
     @pytest.mark.asyncio
-    async def test_records_positive_feedback(
-        self, repo, mock_client
-    ):
+    async def test_records_positive_feedback(self, repo, mock_client):
         """Test recording positive feedback."""
         mock_result = MagicMock()
         mock_result.data = [{"cycle_id": "uuid-1", "feedback_type": "positive"}]
         mock_execute = AsyncMock(return_value=mock_result)
-        mock_client.table.return_value.update.return_value.eq.return_value.execute = (
-            mock_execute
-        )
+        mock_client.table.return_value.update.return_value.eq.return_value.execute = mock_execute
 
         result = await repo.record_feedback(
             cycle_id="uuid-1",
@@ -367,9 +348,7 @@ class TestRecordFeedback(TestConversationRepository):
         assert result["feedback_type"] == "positive"
 
     @pytest.mark.asyncio
-    async def test_records_feedback_with_score(
-        self, repo, mock_client
-    ):
+    async def test_records_feedback_with_score(self, repo, mock_client):
         """Test recording feedback with numeric score."""
         mock_result = MagicMock()
         mock_result.data = [{"cycle_id": "uuid-1"}]
@@ -404,9 +383,7 @@ class TestGetBySession(TestConversationRepository):
     """Tests for get_by_session method."""
 
     @pytest.mark.asyncio
-    async def test_queries_by_session_id(
-        self, repo, mock_client, sample_conversations
-    ):
+    async def test_queries_by_session_id(self, repo, mock_client, sample_conversations):
         """Test that session_id filter is applied."""
         mock_result = MagicMock()
         mock_result.data = sample_conversations
@@ -426,9 +403,7 @@ class TestGetByUser(TestConversationRepository):
     """Tests for get_by_user method."""
 
     @pytest.mark.asyncio
-    async def test_queries_by_user_id(
-        self, repo, mock_client, sample_conversations
-    ):
+    async def test_queries_by_user_id(self, repo, mock_client, sample_conversations):
         """Test that user_id filter is applied."""
         mock_result = MagicMock()
         mock_result.data = sample_conversations

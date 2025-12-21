@@ -4,26 +4,27 @@ Unit tests for RAG Hybrid Retriever.
 Tests the hybrid retrieval implementation combining dense, sparse, and graph methods.
 """
 
-import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
+from src.rag.models.retrieval_models import RetrievalResult
 from src.rag.retriever import (
-    DenseRetriever,
+    DENSE_WEIGHT,
+    GRAPH_WEIGHT,
+    SPARSE_WEIGHT,
     BM25Retriever,
+    DenseRetriever,
     GraphRetriever,
     HybridRetriever,
     hybrid_search,
-    DENSE_WEIGHT,
-    SPARSE_WEIGHT,
-    GRAPH_WEIGHT,
 )
-from src.rag.models.retrieval_models import RetrievalResult
 from src.rag.types import RetrievalSource
-
 
 # ============================================================================
 # FIXTURES
 # ============================================================================
+
 
 @pytest.fixture
 def mock_memory_connector():
@@ -46,7 +47,7 @@ def sample_dense_results():
             source=RetrievalSource.VECTOR,
             score=0.9,
             retrieval_method="dense",
-            metadata={"source_name": "episodic_memories"}
+            metadata={"source_name": "episodic_memories"},
         ),
         RetrievalResult(
             source_id="mem_2",
@@ -54,7 +55,7 @@ def sample_dense_results():
             source=RetrievalSource.VECTOR,
             score=0.8,
             retrieval_method="dense",
-            metadata={"source_name": "episodic_memories"}
+            metadata={"source_name": "episodic_memories"},
         ),
     ]
 
@@ -69,7 +70,7 @@ def sample_sparse_results():
             source=RetrievalSource.FULLTEXT,
             score=0.85,
             retrieval_method="sparse",
-            metadata={"source_name": "causal_paths"}
+            metadata={"source_name": "causal_paths"},
         ),
     ]
 
@@ -84,7 +85,7 @@ def sample_graph_results():
             source=RetrievalSource.GRAPH,
             score=0.75,
             retrieval_method="graph",
-            metadata={"source_name": "semantic_graph"}
+            metadata={"source_name": "semantic_graph"},
         ),
     ]
 
@@ -92,6 +93,7 @@ def sample_graph_results():
 # ============================================================================
 # DENSE RETRIEVER TESTS
 # ============================================================================
+
 
 class TestDenseRetriever:
     """Tests for DenseRetriever."""
@@ -121,17 +123,10 @@ class TestDenseRetriever:
 
         with patch("src.rag.retriever.get_memory_connector", return_value=mock_memory_connector):
             retriever = DenseRetriever()
-            await retriever.search(
-                query="test query",
-                k=20,
-                filters={"brand": "Kisqali"}
-            )
+            await retriever.search(query="test query", k=20, filters={"brand": "Kisqali"})
 
         mock_memory_connector.vector_search_by_text.assert_called_once_with(
-            query_text="test query",
-            k=20,
-            filters={"brand": "Kisqali"},
-            min_similarity=0.5
+            query_text="test query", k=20, filters={"brand": "Kisqali"}, min_similarity=0.5
         )
 
     @pytest.mark.asyncio
@@ -149,6 +144,7 @@ class TestDenseRetriever:
 # ============================================================================
 # BM25 RETRIEVER TESTS
 # ============================================================================
+
 
 class TestBM25Retriever:
     """Tests for BM25Retriever."""
@@ -172,16 +168,10 @@ class TestBM25Retriever:
 
         with patch("src.rag.retriever.get_memory_connector", return_value=mock_memory_connector):
             retriever = BM25Retriever()
-            await retriever.search(
-                query="TRx drop",
-                k=15,
-                filters={"agent_name": "causal_impact"}
-            )
+            await retriever.search(query="TRx drop", k=15, filters={"agent_name": "causal_impact"})
 
         mock_memory_connector.fulltext_search.assert_called_once_with(
-            query_text="TRx drop",
-            k=15,
-            filters={"agent_name": "causal_impact"}
+            query_text="TRx drop", k=15, filters={"agent_name": "causal_impact"}
         )
 
     @pytest.mark.asyncio
@@ -200,6 +190,7 @@ class TestBM25Retriever:
 # GRAPH RETRIEVER TESTS
 # ============================================================================
 
+
 class TestGraphRetriever:
     """Tests for GraphRetriever."""
 
@@ -210,9 +201,7 @@ class TestGraphRetriever:
         with patch("src.rag.retriever.get_memory_connector", return_value=mock_memory_connector):
             retriever = GraphRetriever()
             results = retriever.traverse(
-                entities=["ent_1"],
-                relationship="causal_path",
-                max_depth=3
+                entities=["ent_1"], relationship="causal_path", max_depth=3
             )
 
         assert len(results) == 1
@@ -224,10 +213,7 @@ class TestGraphRetriever:
 
         with patch("src.rag.retriever.get_memory_connector", return_value=mock_memory_connector):
             retriever = GraphRetriever()
-            results = retriever.traverse(
-                entities=["ent_1", "ent_2", "ent_3"],
-                max_depth=2
-            )
+            retriever.traverse(entities=["ent_1", "ent_2", "ent_3"], max_depth=2)
 
         # Called once per entity
         assert mock_memory_connector.graph_traverse.call_count == 3
@@ -241,16 +227,14 @@ class TestGraphRetriever:
                 source=RetrievalSource.GRAPH,
                 score=0.8,
                 retrieval_method="graph",
-                metadata={}
+                metadata={},
             )
         ]
         mock_memory_connector.graph_traverse.return_value = duplicate_results
 
         with patch("src.rag.retriever.get_memory_connector", return_value=mock_memory_connector):
             retriever = GraphRetriever()
-            results = retriever.traverse(
-                entities=["ent_1", "ent_2"]  # Two entities, same result
-            )
+            results = retriever.traverse(entities=["ent_1", "ent_2"])  # Two entities, same result
 
         # Should be deduplicated
         assert len(results) == 1
@@ -261,21 +245,18 @@ class TestGraphRetriever:
 
         with patch("src.rag.retriever.get_memory_connector", return_value=mock_memory_connector):
             retriever = GraphRetriever()
-            results = retriever.traverse_kpi(
-                kpi_name="TRx",
-                min_confidence=0.6
-            )
+            results = retriever.traverse_kpi(kpi_name="TRx", min_confidence=0.6)
 
         assert len(results) == 1
         mock_memory_connector.graph_traverse_kpi.assert_called_once_with(
-            kpi_name="TRx",
-            min_confidence=0.6
+            kpi_name="TRx", min_confidence=0.6
         )
 
 
 # ============================================================================
 # HYBRID RETRIEVER TESTS
 # ============================================================================
+
 
 class TestHybridRetriever:
     """Tests for HybridRetriever."""
@@ -311,9 +292,7 @@ class TestHybridRetriever:
         with patch("src.rag.retriever.get_memory_connector", return_value=mock_memory_connector):
             retriever = HybridRetriever()
             results = await retriever.search(
-                query="test",
-                weights={"dense": 0.8, "sparse": 0.1, "graph": 0.1},
-                k=10
+                query="test", weights={"dense": 0.8, "sparse": 0.1, "graph": 0.1}, k=10
             )
 
         assert len(results) > 0
@@ -329,11 +308,7 @@ class TestHybridRetriever:
 
         with patch("src.rag.retriever.get_memory_connector", return_value=mock_memory_connector):
             retriever = HybridRetriever()
-            results = await retriever.search(
-                query="test",
-                entities=["ent_1", "ent_2"],
-                k=10
-            )
+            await retriever.search(query="test", entities=["ent_1", "ent_2"], k=10)
 
         mock_memory_connector.graph_traverse.assert_called()
 
@@ -348,18 +323,17 @@ class TestHybridRetriever:
 
         with patch("src.rag.retriever.get_memory_connector", return_value=mock_memory_connector):
             retriever = HybridRetriever()
-            results = await retriever.search(
-                query="Why did TRx drop?",
-                kpi_name="TRx",
-                k=10
-            )
+            await retriever.search(query="Why did TRx drop?", kpi_name="TRx", k=10)
 
-        mock_memory_connector.graph_traverse_kpi.assert_called_once_with(kpi_name="TRx", min_confidence=0.5)
+        mock_memory_connector.graph_traverse_kpi.assert_called_once_with(
+            kpi_name="TRx", min_confidence=0.5
+        )
 
 
 # ============================================================================
 # RRF FUSION TESTS
 # ============================================================================
+
 
 class TestReciprocalRankFusion:
     """Tests for RRF fusion algorithm."""
@@ -369,18 +343,43 @@ class TestReciprocalRankFusion:
         retriever = HybridRetriever()
 
         list1 = [
-            RetrievalResult(source_id="1", content="A", source=RetrievalSource.VECTOR, score=0.9, retrieval_method="dense", metadata={}),
-            RetrievalResult(source_id="2", content="B", source=RetrievalSource.VECTOR, score=0.8, retrieval_method="dense", metadata={}),
+            RetrievalResult(
+                source_id="1",
+                content="A",
+                source=RetrievalSource.VECTOR,
+                score=0.9,
+                retrieval_method="dense",
+                metadata={},
+            ),
+            RetrievalResult(
+                source_id="2",
+                content="B",
+                source=RetrievalSource.VECTOR,
+                score=0.8,
+                retrieval_method="dense",
+                metadata={},
+            ),
         ]
         list2 = [
-            RetrievalResult(source_id="2", content="B", source=RetrievalSource.FULLTEXT, score=0.95, retrieval_method="sparse", metadata={}),
-            RetrievalResult(source_id="3", content="C", source=RetrievalSource.FULLTEXT, score=0.85, retrieval_method="sparse", metadata={}),
+            RetrievalResult(
+                source_id="2",
+                content="B",
+                source=RetrievalSource.FULLTEXT,
+                score=0.95,
+                retrieval_method="sparse",
+                metadata={},
+            ),
+            RetrievalResult(
+                source_id="3",
+                content="C",
+                source=RetrievalSource.FULLTEXT,
+                score=0.85,
+                retrieval_method="sparse",
+                metadata={},
+            ),
         ]
 
-        fused = retriever._reciprocal_rank_fusion(
-            result_lists=[list1, list2],
-            weights=[0.5, 0.5]
-        )
+        fused = retriever._reciprocal_rank_fusion(result_lists=[list1, list2], weights=[0.5, 0.5])
 
         # B should be ranked higher (appears in both lists)
         assert fused[0].source_id == "2"
@@ -390,8 +389,7 @@ class TestReciprocalRankFusion:
         retriever = HybridRetriever()
 
         fused = retriever._reciprocal_rank_fusion(
-            result_lists=[[], [], []],
-            weights=[0.5, 0.3, 0.2]
+            result_lists=[[], [], []], weights=[0.5, 0.3, 0.2]
         )
 
         assert fused == []
@@ -401,13 +399,17 @@ class TestReciprocalRankFusion:
         retriever = HybridRetriever()
 
         list1 = [
-            RetrievalResult(source_id="1", content="A", source=RetrievalSource.VECTOR, score=0.9, retrieval_method="dense", metadata={"original": "data"}),
+            RetrievalResult(
+                source_id="1",
+                content="A",
+                source=RetrievalSource.VECTOR,
+                score=0.9,
+                retrieval_method="dense",
+                metadata={"original": "data"},
+            ),
         ]
 
-        fused = retriever._reciprocal_rank_fusion(
-            result_lists=[list1],
-            weights=[1.0]
-        )
+        fused = retriever._reciprocal_rank_fusion(result_lists=[list1], weights=[1.0])
 
         assert "rrf_score" in fused[0].metadata
         assert "original_score" in fused[0].metadata
@@ -418,20 +420,20 @@ class TestReciprocalRankFusion:
 # CONVENIENCE FUNCTION TESTS
 # ============================================================================
 
+
 class TestHybridSearchFunction:
     """Tests for hybrid_search convenience function."""
 
     @pytest.mark.asyncio
-    async def test_hybrid_search_creates_retriever(self, mock_memory_connector, sample_dense_results):
+    async def test_hybrid_search_creates_retriever(
+        self, mock_memory_connector, sample_dense_results
+    ):
         """hybrid_search should create and use HybridRetriever."""
         mock_memory_connector.vector_search_by_text.return_value = sample_dense_results
         mock_memory_connector.fulltext_search.return_value = []
 
         with patch("src.rag.retriever.get_memory_connector", return_value=mock_memory_connector):
-            results = await hybrid_search(
-                query="test query",
-                k=5
-            )
+            results = await hybrid_search(query="test query", k=5)
 
         assert isinstance(results, list)
 
@@ -444,10 +446,7 @@ class TestHybridSearchFunction:
 
         with patch("src.rag.retriever.get_memory_connector", return_value=mock_memory_connector):
             await hybrid_search(
-                query="TRx analysis",
-                k=15,
-                kpi_name="TRx",
-                filters={"brand": "Kisqali"}
+                query="TRx analysis", k=15, kpi_name="TRx", filters={"brand": "Kisqali"}
             )
 
         # Verify filters were passed
@@ -459,6 +458,7 @@ class TestHybridSearchFunction:
 # ============================================================================
 # WEIGHT CONSTANT TESTS
 # ============================================================================
+
 
 class TestWeightConstants:
     """Tests for retrieval weight constants."""

@@ -11,10 +11,11 @@ Version: 4.3
 
 import hashlib
 import json
-from typing import Dict, Any, List, Tuple, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple
 
 try:
     import networkx as nx
+
     NETWORKX_AVAILABLE = True
 except ImportError:
     NETWORKX_AVAILABLE = False
@@ -206,8 +207,8 @@ def get_dag_changes(
     old_nodes = set(old_graph.get("nodes", []))
     new_nodes = set(new_graph.get("nodes", []))
 
-    old_edges = set(tuple(e) for e in old_graph.get("edges", []))
-    new_edges = set(tuple(e) for e in new_graph.get("edges", []))
+    old_edges = {tuple(e) for e in old_graph.get("edges", [])}
+    new_edges = {tuple(e) for e in new_graph.get("edges", [])}
 
     return {
         "nodes_added": list(new_nodes - old_nodes),

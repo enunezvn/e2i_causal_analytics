@@ -1,12 +1,16 @@
 """Causal Impact Agent nodes."""
 
+from src.agents.causal_impact.nodes.estimation import (
+    EstimationNode,
+    estimate_causal_effect,
+)
 from src.agents.causal_impact.nodes.graph_builder import (
     GraphBuilderNode,
     build_causal_graph,
 )
-from src.agents.causal_impact.nodes.estimation import (
-    EstimationNode,
-    estimate_causal_effect,
+from src.agents.causal_impact.nodes.interpretation import (
+    InterpretationNode,
+    interpret_results,
 )
 from src.agents.causal_impact.nodes.refutation import (
     RefutationNode,
@@ -15,10 +19,6 @@ from src.agents.causal_impact.nodes.refutation import (
 from src.agents.causal_impact.nodes.sensitivity import (
     SensitivityNode,
     analyze_sensitivity,
-)
-from src.agents.causal_impact.nodes.interpretation import (
-    InterpretationNode,
-    interpret_results,
 )
 
 __all__ = [

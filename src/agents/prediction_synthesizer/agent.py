@@ -13,13 +13,13 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from .graph import build_prediction_synthesizer_graph, build_simple_prediction_graph
 from .state import (
     EnsemblePrediction,
     ModelPrediction,
     PredictionContext,
     PredictionSynthesizerState,
 )
-from .graph import build_prediction_synthesizer_graph, build_simple_prediction_graph
 
 logger = logging.getLogger(__name__)
 
@@ -245,9 +245,7 @@ class PredictionSynthesizerAgent:
                 "Low model agreement - consider investigating model discrepancies"
             )
         elif ensemble.get("confidence", 0) < 0.5:
-            recommendations.append(
-                "Low confidence - may need more data or model retraining"
-            )
+            recommendations.append("Low confidence - may need more data or model retraining")
 
         context = output.prediction_context or {}
 

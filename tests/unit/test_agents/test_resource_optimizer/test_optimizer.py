@@ -3,6 +3,7 @@ E2I Resource Optimizer Agent - Optimizer Node Tests
 """
 
 import pytest
+
 from src.agents.resource_optimizer.nodes.optimizer import OptimizerNode
 
 
@@ -27,9 +28,7 @@ class TestOptimizerNode:
         node = OptimizerNode()
         result = await node.execute(formulated_state)
 
-        total_allocation = sum(
-            a["optimized_allocation"] for a in result["optimal_allocations"]
-        )
+        total_allocation = sum(a["optimized_allocation"] for a in result["optimal_allocations"])
         budget = formulated_state["_problem"]["b_ub"][0]
 
         assert total_allocation <= budget + 0.01  # Allow small tolerance
@@ -43,7 +42,7 @@ class TestOptimizerNode:
         lb = formulated_state["_problem"]["lb"]
         ub = formulated_state["_problem"]["ub"]
 
-        for i, alloc in enumerate(result["optimal_allocations"]):
+        for _i, alloc in enumerate(result["optimal_allocations"]):
             # Find matching target by entity_id
             target_idx = None
             for j, t in enumerate(formulated_state["_problem"]["targets"]):
@@ -132,9 +131,7 @@ class TestOptimizerNode:
                 if t["entity_id"] == alloc["entity_id"]:
                     c = formulated_state["_problem"]["c"][i]
                     expected_impact = c * alloc["optimized_allocation"]
-                    assert alloc["expected_impact"] == pytest.approx(
-                        expected_impact, rel=0.01
-                    )
+                    assert alloc["expected_impact"] == pytest.approx(expected_impact, rel=0.01)
                     break
 
 

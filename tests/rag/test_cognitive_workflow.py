@@ -10,15 +10,14 @@ Tests cover:
 Author: E2I Causal Analytics Team
 """
 
-import pytest
-from unittest.mock import Mock, patch, AsyncMock, MagicMock
-from typing import List, Dict, Any
-import json
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 
 # =============================================================================
 # MEMORY BACKEND TESTS
 # =============================================================================
+
 
 class TestEpisodicMemoryBackend:
     """Tests for EpisodicMemoryBackend adapter."""
@@ -137,16 +136,17 @@ class TestProceduralMemoryBackend:
             "tool_sequence": [
                 {"tool": "query_episodic"},
                 {"tool": "traverse_graph"},
-                {"tool": "synthesize"}
+                {"tool": "synthesize"},
             ],
             "procedure_type": "analysis",
             "success_rate": 0.92,
             "execution_count": 15,
-            "similarity": 0.88
+            "similarity": 0.88,
         }
 
-        with patch("src.rag.cognitive_backends.find_relevant_procedures_by_text",
-                   new_callable=AsyncMock) as mock_find:
+        with patch(
+            "src.rag.cognitive_backends.find_relevant_procedures_by_text", new_callable=AsyncMock
+        ) as mock_find:
             mock_find.return_value = [mock_result]
 
             backend = ProceduralMemoryBackend()
@@ -166,11 +166,12 @@ class TestProceduralMemoryBackend:
             "id": "proc_002",
             "procedure_name": "Simple Query",
             "tool_sequence": [],
-            "similarity": 0.75
+            "similarity": 0.75,
         }
 
-        with patch("src.rag.cognitive_backends.find_relevant_procedures_by_text",
-                   new_callable=AsyncMock) as mock_find:
+        with patch(
+            "src.rag.cognitive_backends.find_relevant_procedures_by_text", new_callable=AsyncMock
+        ) as mock_find:
             mock_find.return_value = [mock_result]
 
             backend = ProceduralMemoryBackend()
@@ -188,8 +189,9 @@ class TestSignalCollector:
         """Test collecting DSPy training signals."""
         from src.rag.cognitive_backends import SignalCollector
 
-        with patch("src.rag.cognitive_backends.record_learning_signal",
-                   new_callable=AsyncMock) as mock_record:
+        with patch(
+            "src.rag.cognitive_backends.record_learning_signal", new_callable=AsyncMock
+        ) as mock_record:
             mock_record.return_value = {"id": "signal_001"}
 
             collector = SignalCollector()
@@ -199,7 +201,7 @@ class TestSignalCollector:
                     "input": "original query",
                     "output": "rewritten query",
                     "metric": 0.9,
-                    "cycle_id": "cycle_001"
+                    "cycle_id": "cycle_001",
                 }
             ]
 
@@ -212,8 +214,9 @@ class TestSignalCollector:
         """Test that failed signals are queued for retry."""
         from src.rag.cognitive_backends import SignalCollector
 
-        with patch("src.rag.cognitive_backends.record_learning_signal",
-                   new_callable=AsyncMock) as mock_record:
+        with patch(
+            "src.rag.cognitive_backends.record_learning_signal", new_callable=AsyncMock
+        ) as mock_record:
             mock_record.side_effect = Exception("Storage error")
 
             collector = SignalCollector()
@@ -246,6 +249,7 @@ class TestGetCognitiveMemoryBackends:
 # CAUSAL RAG COGNITIVE SEARCH TESTS
 # =============================================================================
 
+
 class TestCausalRAGCognitiveSearch:
     """Tests for CausalRAG.cognitive_search() method."""
 
@@ -266,7 +270,7 @@ class TestCausalRAGCognitiveSearch:
             "rewritten_query": "optimized query",
             "dspy_signals": [],
             "worth_remembering": True,
-            "latency_ms": 500.0
+            "latency_ms": 500.0,
         }
 
         rag = CausalRAG()
@@ -283,8 +287,9 @@ class TestCausalRAGCognitiveSearch:
     @pytest.mark.asyncio
     async def test_cognitive_search_handles_missing_api_key(self):
         """Test error handling when ANTHROPIC_API_KEY is missing."""
-        from src.rag.causal_rag import CausalRAG
         import os
+
+        from src.rag.causal_rag import CausalRAG
 
         # Temporarily remove API key if present
         original_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -345,7 +350,7 @@ class TestCausalRAGCognitiveSearch:
                 "rewritten_query": "test",
                 "dspy_signals": [],
                 "worth_remembering": False,
-                "latency_ms": 100.0
+                "latency_ms": 100.0,
             }
 
             # Call without conversation_id
@@ -360,6 +365,7 @@ class TestCausalRAGCognitiveSearch:
 # API ENDPOINT TESTS
 # =============================================================================
 
+
 class TestCognitiveRAGEndpoint:
     """Tests for /cognitive/rag API endpoint."""
 
@@ -367,7 +373,9 @@ class TestCognitiveRAGEndpoint:
     def client(self):
         """Create test client."""
         from fastapi.testclient import TestClient
+
         from src.api.main import app
+
         return TestClient(app)
 
     def test_endpoint_accepts_valid_request(self, client):
@@ -375,25 +383,24 @@ class TestCognitiveRAGEndpoint:
         # Patch at the import location inside the endpoint function
         with patch("src.rag.causal_rag.CausalRAG") as mock_rag_class:
             mock_rag = MagicMock()
-            mock_rag.cognitive_search = AsyncMock(return_value={
-                "response": "Test response",
-                "evidence": [],
-                "hop_count": 0,
-                "visualization_config": {},
-                "routed_agents": [],
-                "entities": [],
-                "intent": "",
-                "rewritten_query": "test",
-                "dspy_signals": [],
-                "worth_remembering": False,
-                "latency_ms": 100.0
-            })
+            mock_rag.cognitive_search = AsyncMock(
+                return_value={
+                    "response": "Test response",
+                    "evidence": [],
+                    "hop_count": 0,
+                    "visualization_config": {},
+                    "routed_agents": [],
+                    "entities": [],
+                    "intent": "",
+                    "rewritten_query": "test",
+                    "dspy_signals": [],
+                    "worth_remembering": False,
+                    "latency_ms": 100.0,
+                }
+            )
             mock_rag_class.return_value = mock_rag
 
-            response = client.post(
-                "/cognitive/rag",
-                json={"query": "Why did TRx increase?"}
-            )
+            response = client.post("/cognitive/rag", json={"query": "Why did TRx increase?"})
 
             assert response.status_code == 200
             data = response.json()
@@ -421,10 +428,7 @@ class TestCognitiveRAGEndpoint:
         mock_module.CausalRAG = MagicMock(side_effect=ImportError("dspy not installed"))
 
         with patch.dict(sys.modules, {"src.rag.causal_rag": mock_module}):
-            response = client.post(
-                "/cognitive/rag",
-                json={"query": "Test query"}
-            )
+            response = client.post("/cognitive/rag", json={"query": "Test query"})
 
             assert response.status_code == 503
             assert "dependencies" in response.json()["detail"].lower()
@@ -433,27 +437,25 @@ class TestCognitiveRAGEndpoint:
         """Test endpoint accepts optional conversation_id."""
         with patch("src.rag.causal_rag.CausalRAG") as mock_rag_class:
             mock_rag = MagicMock()
-            mock_rag.cognitive_search = AsyncMock(return_value={
-                "response": "Response",
-                "evidence": [],
-                "hop_count": 0,
-                "visualization_config": {},
-                "routed_agents": [],
-                "entities": [],
-                "intent": "",
-                "rewritten_query": "",
-                "dspy_signals": [],
-                "worth_remembering": False,
-                "latency_ms": 50.0
-            })
+            mock_rag.cognitive_search = AsyncMock(
+                return_value={
+                    "response": "Response",
+                    "evidence": [],
+                    "hop_count": 0,
+                    "visualization_config": {},
+                    "routed_agents": [],
+                    "entities": [],
+                    "intent": "",
+                    "rewritten_query": "",
+                    "dspy_signals": [],
+                    "worth_remembering": False,
+                    "latency_ms": 50.0,
+                }
+            )
             mock_rag_class.return_value = mock_rag
 
             response = client.post(
-                "/cognitive/rag",
-                json={
-                    "query": "Test query",
-                    "conversation_id": "session-123"
-                }
+                "/cognitive/rag", json={"query": "Test query", "conversation_id": "session-123"}
             )
 
             assert response.status_code == 200
@@ -462,6 +464,7 @@ class TestCognitiveRAGEndpoint:
 # =============================================================================
 # INTEGRATION TESTS
 # =============================================================================
+
 
 class TestCognitiveWorkflowIntegration:
     """End-to-end integration tests for cognitive workflow."""
@@ -472,9 +475,8 @@ class TestCognitiveWorkflowIntegration:
         """Test full 4-phase workflow with mocked memory backends."""
         from src.rag.cognitive_backends import (
             EpisodicMemoryBackend,
-            SemanticMemoryBackend,
             ProceduralMemoryBackend,
-            SignalCollector
+            SemanticMemoryBackend,
         )
 
         # Create mocked backends
@@ -488,8 +490,9 @@ class TestCognitiveWorkflowIntegration:
 
         procedural = ProceduralMemoryBackend()
 
-        with patch("src.rag.cognitive_backends.find_relevant_procedures_by_text",
-                   new_callable=AsyncMock) as mock_proc:
+        with patch(
+            "src.rag.cognitive_backends.find_relevant_procedures_by_text", new_callable=AsyncMock
+        ) as mock_proc:
             mock_proc.return_value = []
 
             # Test each backend individually
@@ -507,8 +510,9 @@ class TestCognitiveWorkflowIntegration:
         """Test DSPy signal collection through the workflow."""
         from src.rag.cognitive_backends import SignalCollector
 
-        with patch("src.rag.cognitive_backends.record_learning_signal",
-                   new_callable=AsyncMock) as mock_record:
+        with patch(
+            "src.rag.cognitive_backends.record_learning_signal", new_callable=AsyncMock
+        ) as mock_record:
             mock_record.return_value = {"id": "signal_001"}
 
             collector = SignalCollector()
@@ -519,7 +523,7 @@ class TestCognitiveWorkflowIntegration:
                 {"signature_name": "EntityExtraction", "input": "q1", "output": "o2", "phase": 1},
                 {"signature_name": "InvestigationPlan", "input": "q2", "output": "o3", "phase": 2},
                 {"signature_name": "EvidenceSynthesis", "input": "q3", "output": "o4", "phase": 3},
-                {"signature_name": "MemoryWorthiness", "input": "q4", "output": "o5", "phase": 4}
+                {"signature_name": "MemoryWorthiness", "input": "q4", "output": "o5", "phase": 4},
             ]
 
             await collector.collect(signals)
@@ -532,6 +536,7 @@ class TestCognitiveWorkflowIntegration:
 # PERFORMANCE TESTS
 # =============================================================================
 
+
 class TestCognitiveWorkflowPerformance:
     """Performance tests for cognitive workflow components."""
 
@@ -539,6 +544,7 @@ class TestCognitiveWorkflowPerformance:
     async def test_backend_adapter_overhead(self):
         """Test that backend adapters add minimal overhead."""
         import time
+
         from src.rag.cognitive_backends import EpisodicMemoryBackend
 
         mock_connector = MagicMock()

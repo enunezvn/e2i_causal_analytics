@@ -5,13 +5,13 @@ Estimates causal effects using DoWhy/EconML with natural language interpretation
 
 import time
 from datetime import datetime, timezone
-from typing import Dict, Any, Optional
-from src.agents.causal_impact.state import (
-    CausalImpactState,
-    CausalImpactInput,
-    CausalImpactOutput,
-)
+from typing import Any, Dict, Optional
+
 from src.agents.causal_impact.graph import create_causal_impact_graph
+from src.agents.causal_impact.state import (
+    CausalImpactOutput,
+    CausalImpactState,
+)
 
 
 class CausalImpactAgent:
@@ -120,9 +120,7 @@ class CausalImpactAgent:
 
         return state
 
-    def _build_output(
-        self, state: CausalImpactState, start_time: float
-    ) -> CausalImpactOutput:
+    def _build_output(self, state: CausalImpactState, start_time: float) -> CausalImpactOutput:
         """Build output from final state.
 
         Args:
@@ -153,9 +151,7 @@ class CausalImpactAgent:
         # Determine overall confidence
         refutation_confidence = refutation_results.get("confidence_adjustment", 1.0)
         sensitivity_robust = sensitivity_analysis.get("robust_to_confounding", False)
-        statistical_significance = estimation_result.get(
-            "statistical_significance", False
-        )
+        statistical_significance = estimation_result.get("statistical_significance", False)
 
         if statistical_significance and sensitivity_robust:
             base_confidence = 0.9
@@ -171,20 +167,18 @@ class CausalImpactAgent:
             "query_id": state.get("query_id", "unknown"),
             "status": "completed",
             # Contract-aligned output field names
-            "causal_narrative": interpretation.get(
-                "narrative", "Analysis completed successfully."
-            ),
+            "causal_narrative": interpretation.get("narrative", "Analysis completed successfully."),
             "ate_estimate": estimation_result.get("ate"),
             "confidence_interval": (
-                estimation_result.get("ate_ci_lower", 0.0),
-                estimation_result.get("ate_ci_upper", 0.0),
-            )
-            if "ate_ci_lower" in estimation_result
-            else None,
-            "standard_error": estimation_result.get("standard_error"),
-            "statistical_significance": estimation_result.get(
-                "statistical_significance", False
+                (
+                    estimation_result.get("ate_ci_lower", 0.0),
+                    estimation_result.get("ate_ci_upper", 0.0),
+                )
+                if "ate_ci_lower" in estimation_result
+                else None
             ),
+            "standard_error": estimation_result.get("standard_error"),
+            "statistical_significance": estimation_result.get("statistical_significance", False),
             "p_value": estimation_result.get("p_value"),
             "effect_type": estimation_result.get("effect_type", "ate"),
             "estimation_method": estimation_result.get("method"),

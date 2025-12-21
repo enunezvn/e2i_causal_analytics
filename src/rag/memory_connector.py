@@ -15,8 +15,8 @@ Usage:
 import logging
 from typing import Any, Dict, List, Optional
 
-from src.memory.services.factories import get_supabase_client, get_embedding_service
 from src.memory.semantic_memory import get_semantic_memory
+from src.memory.services.factories import get_embedding_service, get_supabase_client
 from src.rag.models.retrieval_models import RetrievalResult
 from src.rag.types import RetrievalSource
 
@@ -52,7 +52,7 @@ class MemoryConnector:
         query_embedding: List[float],
         k: int = 10,
         filters: Optional[Dict[str, Any]] = None,
-        min_similarity: float = 0.5
+        min_similarity: float = 0.5,
     ) -> List[RetrievalResult]:
         """
         Search memories by vector similarity.
@@ -76,11 +76,7 @@ class MemoryConnector:
             # Call Supabase RPC function
             response = client.rpc(
                 "hybrid_vector_search",
-                {
-                    "query_embedding": query_embedding,
-                    "match_count": k,
-                    "filters": filters or {}
-                }
+                {"query_embedding": query_embedding, "match_count": k, "filters": filters or {}},
             ).execute()
 
             results = []
@@ -90,14 +86,16 @@ class MemoryConnector:
                 if similarity >= min_similarity:
                     result_metadata = row.get("metadata", {}).copy() if row.get("metadata") else {}
                     result_metadata["source_name"] = row.get("source_table", "unknown")
-                    results.append(RetrievalResult(
-                        source_id=row.get("id", ""),
-                        content=row.get("content", ""),
-                        source=RetrievalSource.VECTOR,
-                        score=float(similarity),
-                        retrieval_method="dense",
-                        metadata=result_metadata
-                    ))
+                    results.append(
+                        RetrievalResult(
+                            source_id=row.get("id", ""),
+                            content=row.get("content", ""),
+                            source=RetrievalSource.VECTOR,
+                            score=float(similarity),
+                            retrieval_method="dense",
+                            metadata=result_metadata,
+                        )
+                    )
 
             logger.debug(f"Vector search returned {len(results)} results")
             return results
@@ -111,7 +109,7 @@ class MemoryConnector:
         query_text: str,
         k: int = 10,
         filters: Optional[Dict[str, Any]] = None,
-        min_similarity: float = 0.5
+        min_similarity: float = 0.5,
     ) -> List[RetrievalResult]:
         """
         Search memories by text (auto-generates embedding).
@@ -129,10 +127,7 @@ class MemoryConnector:
         embedding = await embedding_service.embed(query_text)
 
         return await self.vector_search(
-            query_embedding=embedding,
-            k=k,
-            filters=filters,
-            min_similarity=min_similarity
+            query_embedding=embedding, k=k, filters=filters, min_similarity=min_similarity
         )
 
     # ========================================================================
@@ -140,10 +135,7 @@ class MemoryConnector:
     # ========================================================================
 
     async def fulltext_search(
-        self,
-        query_text: str,
-        k: int = 10,
-        filters: Optional[Dict[str, Any]] = None
+        self, query_text: str, k: int = 10, filters: Optional[Dict[str, Any]] = None
     ) -> List[RetrievalResult]:
         """
         Search using PostgreSQL full-text search (BM25-like ranking).
@@ -167,11 +159,7 @@ class MemoryConnector:
             # Call Supabase RPC function
             response = client.rpc(
                 "hybrid_fulltext_search",
-                {
-                    "search_query": query_text,
-                    "match_count": k,
-                    "filters": filters or {}
-                }
+                {"search_query": query_text, "match_count": k, "filters": filters or {}},
             ).execute()
 
             results = []
@@ -191,14 +179,16 @@ class MemoryConnector:
 
                 result_metadata = row.get("metadata", {}).copy() if row.get("metadata") else {}
                 result_metadata["source_name"] = row.get("source_table", "unknown")
-                results.append(RetrievalResult(
-                    source_id=row.get("id", ""),
-                    content=row.get("content", ""),
-                    source=RetrievalSource.FULLTEXT,
-                    score=normalized_score,
-                    retrieval_method="sparse",
-                    metadata=result_metadata
-                ))
+                results.append(
+                    RetrievalResult(
+                        source_id=row.get("id", ""),
+                        content=row.get("content", ""),
+                        source=RetrievalSource.FULLTEXT,
+                        score=normalized_score,
+                        retrieval_method="sparse",
+                        metadata=result_metadata,
+                    )
+                )
 
             logger.debug(f"Fulltext search returned {len(results)} results")
             return results
@@ -212,10 +202,7 @@ class MemoryConnector:
     # ========================================================================
 
     def graph_traverse(
-        self,
-        entity_id: str,
-        relationship: str = "causal_path",
-        max_depth: int = 3
+        self, entity_id: str, relationship: str = "causal_path", max_depth: int = 3
     ) -> List[RetrievalResult]:
         """
         Traverse semantic graph to find related entities.
@@ -258,9 +245,7 @@ class MemoryConnector:
             return []
 
     def graph_traverse_kpi(
-        self,
-        kpi_name: str,
-        min_confidence: float = 0.5
+        self, kpi_name: str, min_confidence: float = 0.5
     ) -> List[RetrievalResult]:
         """
         Find causal paths impacting a specific KPI.
@@ -294,19 +279,21 @@ class MemoryConnector:
             path_nodes = chain.get("path", [])
             content = " → ".join(str(node) for node in path_nodes)
 
-            results.append(RetrievalResult(
-                source_id=chain.get("start_entity_id", f"chain_{i}"),
-                content=content or f"Causal chain {i+1}",
-                source=RetrievalSource.GRAPH,
-                score=chain.get("confidence", 0.8),
-                retrieval_method="graph",
-                metadata={
-                    "source_name": "semantic_graph",
-                    "path_length": chain.get("path_length", len(path_nodes)),
-                    "relationships": chain.get("relationships", []),
-                    "effect_sizes": chain.get("effect_sizes", [])
-                }
-            ))
+            results.append(
+                RetrievalResult(
+                    source_id=chain.get("start_entity_id", f"chain_{i}"),
+                    content=content or f"Causal chain {i+1}",
+                    source=RetrievalSource.GRAPH,
+                    score=chain.get("confidence", 0.8),
+                    retrieval_method="graph",
+                    metadata={
+                        "source_name": "semantic_graph",
+                        "path_length": chain.get("path_length", len(path_nodes)),
+                        "relationships": chain.get("relationships", []),
+                        "effect_sizes": chain.get("effect_sizes", []),
+                    },
+                )
+            )
 
         return results
 
@@ -317,18 +304,20 @@ class MemoryConnector:
         # Add center node
         center = network.get("center_node", {})
         if center:
-            results.append(RetrievalResult(
-                source_id=center.get("id", ""),
-                content=f"{network_type.upper()} center: {center.get('id', 'unknown')}",
-                source=RetrievalSource.GRAPH,
-                score=1.0,  # Center node has highest relevance
-                retrieval_method="graph",
-                metadata={
-                    "source_name": "semantic_graph",
-                    "node_type": "center",
-                    "properties": center.get("properties", {})
-                }
-            ))
+            results.append(
+                RetrievalResult(
+                    source_id=center.get("id", ""),
+                    content=f"{network_type.upper()} center: {center.get('id', 'unknown')}",
+                    source=RetrievalSource.GRAPH,
+                    score=1.0,  # Center node has highest relevance
+                    retrieval_method="graph",
+                    metadata={
+                        "source_name": "semantic_graph",
+                        "node_type": "center",
+                        "properties": center.get("properties", {}),
+                    },
+                )
+            )
 
         # Add connected nodes
         connections = network.get("connections", [])
@@ -337,20 +326,22 @@ class MemoryConnector:
             depth = conn.get("depth", 1)
             score = max(0.5, 1.0 - (depth * 0.2))
 
-            results.append(RetrievalResult(
-                source_id=conn.get("node_id", f"conn_{i}"),
-                content=f"Connected {conn.get('node_type', 'entity')}: {conn.get('node_id', '')}",
-                source=RetrievalSource.GRAPH,
-                score=score,
-                retrieval_method="graph",
-                metadata={
-                    "source_name": "semantic_graph",
-                    "node_type": conn.get("node_type"),
-                    "relationship": conn.get("relationship"),
-                    "depth": depth,
-                    "properties": conn.get("properties", {})
-                }
-            ))
+            results.append(
+                RetrievalResult(
+                    source_id=conn.get("node_id", f"conn_{i}"),
+                    content=f"Connected {conn.get('node_type', 'entity')}: {conn.get('node_id', '')}",
+                    source=RetrievalSource.GRAPH,
+                    score=score,
+                    retrieval_method="graph",
+                    metadata={
+                        "source_name": "semantic_graph",
+                        "node_type": conn.get("node_type"),
+                        "relationship": conn.get("relationship"),
+                        "depth": depth,
+                        "properties": conn.get("properties", {}),
+                    },
+                )
+            )
 
         return results
 
@@ -362,19 +353,21 @@ class MemoryConnector:
             nodes = path.get("nodes", [])
             content = " → ".join(str(n) for n in nodes)
 
-            results.append(RetrievalResult(
-                source_id=path.get("path_id", f"path_{i}"),
-                content=content or f"Path {i+1}",
-                source=RetrievalSource.GRAPH,
-                score=path.get("confidence", 0.7),
-                retrieval_method="graph",
-                metadata={
-                    "source_name": "semantic_graph",
-                    "path_length": path.get("length", len(nodes)),
-                    "relationships": path.get("relationships", []),
-                    "kpi_impact": path.get("kpi_impact")
-                }
-            ))
+            results.append(
+                RetrievalResult(
+                    source_id=path.get("path_id", f"path_{i}"),
+                    content=content or f"Path {i+1}",
+                    source=RetrievalSource.GRAPH,
+                    score=path.get("confidence", 0.7),
+                    retrieval_method="graph",
+                    metadata={
+                        "source_name": "semantic_graph",
+                        "path_length": path.get("length", len(nodes)),
+                        "relationships": path.get("relationships", []),
+                        "kpi_impact": path.get("kpi_impact"),
+                    },
+                )
+            )
 
         return results
 

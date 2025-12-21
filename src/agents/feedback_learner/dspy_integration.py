@@ -32,6 +32,7 @@ class FeedbackLearnerCognitiveContext(TypedDict):
     This context is injected at the start of each learning cycle from the
     4-phase cognitive workflow's Summarizer and Investigator phases.
     """
+
     # Evidence synthesis from Summarizer phase
     synthesized_summary: str
 
@@ -140,9 +141,7 @@ class FeedbackLearnerTrainingSignal:
     agent_satisfaction_delta: Optional[float] = None
 
     # === Timestamp ===
-    created_at: str = field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat()
-    )
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     def compute_reward(self) -> float:
         """
@@ -195,11 +194,11 @@ class FeedbackLearnerTrainingSignal:
 
         # Weighted sum
         reward = (
-            weights["pattern_accuracy"] * accuracy_score +
-            weights["recommendation_actionability"] * actionability_score +
-            weights["update_effectiveness"] * effectiveness_score +
-            weights["efficiency"] * efficiency_score +
-            weights["coverage"] * coverage_score
+            weights["pattern_accuracy"] * accuracy_score
+            + weights["recommendation_actionability"] * actionability_score
+            + weights["update_effectiveness"] * effectiveness_score
+            + weights["efficiency"] * efficiency_score
+            + weights["coverage"] * coverage_score
         )
 
         return round(reward, 4)
@@ -266,26 +265,18 @@ try:
         Analyzes feedback items to identify recurring issues,
         common complaints, and improvement opportunities.
         """
+
         feedback_batch: str = dspy.InputField(
             desc="JSON array of feedback items with ratings, corrections, and comments"
         )
-        agent_baselines: str = dspy.InputField(
-            desc="Current performance baselines for each agent"
-        )
-        historical_patterns: str = dspy.InputField(
-            desc="Previously detected patterns for context"
-        )
+        agent_baselines: str = dspy.InputField(desc="Current performance baselines for each agent")
+        historical_patterns: str = dspy.InputField(desc="Previously detected patterns for context")
 
         patterns: list = dspy.OutputField(
             desc="List of detected patterns with type, severity, affected_agents, frequency"
         )
-        confidence: float = dspy.OutputField(
-            desc="Confidence in pattern detection (0.0-1.0)"
-        )
-        root_causes: list = dspy.OutputField(
-            desc="Hypothesized root causes for each pattern"
-        )
-
+        confidence: float = dspy.OutputField(desc="Confidence in pattern detection (0.0-1.0)")
+        root_causes: list = dspy.OutputField(desc="Hypothesized root causes for each pattern")
 
     class RecommendationGenerationSignature(dspy.Signature):
         """
@@ -298,26 +289,18 @@ try:
         - config_change: Configuration adjustments
         - new_capability: New feature requirements
         """
-        detected_patterns: str = dspy.InputField(
-            desc="Patterns detected in feedback analysis"
-        )
-        prior_learnings: str = dspy.InputField(
-            desc="What worked in past learning cycles"
-        )
-        optimization_examples: str = dspy.InputField(
-            desc="Successful optimization examples"
-        )
+
+        detected_patterns: str = dspy.InputField(desc="Patterns detected in feedback analysis")
+        prior_learnings: str = dspy.InputField(desc="What worked in past learning cycles")
+        optimization_examples: str = dspy.InputField(desc="Successful optimization examples")
 
         recommendations: list = dspy.OutputField(
             desc="Prioritized list of recommendations with category, description, expected_impact"
         )
-        implementation_order: list = dspy.OutputField(
-            desc="Recommended order of implementation"
-        )
+        implementation_order: list = dspy.OutputField(desc="Recommended order of implementation")
         risk_assessment: str = dspy.OutputField(
             desc="Potential risks of implementing recommendations"
         )
-
 
     class KnowledgeUpdateSignature(dspy.Signature):
         """
@@ -329,6 +312,7 @@ try:
         - Knowledge graph relationships
         - Procedural memory
         """
+
         recommendation: str = dspy.InputField(
             desc="Single recommendation to translate to knowledge update"
         )
@@ -339,19 +323,10 @@ try:
         update_type: str = dspy.OutputField(
             desc="Type: experiment | baseline | agent_config | prompt | threshold"
         )
-        key: str = dspy.OutputField(
-            desc="Key path to update in knowledge store"
-        )
-        old_value: str = dspy.OutputField(
-            desc="Current value (for rollback)"
-        )
-        new_value: str = dspy.OutputField(
-            desc="Proposed new value"
-        )
-        justification: str = dspy.OutputField(
-            desc="Reason for this update"
-        )
-
+        key: str = dspy.OutputField(desc="Key path to update in knowledge store")
+        old_value: str = dspy.OutputField(desc="Current value (for rollback)")
+        new_value: str = dspy.OutputField(desc="Proposed new value")
+        justification: str = dspy.OutputField(desc="Reason for this update")
 
     class LearningSummarySignature(dspy.Signature):
         """
@@ -362,21 +337,15 @@ try:
         - Agent handoff context
         - Knowledge graph storage
         """
+
         patterns: str = dspy.InputField(desc="Detected patterns")
         recommendations: str = dspy.InputField(desc="Generated recommendations")
         applied_updates: str = dspy.InputField(desc="Updates that were applied")
         feedback_stats: str = dspy.InputField(desc="Feedback statistics summary")
 
-        summary: str = dspy.OutputField(
-            desc="Executive summary in 2-3 paragraphs"
-        )
-        key_insights: list = dspy.OutputField(
-            desc="Top 3-5 key insights from this learning cycle"
-        )
-        next_steps: list = dspy.OutputField(
-            desc="Recommended follow-up actions"
-        )
-
+        summary: str = dspy.OutputField(desc="Executive summary in 2-3 paragraphs")
+        key_insights: list = dspy.OutputField(desc="Top 3-5 key insights from this learning cycle")
+        next_steps: list = dspy.OutputField(desc="Recommended follow-up actions")
 
     DSPY_AVAILABLE = True
     logger.info("DSPy signatures loaded for Feedback Learner agent")
@@ -428,24 +397,24 @@ class FeedbackLearnerOptimizer:
         score = 0.0
 
         # Patterns should be specific
-        if hasattr(prediction, 'patterns') and prediction.patterns:
+        if hasattr(prediction, "patterns") and prediction.patterns:
             for pattern in prediction.patterns:
                 if isinstance(pattern, dict):
                     # Has required fields
-                    if all(k in pattern for k in ['type', 'severity', 'affected_agents']):
+                    if all(k in pattern for k in ["type", "severity", "affected_agents"]):
                         score += 0.1
                     # Has root cause
-                    if pattern.get('root_cause_hypothesis'):
+                    if pattern.get("root_cause_hypothesis"):
                         score += 0.05
 
         # Confidence should be calibrated (penalize over/under confidence)
-        if hasattr(prediction, 'confidence'):
+        if hasattr(prediction, "confidence"):
             conf = prediction.confidence
             if 0.3 <= conf <= 0.9:
                 score += 0.2
 
         # Root causes should be specific
-        if hasattr(prediction, 'root_causes') and prediction.root_causes:
+        if hasattr(prediction, "root_causes") and prediction.root_causes:
             score += min(0.3, len(prediction.root_causes) * 0.1)
 
         return min(1.0, score)
@@ -462,25 +431,28 @@ class FeedbackLearnerOptimizer:
         score = 0.0
 
         # Recommendations should be actionable
-        if hasattr(prediction, 'recommendations') and prediction.recommendations:
+        if hasattr(prediction, "recommendations") and prediction.recommendations:
             for rec in prediction.recommendations:
                 if isinstance(rec, dict):
                     # Has category
-                    if rec.get('category') in [
-                        'prompt_update', 'model_retrain', 'data_update',
-                        'config_change', 'new_capability'
+                    if rec.get("category") in [
+                        "prompt_update",
+                        "model_retrain",
+                        "data_update",
+                        "config_change",
+                        "new_capability",
                     ]:
                         score += 0.1
                     # Has expected impact
-                    if rec.get('expected_impact'):
+                    if rec.get("expected_impact"):
                         score += 0.05
 
         # Implementation order should be provided
-        if hasattr(prediction, 'implementation_order') and prediction.implementation_order:
+        if hasattr(prediction, "implementation_order") and prediction.implementation_order:
             score += 0.2
 
         # Risk assessment should be thoughtful
-        if hasattr(prediction, 'risk_assessment') and len(str(prediction.risk_assessment)) > 50:
+        if hasattr(prediction, "risk_assessment") and len(str(prediction.risk_assessment)) > 50:
             score += 0.2
 
         return min(1.0, score)
@@ -489,7 +461,7 @@ class FeedbackLearnerOptimizer:
         self,
         phase: Literal["pattern", "recommendation", "update", "summary"],
         training_signals: List[Dict[str, Any]],
-        budget: int = 50
+        budget: int = 50,
     ) -> Optional[Any]:
         """
         Run MIPROv2 optimization for a specific phase.
@@ -532,27 +504,16 @@ class FeedbackLearnerOptimizer:
             return None
 
         optimizer = MIPROv2(
-            metric=metrics[phase],
-            num_candidates=10,
-            max_bootstrapped_demos=4,
-            num_threads=4
+            metric=metrics[phase], num_candidates=10, max_bootstrapped_demos=4, num_threads=4
         )
 
         module = dspy.ChainOfThought(signatures[phase])
 
-        optimized = optimizer.compile(
-            module,
-            trainset=examples,
-            num_trials=budget
-        )
+        optimized = optimizer.compile(module, trainset=examples, num_trials=budget)
 
         return optimized
 
-    def _signals_to_examples(
-        self,
-        signals: List[Dict[str, Any]],
-        phase: str
-    ) -> List:
+    def _signals_to_examples(self, signals: List[Dict[str, Any]], phase: str) -> List:
         """Convert training signals to DSPy Examples."""
         if not DSPY_AVAILABLE:
             return []
@@ -572,12 +533,14 @@ class FeedbackLearnerOptimizer:
             try:
                 if phase == "pattern":
                     example = dspy.Example(
-                        feedback_batch=str(signal.get("input_context", {}).get("feedback_batch", [])),
+                        feedback_batch=str(
+                            signal.get("input_context", {}).get("feedback_batch", [])
+                        ),
                         agent_baselines="{}",
                         historical_patterns="[]",
                         patterns=signal.get("output", {}).get("patterns", []),
                         confidence=0.8,
-                        root_causes=[]
+                        root_causes=[],
                     ).with_inputs("feedback_batch", "agent_baselines", "historical_patterns")
                     examples.append(example)
 
@@ -594,7 +557,7 @@ class FeedbackLearnerOptimizer:
 
 def create_memory_contribution(
     signal: FeedbackLearnerTrainingSignal,
-    memory_type: Literal["episodic", "semantic", "procedural"] = "semantic"
+    memory_type: Literal["episodic", "semantic", "procedural"] = "semantic",
 ) -> Dict[str, Any]:
     """
     Create memory contribution from training signal.
@@ -618,68 +581,78 @@ def create_memory_contribution(
 
     if memory_type == "semantic":
         # Semantic memory: knowledge graph entities and relationships
-        contribution.update({
-            "index": "learning_outcomes",
-            "ttl_days": 365,
-            "entities": [
-                {
-                    "type": "LearningCycle",
-                    "id": signal.batch_id,
-                    "properties": {
-                        "feedback_count": signal.feedback_count,
-                        "patterns_detected": signal.patterns_detected,
-                        "recommendations_generated": signal.recommendations_generated,
-                        "updates_applied": signal.updates_applied,
-                        "reward": signal.compute_reward(),
+        contribution.update(
+            {
+                "index": "learning_outcomes",
+                "ttl_days": 365,
+                "entities": [
+                    {
+                        "type": "LearningCycle",
+                        "id": signal.batch_id,
+                        "properties": {
+                            "feedback_count": signal.feedback_count,
+                            "patterns_detected": signal.patterns_detected,
+                            "recommendations_generated": signal.recommendations_generated,
+                            "updates_applied": signal.updates_applied,
+                            "reward": signal.compute_reward(),
+                        },
                     }
-                }
-            ],
-            "relationships": [
-                {
-                    "type": "IMPROVED",
-                    "from": {"type": "LearningCycle", "id": signal.batch_id},
-                    "to": {"type": "Agent", "id": agent},
-                    "properties": {"cycle_date": signal.created_at}
-                }
-                for agent in signal.focus_agents
-            ] if signal.focus_agents else []
-        })
+                ],
+                "relationships": (
+                    [
+                        {
+                            "type": "IMPROVED",
+                            "from": {"type": "LearningCycle", "id": signal.batch_id},
+                            "to": {"type": "Agent", "id": agent},
+                            "properties": {"cycle_date": signal.created_at},
+                        }
+                        for agent in signal.focus_agents
+                    ]
+                    if signal.focus_agents
+                    else []
+                ),
+            }
+        )
 
     elif memory_type == "episodic":
         # Episodic memory: specific learning experiences
-        contribution.update({
-            "index": "learning_experiences",
-            "ttl_days": 180,
-            "content": {
-                "batch_id": signal.batch_id,
-                "summary": f"Processed {signal.feedback_count} feedback items, "
-                          f"detected {signal.patterns_detected} patterns, "
-                          f"generated {signal.recommendations_generated} recommendations",
-                "reward": signal.compute_reward(),
+        contribution.update(
+            {
+                "index": "learning_experiences",
+                "ttl_days": 180,
+                "content": {
+                    "batch_id": signal.batch_id,
+                    "summary": f"Processed {signal.feedback_count} feedback items, "
+                    f"detected {signal.patterns_detected} patterns, "
+                    f"generated {signal.recommendations_generated} recommendations",
+                    "reward": signal.compute_reward(),
+                },
             }
-        })
+        )
 
     elif memory_type == "procedural":
         # Procedural memory: successful learning procedures
         if signal.compute_reward() >= 0.7:  # Only store high-quality procedures
-            contribution.update({
-                "index": "learning_procedures",
-                "ttl_days": 365,
-                "procedure": {
-                    "trigger": "feedback_batch",
-                    "conditions": {
-                        "min_feedback_count": 10,
-                        "focus_agents": signal.focus_agents,
+            contribution.update(
+                {
+                    "index": "learning_procedures",
+                    "ttl_days": 365,
+                    "procedure": {
+                        "trigger": "feedback_batch",
+                        "conditions": {
+                            "min_feedback_count": 10,
+                            "focus_agents": signal.focus_agents,
+                        },
+                        "steps": [
+                            "collect_feedback",
+                            "analyze_patterns",
+                            "extract_learnings",
+                            "update_knowledge",
+                        ],
+                        "expected_outcome": f"reward >= {signal.compute_reward():.2f}",
                     },
-                    "steps": [
-                        "collect_feedback",
-                        "analyze_patterns",
-                        "extract_learnings",
-                        "update_knowledge"
-                    ],
-                    "expected_outcome": f"reward >= {signal.compute_reward():.2f}",
                 }
-            })
+            )
 
     return contribution
 
@@ -691,21 +664,17 @@ def create_memory_contribution(
 __all__ = [
     # Cognitive Context
     "FeedbackLearnerCognitiveContext",
-
     # Training Signals
     "AgentTrainingSignal",
     "FeedbackLearnerTrainingSignal",
-
     # DSPy Signatures (may be None if dspy not installed)
     "PatternDetectionSignature",
     "RecommendationGenerationSignature",
     "KnowledgeUpdateSignature",
     "LearningSummarySignature",
-
     # Optimization
     "FeedbackLearnerOptimizer",
     "DSPY_AVAILABLE",
-
     # Memory
     "create_memory_contribution",
 ]

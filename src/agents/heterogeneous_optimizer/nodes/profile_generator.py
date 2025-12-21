@@ -5,7 +5,7 @@ Pure computation - no LLM needed.
 """
 
 import time
-from typing import Dict, Any, List
+from typing import Any, Dict, List
 
 from ..state import HeterogeneousOptimizerState
 
@@ -13,11 +13,9 @@ from ..state import HeterogeneousOptimizerState
 class ProfileGeneratorNode:
     """Generate visualization data and executive summaries."""
 
-    async def execute(
-        self, state: HeterogeneousOptimizerState
-    ) -> HeterogeneousOptimizerState:
+    async def execute(self, state: HeterogeneousOptimizerState) -> HeterogeneousOptimizerState:
         """Execute profile generation."""
-        start_time = time.time()
+        time.time()
 
         if state.get("status") == "failed":
             return state
@@ -51,9 +49,7 @@ class ProfileGeneratorNode:
                 "status": "failed",
             }
 
-    def _generate_cate_plot_data(
-        self, state: HeterogeneousOptimizerState
-    ) -> Dict[str, Any]:
+    def _generate_cate_plot_data(self, state: HeterogeneousOptimizerState) -> Dict[str, Any]:
         """Generate data for CATE visualization plots.
 
         Returns data structure suitable for plotting CATE estimates by segment.
@@ -86,9 +82,7 @@ class ProfileGeneratorNode:
 
         return plot_data
 
-    def _generate_segment_grid_data(
-        self, state: HeterogeneousOptimizerState
-    ) -> Dict[str, Any]:
+    def _generate_segment_grid_data(self, state: HeterogeneousOptimizerState) -> Dict[str, Any]:
         """Generate segment grid data for heatmap visualization.
 
         Returns data structure suitable for segment comparison heatmap.
@@ -120,9 +114,7 @@ class ProfileGeneratorNode:
 
         return grid_data
 
-    def _generate_executive_summary(
-        self, state: HeterogeneousOptimizerState
-    ) -> str:
+    def _generate_executive_summary(self, state: HeterogeneousOptimizerState) -> str:
         """Generate executive summary of heterogeneous optimization analysis."""
 
         overall_ate = state.get("overall_ate", 0)
@@ -141,7 +133,7 @@ class ProfileGeneratorNode:
             )
 
         summary_parts = [
-            f"Heterogeneous treatment effect analysis complete.",
+            "Heterogeneous treatment effect analysis complete.",
             f"Overall treatment effect: {overall_ate:.3f}.",
             f"Heterogeneity score: {heterogeneity_score:.2f} (0=uniform, 1=highly heterogeneous).",
         ]
@@ -173,9 +165,7 @@ class ProfileGeneratorNode:
 
         return " ".join(summary_parts)
 
-    def _generate_key_insights(
-        self, state: HeterogeneousOptimizerState
-    ) -> List[str]:
+    def _generate_key_insights(self, state: HeterogeneousOptimizerState) -> List[str]:
         """Generate key insights from heterogeneous optimization analysis."""
 
         insights = []

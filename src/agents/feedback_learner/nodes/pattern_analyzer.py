@@ -12,7 +12,7 @@ import re
 import time
 from typing import Any, Dict, List, Optional
 
-from ..state import FeedbackLearnerState, DetectedPattern
+from ..state import DetectedPattern, FeedbackLearnerState
 
 logger = logging.getLogger(__name__)
 
@@ -62,9 +62,7 @@ class PatternAnalyzerNode:
 
             analysis_time = int((time.time() - start_time) * 1000)
 
-            logger.info(
-                f"Pattern analysis complete: {len(result['patterns'])} patterns detected"
-            )
+            logger.info(f"Pattern analysis complete: {len(result['patterns'])} patterns detected")
 
             return {
                 **state,
@@ -83,9 +81,7 @@ class PatternAnalyzerNode:
                 "status": "failed",
             }
 
-    def _analyze_deterministic(
-        self, state: FeedbackLearnerState
-    ) -> Dict[str, Any]:
+    def _analyze_deterministic(self, state: FeedbackLearnerState) -> Dict[str, Any]:
         """Deterministic pattern analysis using heuristics."""
         feedback_items = state.get("feedback_items") or []
         summary = state.get("feedback_summary") or {}
@@ -94,21 +90,20 @@ class PatternAnalyzerNode:
         pattern_id = 1
 
         # Analyze by feedback type
-        by_type = summary.get("by_type", {})
+        summary.get("by_type", {})
         by_agent = summary.get("by_agent", {})
 
         # Check for low ratings pattern
         ratings = [
             fb
             for fb in feedback_items
-            if fb["feedback_type"] == "rating"
-            and isinstance(fb["user_feedback"], (int, float))
+            if fb["feedback_type"] == "rating" and isinstance(fb["user_feedback"], (int, float))
         ]
         if ratings:
             avg_rating = sum(fb["user_feedback"] for fb in ratings) / len(ratings)
             if avg_rating < 3.0:  # Assuming 1-5 scale
                 affected_agents = list(
-                    set(fb["source_agent"] for fb in ratings if fb["user_feedback"] < 3)
+                    {fb["source_agent"] for fb in ratings if fb["user_feedback"] < 3}
                 )
                 patterns.append(
                     DetectedPattern(
@@ -125,11 +120,9 @@ class PatternAnalyzerNode:
                 pattern_id += 1
 
         # Check for correction pattern
-        corrections = [
-            fb for fb in feedback_items if fb["feedback_type"] == "correction"
-        ]
+        corrections = [fb for fb in feedback_items if fb["feedback_type"] == "correction"]
         if len(corrections) > 5:
-            affected_agents = list(set(fb["source_agent"] for fb in corrections))
+            affected_agents = list({fb["source_agent"] for fb in corrections})
             patterns.append(
                 DetectedPattern(
                     pattern_id=f"P{pattern_id}",
@@ -156,7 +149,7 @@ class PatternAnalyzerNode:
 
             if len(errors) > 3:
                 avg_error = sum(abs(e[1]) for e in errors) / len(errors)
-                affected_agents = list(set(e[0]["source_agent"] for e in errors))
+                affected_agents = list({e[0]["source_agent"] for e in errors})
                 patterns.append(
                     DetectedPattern(
                         pattern_id=f"P{pattern_id}",
@@ -198,9 +191,7 @@ class PatternAnalyzerNode:
                         frequency=agent_negative,
                         severity="high",
                         affected_agents=[agent],
-                        example_feedback_ids=[
-                            fb["feedback_id"] for fb in agent_feedback[:3]
-                        ],
+                        example_feedback_ids=[fb["feedback_id"] for fb in agent_feedback[:3]],
                         root_cause_hypothesis=f"Agent '{agent}' may need retraining or prompt updates",
                     )
                 )
@@ -314,9 +305,7 @@ Output JSON:
 
         return []
 
-    def _cluster_patterns(
-        self, patterns: List[DetectedPattern]
-    ) -> Dict[str, List[str]]:
+    def _cluster_patterns(self, patterns: List[DetectedPattern]) -> Dict[str, List[str]]:
         """Cluster patterns by type."""
         clusters: Dict[str, List[str]] = {}
 

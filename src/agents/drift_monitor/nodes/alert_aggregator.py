@@ -15,20 +15,13 @@ Contract: .claude/contracts/tier3-contracts.md lines 349-562
 """
 
 import time
-from datetime import datetime, timezone
 import uuid
+from datetime import datetime, timezone
 
-from src.agents.drift_monitor.state import DriftMonitorState, DriftResult, DriftAlert, ErrorDetails
-
+from src.agents.drift_monitor.state import DriftAlert, DriftMonitorState, DriftResult, ErrorDetails
 
 # Severity weights for composite drift score calculation
-SEVERITY_WEIGHTS = {
-    "none": 0.0,
-    "low": 0.25,
-    "medium": 0.5,
-    "high": 0.75,
-    "critical": 1.0
-}
+SEVERITY_WEIGHTS = {"none": 0.0, "low": 0.25, "medium": 0.5, "high": 0.75, "critical": 1.0}
 
 
 class AlertAggregatorNode:
@@ -85,7 +78,9 @@ class AlertAggregatorNode:
             alerts = self._generate_alerts(all_results)
 
             # Create drift summary
-            drift_summary = self._create_drift_summary(all_results, drift_score, features_with_drift)
+            drift_summary = self._create_drift_summary(
+                all_results, drift_score, features_with_drift
+            )
 
             # Generate recommended actions
             recommended_actions = self._generate_recommendations(all_results, drift_score)
@@ -106,7 +101,7 @@ class AlertAggregatorNode:
             error: ErrorDetails = {
                 "node": "alert_aggregator",
                 "error": str(e),
-                "timestamp": datetime.now(timezone.utc).isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             }
             state["errors"] = state.get("errors", []) + [error]
             state["status"] = "failed"
@@ -179,11 +174,7 @@ class AlertAggregatorNode:
         Returns:
             List of feature names with detected drift
         """
-        drifted_features = [
-            r["feature"]
-            for r in results
-            if r["drift_detected"]
-        ]
+        drifted_features = [r["feature"] for r in results if r["drift_detected"]]
 
         # Remove duplicates and sort
         return sorted(set(drifted_features))
@@ -218,9 +209,7 @@ class AlertAggregatorNode:
         for drift_type, features in critical_by_type.items():
             if features:
                 alert = self._create_alert(
-                    severity="critical",
-                    drift_type=drift_type,
-                    affected_features=features
+                    severity="critical", drift_type=drift_type, affected_features=features
                 )
                 alerts.append(alert)
 
@@ -228,19 +217,14 @@ class AlertAggregatorNode:
         for drift_type, features in high_by_type.items():
             if features:
                 alert = self._create_alert(
-                    severity="warning",
-                    drift_type=drift_type,
-                    affected_features=features
+                    severity="warning", drift_type=drift_type, affected_features=features
                 )
                 alerts.append(alert)
 
         return alerts
 
     def _create_alert(
-        self,
-        severity: str,
-        drift_type: str,
-        affected_features: list[str]
+        self, severity: str, drift_type: str, affected_features: list[str]
     ) -> DriftAlert:
         """Create a drift alert.
 
@@ -261,13 +245,13 @@ class AlertAggregatorNode:
             "critical": {
                 "data": f"CRITICAL data drift detected in features: {feature_list}",
                 "model": f"CRITICAL model drift detected in predictions: {feature_list}",
-                "concept": f"CRITICAL concept drift detected in features: {feature_list}"
+                "concept": f"CRITICAL concept drift detected in features: {feature_list}",
             },
             "warning": {
                 "data": f"HIGH data drift detected in features: {feature_list}",
                 "model": f"HIGH model drift detected in predictions: {feature_list}",
-                "concept": f"HIGH concept drift detected in features: {feature_list}"
-            }
+                "concept": f"HIGH concept drift detected in features: {feature_list}",
+            },
         }
 
         # Generate recommended action
@@ -275,13 +259,13 @@ class AlertAggregatorNode:
             "critical": {
                 "data": "Immediate action required: Retrain model with recent data and investigate feature distribution changes",
                 "model": "Immediate action required: Investigate model degradation and consider retraining or recalibration",
-                "concept": "Immediate action required: Review ground truth labels and feature-target relationships"
+                "concept": "Immediate action required: Review ground truth labels and feature-target relationships",
             },
             "warning": {
                 "data": "Monitor closely: Schedule model retraining if drift persists",
                 "model": "Monitor closely: Check prediction accuracy on recent data",
-                "concept": "Monitor closely: Validate model performance on current data"
-            }
+                "concept": "Monitor closely: Validate model performance on current data",
+            },
         }
 
         alert: DriftAlert = {
@@ -291,16 +275,13 @@ class AlertAggregatorNode:
             "affected_features": affected_features,
             "message": messages[severity][drift_type],
             "recommended_action": actions[severity][drift_type],
-            "timestamp": datetime.now(timezone.utc).isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
         return alert
 
     def _create_drift_summary(
-        self,
-        results: list[DriftResult],
-        drift_score: float,
-        features_with_drift: list[str]
+        self, results: list[DriftResult], drift_score: float, features_with_drift: list[str]
     ) -> str:
         """Create human-readable drift summary.
 
@@ -321,14 +302,16 @@ class AlertAggregatorNode:
             "high": sum(1 for r in results if r["severity"] == "high"),
             "medium": sum(1 for r in results if r["severity"] == "medium"),
             "low": sum(1 for r in results if r["severity"] == "low"),
-            "none": sum(1 for r in results if r["severity"] == "none")
+            "none": sum(1 for r in results if r["severity"] == "none"),
         }
 
         # Count by drift type
         type_counts = {
             "data": sum(1 for r in results if r["drift_type"] == "data" and r["drift_detected"]),
             "model": sum(1 for r in results if r["drift_type"] == "model" and r["drift_detected"]),
-            "concept": sum(1 for r in results if r["drift_type"] == "concept" and r["drift_detected"])
+            "concept": sum(
+                1 for r in results if r["drift_type"] == "concept" and r["drift_detected"]
+            ),
         }
 
         # Determine overall status
@@ -347,7 +330,7 @@ class AlertAggregatorNode:
         summary_parts = [
             f"Drift Detection Summary: {status} (score: {drift_score:.3f})",
             f"Features checked: {len(results)}",
-            f"Features with drift: {len(features_with_drift)}"
+            f"Features with drift: {len(features_with_drift)}",
         ]
 
         # Add severity breakdown
@@ -369,7 +352,9 @@ class AlertAggregatorNode:
 
         return "\n".join(summary_parts)
 
-    def _generate_recommendations(self, results: list[DriftResult], drift_score: float) -> list[str]:
+    def _generate_recommendations(
+        self, results: list[DriftResult], drift_score: float
+    ) -> list[str]:
         """Generate recommended actions based on drift results.
 
         Args:
@@ -396,15 +381,23 @@ class AlertAggregatorNode:
         # Specific recommendations for critical features
         critical_features = [r["feature"] for r in results if r["severity"] == "critical"]
         if critical_features:
-            recommendations.append(f"Investigate critical drift in: {', '.join(critical_features[:3])}")
+            recommendations.append(
+                f"Investigate critical drift in: {', '.join(critical_features[:3])}"
+            )
 
         # Data drift specific
-        data_drift_count = sum(1 for r in results if r["drift_type"] == "data" and r["drift_detected"])
+        data_drift_count = sum(
+            1 for r in results if r["drift_type"] == "data" and r["drift_detected"]
+        )
         if data_drift_count > 0:
-            recommendations.append(f"Review data pipeline - {data_drift_count} features showing distribution changes")
+            recommendations.append(
+                f"Review data pipeline - {data_drift_count} features showing distribution changes"
+            )
 
         # Model drift specific
-        model_drift_count = sum(1 for r in results if r["drift_type"] == "model" and r["drift_detected"])
+        model_drift_count = sum(
+            1 for r in results if r["drift_type"] == "model" and r["drift_detected"]
+        )
         if model_drift_count > 0:
             recommendations.append("Check model prediction quality on recent data")
 

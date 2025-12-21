@@ -2,11 +2,11 @@
 Tests for Component Health Node
 """
 
-import pytest
 from datetime import datetime
 
+import pytest
+
 from src.agents.health_score.nodes.component_health import ComponentHealthNode
-from src.agents.health_score.state import ComponentStatus
 
 
 class TestComponentHealthNode:

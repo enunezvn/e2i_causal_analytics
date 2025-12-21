@@ -1,8 +1,8 @@
 """Tests for Heterogeneous Optimizer Agent."""
 
 import pytest
+
 from src.agents.heterogeneous_optimizer.agent import HeterogeneousOptimizerAgent
-from src.agents.heterogeneous_optimizer.state import HeterogeneousOptimizerState
 
 
 class TestHeterogeneousOptimizerAgent:
@@ -38,13 +38,15 @@ class TestHeterogeneousOptimizerAgent:
 
         # Missing query
         with pytest.raises(ValueError, match="Missing required field: query"):
-            await agent.run({
-                "treatment_var": "treatment",
-                "outcome_var": "outcome",
-                "segment_vars": ["segment1"],
-                "effect_modifiers": ["modifier1"],
-                "data_source": "test",
-            })
+            await agent.run(
+                {
+                    "treatment_var": "treatment",
+                    "outcome_var": "outcome",
+                    "segment_vars": ["segment1"],
+                    "effect_modifiers": ["modifier1"],
+                    "data_source": "test",
+                }
+            )
 
     @pytest.mark.asyncio
     async def test_input_validation_missing_treatment_var(self):
@@ -52,13 +54,15 @@ class TestHeterogeneousOptimizerAgent:
         agent = HeterogeneousOptimizerAgent()
 
         with pytest.raises(ValueError, match="Missing required field: treatment_var"):
-            await agent.run({
-                "query": "test",
-                "outcome_var": "outcome",
-                "segment_vars": ["segment1"],
-                "effect_modifiers": ["modifier1"],
-                "data_source": "test",
-            })
+            await agent.run(
+                {
+                    "query": "test",
+                    "outcome_var": "outcome",
+                    "segment_vars": ["segment1"],
+                    "effect_modifiers": ["modifier1"],
+                    "data_source": "test",
+                }
+            )
 
     @pytest.mark.asyncio
     async def test_input_validation_missing_outcome_var(self):
@@ -66,13 +70,15 @@ class TestHeterogeneousOptimizerAgent:
         agent = HeterogeneousOptimizerAgent()
 
         with pytest.raises(ValueError, match="Missing required field: outcome_var"):
-            await agent.run({
-                "query": "test",
-                "treatment_var": "treatment",
-                "segment_vars": ["segment1"],
-                "effect_modifiers": ["modifier1"],
-                "data_source": "test",
-            })
+            await agent.run(
+                {
+                    "query": "test",
+                    "treatment_var": "treatment",
+                    "segment_vars": ["segment1"],
+                    "effect_modifiers": ["modifier1"],
+                    "data_source": "test",
+                }
+            )
 
     @pytest.mark.asyncio
     async def test_input_validation_missing_segment_vars(self):
@@ -80,13 +86,15 @@ class TestHeterogeneousOptimizerAgent:
         agent = HeterogeneousOptimizerAgent()
 
         with pytest.raises(ValueError, match="Missing required field: segment_vars"):
-            await agent.run({
-                "query": "test",
-                "treatment_var": "treatment",
-                "outcome_var": "outcome",
-                "effect_modifiers": ["modifier1"],
-                "data_source": "test",
-            })
+            await agent.run(
+                {
+                    "query": "test",
+                    "treatment_var": "treatment",
+                    "outcome_var": "outcome",
+                    "effect_modifiers": ["modifier1"],
+                    "data_source": "test",
+                }
+            )
 
     @pytest.mark.asyncio
     async def test_input_validation_missing_effect_modifiers(self):
@@ -94,13 +102,15 @@ class TestHeterogeneousOptimizerAgent:
         agent = HeterogeneousOptimizerAgent()
 
         with pytest.raises(ValueError, match="Missing required field: effect_modifiers"):
-            await agent.run({
-                "query": "test",
-                "treatment_var": "treatment",
-                "outcome_var": "outcome",
-                "segment_vars": ["segment1"],
-                "data_source": "test",
-            })
+            await agent.run(
+                {
+                    "query": "test",
+                    "treatment_var": "treatment",
+                    "outcome_var": "outcome",
+                    "segment_vars": ["segment1"],
+                    "data_source": "test",
+                }
+            )
 
     @pytest.mark.asyncio
     async def test_input_validation_empty_segment_vars(self):
@@ -108,14 +118,16 @@ class TestHeterogeneousOptimizerAgent:
         agent = HeterogeneousOptimizerAgent()
 
         with pytest.raises(ValueError, match="segment_vars must be a non-empty list"):
-            await agent.run({
-                "query": "test",
-                "treatment_var": "treatment",
-                "outcome_var": "outcome",
-                "segment_vars": [],
-                "effect_modifiers": ["modifier1"],
-                "data_source": "test",
-            })
+            await agent.run(
+                {
+                    "query": "test",
+                    "treatment_var": "treatment",
+                    "outcome_var": "outcome",
+                    "segment_vars": [],
+                    "effect_modifiers": ["modifier1"],
+                    "data_source": "test",
+                }
+            )
 
     @pytest.mark.asyncio
     async def test_input_validation_empty_effect_modifiers(self):
@@ -123,14 +135,16 @@ class TestHeterogeneousOptimizerAgent:
         agent = HeterogeneousOptimizerAgent()
 
         with pytest.raises(ValueError, match="effect_modifiers must be a non-empty list"):
-            await agent.run({
-                "query": "test",
-                "treatment_var": "treatment",
-                "outcome_var": "outcome",
-                "segment_vars": ["segment1"],
-                "effect_modifiers": [],
-                "data_source": "test",
-            })
+            await agent.run(
+                {
+                    "query": "test",
+                    "treatment_var": "treatment",
+                    "outcome_var": "outcome",
+                    "segment_vars": ["segment1"],
+                    "effect_modifiers": [],
+                    "data_source": "test",
+                }
+            )
 
     @pytest.mark.asyncio
     async def test_input_validation_n_estimators_range(self):
@@ -138,63 +152,77 @@ class TestHeterogeneousOptimizerAgent:
         agent = HeterogeneousOptimizerAgent()
 
         with pytest.raises(ValueError, match="n_estimators must be an integer between 50 and 500"):
-            await agent.run({
-                "query": "test",
-                "treatment_var": "treatment",
-                "outcome_var": "outcome",
-                "segment_vars": ["segment1"],
-                "effect_modifiers": ["modifier1"],
-                "data_source": "test",
-                "n_estimators": 1000,  # Too high
-            })
+            await agent.run(
+                {
+                    "query": "test",
+                    "treatment_var": "treatment",
+                    "outcome_var": "outcome",
+                    "segment_vars": ["segment1"],
+                    "effect_modifiers": ["modifier1"],
+                    "data_source": "test",
+                    "n_estimators": 1000,  # Too high
+                }
+            )
 
     @pytest.mark.asyncio
     async def test_input_validation_min_samples_leaf_range(self):
         """Test min_samples_leaf range validation."""
         agent = HeterogeneousOptimizerAgent()
 
-        with pytest.raises(ValueError, match="min_samples_leaf must be an integer between 5 and 100"):
-            await agent.run({
-                "query": "test",
-                "treatment_var": "treatment",
-                "outcome_var": "outcome",
-                "segment_vars": ["segment1"],
-                "effect_modifiers": ["modifier1"],
-                "data_source": "test",
-                "min_samples_leaf": 200,  # Too high
-            })
+        with pytest.raises(
+            ValueError, match="min_samples_leaf must be an integer between 5 and 100"
+        ):
+            await agent.run(
+                {
+                    "query": "test",
+                    "treatment_var": "treatment",
+                    "outcome_var": "outcome",
+                    "segment_vars": ["segment1"],
+                    "effect_modifiers": ["modifier1"],
+                    "data_source": "test",
+                    "min_samples_leaf": 200,  # Too high
+                }
+            )
 
     @pytest.mark.asyncio
     async def test_input_validation_significance_level_range(self):
         """Test significance_level range validation."""
         agent = HeterogeneousOptimizerAgent()
 
-        with pytest.raises(ValueError, match="significance_level must be a number between 0.01 and 0.10"):
-            await agent.run({
-                "query": "test",
-                "treatment_var": "treatment",
-                "outcome_var": "outcome",
-                "segment_vars": ["segment1"],
-                "effect_modifiers": ["modifier1"],
-                "data_source": "test",
-                "significance_level": 0.5,  # Too high
-            })
+        with pytest.raises(
+            ValueError, match="significance_level must be a number between 0.01 and 0.10"
+        ):
+            await agent.run(
+                {
+                    "query": "test",
+                    "treatment_var": "treatment",
+                    "outcome_var": "outcome",
+                    "segment_vars": ["segment1"],
+                    "effect_modifiers": ["modifier1"],
+                    "data_source": "test",
+                    "significance_level": 0.5,  # Too high
+                }
+            )
 
     @pytest.mark.asyncio
     async def test_input_validation_top_segments_count_range(self):
         """Test top_segments_count range validation."""
         agent = HeterogeneousOptimizerAgent()
 
-        with pytest.raises(ValueError, match="top_segments_count must be an integer between 5 and 50"):
-            await agent.run({
-                "query": "test",
-                "treatment_var": "treatment",
-                "outcome_var": "outcome",
-                "segment_vars": ["segment1"],
-                "effect_modifiers": ["modifier1"],
-                "data_source": "test",
-                "top_segments_count": 100,  # Too high
-            })
+        with pytest.raises(
+            ValueError, match="top_segments_count must be an integer between 5 and 50"
+        ):
+            await agent.run(
+                {
+                    "query": "test",
+                    "treatment_var": "treatment",
+                    "outcome_var": "outcome",
+                    "segment_vars": ["segment1"],
+                    "effect_modifiers": ["modifier1"],
+                    "data_source": "test",
+                    "top_segments_count": 100,  # Too high
+                }
+            )
 
     @pytest.mark.asyncio
     async def test_output_has_required_fields(self):
@@ -376,7 +404,7 @@ class TestHeterogeneousOptimizerAgent:
         assert "region" in cate_by_segment
 
         # Each should be a list of CATE results
-        for segment_var, results in cate_by_segment.items():
+        for _segment_var, results in cate_by_segment.items():
             assert isinstance(results, list)
             if results:
                 assert "cate_estimate" in results[0]

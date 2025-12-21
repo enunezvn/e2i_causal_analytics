@@ -9,17 +9,17 @@ Deployment workflow with 6 nodes:
 6. Health Check - Verify deployment health
 """
 
-from .registry_manager import (
-    register_model,
-    validate_promotion,
-    promote_stage,
-)
 from .deployment_orchestrator import (
-    package_model,
-    deploy_to_endpoint,
     check_rollback_availability,
+    deploy_to_endpoint,
+    package_model,
 )
 from .health_checker import check_health
+from .registry_manager import (
+    promote_stage,
+    register_model,
+    validate_promotion,
+)
 
 __all__ = [
     # Registry management

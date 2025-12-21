@@ -1,13 +1,13 @@
 """Tests for success criteria validation."""
 
 import pytest
+
 from src.agents.ml_foundation.scope_definer.nodes.criteria_validator import (
-    define_success_criteria,
+    _define_baseline_model,
     _define_classification_criteria,
     _define_regression_criteria,
-    _define_causal_criteria,
-    _define_baseline_model,
     _validate_criteria,
+    define_success_criteria,
 )
 
 
@@ -181,9 +181,7 @@ def test_validate_criteria_warns_on_low_samples():
     """Test validation warns when minimum samples is too low."""
     criteria = {"experiment_id": "exp_test_123", "baseline_model": "test"}
 
-    state = {
-        "scope_spec": {"minimum_samples": 50}  # Very low
-    }
+    state = {"scope_spec": {"minimum_samples": 50}}  # Very low
 
     result = _validate_criteria(criteria, state)
 

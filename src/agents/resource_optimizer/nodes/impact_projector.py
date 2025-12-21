@@ -21,9 +21,7 @@ class ImpactProjectorNode:
     Generates summary and recommendations.
     """
 
-    async def execute(
-        self, state: ResourceOptimizerState
-    ) -> ResourceOptimizerState:
+    async def execute(self, state: ResourceOptimizerState) -> ResourceOptimizerState:
         """Project impact and generate recommendations."""
         start_time = time.time()
 
@@ -36,9 +34,7 @@ class ImpactProjectorNode:
             if not allocations:
                 return {
                     **state,
-                    "errors": [
-                        {"node": "impact_projector", "error": "No allocations to project"}
-                    ],
+                    "errors": [{"node": "impact_projector", "error": "No allocations to project"}],
                     "status": "failed",
                 }
 
@@ -46,9 +42,7 @@ class ImpactProjectorNode:
             total_outcome = sum(a.get("expected_impact", 0) for a in allocations)
 
             # Calculate total investment
-            total_allocation = sum(
-                a.get("optimized_allocation", 0) for a in allocations
-            )
+            total_allocation = sum(a.get("optimized_allocation", 0) for a in allocations)
 
             # Calculate ROI
             roi = total_outcome / total_allocation if total_allocation > 0 else 0
@@ -68,9 +62,7 @@ class ImpactProjectorNode:
                 + int((time.time() - start_time) * 1000)
             )
 
-            logger.info(
-                f"Impact projection complete: outcome={total_outcome:.2f}, roi={roi:.2f}"
-            )
+            logger.info(f"Impact projection complete: outcome={total_outcome:.2f}, roi={roi:.2f}")
 
             return {
                 **state,
@@ -91,9 +83,7 @@ class ImpactProjectorNode:
                 "status": "failed",
             }
 
-    def _calculate_segment_impact(
-        self, allocations: List[Dict[str, Any]]
-    ) -> Dict[str, float]:
+    def _calculate_segment_impact(self, allocations: List[Dict[str, Any]]) -> Dict[str, float]:
         """Calculate impact by segment/entity type."""
         impact_by_type: Dict[str, float] = {}
 
@@ -115,17 +105,13 @@ class ImpactProjectorNode:
         increases = [a for a in allocations if a.get("change", 0) > 0]
         decreases = [a for a in allocations if a.get("change", 0) < 0]
 
-        summary = f"Optimization complete. "
+        summary = "Optimization complete. "
         summary += f"Projected outcome: {total_outcome:.0f} (ROI: {roi:.2f}). "
-        summary += (
-            f"Recommended changes: {len(increases)} increases, {len(decreases)} decreases."
-        )
+        summary += f"Recommended changes: {len(increases)} increases, {len(decreases)} decreases."
 
         return summary
 
-    def _generate_recommendations(
-        self, allocations: List[Dict[str, Any]]
-    ) -> List[str]:
+    def _generate_recommendations(self, allocations: List[Dict[str, Any]]) -> List[str]:
         """Generate actionable recommendations."""
         recommendations = []
 

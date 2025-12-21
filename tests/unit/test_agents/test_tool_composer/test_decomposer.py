@@ -6,9 +6,9 @@ into atomic sub-questions.
 """
 
 import json
+from unittest.mock import AsyncMock
+
 import pytest
-from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.agents.tool_composer.decomposer import (
     DecompositionError,
@@ -17,7 +17,6 @@ from src.agents.tool_composer.decomposer import (
 )
 from src.agents.tool_composer.models.composition_models import (
     DecompositionResult,
-    SubQuestion,
 )
 
 
@@ -39,7 +38,7 @@ class TestQueryDecomposerInit:
             model="claude-3-5-haiku-latest",
             temperature=0.5,
             max_sub_questions=8,
-            min_sub_questions=3
+            min_sub_questions=3,
         )
         assert decomposer.model == "claude-3-5-haiku-latest"
         assert decomposer.temperature == 0.5
@@ -107,12 +106,16 @@ class TestDecompositionValidation:
     async def test_minimum_sub_questions(self, mock_llm_client):
         """Test that minimum sub-questions constraint is enforced"""
         # Configure mock to return too few questions
-        mock_llm_client.set_decomposition_response(json.dumps({
-            "reasoning": "Single question",
-            "sub_questions": [
-                {"id": "sq_1", "question": "Only one", "intent": "DESCRIPTIVE"}
-            ]
-        }))
+        mock_llm_client.set_decomposition_response(
+            json.dumps(
+                {
+                    "reasoning": "Single question",
+                    "sub_questions": [
+                        {"id": "sq_1", "question": "Only one", "intent": "DESCRIPTIVE"}
+                    ],
+                }
+            )
+        )
 
         decomposer = QueryDecomposer(llm_client=mock_llm_client, min_sub_questions=2)
 
@@ -125,13 +128,17 @@ class TestDecompositionValidation:
     async def test_maximum_sub_questions_truncated(self, mock_llm_client):
         """Test that too many sub-questions are truncated"""
         many_questions = [
-            {"id": f"sq_{i}", "question": f"Question {i}", "intent": "DESCRIPTIVE", "depends_on": []}
+            {
+                "id": f"sq_{i}",
+                "question": f"Question {i}",
+                "intent": "DESCRIPTIVE",
+                "depends_on": [],
+            }
             for i in range(10)
         ]
-        mock_llm_client.set_decomposition_response(json.dumps({
-            "reasoning": "Many questions",
-            "sub_questions": many_questions
-        }))
+        mock_llm_client.set_decomposition_response(
+            json.dumps({"reasoning": "Many questions", "sub_questions": many_questions})
+        )
 
         decomposer = QueryDecomposer(llm_client=mock_llm_client, max_sub_questions=6)
         result = await decomposer.decompose("Complex query")
@@ -141,13 +148,27 @@ class TestDecompositionValidation:
     @pytest.mark.asyncio
     async def test_dependency_cycle_detection(self, mock_llm_client):
         """Test that dependency cycles are detected"""
-        mock_llm_client.set_decomposition_response(json.dumps({
-            "reasoning": "Cyclic dependencies",
-            "sub_questions": [
-                {"id": "sq_1", "question": "Q1", "intent": "CAUSAL", "depends_on": ["sq_2"]},
-                {"id": "sq_2", "question": "Q2", "intent": "CAUSAL", "depends_on": ["sq_1"]}
-            ]
-        }))
+        mock_llm_client.set_decomposition_response(
+            json.dumps(
+                {
+                    "reasoning": "Cyclic dependencies",
+                    "sub_questions": [
+                        {
+                            "id": "sq_1",
+                            "question": "Q1",
+                            "intent": "CAUSAL",
+                            "depends_on": ["sq_2"],
+                        },
+                        {
+                            "id": "sq_2",
+                            "question": "Q2",
+                            "intent": "CAUSAL",
+                            "depends_on": ["sq_1"],
+                        },
+                    ],
+                }
+            )
+        )
 
         decomposer = QueryDecomposer(llm_client=mock_llm_client)
 
@@ -159,13 +180,22 @@ class TestDecompositionValidation:
     @pytest.mark.asyncio
     async def test_invalid_dependency_reference(self, mock_llm_client):
         """Test that invalid dependency references are caught"""
-        mock_llm_client.set_decomposition_response(json.dumps({
-            "reasoning": "Invalid reference",
-            "sub_questions": [
-                {"id": "sq_1", "question": "Q1", "intent": "CAUSAL", "depends_on": []},
-                {"id": "sq_2", "question": "Q2", "intent": "CAUSAL", "depends_on": ["sq_99"]}  # Invalid
-            ]
-        }))
+        mock_llm_client.set_decomposition_response(
+            json.dumps(
+                {
+                    "reasoning": "Invalid reference",
+                    "sub_questions": [
+                        {"id": "sq_1", "question": "Q1", "intent": "CAUSAL", "depends_on": []},
+                        {
+                            "id": "sq_2",
+                            "question": "Q2",
+                            "intent": "CAUSAL",
+                            "depends_on": ["sq_99"],
+                        },  # Invalid
+                    ],
+                }
+            )
+        )
 
         decomposer = QueryDecomposer(llm_client=mock_llm_client)
 
@@ -181,7 +211,8 @@ class TestResponseParsing:
     @pytest.mark.asyncio
     async def test_parse_markdown_code_block(self, mock_llm_client):
         """Test parsing JSON from markdown code block"""
-        mock_llm_client.set_decomposition_response("""Here is the decomposition:
+        mock_llm_client.set_decomposition_response(
+            """Here is the decomposition:
 
 ```json
 {
@@ -191,7 +222,8 @@ class TestResponseParsing:
         {"id": "sq_2", "question": "Q2", "intent": "DESCRIPTIVE", "depends_on": []}
     ]
 }
-```""")
+```"""
+        )
 
         decomposer = QueryDecomposer(llm_client=mock_llm_client)
         result = await decomposer.decompose("Test")
@@ -201,13 +233,17 @@ class TestResponseParsing:
     @pytest.mark.asyncio
     async def test_parse_plain_json(self, mock_llm_client):
         """Test parsing plain JSON response"""
-        mock_llm_client.set_decomposition_response(json.dumps({
-            "reasoning": "Plain JSON",
-            "sub_questions": [
-                {"id": "sq_1", "question": "Q1", "intent": "CAUSAL"},
-                {"id": "sq_2", "question": "Q2", "intent": "DESCRIPTIVE"}
-            ]
-        }))
+        mock_llm_client.set_decomposition_response(
+            json.dumps(
+                {
+                    "reasoning": "Plain JSON",
+                    "sub_questions": [
+                        {"id": "sq_1", "question": "Q1", "intent": "CAUSAL"},
+                        {"id": "sq_2", "question": "Q2", "intent": "DESCRIPTIVE"},
+                    ],
+                }
+            )
+        )
 
         decomposer = QueryDecomposer(llm_client=mock_llm_client)
         result = await decomposer.decompose("Test")
@@ -233,13 +269,17 @@ class TestDefaultValues:
     @pytest.mark.asyncio
     async def test_default_id_generation(self, mock_llm_client):
         """Test that IDs are auto-generated if not provided"""
-        mock_llm_client.set_decomposition_response(json.dumps({
-            "reasoning": "No IDs",
-            "sub_questions": [
-                {"question": "Q1", "intent": "CAUSAL"},
-                {"question": "Q2", "intent": "DESCRIPTIVE"}
-            ]
-        }))
+        mock_llm_client.set_decomposition_response(
+            json.dumps(
+                {
+                    "reasoning": "No IDs",
+                    "sub_questions": [
+                        {"question": "Q1", "intent": "CAUSAL"},
+                        {"question": "Q2", "intent": "DESCRIPTIVE"},
+                    ],
+                }
+            )
+        )
 
         decomposer = QueryDecomposer(llm_client=mock_llm_client)
         result = await decomposer.decompose("Test")
@@ -250,13 +290,17 @@ class TestDefaultValues:
     @pytest.mark.asyncio
     async def test_default_intent(self, mock_llm_client):
         """Test that intent defaults to DESCRIPTIVE"""
-        mock_llm_client.set_decomposition_response(json.dumps({
-            "reasoning": "No intent",
-            "sub_questions": [
-                {"id": "sq_1", "question": "Q1"},
-                {"id": "sq_2", "question": "Q2"}
-            ]
-        }))
+        mock_llm_client.set_decomposition_response(
+            json.dumps(
+                {
+                    "reasoning": "No intent",
+                    "sub_questions": [
+                        {"id": "sq_1", "question": "Q1"},
+                        {"id": "sq_2", "question": "Q2"},
+                    ],
+                }
+            )
+        )
 
         decomposer = QueryDecomposer(llm_client=mock_llm_client)
         result = await decomposer.decompose("Test")
@@ -267,13 +311,17 @@ class TestDefaultValues:
     @pytest.mark.asyncio
     async def test_default_empty_lists(self, mock_llm_client):
         """Test that entities and depends_on default to empty lists"""
-        mock_llm_client.set_decomposition_response(json.dumps({
-            "reasoning": "Minimal",
-            "sub_questions": [
-                {"id": "sq_1", "question": "Q1", "intent": "CAUSAL"},
-                {"id": "sq_2", "question": "Q2", "intent": "DESCRIPTIVE"}
-            ]
-        }))
+        mock_llm_client.set_decomposition_response(
+            json.dumps(
+                {
+                    "reasoning": "Minimal",
+                    "sub_questions": [
+                        {"id": "sq_1", "question": "Q1", "intent": "CAUSAL"},
+                        {"id": "sq_2", "question": "Q2", "intent": "DESCRIPTIVE"},
+                    ],
+                }
+            )
+        )
 
         decomposer = QueryDecomposer(llm_client=mock_llm_client)
         result = await decomposer.decompose("Test")
@@ -290,9 +338,7 @@ class TestLLMInteraction:
     async def test_llm_called_with_correct_params(self, mock_llm_client, simple_query):
         """Test that LLM is called with correct parameters"""
         decomposer = QueryDecomposer(
-            llm_client=mock_llm_client,
-            model="test-model",
-            temperature=0.5
+            llm_client=mock_llm_client, model="test-model", temperature=0.5
         )
         await decomposer.decompose(simple_query)
 
@@ -326,10 +372,7 @@ class TestSyncWrapper:
     def test_decompose_sync_with_custom_params(self, mock_llm_client, simple_query):
         """Test sync wrapper with custom parameters"""
         result = decompose_sync(
-            simple_query,
-            mock_llm_client,
-            model="custom-model",
-            temperature=0.7
+            simple_query, mock_llm_client, model="custom-model", temperature=0.7
         )
 
         assert isinstance(result, DecompositionResult)
@@ -355,12 +398,14 @@ class TestErrorHandling:
     @pytest.mark.asyncio
     async def test_missing_required_field(self, mock_llm_client):
         """Test handling of missing required fields in response"""
-        mock_llm_client.set_decomposition_response(json.dumps({
-            "reasoning": "Missing questions",
-            "sub_questions": [
-                {"id": "sq_1", "intent": "CAUSAL"}  # Missing 'question'
-            ]
-        }))
+        mock_llm_client.set_decomposition_response(
+            json.dumps(
+                {
+                    "reasoning": "Missing questions",
+                    "sub_questions": [{"id": "sq_1", "intent": "CAUSAL"}],  # Missing 'question'
+                }
+            )
+        )
 
         decomposer = QueryDecomposer(llm_client=mock_llm_client)
 

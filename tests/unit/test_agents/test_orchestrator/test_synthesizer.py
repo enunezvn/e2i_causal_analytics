@@ -1,7 +1,9 @@
 """Tests for synthesizer node."""
 
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+
 from src.agents.orchestrator.nodes.synthesizer import (
     SynthesizerNode,
     synthesize_response,
@@ -101,8 +103,12 @@ class TestSynthesizerNode:
         assert "gap_analyzer" in call_args
 
         # Verify synthesis
-        assert result["synthesized_response"] == "Synthesized response combining all agent insights."
-        assert result["response_confidence"] == pytest.approx(0.845, 0.01)  # Average of 0.87 and 0.82
+        assert (
+            result["synthesized_response"] == "Synthesized response combining all agent insights."
+        )
+        assert result["response_confidence"] == pytest.approx(
+            0.845, 0.01
+        )  # Average of 0.87 and 0.82
         assert "Increase engagement" in result["recommendations"]
         assert "Expand coverage" in result["recommendations"]
 
@@ -461,9 +467,7 @@ class TestGenerateErrorResponse:
         """Test error response with single failed agent."""
         synthesizer = SynthesizerNode()
 
-        failed_results = [
-            {"agent_name": "causal_impact", "error": "Agent timed out after 30000ms"}
-        ]
+        failed_results = [{"agent_name": "causal_impact", "error": "Agent timed out after 30000ms"}]
 
         error_response = synthesizer._generate_error_response(failed_results)
 
@@ -563,9 +567,7 @@ class TestConfidenceCalculation:
         synthesizer = SynthesizerNode()
 
         state = {
-            "agent_results": [
-                {"agent_name": "agent1", "success": False, "error": "Failed"}
-            ],
+            "agent_results": [{"agent_name": "agent1", "success": False, "error": "Failed"}],
             "classification_latency_ms": 0,
             "routing_latency_ms": 0,
             "dispatch_latency_ms": 0,

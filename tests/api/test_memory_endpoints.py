@@ -10,13 +10,13 @@ Tests the memory system endpoints:
 - GET /memory/stats
 """
 
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
 from fastapi.testclient import TestClient
 
 from src.api.main import app
 from src.rag.models.retrieval_models import RetrievalResult
-
 
 client = TestClient(app)
 
@@ -24,6 +24,7 @@ client = TestClient(app)
 # =============================================================================
 # FIXTURES
 # =============================================================================
+
 
 @pytest.fixture
 def mock_hybrid_search():
@@ -36,7 +37,7 @@ def mock_hybrid_search():
                 source_id="mem_1",
                 score=0.85,
                 retrieval_method="dense",
-                metadata={"brand": "Kisqali"}
+                metadata={"brand": "Kisqali"},
             ),
             RetrievalResult(
                 content="Causal path: HCP visits → Script volume → TRx",
@@ -44,8 +45,8 @@ def mock_hybrid_search():
                 source_id="path_1",
                 score=0.75,
                 retrieval_method="sparse",
-                metadata={}
-            )
+                metadata={},
+            ),
         ]
         yield mock
 
@@ -53,8 +54,10 @@ def mock_hybrid_search():
 @pytest.fixture
 def mock_episodic_memory_functions():
     """Mock episodic memory functions."""
-    with patch("src.api.routes.memory.insert_episodic_memory_with_text") as mock_insert, \
-         patch("src.api.routes.memory.get_memory_by_id") as mock_get:
+    with (
+        patch("src.api.routes.memory.insert_episodic_memory_with_text") as mock_insert,
+        patch("src.api.routes.memory.get_memory_by_id") as mock_get,
+    ):
         mock_insert.return_value = "mem_123"
         mock_get.return_value = {
             "memory_id": "mem_123",
@@ -65,7 +68,7 @@ def mock_episodic_memory_functions():
             "brand": "Kisqali",
             "region": "northeast",
             "raw_content": {},
-            "occurred_at": "2025-01-01T00:00:00"
+            "occurred_at": "2025-01-01T00:00:00",
         }
         yield {"insert": mock_insert, "get": mock_get}
 
@@ -73,15 +76,13 @@ def mock_episodic_memory_functions():
 @pytest.fixture
 def mock_procedural_memory_functions():
     """Mock procedural memory functions."""
-    with patch("src.api.routes.memory.update_procedure_outcome") as mock_update, \
-         patch("src.api.routes.memory.get_procedure_by_id") as mock_get, \
-         patch("src.api.routes.memory.record_learning_signal") as mock_signal:
+    with (
+        patch("src.api.routes.memory.update_procedure_outcome") as mock_update,
+        patch("src.api.routes.memory.get_procedure_by_id") as mock_get,
+        patch("src.api.routes.memory.record_learning_signal") as mock_signal,
+    ):
         mock_update.return_value = None
-        mock_get.return_value = {
-            "procedure_id": "proc_001",
-            "usage_count": 10,
-            "success_count": 9
-        }
+        mock_get.return_value = {"procedure_id": "proc_001", "usage_count": 10, "success_count": 9}
         mock_signal.return_value = "signal_123"
         yield {"update": mock_update, "get": mock_get, "signal": mock_signal}
 
@@ -90,19 +91,18 @@ def mock_procedural_memory_functions():
 def mock_semantic_memory():
     """Mock semantic memory."""
     memory = MagicMock()
-    memory.find_causal_paths_for_kpi = MagicMock(return_value=[
-        {
-            "nodes": ["HCP engagement", "Script volume", "TRx"],
-            "confidence": 0.85,
-            "path_id": "path_1"
-        }
-    ])
-    memory.traverse_causal_chain = MagicMock(return_value=[
-        {
-            "path": ["Entity A", "Entity B"],
-            "confidence": 0.8
-        }
-    ])
+    memory.find_causal_paths_for_kpi = MagicMock(
+        return_value=[
+            {
+                "nodes": ["HCP engagement", "Script volume", "TRx"],
+                "confidence": 0.85,
+                "path_id": "path_1",
+            }
+        ]
+    )
+    memory.traverse_causal_chain = MagicMock(
+        return_value=[{"path": ["Entity A", "Entity B"], "confidence": 0.8}]
+    )
     return memory
 
 
@@ -110,17 +110,14 @@ def mock_semantic_memory():
 # SEARCH ENDPOINT TESTS
 # =============================================================================
 
+
 class TestMemorySearch:
     """Tests for POST /memory/search."""
 
     def test_search_returns_results(self, mock_hybrid_search):
         """search should return hybrid search results."""
         response = client.post(
-            "/memory/search",
-            json={
-                "query": "Why did TRx drop in northeast?",
-                "k": 10
-            }
+            "/memory/search", json={"query": "Why did TRx drop in northeast?", "k": 10}
         )
 
         assert response.status_code == 200
@@ -136,8 +133,8 @@ class TestMemorySearch:
             json={
                 "query": "TRx trends",
                 "k": 5,
-                "filters": {"brand": "Kisqali", "region": "northeast"}
-            }
+                "filters": {"brand": "Kisqali", "region": "northeast"},
+            },
         )
 
         assert response.status_code == 200
@@ -148,11 +145,7 @@ class TestMemorySearch:
     def test_search_with_kpi_name(self, mock_hybrid_search):
         """search should pass kpi_name for targeted retrieval."""
         response = client.post(
-            "/memory/search",
-            json={
-                "query": "What impacts TRx?",
-                "kpi_name": "TRx"
-            }
+            "/memory/search", json={"query": "What impacts TRx?", "kpi_name": "TRx"}
         )
 
         assert response.status_code == 200
@@ -161,13 +154,7 @@ class TestMemorySearch:
 
     def test_search_filters_by_min_score(self, mock_hybrid_search):
         """search should filter results below min_score."""
-        response = client.post(
-            "/memory/search",
-            json={
-                "query": "TRx analysis",
-                "min_score": 0.8
-            }
-        )
+        response = client.post("/memory/search", json={"query": "TRx analysis", "min_score": 0.8})
 
         assert response.status_code == 200
         data = response.json()
@@ -177,10 +164,7 @@ class TestMemorySearch:
 
     def test_search_includes_latency(self, mock_hybrid_search):
         """search should include search latency in response."""
-        response = client.post(
-            "/memory/search",
-            json={"query": "test query"}
-        )
+        response = client.post("/memory/search", json={"query": "test query"})
 
         assert response.status_code == 200
         data = response.json()
@@ -189,10 +173,7 @@ class TestMemorySearch:
 
     def test_search_validates_query_length(self):
         """search should reject empty queries."""
-        response = client.post(
-            "/memory/search",
-            json={"query": ""}
-        )
+        response = client.post("/memory/search", json={"query": ""})
 
         assert response.status_code == 422  # Validation error
 
@@ -200,6 +181,7 @@ class TestMemorySearch:
 # =============================================================================
 # EPISODIC MEMORY TESTS
 # =============================================================================
+
 
 class TestEpisodicMemory:
     """Tests for episodic memory endpoints."""
@@ -213,8 +195,8 @@ class TestEpisodicMemory:
                 "event_type": "query",
                 "session_id": "sess_123",
                 "agent_name": "orchestrator",
-                "brand": "Kisqali"
-            }
+                "brand": "Kisqali",
+            },
         )
 
         assert response.status_code == 200
@@ -226,11 +208,7 @@ class TestEpisodicMemory:
     def test_create_episodic_memory_minimal(self, mock_episodic_memory_functions):
         """POST /memory/episodic should work with minimal fields."""
         response = client.post(
-            "/memory/episodic",
-            json={
-                "content": "Minimal memory",
-                "event_type": "action"
-            }
+            "/memory/episodic", json={"content": "Minimal memory", "event_type": "action"}
         )
 
         assert response.status_code == 200
@@ -258,6 +236,7 @@ class TestEpisodicMemory:
 # PROCEDURAL MEMORY TESTS
 # =============================================================================
 
+
 class TestProceduralFeedback:
     """Tests for POST /memory/procedural/feedback."""
 
@@ -270,8 +249,8 @@ class TestProceduralFeedback:
                 "outcome": "success",
                 "score": 0.9,
                 "feedback_text": "Analysis was accurate",
-                "agent_name": "feedback_learner"
-            }
+                "agent_name": "feedback_learner",
+            },
         )
 
         assert response.status_code == 200
@@ -288,11 +267,7 @@ class TestProceduralFeedback:
         """Should work with minimal required fields."""
         response = client.post(
             "/memory/procedural/feedback",
-            json={
-                "procedure_id": "proc_002",
-                "outcome": "partial",
-                "score": 0.6
-            }
+            json={"procedure_id": "proc_002", "outcome": "partial", "score": 0.6},
         )
 
         assert response.status_code == 200
@@ -302,6 +277,7 @@ class TestProceduralFeedback:
 # SEMANTIC PATH TESTS
 # =============================================================================
 
+
 class TestSemanticPaths:
     """Tests for GET /memory/semantic/paths."""
 
@@ -309,8 +285,7 @@ class TestSemanticPaths:
         """Should find paths for a given KPI."""
         with patch("src.api.routes.memory.get_semantic_memory", return_value=mock_semantic_memory):
             response = client.get(
-                "/memory/semantic/paths",
-                params={"kpi_name": "TRx", "min_confidence": 0.6}
+                "/memory/semantic/paths", params={"kpi_name": "TRx", "min_confidence": 0.6}
             )
 
         assert response.status_code == 200
@@ -318,16 +293,14 @@ class TestSemanticPaths:
         assert data["total_paths"] == 1
         assert "query_latency_ms" in data
         mock_semantic_memory.find_causal_paths_for_kpi.assert_called_once_with(
-            kpi_name="TRx",
-            min_confidence=0.6
+            kpi_name="TRx", min_confidence=0.6
         )
 
     def test_query_paths_by_entity(self, mock_semantic_memory):
         """Should traverse from a starting entity."""
         with patch("src.api.routes.memory.get_semantic_memory", return_value=mock_semantic_memory):
             response = client.get(
-                "/memory/semantic/paths",
-                params={"start_entity_id": "ent_001", "max_depth": 2}
+                "/memory/semantic/paths", params={"start_entity_id": "ent_001", "max_depth": 2}
             )
 
         assert response.status_code == 200
@@ -337,6 +310,7 @@ class TestSemanticPaths:
 # =============================================================================
 # STATS ENDPOINT TESTS
 # =============================================================================
+
 
 class TestMemoryStats:
     """Tests for GET /memory/stats."""

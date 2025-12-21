@@ -1,6 +1,7 @@
 """Tests for metrics_aggregator node (aggregate_metrics)."""
 
 import pytest
+
 from src.agents.ml_foundation.observability_connector.nodes.metrics_aggregator import (
     aggregate_metrics,
 )
@@ -43,7 +44,7 @@ class TestAggregateMetrics:
         assert len(latency_by_agent) > 0
 
         # Check that each agent has p50, p95, p99, avg
-        for agent_name, stats in latency_by_agent.items():
+        for _agent_name, stats in latency_by_agent.items():
             assert "p50" in stats
             assert "p95" in stats
             assert "p99" in stats
@@ -82,10 +83,10 @@ class TestAggregateMetrics:
         error_rate_by_tier = result["error_rate_by_tier"]
 
         # Check that error rates are between 0 and 1
-        for agent_name, error_rate in error_rate_by_agent.items():
+        for _agent_name, error_rate in error_rate_by_agent.items():
             assert 0.0 <= error_rate <= 1.0
 
-        for tier, error_rate in error_rate_by_tier.items():
+        for _tier, error_rate in error_rate_by_tier.items():
             assert 0.0 <= error_rate <= 1.0
 
     @pytest.mark.asyncio

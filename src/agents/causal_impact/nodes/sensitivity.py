@@ -4,8 +4,10 @@ Computes E-values to quantify robustness to unmeasured confounding.
 """
 
 import time
-import numpy as np
 from typing import Dict
+
+import numpy as np
+
 from src.agents.causal_impact.state import CausalImpactState, SensitivityAnalysis
 
 
@@ -39,7 +41,7 @@ class SensitivityNode:
 
             ate = estimation_result["ate"]
             ate_ci_lower = estimation_result["ate_ci_lower"]
-            ate_ci_upper = estimation_result["ate_ci_upper"]
+            estimation_result["ate_ci_upper"]
 
             # Calculate E-values
             e_value_point = self._calculate_e_value(ate)

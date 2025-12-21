@@ -4,8 +4,8 @@ This agent selects optimal ML algorithms based on problem scope and constraints.
 """
 
 import logging
-from typing import Dict, Any
 from datetime import datetime
+from typing import Any, Dict
 
 from .graph import create_model_selector_graph
 from .state import ModelSelectorState
@@ -92,9 +92,7 @@ class ModelSelectorAgent:
             "baseline_metrics": input_data.get("baseline_metrics", {}),
             "algorithm_preferences": input_data.get("algorithm_preferences"),
             "excluded_algorithms": input_data.get("excluded_algorithms"),
-            "interpretability_required": input_data.get(
-                "interpretability_required", False
-            ),
+            "interpretability_required": input_data.get("interpretability_required", False),
             "problem_type": problem_type,
             "technical_constraints": technical_constraints,
             "row_count": qc_report.get("row_count", 1000),
@@ -133,12 +131,8 @@ class ModelSelectorAgent:
                 "algorithm_name": final_state.get("algorithm_name", ""),
                 "algorithm_class": final_state.get("algorithm_class", ""),
                 "algorithm_family": final_state.get("algorithm_family", ""),
-                "default_hyperparameters": final_state.get(
-                    "default_hyperparameters", {}
-                ),
-                "hyperparameter_search_space": final_state.get(
-                    "hyperparameter_search_space", {}
-                ),
+                "default_hyperparameters": final_state.get("default_hyperparameters", {}),
+                "hyperparameter_search_space": final_state.get("hyperparameter_search_space", {}),
                 "expected_performance": final_state.get("expected_performance", {}),
                 "training_time_estimate_hours": final_state.get(
                     "training_time_estimate_hours", 0.0
@@ -157,9 +151,7 @@ class ModelSelectorAgent:
                 "selection_rationale": final_state.get("selection_rationale", ""),
                 "primary_reason": final_state.get("primary_reason", ""),
                 "supporting_factors": final_state.get("supporting_factors", []),
-                "alternatives_considered": final_state.get(
-                    "alternatives_considered", []
-                ),
+                "alternatives_considered": final_state.get("alternatives_considered", []),
                 "constraint_compliance": final_state.get("constraint_compliance", {}),
             }
 

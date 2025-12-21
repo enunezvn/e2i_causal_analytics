@@ -3,7 +3,7 @@
 This module defines the TypedDict state used by the model_trainer LangGraph.
 """
 
-from typing import TypedDict, Optional, Dict, Any, List
+from typing import Any, Dict, List, Optional, TypedDict
 
 
 class ModelTrainerState(TypedDict, total=False):

@@ -8,14 +8,14 @@ Contract: .claude/contracts/tier3-contracts.md lines 82-142
 """
 
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
-import uuid
 
 from src.agents.experiment_designer.state import (
-    ExperimentDesignState,
-    ErrorDetails,
     DoWhySpec,
+    ErrorDetails,
+    ExperimentDesignState,
     ExperimentTemplate,
 )
 
@@ -164,9 +164,7 @@ class TemplateGeneratorNode:
             identification_strategy=identification_strategy,
         )
 
-    def _generate_analysis_code(
-        self, state: ExperimentDesignState, dag_spec: DoWhySpec
-    ) -> str:
+    def _generate_analysis_code(self, state: ExperimentDesignState, dag_spec: DoWhySpec) -> str:
         """Generate Python analysis template using DoWhy.
 
         Args:
@@ -184,13 +182,10 @@ class TemplateGeneratorNode:
         # Choose estimator based on design
         if design_type in ["RCT", "cluster_rct"]:
             estimator = "backdoor.linear_regression"
-            econml_estimator = "econml.dml.CausalForestDML"
         elif design_type == "difference_in_differences":
             estimator = "backdoor.difference_in_differences"
-            econml_estimator = "econml.panel.PanelEstimator"
         else:
             estimator = "backdoor.linear_regression"
-            econml_estimator = "econml.dml.CausalForestDML"
 
         return f'''"""
 E2I Experiment Analysis Template
@@ -358,24 +353,28 @@ print("Results saved to analysis_results.json")
         for week in [1, 2, 4]:
             checkpoint_day = week * 7
             if checkpoint_day <= duration_days:
-                checkpoints.append({
-                    "day": checkpoint_day,
-                    "type": "interim",
-                    "checks": [
-                        "enrollment_rate",
-                        "treatment_fidelity",
-                        "outcome_collection_rate",
-                    ],
-                })
-        checkpoints.append({
-            "day": duration_days,
-            "type": "final",
-            "checks": [
-                "primary_analysis",
-                "refutation_tests",
-                "heterogeneity_analysis",
-            ],
-        })
+                checkpoints.append(
+                    {
+                        "day": checkpoint_day,
+                        "type": "interim",
+                        "checks": [
+                            "enrollment_rate",
+                            "treatment_fidelity",
+                            "outcome_collection_rate",
+                        ],
+                    }
+                )
+        checkpoints.append(
+            {
+                "day": duration_days,
+                "type": "final",
+                "checks": [
+                    "primary_analysis",
+                    "refutation_tests",
+                    "heterogeneity_analysis",
+                ],
+            }
+        )
 
         # Generate pre-registration document
         prereg_doc = self._generate_preregistration(state)
@@ -424,11 +423,27 @@ print("Results saved to analysis_results.json")
 
         # Build document based on formality level
         if formality == "light":
-            return self._generate_light_prereg(state, power_analysis, treatment_name, primary_outcome)
+            return self._generate_light_prereg(
+                state, power_analysis, treatment_name, primary_outcome
+            )
         elif formality == "heavy":
-            return self._generate_heavy_prereg(state, power_analysis, treatment_name, treatment_desc, primary_outcome, secondary_outcomes)
+            return self._generate_heavy_prereg(
+                state,
+                power_analysis,
+                treatment_name,
+                treatment_desc,
+                primary_outcome,
+                secondary_outcomes,
+            )
         else:  # medium
-            return self._generate_medium_prereg(state, power_analysis, treatment_name, treatment_desc, primary_outcome, secondary_outcomes)
+            return self._generate_medium_prereg(
+                state,
+                power_analysis,
+                treatment_name,
+                treatment_desc,
+                primary_outcome,
+                secondary_outcomes,
+            )
 
     def _generate_light_prereg(
         self, state: ExperimentDesignState, power: dict, treatment: str, outcome: str
@@ -453,13 +468,20 @@ Comparison of {outcome} between treatment and control groups.
 """
 
     def _generate_medium_prereg(
-        self, state: ExperimentDesignState, power: dict,
-        treatment: str, treatment_desc: str, outcome: str, secondary: list
+        self,
+        state: ExperimentDesignState,
+        power: dict,
+        treatment: str,
+        treatment_desc: str,
+        outcome: str,
+        secondary: list,
     ) -> str:
         """Generate medium pre-registration."""
         validity_score = state.get("overall_validity_score", 0.5)
         threats = state.get("validity_threats", [])
-        threat_summary = ", ".join([t.get("threat_name", "") for t in threats[:3]]) or "None identified"
+        threat_summary = (
+            ", ".join([t.get("threat_name", "") for t in threats[:3]]) or "None identified"
+        )
 
         return f"""# Experiment Pre-Registration
 
@@ -495,24 +517,41 @@ Comparison of {outcome} between treatment and control groups.
 """
 
     def _generate_heavy_prereg(
-        self, state: ExperimentDesignState, power: dict,
-        treatment: str, treatment_desc: str, outcome: str, secondary: list
+        self,
+        state: ExperimentDesignState,
+        power: dict,
+        treatment: str,
+        treatment_desc: str,
+        outcome: str,
+        secondary: list,
     ) -> str:
         """Generate comprehensive pre-registration (OSF-style)."""
-        medium = self._generate_medium_prereg(state, power, treatment, treatment_desc, outcome, secondary)
+        medium = self._generate_medium_prereg(
+            state, power, treatment, treatment_desc, outcome, secondary
+        )
 
         threats = state.get("validity_threats", [])
         mitigations = state.get("mitigations", [])
 
-        threat_details = "\n".join([
-            f"- **{t.get('threat_name', 'Unknown')}** ({t.get('severity', 'medium')}): {t.get('description', '')}"
-            for t in threats
-        ]) or "No significant threats identified"
+        threat_details = (
+            "\n".join(
+                [
+                    f"- **{t.get('threat_name', 'Unknown')}** ({t.get('severity', 'medium')}): {t.get('description', '')}"
+                    for t in threats
+                ]
+            )
+            or "No significant threats identified"
+        )
 
-        mitigation_details = "\n".join([
-            f"- **{m.get('threat_addressed', 'Unknown')}**: {m.get('strategy', '')}"
-            for m in mitigations
-        ]) or "No specific mitigations required"
+        mitigation_details = (
+            "\n".join(
+                [
+                    f"- **{m.get('threat_addressed', 'Unknown')}**: {m.get('strategy', '')}"
+                    for m in mitigations
+                ]
+            )
+            or "No specific mitigations required"
+        )
 
         sensitivity = power.get("sensitivity_analysis", {})
         sensitivity_text = ""
@@ -609,8 +648,10 @@ Comparison of {outcome} between treatment and control groups.
                     "type": "timeline",
                     "start_date": datetime.now().isoformat(),
                     "end_date": (
-                        datetime.now() + timedelta(days=duration_days)
-                    ).isoformat() if duration_days else None,
+                        (datetime.now() + timedelta(days=duration_days)).isoformat()
+                        if duration_days
+                        else None
+                    ),
                 },
             ],
             "alerts": [

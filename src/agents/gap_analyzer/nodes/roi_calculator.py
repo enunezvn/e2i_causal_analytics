@@ -12,25 +12,26 @@ Implements the full ROI methodology from docs/roi_methodology.md:
 Reference: docs/roi_methodology.md, src/services/roi_calculation.py
 """
 
-import time
-from typing import Dict, List, Any, Optional
 import logging
+import time
+from typing import Any, Dict, List, Optional
+
+from src.services.roi_calculation import (
+    AttributionLevel,
+    CostInput,
+    RiskAssessment,
+    RiskLevel,
+    ROICalculationService,
+    ROIResult,
+    ValueDriverInput,
+    ValueDriverType,
+)
 
 from ..state import (
+    ConfidenceIntervalDict,
     GapAnalyzerState,
     PerformanceGap,
     ROIEstimate,
-    ConfidenceIntervalDict,
-)
-from src.services.roi_calculation import (
-    ROICalculationService,
-    ValueDriverInput,
-    CostInput,
-    RiskAssessment,
-    ROIResult,
-    ValueDriverType,
-    AttributionLevel,
-    RiskLevel,
 )
 
 logger = logging.getLogger(__name__)
@@ -81,9 +82,7 @@ class ROICalculatorNode:
             use_bootstrap: Whether to compute bootstrap confidence intervals
             n_simulations: Number of Monte Carlo simulations for bootstrap
         """
-        self.roi_service = roi_service or ROICalculationService(
-            n_simulations=n_simulations
-        )
+        self.roi_service = roi_service or ROICalculationService(n_simulations=n_simulations)
         self.use_bootstrap = use_bootstrap
 
     async def execute(self, state: GapAnalyzerState) -> Dict[str, Any]:
@@ -117,9 +116,7 @@ class ROICalculatorNode:
                 roi_estimates.append(roi_estimate)
 
             # Calculate total addressable value (attributed value)
-            total_addressable_value = sum(
-                est["estimated_revenue_impact"] for est in roi_estimates
-            )
+            total_addressable_value = sum(est["estimated_revenue_impact"] for est in roi_estimates)
 
             roi_latency_ms = int((time.time() - start_time) * 1000)
 
@@ -206,9 +203,7 @@ class ROICalculatorNode:
             }
 
         # Build assumptions list
-        assumptions = self._build_assumptions(
-            metric, driver_type, attribution, risk_assessment
-        )
+        assumptions = self._build_assumptions(metric, driver_type, attribution, risk_assessment)
 
         # Legacy confidence (use probability_positive if available)
         legacy_confidence = (
@@ -277,12 +272,20 @@ class ROICalculatorNode:
             driver_type=driver_type,
             quantity=gap_size,
             # Optional fields based on driver type
-            hcp_count=int(gap_size / 10) if driver_type == ValueDriverType.INTENT_TO_PRESCRIBE else None,
+            hcp_count=(
+                int(gap_size / 10) if driver_type == ValueDriverType.INTENT_TO_PRESCRIBE else None
+            ),
             trigger_count=int(gap_size) if driver_type == ValueDriverType.ACTION_RATE else None,
-            fp_reduction=int(gap_size * 0.3) if driver_type == ValueDriverType.DATA_QUALITY else None,
-            fn_reduction=int(gap_size * 0.7) if driver_type == ValueDriverType.DATA_QUALITY else None,
+            fp_reduction=(
+                int(gap_size * 0.3) if driver_type == ValueDriverType.DATA_QUALITY else None
+            ),
+            fn_reduction=(
+                int(gap_size * 0.7) if driver_type == ValueDriverType.DATA_QUALITY else None
+            ),
             auc_drop_prevented=0.02 if driver_type == ValueDriverType.DRIFT_PREVENTION else None,
-            baseline_model_value=gap_size * 850 if driver_type == ValueDriverType.DRIFT_PREVENTION else None,
+            baseline_model_value=(
+                gap_size * 850 if driver_type == ValueDriverType.DRIFT_PREVENTION else None
+            ),
         )
 
     def _estimate_intervention_costs(
@@ -532,12 +535,14 @@ class ROICalculatorNode:
     def _summarize_risks(self, risk: RiskAssessment) -> str:
         """Summarize risk factors."""
         high_count = sum(
-            1 for r in [
+            1
+            for r in [
                 risk.technical_complexity,
                 risk.organizational_change,
                 risk.data_dependencies,
                 risk.timeline_uncertainty,
-            ] if r == RiskLevel.HIGH
+            ]
+            if r == RiskLevel.HIGH
         )
         if high_count >= 2:
             return "multiple high-risk factors"

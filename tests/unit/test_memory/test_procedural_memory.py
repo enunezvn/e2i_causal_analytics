@@ -5,40 +5,39 @@ Tests pattern learning, few-shot example retrieval, and DSPy learning signals.
 """
 
 import json
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from datetime import datetime, timezone, timedelta
-from unittest.mock import MagicMock, patch, AsyncMock
 
 from src.memory.procedural_memory import (
+    LearningSignalInput,
     # Data classes
     ProceduralMemoryInput,
-    LearningSignalInput,
+    # Statistics functions
+    _increment_memory_stats,
+    deactivate_procedure,
     # Procedural memory functions
     find_relevant_procedures,
     find_relevant_procedures_by_text,
+    get_feedback_summary_for_agent,
+    get_feedback_summary_for_trigger,
+    get_few_shot_examples,
+    get_memory_statistics,
+    get_procedure_by_id,
+    get_recent_signals,
+    get_top_procedures,
+    get_training_examples_for_agent,
     insert_procedural_memory,
     insert_procedural_memory_with_text,
-    get_few_shot_examples,
-    get_few_shot_examples_by_text,
-    update_procedure_outcome,
-    get_procedure_by_id,
-    deactivate_procedure,
-    get_top_procedures,
     # Learning signal functions
     record_learning_signal,
-    get_training_examples_for_agent,
-    get_feedback_summary_for_trigger,
-    get_feedback_summary_for_agent,
-    get_recent_signals,
-    # Statistics functions
-    _increment_memory_stats,
-    get_memory_statistics,
+    update_procedure_outcome,
 )
-
 
 # ============================================================================
 # FIXTURES
 # ============================================================================
+
 
 @pytest.fixture
 def mock_supabase():
@@ -90,7 +89,7 @@ def sample_procedure_input():
         tool_sequence=[
             {"tool": "query_kpi", "params": {"kpi": "TRx"}},
             {"tool": "analyze_trend", "params": {"period": "30d"}},
-            {"tool": "find_correlations", "params": {}}
+            {"tool": "find_correlations", "params": {}},
         ],
         procedure_type="investigation",
         trigger_pattern="Why did TRx drop?",
@@ -98,7 +97,7 @@ def sample_procedure_input():
         detected_intent="kpi_investigation",
         applicable_brands=["Kisqali"],
         applicable_regions=["northeast"],
-        applicable_agents=["causal_impact", "gap_analyzer"]
+        applicable_agents=["causal_impact", "gap_analyzer"],
     )
 
 
@@ -120,7 +119,7 @@ def sample_learning_signal():
         dspy_metric_name="relevance",
         dspy_metric_value=0.95,
         training_input="Why did TRx drop?",
-        training_output="TRx dropped due to seasonal factors."
+        training_output="TRx dropped due to seasonal factors.",
     )
 
 
@@ -128,14 +127,14 @@ def sample_learning_signal():
 # DATA CLASS TESTS
 # ============================================================================
 
+
 class TestProceduralMemoryInput:
     """Tests for ProceduralMemoryInput data class."""
 
     def test_minimal_input(self):
         """ProceduralMemoryInput should work with only required fields."""
         proc = ProceduralMemoryInput(
-            procedure_name="test_procedure",
-            tool_sequence=[{"tool": "test"}]
+            procedure_name="test_procedure", tool_sequence=[{"tool": "test"}]
         )
         assert proc.procedure_name == "test_procedure"
         assert proc.tool_sequence == [{"tool": "test"}]
@@ -187,6 +186,7 @@ class TestLearningSignalInput:
 # PROCEDURAL MEMORY FUNCTION TESTS
 # ============================================================================
 
+
 class TestFindRelevantProcedures:
     """Tests for find_relevant_procedures function."""
 
@@ -208,8 +208,8 @@ class TestFindRelevantProcedures:
                 "match_count": 5,
                 "filter_type": None,
                 "filter_intent": None,
-                "filter_brand": None
-            }
+                "filter_brand": None,
+            },
         )
         assert len(result) == 1
 
@@ -225,7 +225,7 @@ class TestFindRelevantProcedures:
                 intent="kpi_investigation",
                 brand="Kisqali",
                 limit=10,
-                min_similarity=0.7
+                min_similarity=0.7,
             )
 
         call_args = mock_supabase.rpc.call_args[0][1]
@@ -267,10 +267,12 @@ class TestFindRelevantProceduresByText:
         ]
 
         with patch("src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase):
-            with patch("src.memory.procedural_memory.get_embedding_service", return_value=mock_embedding_service):
+            with patch(
+                "src.memory.procedural_memory.get_embedding_service",
+                return_value=mock_embedding_service,
+            ):
                 result = await find_relevant_procedures_by_text(
-                    "Why did TRx drop?",
-                    intent="kpi_investigation"
+                    "Why did TRx drop?", intent="kpi_investigation"
                 )
 
         mock_embedding_service.embed.assert_called_once_with("Why did TRx drop?")
@@ -281,13 +283,17 @@ class TestInsertProceduralMemory:
     """Tests for insert_procedural_memory function."""
 
     @pytest.mark.asyncio
-    async def test_insert_new_procedure(self, mock_supabase, sample_procedure_input, sample_embedding):
+    async def test_insert_new_procedure(
+        self, mock_supabase, sample_procedure_input, sample_embedding
+    ):
         """insert_procedural_memory should insert new procedure when no similar exists."""
         # No similar procedure found
         mock_supabase.rpc.return_value.execute.return_value.data = []
 
         with patch("src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase):
-            with patch("src.memory.procedural_memory._increment_memory_stats", new_callable=AsyncMock):
+            with patch(
+                "src.memory.procedural_memory._increment_memory_stats", new_callable=AsyncMock
+            ):
                 result = await insert_procedural_memory(sample_procedure_input, sample_embedding)
 
         assert result is not None
@@ -298,7 +304,9 @@ class TestInsertProceduralMemory:
         assert insert_call.called
 
     @pytest.mark.asyncio
-    async def test_update_existing_procedure(self, mock_supabase, sample_procedure_input, sample_embedding):
+    async def test_update_existing_procedure(
+        self, mock_supabase, sample_procedure_input, sample_embedding
+    ):
         """insert_procedural_memory should update counts when similar procedure exists."""
         # Similar procedure found
         mock_supabase.rpc.return_value.execute.return_value.data = [
@@ -318,13 +326,14 @@ class TestInsertProceduralMemory:
     async def test_insert_sets_defaults(self, mock_supabase, sample_embedding):
         """insert_procedural_memory should set default values for optional fields."""
         minimal_input = ProceduralMemoryInput(
-            procedure_name="test",
-            tool_sequence=[{"tool": "test"}]
+            procedure_name="test", tool_sequence=[{"tool": "test"}]
         )
         mock_supabase.rpc.return_value.execute.return_value.data = []
 
         with patch("src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase):
-            with patch("src.memory.procedural_memory._increment_memory_stats", new_callable=AsyncMock):
+            with patch(
+                "src.memory.procedural_memory._increment_memory_stats", new_callable=AsyncMock
+            ):
                 await insert_procedural_memory(minimal_input, sample_embedding)
 
         insert_call = mock_supabase.table.return_value.insert
@@ -340,28 +349,41 @@ class TestInsertProceduralMemoryWithText:
     """Tests for insert_procedural_memory_with_text function."""
 
     @pytest.mark.asyncio
-    async def test_insert_with_trigger_text(self, mock_supabase, mock_embedding_service, sample_procedure_input):
+    async def test_insert_with_trigger_text(
+        self, mock_supabase, mock_embedding_service, sample_procedure_input
+    ):
         """insert_procedural_memory_with_text should embed trigger text."""
         mock_supabase.rpc.return_value.execute.return_value.data = []
 
         with patch("src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase):
-            with patch("src.memory.procedural_memory.get_embedding_service", return_value=mock_embedding_service):
-                with patch("src.memory.procedural_memory._increment_memory_stats", new_callable=AsyncMock):
+            with patch(
+                "src.memory.procedural_memory.get_embedding_service",
+                return_value=mock_embedding_service,
+            ):
+                with patch(
+                    "src.memory.procedural_memory._increment_memory_stats", new_callable=AsyncMock
+                ):
                     await insert_procedural_memory_with_text(
-                        sample_procedure_input,
-                        trigger_text="Custom trigger text"
+                        sample_procedure_input, trigger_text="Custom trigger text"
                     )
 
         mock_embedding_service.embed.assert_called_once_with("Custom trigger text")
 
     @pytest.mark.asyncio
-    async def test_insert_uses_trigger_pattern_fallback(self, mock_supabase, mock_embedding_service, sample_procedure_input):
+    async def test_insert_uses_trigger_pattern_fallback(
+        self, mock_supabase, mock_embedding_service, sample_procedure_input
+    ):
         """insert_procedural_memory_with_text should fall back to trigger_pattern."""
         mock_supabase.rpc.return_value.execute.return_value.data = []
 
         with patch("src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase):
-            with patch("src.memory.procedural_memory.get_embedding_service", return_value=mock_embedding_service):
-                with patch("src.memory.procedural_memory._increment_memory_stats", new_callable=AsyncMock):
+            with patch(
+                "src.memory.procedural_memory.get_embedding_service",
+                return_value=mock_embedding_service,
+            ):
+                with patch(
+                    "src.memory.procedural_memory._increment_memory_stats", new_callable=AsyncMock
+                ):
                     await insert_procedural_memory_with_text(sample_procedure_input)
 
         # Should use trigger_pattern from input
@@ -381,7 +403,7 @@ class TestGetFewShotExamples:
                 "tool_sequence": json.dumps([{"tool": "query_kpi"}]),
                 "success_rate": 0.85,
                 "applicable_brands": ["Kisqali"],
-                "applicable_regions": ["northeast"]
+                "applicable_regions": ["northeast"],
             }
         ]
 
@@ -403,7 +425,7 @@ class TestGetFewShotExamples:
             {
                 "trigger_pattern": "test",
                 "tool_sequence": '[{"tool": "test_tool"}]',
-                "success_rate": 0.9
+                "success_rate": 0.9,
             }
         ]
 
@@ -419,7 +441,7 @@ class TestGetFewShotExamples:
             {
                 "trigger_pattern": "test",
                 "tool_sequence": [{"tool": "test_tool"}],
-                "success_rate": 0.9
+                "success_rate": 0.9,
             }
         ]
 
@@ -437,7 +459,7 @@ class TestUpdateProcedureOutcome:
         """update_procedure_outcome should increment both counts on success."""
         mock_supabase.table.return_value.single.return_value.execute.return_value.data = {
             "usage_count": 5,
-            "success_count": 4
+            "success_count": 4,
         }
 
         with patch("src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase):
@@ -453,7 +475,7 @@ class TestUpdateProcedureOutcome:
         """update_procedure_outcome should only increment usage on failure."""
         mock_supabase.table.return_value.single.return_value.execute.return_value.data = {
             "usage_count": 5,
-            "success_count": 4
+            "success_count": 4,
         }
 
         with patch("src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase):
@@ -474,7 +496,6 @@ class TestUpdateProcedureOutcome:
             await update_procedure_outcome("nonexistent", success=True)
 
         # Update should not be called
-        update_call = mock_supabase.table.return_value.update
         # We check .eq was not called on update (because select returned None)
 
 
@@ -486,7 +507,7 @@ class TestGetProcedureById:
         """get_procedure_by_id should return procedure data."""
         mock_supabase.table.return_value.single.return_value.execute.return_value.data = {
             "procedure_id": "proc_123",
-            "procedure_name": "test_procedure"
+            "procedure_name": "test_procedure",
         }
 
         with patch("src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase):
@@ -541,7 +562,7 @@ class TestGetTopProcedures:
         """get_top_procedures should return procedures ordered by success."""
         mock_supabase.table.return_value.execute.return_value.data = [
             {"procedure_id": "proc_1", "success_count": 100, "applicable_brands": ["all"]},
-            {"procedure_id": "proc_2", "success_count": 50, "applicable_brands": ["all"]}
+            {"procedure_id": "proc_2", "success_count": 50, "applicable_brands": ["all"]},
         ]
 
         with patch("src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase):
@@ -555,7 +576,7 @@ class TestGetTopProcedures:
         mock_supabase.table.return_value.execute.return_value.data = [
             {"procedure_id": "proc_1", "applicable_brands": ["Kisqali"]},
             {"procedure_id": "proc_2", "applicable_brands": ["Fabhalta"]},
-            {"procedure_id": "proc_3", "applicable_brands": ["all"]}
+            {"procedure_id": "proc_3", "applicable_brands": ["all"]},
         ]
 
         with patch("src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase):
@@ -586,6 +607,7 @@ class TestGetTopProcedures:
 # LEARNING SIGNAL TESTS
 # ============================================================================
 
+
 class TestRecordLearningSignal:
     """Tests for record_learning_signal function."""
 
@@ -608,10 +630,8 @@ class TestRecordLearningSignal:
     async def test_record_signal_with_context(self, mock_supabase, sample_learning_signal):
         """record_learning_signal should include all E2I context."""
         with patch("src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase):
-            result = await record_learning_signal(
-                sample_learning_signal,
-                cycle_id="cycle_123",
-                session_id="session_456"
+            await record_learning_signal(
+                sample_learning_signal, cycle_id="cycle_123", session_id="session_456"
             )
 
         insert_call = mock_supabase.table.return_value.insert
@@ -650,7 +670,7 @@ class TestGetTrainingExamplesForAgent:
                 "signal_id": "sig_1",
                 "training_input": "input1",
                 "training_output": "output1",
-                "dspy_metric_value": 0.95
+                "dspy_metric_value": 0.95,
             }
         ]
 
@@ -670,11 +690,7 @@ class TestGetTrainingExamplesForAgent:
         mock_supabase.table.return_value.execute.return_value.data = []
 
         with patch("src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase):
-            await get_training_examples_for_agent(
-                "causal_impact",
-                brand="Kisqali",
-                min_score=0.8
-            )
+            await get_training_examples_for_agent("causal_impact", brand="Kisqali", min_score=0.8)
 
         eq_calls = mock_supabase.table.return_value.eq.call_args_list
         assert any(call[0] == ("brand", "Kisqali") for call in eq_calls)
@@ -695,7 +711,7 @@ class TestGetFeedbackSummaryForTrigger:
             {"signal_type": "thumbs_down", "signal_value": None},
             {"signal_type": "rating", "signal_value": 4.5},
             {"signal_type": "rating", "signal_value": 3.5},
-            {"signal_type": "correction", "signal_value": None}
+            {"signal_type": "correction", "signal_value": None},
         ]
 
         with patch("src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase):
@@ -742,7 +758,7 @@ class TestGetFeedbackSummaryForAgent:
         mock_supabase.table.return_value.execute.return_value.data = [
             {"signal_type": "thumbs_up", "signal_value": None, "is_training_example": True},
             {"signal_type": "rating", "signal_value": 4.0, "is_training_example": False},
-            {"signal_type": "correction", "signal_value": None, "is_training_example": True}
+            {"signal_type": "correction", "signal_value": None, "is_training_example": True},
         ]
 
         with patch("src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase):
@@ -764,7 +780,7 @@ class TestGetRecentSignals:
         """get_recent_signals should return recent signals ordered by date."""
         mock_supabase.table.return_value.execute.return_value.data = [
             {"signal_id": "sig_1", "signal_type": "thumbs_up"},
-            {"signal_id": "sig_2", "signal_type": "rating"}
+            {"signal_id": "sig_2", "signal_type": "rating"},
         ]
 
         with patch("src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase):
@@ -780,11 +796,7 @@ class TestGetRecentSignals:
         mock_supabase.table.return_value.execute.return_value.data = []
 
         with patch("src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase):
-            await get_recent_signals(
-                limit=20,
-                signal_type="thumbs_up",
-                agent_name="causal_impact"
-            )
+            await get_recent_signals(limit=20, signal_type="thumbs_up", agent_name="causal_impact")
 
         eq_calls = mock_supabase.table.return_value.eq.call_args_list
         assert any(call[0] == ("signal_type", "thumbs_up") for call in eq_calls)
@@ -794,6 +806,7 @@ class TestGetRecentSignals:
 # ============================================================================
 # MEMORY STATISTICS TESTS
 # ============================================================================
+
 
 class TestIncrementMemoryStats:
     """Tests for _increment_memory_stats function."""
@@ -842,7 +855,7 @@ class TestGetMemoryStatistics:
         mock_supabase.table.return_value.execute.return_value.data = [
             {"memory_type": "procedural", "count": 100, "stat_date": "2025-01-01"},
             {"memory_type": "procedural", "count": 50, "stat_date": "2025-01-02"},
-            {"memory_type": "episodic", "count": 200, "stat_date": "2025-01-01"}
+            {"memory_type": "episodic", "count": 200, "stat_date": "2025-01-01"},
         ]
 
         with patch("src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase):
@@ -880,20 +893,20 @@ class TestGetMemoryStatistics:
 # EDGE CASE TESTS
 # ============================================================================
 
+
 class TestEdgeCases:
     """Edge case and error handling tests."""
 
     @pytest.mark.asyncio
     async def test_empty_tool_sequence(self, mock_supabase, sample_embedding):
         """Procedure with empty tool sequence should still work."""
-        procedure = ProceduralMemoryInput(
-            procedure_name="empty_procedure",
-            tool_sequence=[]
-        )
+        procedure = ProceduralMemoryInput(procedure_name="empty_procedure", tool_sequence=[])
         mock_supabase.rpc.return_value.execute.return_value.data = []
 
         with patch("src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase):
-            with patch("src.memory.procedural_memory._increment_memory_stats", new_callable=AsyncMock):
+            with patch(
+                "src.memory.procedural_memory._increment_memory_stats", new_callable=AsyncMock
+            ):
                 result = await insert_procedural_memory(procedure, sample_embedding)
 
         assert result is not None
@@ -909,7 +922,9 @@ class TestEdgeCases:
         for signal_type in signal_types:
             signal = LearningSignalInput(signal_type=signal_type)
 
-            with patch("src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase):
+            with patch(
+                "src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase
+            ):
                 result = await record_learning_signal(signal)
 
             assert result is not None
@@ -922,7 +937,9 @@ class TestEdgeCases:
         for brand in brands:
             mock_supabase.rpc.return_value.execute.return_value.data = []
 
-            with patch("src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase):
+            with patch(
+                "src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase
+            ):
                 await find_relevant_procedures(sample_embedding, brand=brand)
 
             call_args = mock_supabase.rpc.call_args[0][1]
@@ -936,8 +953,8 @@ class TestEdgeCases:
             signal_details={
                 "original": "Wrong answer",
                 "corrected": "Right answer",
-                "nested": {"key": "value"}
-            }
+                "nested": {"key": "value"},
+            },
         )
 
         with patch("src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase):
@@ -965,12 +982,14 @@ class TestEdgeCases:
             detected_intent="test_intent",
             applicable_brands=["Kisqali", "Fabhalta"],
             applicable_regions=["northeast", "south"],
-            applicable_agents=["causal_impact", "gap_analyzer"]
+            applicable_agents=["causal_impact", "gap_analyzer"],
         )
         mock_supabase.rpc.return_value.execute.return_value.data = []
 
         with patch("src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase):
-            with patch("src.memory.procedural_memory._increment_memory_stats", new_callable=AsyncMock):
+            with patch(
+                "src.memory.procedural_memory._increment_memory_stats", new_callable=AsyncMock
+            ):
                 result = await insert_procedural_memory(procedure, sample_embedding)
 
         assert result is not None

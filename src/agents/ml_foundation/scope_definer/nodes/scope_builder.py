@@ -3,9 +3,9 @@
 This module builds the complete ScopeSpec from business requirements.
 """
 
-from typing import Dict, Any, List
-from datetime import datetime
 import uuid
+from datetime import datetime
+from typing import Any, Dict, List
 
 
 async def build_scope_spec(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -54,15 +54,8 @@ async def build_scope_spec(state: Dict[str, Any]) -> Dict[str, Any]:
 
     # Define constraints
     regulatory_constraints = ["HIPAA", "GDPR"]
-    ethical_constraints = [
-        "no_protected_attributes",
-        "no_race_features",
-        "no_direct_pii"
-    ]
-    technical_constraints = [
-        "inference_latency_<100ms",
-        "model_size_<1GB"
-    ]
+    ethical_constraints = ["no_protected_attributes", "no_race_features", "no_direct_pii"]
+    technical_constraints = ["inference_latency_<100ms", "model_size_<1GB"]
 
     # Determine minimum samples
     minimum_samples = _calculate_minimum_samples(problem_type)
@@ -101,7 +94,7 @@ async def build_scope_spec(state: Dict[str, Any]) -> Dict[str, Any]:
 def _define_target_population(state: Dict[str, Any]) -> str:
     """Define target population description."""
     brand = state.get("brand", "")
-    problem_type = state.get("inferred_problem_type", "")
+    state.get("inferred_problem_type", "")
 
     # Brand-specific populations
     if "remibrutinib" in brand.lower() or "csu" in brand.lower():
@@ -119,11 +112,7 @@ def _define_inclusion_criteria(state: Dict[str, Any]) -> List[str]:
     """Define data inclusion criteria."""
     brand = state.get("brand", "")
 
-    criteria = [
-        "hcp_is_active",
-        "has_patient_data",
-        "recent_activity_90days"
-    ]
+    criteria = ["hcp_is_active", "has_patient_data", "recent_activity_90days"]
 
     # Brand-specific criteria
     if "remibrutinib" in brand.lower():
@@ -138,12 +127,7 @@ def _define_inclusion_criteria(state: Dict[str, Any]) -> List[str]:
 
 def _define_exclusion_criteria(state: Dict[str, Any]) -> List[str]:
     """Define data exclusion criteria."""
-    return [
-        "test_accounts",
-        "invalid_data",
-        "duplicate_records",
-        "missing_required_fields"
-    ]
+    return ["test_accounts", "invalid_data", "duplicate_records", "missing_required_fields"]
 
 
 def _define_required_features(state: Dict[str, Any]) -> List[str]:
@@ -159,19 +143,13 @@ def _define_required_features(state: Dict[str, Any]) -> List[str]:
         "hcp_specialty",
         "patient_count",
         "prescription_history",
-        "brand_affinity_score"
+        "brand_affinity_score",
     ]
 
     if problem_type == "regression":
-        base_features.extend([
-            "historical_prescription_volume",
-            "market_share"
-        ])
+        base_features.extend(["historical_prescription_volume", "market_share"])
     elif problem_type == "binary_classification":
-        base_features.extend([
-            "engagement_score",
-            "channel_response_rate"
-        ])
+        base_features.extend(["engagement_score", "channel_response_rate"])
 
     return base_features
 
@@ -186,7 +164,7 @@ def _define_excluded_features(state: Dict[str, Any]) -> List[str]:
         "exact_address",
         "phone_number",
         "email_address",
-        "future_prescription_data"  # Temporal leakage
+        "future_prescription_data",  # Temporal leakage
     ]
 
 
@@ -197,7 +175,7 @@ def _define_feature_categories(state: Dict[str, Any]) -> List[str]:
         "prescription_history",
         "engagement",
         "market_dynamics",
-        "brand_affinity"
+        "brand_affinity",
     ]
 
 

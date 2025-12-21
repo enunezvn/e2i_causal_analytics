@@ -16,16 +16,18 @@ Reference: docs/roi_methodology.md, src/services/roi_calculation.py
 """
 
 from typing import Optional
-from langgraph.graph import StateGraph, END
 
-from .state import GapAnalyzerState
-from .nodes import (
-    GapDetectorNode,
-    ROICalculatorNode,
-    PrioritizerNode,
-    FormatterNode,
-)
+from langgraph.graph import END, StateGraph
+
 from src.services.roi_calculation import ROICalculationService
+
+from .nodes import (
+    FormatterNode,
+    GapDetectorNode,
+    PrioritizerNode,
+    ROICalculatorNode,
+)
+from .state import GapAnalyzerState
 
 
 def create_gap_analyzer_graph(

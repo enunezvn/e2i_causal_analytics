@@ -13,16 +13,17 @@ Reference: docs/E2I_Causal_Validation_Protocol.html
 
 from __future__ import annotations
 
-import pytest
-import numpy as np
-import pandas as pd
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
+import numpy as np
+import pandas as pd
+import pytest
 
 # ============================================================================
 # DATA STRUCTURES
 # ============================================================================
+
 
 @dataclass
 class SyntheticDataset:
@@ -40,6 +41,7 @@ class SyntheticDataset:
         n_samples: Number of samples
         seed: Random seed used for reproducibility
     """
+
     data: pd.DataFrame
     true_ate: float
     true_cate: Optional[Dict[str, float]] = None
@@ -73,6 +75,7 @@ class SyntheticDataset:
 # ============================================================================
 # DATA GENERATING PROCESSES
 # ============================================================================
+
 
 def generate_simple_linear(
     n: int = 10000,
@@ -108,10 +111,12 @@ def generate_simple_linear(
     epsilon = np.random.normal(0, noise_std, n)
     Y = true_ate * T + epsilon
 
-    data = pd.DataFrame({
-        "T": T,
-        "Y": Y,
-    })
+    data = pd.DataFrame(
+        {
+            "T": T,
+            "Y": Y,
+        }
+    )
 
     return SyntheticDataset(
         data=data,
@@ -167,11 +172,13 @@ def generate_confounded_moderate(
     epsilon = np.random.normal(0, noise_std, n)
     Y = true_ate * T + confounder_strength * C + epsilon
 
-    data = pd.DataFrame({
-        "T": T,
-        "Y": Y,
-        "C": C,
-    })
+    data = pd.DataFrame(
+        {
+            "T": T,
+            "Y": Y,
+            "C": C,
+        }
+    )
 
     return SyntheticDataset(
         data=data,
@@ -218,9 +225,9 @@ def generate_heterogeneous_cate(
 
     if segment_effects is None:
         segment_effects = {
-            "low": -0.10,     # CATE = 0.10
-            "medium": 0.00,   # CATE = 0.20
-            "high": 0.20,     # CATE = 0.40
+            "low": -0.10,  # CATE = 0.10
+            "medium": 0.00,  # CATE = 0.20
+            "high": 0.20,  # CATE = 0.40
         }
 
     # Confounders
@@ -228,45 +235,35 @@ def generate_heterogeneous_cate(
     C2 = np.random.normal(0, 1, n)
 
     # Segment based on C1 (terciles)
-    segment = pd.cut(
-        C1,
-        bins=[-np.inf, -0.67, 0.67, np.inf],
-        labels=["low", "medium", "high"]
-    )
+    segment = pd.cut(C1, bins=[-np.inf, -0.67, 0.67, np.inf], labels=["low", "medium", "high"])
 
     # Treatment: Affected by confounders
     prob_T = 1 / (1 + np.exp(-(0.3 * C1 + 0.2 * C2)))
     T = np.random.binomial(1, prob_T)
 
     # CATE by segment
-    cate = np.array([
-        base_effect + segment_effects[str(s)] for s in segment
-    ])
+    cate = np.array([base_effect + segment_effects[str(s)] for s in segment])
 
     # Outcome with heterogeneous effect
     epsilon = np.random.normal(0, noise_std, n)
     Y = cate * T + 0.3 * C1 + 0.2 * C2 + epsilon
 
-    data = pd.DataFrame({
-        "T": T,
-        "Y": Y,
-        "C1": C1,
-        "C2": C2,
-        "segment": segment,
-    })
+    data = pd.DataFrame(
+        {
+            "T": T,
+            "Y": Y,
+            "C1": C1,
+            "C2": C2,
+            "segment": segment,
+        }
+    )
 
     # Compute true CATEs for each segment
-    true_cate = {
-        seg: base_effect + mod
-        for seg, mod in segment_effects.items()
-    }
+    true_cate = {seg: base_effect + mod for seg, mod in segment_effects.items()}
 
     # ATE is weighted average of CATEs
     segment_counts = data["segment"].value_counts(normalize=True)
-    true_ate = sum(
-        true_cate[seg] * segment_counts.get(seg, 0)
-        for seg in true_cate
-    )
+    true_ate = sum(true_cate[seg] * segment_counts.get(seg, 0) for seg in true_cate)
 
     return SyntheticDataset(
         data=data,
@@ -285,6 +282,7 @@ def generate_heterogeneous_cate(
 # ============================================================================
 # PYTEST FIXTURES
 # ============================================================================
+
 
 @pytest.fixture
 def simple_linear_dataset() -> SyntheticDataset:
@@ -343,6 +341,7 @@ def small_confounded_dataset() -> SyntheticDataset:
 # ============================================================================
 # ESTIMATION UTILITIES
 # ============================================================================
+
 
 def estimate_ate_naive(
     data: pd.DataFrame,

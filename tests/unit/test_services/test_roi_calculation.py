@@ -10,39 +10,34 @@ Tests the full E2I ROI methodology implementation including:
 - NPV calculations
 """
 
-import pytest
-import numpy as np
 from datetime import datetime
 
+import numpy as np
+import pytest
+
 from src.services.roi_calculation import (
-    # Enums
-    ValueDriverType,
-    AttributionLevel,
-    RiskLevel,
-    InitiativeType,
-    # Data classes
-    ValueDriverInput,
-    CostInput,
-    RiskAssessment,
-    ConfidenceInterval,
-    SensitivityResult,
-    ROIResult,
-    # Calculators
-    TRxLiftCalculator,
-    PatientIdentificationCalculator,
     ActionRateCalculator,
-    IntentToPrescribeCalculator,
+    AttributionCalculator,
+    AttributionLevel,
+    BootstrapSimulator,
+    CostCalculator,
+    CostInput,
     DataQualityCalculator,
     DriftPreventionCalculator,
-    BootstrapSimulator,
-    AttributionCalculator,
-    RiskAdjustmentCalculator,
-    CostCalculator,
+    IntentToPrescribeCalculator,
     NPVCalculator,
+    PatientIdentificationCalculator,
+    RiskAdjustmentCalculator,
+    RiskAssessment,
+    RiskLevel,
     # Main service
     ROICalculationService,
+    TRxLiftCalculator,
+    # Data classes
+    ValueDriverInput,
+    # Enums
+    ValueDriverType,
 )
-
 
 # =============================================================================
 # Value Driver Calculator Tests
@@ -191,7 +186,7 @@ class TestDriftPreventionCalculator:
         calc = DriftPreventionCalculator()
         result = calc.calculate(
             auc_drop_prevented=0.05,  # 5% AUC drop prevented
-            baseline_model_value=1_000_000  # $1M baseline model value
+            baseline_model_value=1_000_000,  # $1M baseline model value
         )
         # 0.05 * $1M * 2x = $100,000
         assert result == 100_000.0

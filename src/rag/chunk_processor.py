@@ -5,6 +5,7 @@ Processes agent outputs into retrievable chunks for the RAG system.
 """
 
 from typing import List, Optional
+
 from src.rag.models.insight_models import Chunk
 
 
@@ -52,9 +53,9 @@ class ChunkProcessor:
         chunks = []
 
         # Extract content based on output structure
-        if hasattr(output, 'analysis_results'):
+        if hasattr(output, "analysis_results"):
             content = output.analysis_results
-        elif hasattr(output, 'content'):
+        elif hasattr(output, "content"):
             content = output.content
         else:
             content = str(output)
@@ -70,8 +71,8 @@ class ChunkProcessor:
                 metadata={
                     "chunk_index": i,
                     "total_chunks": len(raw_chunks),
-                    "agent_id": getattr(output, 'agent_id', None),
-                    "activity_id": getattr(output, 'id', None),
+                    "agent_id": getattr(output, "agent_id", None),
+                    "activity_id": getattr(output, "id", None),
                 },
             )
             chunks.append(chunk)
@@ -89,7 +90,7 @@ class ChunkProcessor:
             List of Chunk objects
         """
         # Causal paths are typically single chunks
-        content = path.path_description if hasattr(path, 'path_description') else str(path)
+        content = path.path_description if hasattr(path, "path_description") else str(path)
 
         return [
             Chunk(
@@ -97,9 +98,9 @@ class ChunkProcessor:
                 source_type="causal_path",
                 embedding=None,
                 metadata={
-                    "path_id": getattr(path, 'id', None),
-                    "cause": getattr(path, 'cause', None),
-                    "effect": getattr(path, 'effect', None),
+                    "path_id": getattr(path, "id", None),
+                    "cause": getattr(path, "cause", None),
+                    "effect": getattr(path, "effect", None),
                 },
             )
         ]
@@ -115,7 +116,7 @@ class ChunkProcessor:
             List of Chunk objects
         """
         # KPI snapshots are typically single chunks
-        if hasattr(snapshot, 'to_dict'):
+        if hasattr(snapshot, "to_dict"):
             content = str(snapshot.to_dict())
         else:
             content = str(snapshot)
@@ -126,8 +127,8 @@ class ChunkProcessor:
                 source_type="kpi_snapshot",
                 embedding=None,
                 metadata={
-                    "kpi_name": getattr(snapshot, 'kpi_name', None),
-                    "timestamp": getattr(snapshot, 'timestamp', None),
+                    "kpi_name": getattr(snapshot, "kpi_name", None),
+                    "timestamp": getattr(snapshot, "timestamp", None),
                 },
             )
         ]
@@ -150,7 +151,7 @@ class ChunkProcessor:
 
         # Simple sentence-based splitting
         # In production, use a proper tokenizer
-        sentences = text.replace('\n', ' ').split('. ')
+        sentences = text.replace("\n", " ").split(". ")
         chunks = []
         current_chunk = []
         current_size = 0
@@ -163,7 +164,7 @@ class ChunkProcessor:
             sentence_size = len(sentence.split())
 
             if current_size + sentence_size > chunk_size and current_chunk:
-                chunks.append('. '.join(current_chunk) + '.')
+                chunks.append(". ".join(current_chunk) + ".")
                 # Keep overlap
                 overlap_sentences = current_chunk[-2:] if len(current_chunk) > 2 else []
                 current_chunk = overlap_sentences
@@ -173,6 +174,6 @@ class ChunkProcessor:
             current_size += sentence_size
 
         if current_chunk:
-            chunks.append('. '.join(current_chunk) + '.')
+            chunks.append(". ".join(current_chunk) + ".")
 
         return chunks

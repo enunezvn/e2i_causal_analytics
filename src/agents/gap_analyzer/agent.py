@@ -15,10 +15,10 @@ Architecture:
 
 import time
 import uuid
-from typing import Dict, Any, Optional, List, Literal
+from typing import Any, Dict, Optional
 
-from .state import GapAnalyzerState
 from .graph import create_gap_analyzer_graph
+from .state import GapAnalyzerState
 
 
 class GapAnalyzerAgent:
@@ -106,7 +106,10 @@ class GapAnalyzerAgent:
                 raise ValueError("min_gap_threshold must be a number")
 
         if "max_opportunities" in input_data:
-            if not isinstance(input_data["max_opportunities"], int) or input_data["max_opportunities"] <= 0:
+            if (
+                not isinstance(input_data["max_opportunities"], int)
+                or input_data["max_opportunities"] <= 0
+            ):
                 raise ValueError("max_opportunities must be a positive integer")
 
     def _initialize_state(self, input_data: Dict[str, Any]) -> GapAnalyzerState:

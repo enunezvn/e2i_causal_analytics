@@ -2,8 +2,9 @@
 Tests for Feedback Collector node.
 """
 
-import pytest
 from unittest.mock import AsyncMock
+
+import pytest
 
 from src.agents.feedback_learner.nodes.feedback_collector import FeedbackCollectorNode
 

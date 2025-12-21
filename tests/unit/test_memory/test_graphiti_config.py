@@ -5,28 +5,29 @@ Tests the configuration loading and entity/relationship type mappings.
 """
 
 import os
-import pytest
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
+
+import pytest
 
 from src.memory.graphiti_config import (
-    E2IEntityType,
-    E2IRelationshipType,
-    GraphitiEntityConfig,
-    GraphitiRelationshipConfig,
-    GraphitiConfig,
-    load_graphiti_config,
-    get_graphiti_config,
-    clear_graphiti_config_cache,
     DEFAULT_ENTITY_CONFIGS,
     DEFAULT_RELATIONSHIP_CONFIGS,
+    E2IEntityType,
+    E2IRelationshipType,
+    GraphitiConfig,
+    GraphitiEntityConfig,
+    GraphitiRelationshipConfig,
+    clear_graphiti_config_cache,
+    get_graphiti_config,
+    load_graphiti_config,
 )
-
 
 # ============================================================================
 # Fixtures
 # ============================================================================
+
 
 @pytest.fixture(autouse=True)
 def clear_config_cache():
@@ -74,7 +75,7 @@ performance:
 @pytest.fixture
 def temp_config_file(sample_config_yaml):
     """Create a temporary config file."""
-    with NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+    with NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
         f.write(sample_config_yaml)
         f.flush()
         yield Path(f.name)
@@ -86,14 +87,23 @@ def temp_config_file(sample_config_yaml):
 # Entity Type Enum Tests
 # ============================================================================
 
+
 class TestE2IEntityType:
     """Tests for E2IEntityType enum."""
 
     def test_all_entity_types_defined(self):
         """Test all expected entity types are defined."""
         expected_types = [
-            "Patient", "HCP", "Brand", "Region", "KPI",
-            "CausalPath", "Trigger", "Agent", "Episode", "Community"
+            "Patient",
+            "HCP",
+            "Brand",
+            "Region",
+            "KPI",
+            "CausalPath",
+            "Trigger",
+            "Agent",
+            "Episode",
+            "Community",
         ]
         actual_types = [e.value for e in E2IEntityType]
         for expected in expected_types:
@@ -118,15 +128,24 @@ class TestE2IEntityType:
 # Relationship Type Enum Tests
 # ============================================================================
 
+
 class TestE2IRelationshipType:
     """Tests for E2IRelationshipType enum."""
 
     def test_all_relationship_types_defined(self):
         """Test all expected relationship types are defined."""
         expected_types = [
-            "TREATED_BY", "PRESCRIBED", "PRESCRIBES", "CAUSES",
-            "IMPACTS", "INFLUENCES", "DISCOVERED", "GENERATED",
-            "MENTIONS", "MEMBER_OF", "RELATES_TO"
+            "TREATED_BY",
+            "PRESCRIBED",
+            "PRESCRIBES",
+            "CAUSES",
+            "IMPACTS",
+            "INFLUENCES",
+            "DISCOVERED",
+            "GENERATED",
+            "MENTIONS",
+            "MEMBER_OF",
+            "RELATES_TO",
         ]
         actual_types = [r.value for r in E2IRelationshipType]
         for expected in expected_types:
@@ -148,6 +167,7 @@ class TestE2IRelationshipType:
 # ============================================================================
 # Entity Config Dataclass Tests
 # ============================================================================
+
 
 class TestGraphitiEntityConfig:
     """Tests for GraphitiEntityConfig dataclass."""
@@ -207,6 +227,7 @@ class TestGraphitiRelationshipConfig:
 # GraphitiConfig Tests
 # ============================================================================
 
+
 class TestGraphitiConfig:
     """Tests for GraphitiConfig dataclass."""
 
@@ -236,9 +257,7 @@ class TestGraphitiConfig:
     def test_get_entity_label_from_config(self):
         """Test getting entity label from config."""
         config = GraphitiConfig(
-            entity_configs={
-                "HCP": GraphitiEntityConfig(name="HCP", label="HealthcareProvider")
-            }
+            entity_configs={"HCP": GraphitiEntityConfig(name="HCP", label="HealthcareProvider")}
         )
         label = config.get_entity_label(E2IEntityType.HCP)
         assert label == "HealthcareProvider"
@@ -269,6 +288,7 @@ class TestGraphitiConfig:
 # ============================================================================
 # Default Config Tests
 # ============================================================================
+
 
 class TestDefaultConfigs:
     """Tests for default entity and relationship configurations."""
@@ -315,6 +335,7 @@ class TestDefaultConfigs:
 # ============================================================================
 # Config Loading Tests
 # ============================================================================
+
 
 class TestLoadGraphitiConfig:
     """Tests for load_graphiti_config function."""
@@ -364,10 +385,13 @@ class TestLoadGraphitiConfig:
 
     def test_load_with_falkordb_env_vars(self, temp_config_file):
         """Test FalkorDB settings from environment variables."""
-        with patch.dict(os.environ, {
-            "FALKORDB_HOST": "custom-host",
-            "FALKORDB_PORT": "6381",
-        }):
+        with patch.dict(
+            os.environ,
+            {
+                "FALKORDB_HOST": "custom-host",
+                "FALKORDB_PORT": "6381",
+            },
+        ):
             config = load_graphiti_config(temp_config_file)
             assert config.falkordb_host == "custom-host"
             assert config.falkordb_port == 6381
@@ -386,7 +410,7 @@ memory_backends:
           - Patient
           - InvalidType
 """
-        with NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        with NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             f.write(invalid_yaml)
             f.flush()
             config_path = Path(f.name)
@@ -405,14 +429,14 @@ class TestGetGraphitiConfig:
 
     def test_returns_config(self):
         """Test function returns a GraphitiConfig."""
-        with patch('src.memory.graphiti_config.load_graphiti_config') as mock_load:
+        with patch("src.memory.graphiti_config.load_graphiti_config") as mock_load:
             mock_load.return_value = GraphitiConfig()
             config = get_graphiti_config()
             assert isinstance(config, GraphitiConfig)
 
     def test_caches_config(self):
         """Test config is cached after first call."""
-        with patch('src.memory.graphiti_config.load_graphiti_config') as mock_load:
+        with patch("src.memory.graphiti_config.load_graphiti_config") as mock_load:
             mock_load.return_value = GraphitiConfig()
 
             config1 = get_graphiti_config()
@@ -428,7 +452,7 @@ class TestClearGraphitiConfigCache:
 
     def test_clear_cache(self):
         """Test cache clearing causes reload."""
-        with patch('src.memory.graphiti_config.load_graphiti_config') as mock_load:
+        with patch("src.memory.graphiti_config.load_graphiti_config") as mock_load:
             mock_load.return_value = GraphitiConfig()
 
             # First call
@@ -446,6 +470,7 @@ class TestClearGraphitiConfigCache:
 # ============================================================================
 # Model Configuration Tests
 # ============================================================================
+
 
 class TestModelConfiguration:
     """Tests for model configuration."""
@@ -465,6 +490,7 @@ class TestModelConfiguration:
 # Port Configuration Tests
 # ============================================================================
 
+
 class TestPortConfiguration:
     """Tests for FalkorDB port configuration."""
 
@@ -480,7 +506,7 @@ class TestPortConfiguration:
             clear_graphiti_config_cache()
 
             # Create a temp config file
-            with NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            with NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
                 f.write("environment: local_pilot\n")
                 f.flush()
                 config_path = Path(f.name)

@@ -2,8 +2,9 @@
 Integration Tests for Health Score Agent
 """
 
-import pytest
 from datetime import datetime, timezone
+
+import pytest
 
 from src.agents.health_score.agent import (
     HealthScoreAgent,
@@ -293,6 +294,7 @@ class TestEdgeCases:
     @pytest.mark.asyncio
     async def test_handles_exception_gracefully(self):
         """Test that exceptions are handled gracefully"""
+
         # Create agent with clients that will fail
         class FailingClient:
             async def check(self, endpoint):

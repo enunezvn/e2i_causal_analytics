@@ -3,10 +3,12 @@
 Tests the LLM-based experiment design reasoning functionality.
 """
 
-import pytest
 import json
-from src.agents.experiment_designer.nodes.design_reasoning import DesignReasoningNode
+
+import pytest
+
 from src.agents.experiment_designer.graph import create_initial_state
+from src.agents.experiment_designer.nodes.design_reasoning import DesignReasoningNode
 
 
 class MockLLM:
@@ -29,14 +31,14 @@ class MockLLM:
                     "name": "Treatment",
                     "description": "Increased visit frequency",
                     "implementation_details": "Weekly visits",
-                    "target_population": "All HCPs"
+                    "target_population": "All HCPs",
                 },
                 {
                     "name": "Control",
                     "description": "Standard visit frequency",
                     "implementation_details": "Bi-weekly visits",
-                    "target_population": "All HCPs"
-                }
+                    "target_population": "All HCPs",
+                },
             ],
             "outcomes": [
                 {
@@ -44,18 +46,15 @@ class MockLLM:
                     "metric_type": "continuous",
                     "measurement_method": "CRM index",
                     "measurement_frequency": "weekly",
-                    "is_primary": True
+                    "is_primary": True,
                 }
             ],
             "randomization_unit": "individual",
             "randomization_method": "stratified",
             "stratification_variables": ["territory", "specialty"],
             "blocking_variables": ["region"],
-            "causal_assumptions": [
-                "No unmeasured confounding",
-                "SUTVA holds"
-            ],
-            "identified_confounders": ["territory_size", "baseline_engagement"]
+            "causal_assumptions": ["No unmeasured confounding", "SUTVA holds"],
+            "identified_confounders": ["territory_size", "baseline_engagement"],
         }
 
     def invoke(self, prompt: str) -> str:
@@ -102,9 +101,7 @@ class TestDesignReasoningNode:
     async def test_execute_returns_treatments(self):
         """Test that treatments are returned."""
         node = DesignReasoningNode()
-        state = create_initial_state(
-            business_question="Test treatment definition"
-        )
+        state = create_initial_state(business_question="Test treatment definition")
         state["status"] = "designing"
 
         result = await node.execute(state)
@@ -116,9 +113,7 @@ class TestDesignReasoningNode:
     async def test_execute_returns_outcomes(self):
         """Test that outcomes are returned."""
         node = DesignReasoningNode()
-        state = create_initial_state(
-            business_question="Test outcome definition"
-        )
+        state = create_initial_state(business_question="Test outcome definition")
         state["status"] = "designing"
 
         result = await node.execute(state)
@@ -130,9 +125,7 @@ class TestDesignReasoningNode:
     async def test_execute_returns_randomization(self):
         """Test that randomization settings are returned."""
         node = DesignReasoningNode()
-        state = create_initial_state(
-            business_question="Test randomization settings"
-        )
+        state = create_initial_state(business_question="Test randomization settings")
         state["status"] = "designing"
 
         result = await node.execute(state)
@@ -144,9 +137,7 @@ class TestDesignReasoningNode:
     async def test_execute_returns_stratification(self):
         """Test that stratification variables are returned."""
         node = DesignReasoningNode()
-        state = create_initial_state(
-            business_question="Test stratification variables"
-        )
+        state = create_initial_state(business_question="Test stratification variables")
         state["status"] = "designing"
 
         result = await node.execute(state)
@@ -158,9 +149,7 @@ class TestDesignReasoningNode:
     async def test_execute_skip_on_failed(self):
         """Test execution skips on failed status."""
         node = DesignReasoningNode()
-        state = create_initial_state(
-            business_question="Test skip on failed"
-        )
+        state = create_initial_state(business_question="Test skip on failed")
         state["status"] = "failed"
 
         result = await node.execute(state)
@@ -173,11 +162,7 @@ class TestDesignReasoningNode:
         node = DesignReasoningNode()
         state = create_initial_state(
             business_question="Test with constraints",
-            constraints={
-                "expected_effect_size": 0.25,
-                "power": 0.80,
-                "budget": 100000
-            }
+            constraints={"expected_effect_size": 0.25, "power": 0.80, "budget": 100000},
         )
         state["status"] = "designing"
 
@@ -189,16 +174,14 @@ class TestDesignReasoningNode:
     async def test_execute_with_historical_context(self):
         """Test execution with historical experiment context."""
         node = DesignReasoningNode()
-        state = create_initial_state(
-            business_question="Test with historical context"
-        )
+        state = create_initial_state(business_question="Test with historical context")
         state["status"] = "designing"
         state["historical_experiments"] = [
             {
                 "experiment_id": "exp_001",
                 "design_type": "RCT",
                 "outcome": "Positive",
-                "lessons": "Use stratified randomization"
+                "lessons": "Use stratified randomization",
             }
         ]
 
@@ -210,9 +193,7 @@ class TestDesignReasoningNode:
     async def test_execute_records_latency(self):
         """Test that node latency is recorded."""
         node = DesignReasoningNode()
-        state = create_initial_state(
-            business_question="Test latency recording"
-        )
+        state = create_initial_state(business_question="Test latency recording")
         state["status"] = "designing"
 
         result = await node.execute(state)
@@ -229,16 +210,19 @@ class TestDesignReasoningDesignTypes:
     async def test_rct_design(self):
         """Test RCT design output."""
         node = DesignReasoningNode()
-        state = create_initial_state(
-            business_question="Randomized experiment on visit frequency"
-        )
+        state = create_initial_state(business_question="Randomized experiment on visit frequency")
         state["status"] = "designing"
 
         result = await node.execute(state)
 
         # Design type comparison is case-insensitive
         design_type_normalized = result["design_type"].lower().replace("-", "_")
-        assert design_type_normalized in ["rct", "cluster_rct", "quasi_experimental", "observational"]
+        assert design_type_normalized in [
+            "rct",
+            "cluster_rct",
+            "quasi_experimental",
+            "observational",
+        ]
 
     @pytest.mark.asyncio
     async def test_cluster_rct_context(self):
@@ -246,10 +230,7 @@ class TestDesignReasoningDesignTypes:
         node = DesignReasoningNode()
         state = create_initial_state(
             business_question="Territory-level marketing intervention",
-            constraints={
-                "cluster_size": 50,
-                "expected_icc": 0.05
-            }
+            constraints={"cluster_size": 50, "expected_icc": 0.05},
         )
         state["status"] = "designing"
 
@@ -263,9 +244,7 @@ class TestDesignReasoningDesignTypes:
         node = DesignReasoningNode()
         state = create_initial_state(
             business_question="Impact of policy change on prescribing",
-            constraints={
-                "ethical": "Cannot randomize due to policy rollout"
-            }
+            constraints={"ethical": "Cannot randomize due to policy rollout"},
         )
         state["status"] = "designing"
 
@@ -281,9 +260,7 @@ class TestDesignReasoningOutputValidation:
     async def test_treatment_structure(self):
         """Test treatment structure is valid."""
         node = DesignReasoningNode()
-        state = create_initial_state(
-            business_question="Test treatment structure"
-        )
+        state = create_initial_state(business_question="Test treatment structure")
         state["status"] = "designing"
 
         result = await node.execute(state)
@@ -296,9 +273,7 @@ class TestDesignReasoningOutputValidation:
     async def test_outcome_structure(self):
         """Test outcome structure is valid."""
         node = DesignReasoningNode()
-        state = create_initial_state(
-            business_question="Test outcome structure"
-        )
+        state = create_initial_state(business_question="Test outcome structure")
         state["status"] = "designing"
 
         result = await node.execute(state)
@@ -311,9 +286,7 @@ class TestDesignReasoningOutputValidation:
     async def test_has_primary_outcome(self):
         """Test that at least one primary outcome exists."""
         node = DesignReasoningNode()
-        state = create_initial_state(
-            business_question="Test primary outcome"
-        )
+        state = create_initial_state(business_question="Test primary outcome")
         state["status"] = "designing"
 
         result = await node.execute(state)
@@ -331,9 +304,7 @@ class TestDesignReasoningErrorHandling:
     async def test_recoverable_error(self):
         """Test recoverable error handling."""
         node = DesignReasoningNode()
-        state = create_initial_state(
-            business_question="Test error handling"
-        )
+        state = create_initial_state(business_question="Test error handling")
         state["status"] = "designing"
         # Inject invalid historical data to potentially cause issues
         state["historical_experiments"] = "invalid"
@@ -348,8 +319,7 @@ class TestDesignReasoningErrorHandling:
         """Test that input state is preserved on error."""
         node = DesignReasoningNode()
         state = create_initial_state(
-            business_question="Test state preservation",
-            constraints={"budget": 50000}
+            business_question="Test state preservation", constraints={"budget": 50000}
         )
         state["status"] = "designing"
 
@@ -366,9 +336,7 @@ class TestDesignReasoningPerformance:
     async def test_latency_under_target(self):
         """Test design reasoning completes under 30s target."""
         node = DesignReasoningNode()
-        state = create_initial_state(
-            business_question="Test latency performance"
-        )
+        state = create_initial_state(business_question="Test latency performance")
         state["status"] = "designing"
 
         result = await node.execute(state)

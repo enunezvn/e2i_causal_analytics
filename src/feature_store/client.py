@@ -5,10 +5,8 @@ Main client for interacting with the E2I lightweight feature store.
 Provides unified interface for feature retrieval, writing, and management.
 """
 
-import json
 import logging
 from typing import Any, Dict, List, Optional
-from uuid import UUID
 
 import mlflow
 import redis
@@ -20,7 +18,6 @@ from .models import (
     FeatureGroup,
     FeatureStatistics,
     FeatureValue,
-    FreshnessStatus,
 )
 from .retrieval import FeatureRetriever
 from .writer import FeatureWriter
@@ -185,9 +182,7 @@ class FeatureStoreClient:
 
     def get_feature_group(self, name: str) -> Optional[FeatureGroup]:
         """Get feature group by name."""
-        response = (
-            self.supabase.table("feature_groups").select("*").eq("name", name).execute()
-        )
+        response = self.supabase.table("feature_groups").select("*").eq("name", name).execute()
 
         if response.data:
             return FeatureGroup(**response.data[0])
@@ -265,9 +260,7 @@ class FeatureStoreClient:
         else:
             raise RuntimeError(f"Failed to create feature: {name}")
 
-    def get_feature(
-        self, feature_group_name: str, feature_name: str
-    ) -> Optional[Feature]:
+    def get_feature(self, feature_group_name: str, feature_name: str) -> Optional[Feature]:
         """Get feature by feature group and name."""
         # Get feature group
         feature_group = self.get_feature_group(feature_group_name)
@@ -445,9 +438,7 @@ class FeatureStoreClient:
     # MLflow Integration
     # =========================================================================
 
-    def _log_feature_to_mlflow(
-        self, feature: Feature, feature_group: FeatureGroup
-    ) -> None:
+    def _log_feature_to_mlflow(self, feature: Feature, feature_group: FeatureGroup) -> None:
         """Log feature definition to MLflow."""
         try:
             if not feature_group.mlflow_experiment_id:

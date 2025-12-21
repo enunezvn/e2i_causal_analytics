@@ -8,8 +8,7 @@ Type: Standard (Computational)
 Latency: Up to 150s
 """
 
-from typing import Dict, Any, Optional, Literal
-import time
+from typing import Any, Dict, Literal, Optional
 
 from .graph import create_heterogeneous_optimizer_graph
 from .state import HeterogeneousOptimizerState
@@ -113,9 +112,7 @@ class HeterogeneousOptimizerAgent:
             if not isinstance(top_count, int) or not (5 <= top_count <= 50):
                 raise ValueError("top_segments_count must be an integer between 5 and 50")
 
-    def _build_initial_state(
-        self, input_data: Dict[str, Any]
-    ) -> HeterogeneousOptimizerState:
+    def _build_initial_state(self, input_data: Dict[str, Any]) -> HeterogeneousOptimizerState:
         """Build initial state from input data.
 
         Args:
@@ -167,9 +164,7 @@ class HeterogeneousOptimizerAgent:
             "suggested_next_agent": None,
         }
 
-    def _build_output(
-        self, final_state: HeterogeneousOptimizerState
-    ) -> Dict[str, Any]:
+    def _build_output(self, final_state: HeterogeneousOptimizerState) -> Dict[str, Any]:
         """Build output from final state.
 
         Args:
@@ -220,9 +215,7 @@ class HeterogeneousOptimizerAgent:
             "errors": final_state.get("errors", []),
         }
 
-    def _calculate_confidence(
-        self, state: HeterogeneousOptimizerState
-    ) -> float:
+    def _calculate_confidence(self, state: HeterogeneousOptimizerState) -> float:
         """Calculate confidence score.
 
         Args:
@@ -273,9 +266,7 @@ class HeterogeneousOptimizerAgent:
 
         return max(0.0, min(1.0, confidence))
 
-    def _check_further_analysis(
-        self, state: HeterogeneousOptimizerState
-    ) -> bool:
+    def _check_further_analysis(self, state: HeterogeneousOptimizerState) -> bool:
         """Check if further analysis is needed.
 
         Args:
@@ -303,9 +294,7 @@ class HeterogeneousOptimizerAgent:
 
         return False
 
-    def _suggest_next_agent(
-        self, state: HeterogeneousOptimizerState
-    ) -> Optional[str]:
+    def _suggest_next_agent(self, state: HeterogeneousOptimizerState) -> Optional[str]:
         """Suggest next agent based on results.
 
         Args:

@@ -1,7 +1,8 @@
 """Tests for split loader node."""
 
-import pytest
 import numpy as np
+import pytest
+
 from src.agents.ml_foundation.model_trainer.nodes.split_loader import load_splits
 
 
@@ -149,14 +150,17 @@ class TestLoadSplits:
         """Should calculate ratios correctly for different distributions."""
         state = {
             "train_data": {"X": np.random.rand(700, 5), "y": np.random.rand(700), "row_count": 700},
-            "validation_data": {"X": np.random.rand(150, 5), "y": np.random.rand(150), "row_count": 150},
+            "validation_data": {
+                "X": np.random.rand(150, 5),
+                "y": np.random.rand(150),
+                "row_count": 150,
+            },
             "test_data": {"X": np.random.rand(100, 5), "y": np.random.rand(100), "row_count": 100},
             "holdout_data": {"X": np.random.rand(50, 5), "y": np.random.rand(50), "row_count": 50},
         }
 
         result = await load_splits(state)
 
-        total = 1000
         assert abs(result["train_ratio"] - 0.70) < 0.01
         assert abs(result["validation_ratio"] - 0.15) < 0.01
         assert abs(result["test_ratio"] - 0.10) < 0.01
@@ -178,10 +182,26 @@ class TestLoadSplits:
     async def test_handles_large_dataset(self):
         """Should handle large datasets efficiently."""
         state = {
-            "train_data": {"X": np.random.rand(60000, 50), "y": np.random.rand(60000), "row_count": 60000},
-            "validation_data": {"X": np.random.rand(20000, 50), "y": np.random.rand(20000), "row_count": 20000},
-            "test_data": {"X": np.random.rand(15000, 50), "y": np.random.rand(15000), "row_count": 15000},
-            "holdout_data": {"X": np.random.rand(5000, 50), "y": np.random.rand(5000), "row_count": 5000},
+            "train_data": {
+                "X": np.random.rand(60000, 50),
+                "y": np.random.rand(60000),
+                "row_count": 60000,
+            },
+            "validation_data": {
+                "X": np.random.rand(20000, 50),
+                "y": np.random.rand(20000),
+                "row_count": 20000,
+            },
+            "test_data": {
+                "X": np.random.rand(15000, 50),
+                "y": np.random.rand(15000),
+                "row_count": 15000,
+            },
+            "holdout_data": {
+                "X": np.random.rand(5000, 50),
+                "y": np.random.rand(5000),
+                "row_count": 5000,
+            },
         }
 
         result = await load_splits(state)

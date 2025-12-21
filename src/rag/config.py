@@ -10,9 +10,9 @@ This module defines configuration classes for the hybrid RAG system:
 Part of Phase 1, Checkpoint 1.1.
 """
 
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
 import os
+from dataclasses import dataclass, field
+from typing import Any, Dict, Optional
 
 
 @dataclass
@@ -23,6 +23,7 @@ class HybridSearchConfig:
     Controls weight distribution, per-source limits, timeouts,
     and fusion parameters.
     """
+
     # Weight distribution (must sum to 1.0)
     vector_weight: float = 0.4
     fulltext_weight: float = 0.2
@@ -106,7 +107,7 @@ class HybridSearchConfig:
             "graph_boost_factor": self.graph_boost_factor,
             "vector_min_similarity": self.vector_min_similarity,
             "fulltext_min_rank": self.fulltext_min_rank,
-            "graph_min_relevance": self.graph_min_relevance
+            "graph_min_relevance": self.graph_min_relevance,
         }
 
 
@@ -117,6 +118,7 @@ class EmbeddingConfig:
 
     Supports both OpenAI API and local sentence-transformers models.
     """
+
     # Model choice
     model_name: str = "text-embedding-3-small"  # OpenAI default
     model_provider: str = "openai"  # "openai" or "sentence_transformers"
@@ -164,7 +166,7 @@ class EmbeddingConfig:
             api_key=os.getenv("OPENAI_API_KEY"),
             api_base_url=os.getenv("OPENAI_API_BASE"),
             embedding_dimension=int(os.getenv("EMBEDDING_DIMENSION", "1536")),
-            batch_size=int(os.getenv("EMBEDDING_BATCH_SIZE", "100"))
+            batch_size=int(os.getenv("EMBEDDING_BATCH_SIZE", "100")),
         )
 
 
@@ -173,6 +175,7 @@ class FalkorDBConfig:
     """
     Configuration for FalkorDB graph database connection.
     """
+
     host: str = "localhost"
     port: int = 6381  # e2i FalkorDB external port (6379=redis internal, 6380=auto-claude, 6381=e2i)
     graph_name: str = "e2i_knowledge"
@@ -200,7 +203,7 @@ class FalkorDBConfig:
             graph_name=os.getenv("FALKORDB_GRAPH", "e2i_knowledge"),
             password=os.getenv("FALKORDB_PASSWORD"),
             max_connections=int(os.getenv("FALKORDB_MAX_CONNECTIONS", "10")),
-            connection_timeout_seconds=float(os.getenv("FALKORDB_TIMEOUT", "5.0"))
+            connection_timeout_seconds=float(os.getenv("FALKORDB_TIMEOUT", "5.0")),
         )
 
     def get_connection_url(self) -> str:
@@ -214,6 +217,7 @@ class HealthMonitorConfig:
     """
     Configuration for health monitoring.
     """
+
     # Check intervals
     check_interval_seconds: float = 30.0
 
@@ -237,6 +241,7 @@ class RAGConfig:
 
     Combines all sub-configurations for easy management.
     """
+
     # Sub-configurations
     search: HybridSearchConfig = field(default_factory=HybridSearchConfig)
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
@@ -293,7 +298,7 @@ class RAGConfig:
             cache_enabled=os.getenv("RAG_CACHE_ENABLED", "true").lower() == "true",
             cache_ttl_seconds=int(os.getenv("RAG_CACHE_TTL", "300")),
             log_all_queries=os.getenv("RAG_LOG_ALL_QUERIES", "false").lower() == "true",
-            log_slow_queries_ms=float(os.getenv("RAG_LOG_SLOW_MS", "1000"))
+            log_slow_queries_ms=float(os.getenv("RAG_LOG_SLOW_MS", "1000")),
         )
 
 
@@ -304,20 +309,18 @@ DEVELOPMENT_CONFIG = RAGConfig(
     search=HybridSearchConfig(
         vector_timeout_ms=5000,  # Longer timeouts for dev
         fulltext_timeout_ms=3000,
-        graph_timeout_ms=5000
+        graph_timeout_ms=5000,
     ),
     log_all_queries=True,
-    cache_enabled=False  # Disable cache in dev for easier debugging
+    cache_enabled=False,  # Disable cache in dev for easier debugging
 )
 
 PRODUCTION_CONFIG = RAGConfig(
     search=HybridSearchConfig(
-        vector_timeout_ms=2000,
-        fulltext_timeout_ms=1000,
-        graph_timeout_ms=3000
+        vector_timeout_ms=2000, fulltext_timeout_ms=1000, graph_timeout_ms=3000
     ),
     log_all_queries=False,
     log_slow_queries_ms=500.0,  # Lower threshold in prod
     cache_enabled=True,
-    cache_ttl_seconds=600  # 10 minutes in prod
+    cache_ttl_seconds=600,  # 10 minutes in prod
 )

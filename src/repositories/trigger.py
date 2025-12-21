@@ -4,8 +4,9 @@ Trigger Repository.
 Handles HCP triggers with change tracking.
 """
 
-from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
+
 from src.repositories.base import BaseRepository
 
 
@@ -178,10 +179,7 @@ class TriggerRepository(BaseRepository):
             }
 
         total_changes = len(result.data)
-        failed_changes = sum(
-            1 for row in result.data
-            if row.get("change_failed") is True
-        )
+        failed_changes = sum(1 for row in result.data if row.get("change_failed") is True)
 
         return {
             "change_fail_rate": failed_changes / total_changes if total_changes > 0 else 0.0,
@@ -235,10 +233,7 @@ class TriggerRepository(BaseRepository):
             }
 
         total_delivered = len(result.data)
-        total_accepted = sum(
-            1 for row in result.data
-            if row.get("acceptance_status") == "accepted"
-        )
+        total_accepted = sum(1 for row in result.data if row.get("acceptance_status") == "accepted")
 
         return {
             "acceptance_rate": total_accepted / total_delivered if total_delivered > 0 else 0.0,
@@ -278,11 +273,6 @@ class TriggerRepository(BaseRepository):
         if brand:
             query = query.eq("brand", brand)
 
-        result = await (
-            query
-            .order("trigger_timestamp", desc=True)
-            .limit(limit)
-            .execute()
-        )
+        result = await query.order("trigger_timestamp", desc=True).limit(limit).execute()
 
         return [self._to_model(row) for row in result.data]

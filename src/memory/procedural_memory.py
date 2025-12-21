@@ -41,10 +41,10 @@ import json
 import logging
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from src.memory.services.factories import get_supabase_client, get_embedding_service
+from src.memory.services.factories import get_embedding_service, get_supabase_client
 
 logger = logging.getLogger(__name__)
 
@@ -53,9 +53,11 @@ logger = logging.getLogger(__name__)
 # DATA CLASSES
 # ============================================================================
 
+
 @dataclass
 class ProceduralMemoryInput:
     """Input for creating a procedural memory."""
+
     procedure_name: str
     tool_sequence: List[Dict[str, Any]]
     procedure_type: str = "tool_sequence"
@@ -70,6 +72,7 @@ class ProceduralMemoryInput:
 @dataclass
 class LearningSignalInput:
     """Input for recording a learning signal."""
+
     signal_type: str  # thumbs_up, thumbs_down, correction, rating
     signal_value: Optional[float] = None
     signal_details: Optional[Dict[str, Any]] = None
@@ -94,13 +97,14 @@ class LearningSignalInput:
 # PROCEDURAL MEMORY FUNCTIONS
 # ============================================================================
 
+
 async def find_relevant_procedures(
     embedding: List[float],
     procedure_type: Optional[str] = None,
     intent: Optional[str] = None,
     brand: Optional[str] = None,
     limit: int = 5,
-    min_similarity: float = 0.6
+    min_similarity: float = 0.6,
 ) -> List[Dict[str, Any]]:
     """
     Find relevant procedures (few-shot examples) with E2I context matching.
@@ -126,8 +130,8 @@ async def find_relevant_procedures(
             "match_count": limit,
             "filter_type": procedure_type,
             "filter_intent": intent,
-            "filter_brand": brand
-        }
+            "filter_brand": brand,
+        },
     ).execute()
 
     logger.debug(f"Found {len(result.data or [])} relevant procedures")
@@ -140,7 +144,7 @@ async def find_relevant_procedures_by_text(
     intent: Optional[str] = None,
     brand: Optional[str] = None,
     limit: int = 5,
-    min_similarity: float = 0.6
+    min_similarity: float = 0.6,
 ) -> List[Dict[str, Any]]:
     """
     Find relevant procedures by text query (auto-generates embedding).
@@ -165,13 +169,12 @@ async def find_relevant_procedures_by_text(
         intent=intent,
         brand=brand,
         limit=limit,
-        min_similarity=min_similarity
+        min_similarity=min_similarity,
     )
 
 
 async def insert_procedural_memory(
-    procedure: ProceduralMemoryInput,
-    trigger_embedding: List[float]
+    procedure: ProceduralMemoryInput, trigger_embedding: List[float]
 ) -> str:
     """
     Insert or update procedural memory with E2I context.
@@ -190,23 +193,19 @@ async def insert_procedural_memory(
 
     # Check for existing similar procedure
     existing = await find_relevant_procedures(
-        trigger_embedding,
-        procedure.procedure_type,
-        limit=1,
-        min_similarity=0.9
+        trigger_embedding, procedure.procedure_type, limit=1, min_similarity=0.9
     )
 
     if existing:
         procedure_id = existing[0]["procedure_id"]
 
-        client.table("procedural_memories") \
-            .update({
+        client.table("procedural_memories").update(
+            {
                 "usage_count": existing[0].get("usage_count", 0) + 1,
                 "success_count": existing[0].get("success_count", 0) + 1,
-                "updated_at": datetime.now(timezone.utc).isoformat()
-            }) \
-            .eq("procedure_id", procedure_id) \
-            .execute()
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        ).eq("procedure_id", procedure_id).execute()
 
         logger.info(f"Updated existing procedure {procedure_id}")
         return procedure_id
@@ -229,7 +228,7 @@ async def insert_procedural_memory(
         "success_count": 1,
         "is_active": True,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "updated_at": datetime.now(timezone.utc).isoformat()
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
     # Filter out None values
@@ -245,8 +244,7 @@ async def insert_procedural_memory(
 
 
 async def insert_procedural_memory_with_text(
-    procedure: ProceduralMemoryInput,
-    trigger_text: Optional[str] = None
+    procedure: ProceduralMemoryInput, trigger_text: Optional[str] = None
 ) -> str:
     """
     Insert procedural memory with auto-generated embedding.
@@ -262,17 +260,14 @@ async def insert_procedural_memory_with_text(
     embedding_service = get_embedding_service()
     embedding = await embedding_service.embed(text)
 
-    return await insert_procedural_memory(
-        procedure=procedure,
-        trigger_embedding=embedding
-    )
+    return await insert_procedural_memory(procedure=procedure, trigger_embedding=embedding)
 
 
 async def get_few_shot_examples(
     query_embedding: List[float],
     intent: Optional[str] = None,
     brand: Optional[str] = None,
-    max_examples: int = 5
+    max_examples: int = 5,
 ) -> List[Dict[str, Any]]:
     """
     Get few-shot examples for in-context learning with E2I context.
@@ -291,7 +286,7 @@ async def get_few_shot_examples(
         intent=intent,
         brand=brand,
         limit=max_examples,
-        min_similarity=0.6
+        min_similarity=0.6,
     )
 
     examples = []
@@ -300,14 +295,16 @@ async def get_few_shot_examples(
         if isinstance(tool_sequence, str):
             tool_sequence = json.loads(tool_sequence)
 
-        examples.append({
-            "trigger": proc.get("trigger_pattern", ""),
-            "intent": proc.get("detected_intent"),
-            "solution": tool_sequence,
-            "success_rate": proc.get("success_rate", 0),
-            "applicable_brands": proc.get("applicable_brands", []),
-            "applicable_regions": proc.get("applicable_regions", [])
-        })
+        examples.append(
+            {
+                "trigger": proc.get("trigger_pattern", ""),
+                "intent": proc.get("detected_intent"),
+                "solution": tool_sequence,
+                "success_rate": proc.get("success_rate", 0),
+                "applicable_brands": proc.get("applicable_brands", []),
+                "applicable_regions": proc.get("applicable_regions", []),
+            }
+        )
 
     logger.debug(f"Retrieved {len(examples)} few-shot examples")
     return examples
@@ -317,7 +314,7 @@ async def get_few_shot_examples_by_text(
     query_text: str,
     intent: Optional[str] = None,
     brand: Optional[str] = None,
-    max_examples: int = 5
+    max_examples: int = 5,
 ) -> List[Dict[str, Any]]:
     """
     Get few-shot examples by text query (auto-generates embedding).
@@ -335,17 +332,11 @@ async def get_few_shot_examples_by_text(
     embedding = await embedding_service.embed(query_text)
 
     return await get_few_shot_examples(
-        query_embedding=embedding,
-        intent=intent,
-        brand=brand,
-        max_examples=max_examples
+        query_embedding=embedding, intent=intent, brand=brand, max_examples=max_examples
     )
 
 
-async def update_procedure_outcome(
-    procedure_id: str,
-    success: bool
-) -> None:
+async def update_procedure_outcome(procedure_id: str, success: bool) -> None:
     """
     Update procedure usage and success counts.
 
@@ -356,11 +347,13 @@ async def update_procedure_outcome(
     client = get_supabase_client()
 
     # Get current counts
-    result = client.table("procedural_memories") \
-        .select("usage_count, success_count") \
-        .eq("procedure_id", procedure_id) \
-        .single() \
+    result = (
+        client.table("procedural_memories")
+        .select("usage_count, success_count")
+        .eq("procedure_id", procedure_id)
+        .single()
         .execute()
+    )
 
     if not result.data:
         logger.warning(f"Procedure {procedure_id} not found for outcome update")
@@ -369,16 +362,13 @@ async def update_procedure_outcome(
     current = result.data
     updates = {
         "usage_count": current.get("usage_count", 0) + 1,
-        "updated_at": datetime.now(timezone.utc).isoformat()
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
     if success:
         updates["success_count"] = current.get("success_count", 0) + 1
 
-    client.table("procedural_memories") \
-        .update(updates) \
-        .eq("procedure_id", procedure_id) \
-        .execute()
+    client.table("procedural_memories").update(updates).eq("procedure_id", procedure_id).execute()
 
     logger.debug(f"Updated procedure {procedure_id} outcome (success={success})")
 
@@ -395,11 +385,13 @@ async def get_procedure_by_id(procedure_id: str) -> Optional[Dict[str, Any]]:
     """
     client = get_supabase_client()
 
-    result = client.table("procedural_memories") \
-        .select("*") \
-        .eq("procedure_id", procedure_id) \
-        .single() \
+    result = (
+        client.table("procedural_memories")
+        .select("*")
+        .eq("procedure_id", procedure_id)
+        .single()
         .execute()
+    )
 
     return result.data
 
@@ -416,13 +408,12 @@ async def deactivate_procedure(procedure_id: str) -> bool:
     """
     client = get_supabase_client()
 
-    result = client.table("procedural_memories") \
-        .update({
-            "is_active": False,
-            "updated_at": datetime.now(timezone.utc).isoformat()
-        }) \
-        .eq("procedure_id", procedure_id) \
+    result = (
+        client.table("procedural_memories")
+        .update({"is_active": False, "updated_at": datetime.now(timezone.utc).isoformat()})
+        .eq("procedure_id", procedure_id)
         .execute()
+    )
 
     deactivated = len(result.data or []) > 0
     if deactivated:
@@ -431,9 +422,7 @@ async def deactivate_procedure(procedure_id: str) -> bool:
 
 
 async def get_top_procedures(
-    procedure_type: Optional[str] = None,
-    brand: Optional[str] = None,
-    limit: int = 10
+    procedure_type: Optional[str] = None, brand: Optional[str] = None, limit: int = 10
 ) -> List[Dict[str, Any]]:
     """
     Get top procedures by success rate.
@@ -448,11 +437,13 @@ async def get_top_procedures(
     """
     client = get_supabase_client()
 
-    query = client.table("procedural_memories") \
-        .select("*") \
-        .eq("is_active", True) \
-        .order("success_count", desc=True) \
+    query = (
+        client.table("procedural_memories")
+        .select("*")
+        .eq("is_active", True)
+        .order("success_count", desc=True)
         .limit(limit)
+    )
 
     if procedure_type:
         query = query.eq("procedure_type", procedure_type)
@@ -464,7 +455,8 @@ async def get_top_procedures(
 
     if brand:
         procedures = [
-            p for p in procedures
+            p
+            for p in procedures
             if brand in p.get("applicable_brands", []) or "all" in p.get("applicable_brands", [])
         ]
 
@@ -475,10 +467,9 @@ async def get_top_procedures(
 # LEARNING SIGNALS FUNCTIONS
 # ============================================================================
 
+
 async def record_learning_signal(
-    signal: LearningSignalInput,
-    cycle_id: Optional[str] = None,
-    session_id: Optional[str] = None
+    signal: LearningSignalInput, cycle_id: Optional[str] = None, session_id: Optional[str] = None
 ) -> str:
     """
     Record a learning signal with E2I context.
@@ -517,7 +508,7 @@ async def record_learning_signal(
         "dspy_metric_value": signal.dspy_metric_value,
         "training_input": signal.training_input,
         "training_output": signal.training_output,
-        "created_at": datetime.now(timezone.utc).isoformat()
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
     # Remove None values
@@ -530,10 +521,7 @@ async def record_learning_signal(
 
 
 async def get_training_examples_for_agent(
-    agent_name: str,
-    brand: Optional[str] = None,
-    min_score: float = 0.7,
-    limit: int = 100
+    agent_name: str, brand: Optional[str] = None, min_score: float = 0.7, limit: int = 100
 ) -> List[Dict[str, Any]]:
     """
     Get high-quality training examples for a specific agent.
@@ -550,13 +538,15 @@ async def get_training_examples_for_agent(
     """
     client = get_supabase_client()
 
-    query = client.table("learning_signals") \
-        .select("*") \
-        .eq("rated_agent", agent_name) \
-        .eq("is_training_example", True) \
-        .gte("dspy_metric_value", min_score) \
-        .order("dspy_metric_value", desc=True) \
+    query = (
+        client.table("learning_signals")
+        .select("*")
+        .eq("rated_agent", agent_name)
+        .eq("is_training_example", True)
+        .gte("dspy_metric_value", min_score)
+        .order("dspy_metric_value", desc=True)
         .limit(limit)
+    )
 
     if brand:
         query = query.eq("brand", brand)
@@ -579,10 +569,12 @@ async def get_feedback_summary_for_trigger(trigger_id: str) -> Dict[str, Any]:
     """
     client = get_supabase_client()
 
-    result = client.table("learning_signals") \
-        .select("signal_type, signal_value") \
-        .eq("related_trigger_id", trigger_id) \
+    result = (
+        client.table("learning_signals")
+        .select("signal_type, signal_value")
+        .eq("related_trigger_id", trigger_id)
         .execute()
+    )
 
     signals = result.data or []
 
@@ -592,10 +584,12 @@ async def get_feedback_summary_for_trigger(trigger_id: str) -> Dict[str, Any]:
         "thumbs_up": sum(1 for s in signals if s["signal_type"] == "thumbs_up"),
         "thumbs_down": sum(1 for s in signals if s["signal_type"] == "thumbs_down"),
         "avg_rating": None,
-        "corrections_count": sum(1 for s in signals if s["signal_type"] == "correction")
+        "corrections_count": sum(1 for s in signals if s["signal_type"] == "correction"),
     }
 
-    ratings = [s["signal_value"] for s in signals if s["signal_type"] == "rating" and s["signal_value"]]
+    ratings = [
+        s["signal_value"] for s in signals if s["signal_type"] == "rating" and s["signal_value"]
+    ]
     if ratings:
         summary["avg_rating"] = sum(ratings) / len(ratings)
 
@@ -614,10 +608,12 @@ async def get_feedback_summary_for_agent(agent_name: str) -> Dict[str, Any]:
     """
     client = get_supabase_client()
 
-    result = client.table("learning_signals") \
-        .select("signal_type, signal_value") \
-        .eq("rated_agent", agent_name) \
+    result = (
+        client.table("learning_signals")
+        .select("signal_type, signal_value")
+        .eq("rated_agent", agent_name)
         .execute()
+    )
 
     signals = result.data or []
 
@@ -628,10 +624,12 @@ async def get_feedback_summary_for_agent(agent_name: str) -> Dict[str, Any]:
         "thumbs_down": sum(1 for s in signals if s["signal_type"] == "thumbs_down"),
         "avg_rating": None,
         "corrections_count": sum(1 for s in signals if s["signal_type"] == "correction"),
-        "training_examples": sum(1 for s in signals if s.get("is_training_example"))
+        "training_examples": sum(1 for s in signals if s.get("is_training_example")),
     }
 
-    ratings = [s["signal_value"] for s in signals if s["signal_type"] == "rating" and s["signal_value"]]
+    ratings = [
+        s["signal_value"] for s in signals if s["signal_type"] == "rating" and s["signal_value"]
+    ]
     if ratings:
         summary["avg_rating"] = sum(ratings) / len(ratings)
 
@@ -639,9 +637,7 @@ async def get_feedback_summary_for_agent(agent_name: str) -> Dict[str, Any]:
 
 
 async def get_recent_signals(
-    limit: int = 50,
-    signal_type: Optional[str] = None,
-    agent_name: Optional[str] = None
+    limit: int = 50, signal_type: Optional[str] = None, agent_name: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """
     Get recent learning signals.
@@ -656,10 +652,7 @@ async def get_recent_signals(
     """
     client = get_supabase_client()
 
-    query = client.table("learning_signals") \
-        .select("*") \
-        .order("created_at", desc=True) \
-        .limit(limit)
+    query = client.table("learning_signals").select("*").order("created_at", desc=True).limit(limit)
 
     if signal_type:
         query = query.eq("signal_type", signal_type)
@@ -674,10 +667,8 @@ async def get_recent_signals(
 # MEMORY STATISTICS FUNCTIONS
 # ============================================================================
 
-async def _increment_memory_stats(
-    memory_type: str,
-    subtype: Optional[str] = None
-) -> None:
+
+async def _increment_memory_stats(memory_type: str, subtype: Optional[str] = None) -> None:
     """
     Track memory usage statistics for monitoring.
 
@@ -691,23 +682,23 @@ async def _increment_memory_stats(
 
     try:
         # Upsert stats record
-        client.table("memory_statistics") \
-            .upsert({
+        client.table("memory_statistics").upsert(
+            {
                 "stat_date": today,
                 "memory_type": memory_type,
                 "subtype": subtype or "general",
                 "count": 1,
-                "updated_at": datetime.now(timezone.utc).isoformat()
-            }, on_conflict="stat_date,memory_type,subtype") \
-            .execute()
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+            on_conflict="stat_date,memory_type,subtype",
+        ).execute()
     except Exception as e:
         # Stats are non-critical, just log
         logger.debug(f"Failed to update memory stats: {e}")
 
 
 async def get_memory_statistics(
-    days_back: int = 30,
-    memory_type: Optional[str] = None
+    days_back: int = 30, memory_type: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Get memory usage statistics for monitoring.
@@ -723,10 +714,12 @@ async def get_memory_statistics(
 
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days_back)).date().isoformat()
 
-    query = client.table("memory_statistics") \
-        .select("*") \
-        .gte("stat_date", cutoff) \
+    query = (
+        client.table("memory_statistics")
+        .select("*")
+        .gte("stat_date", cutoff)
         .order("stat_date", desc=True)
+    )
 
     if memory_type:
         query = query.eq("memory_type", memory_type)
@@ -742,8 +735,4 @@ async def get_memory_statistics(
             totals[mt] = 0
         totals[mt] += stat.get("count", 0)
 
-    return {
-        "period_days": days_back,
-        "totals_by_type": totals,
-        "daily_breakdown": stats
-    }
+    return {"period_days": days_back, "totals_by_type": totals, "daily_breakdown": stats}

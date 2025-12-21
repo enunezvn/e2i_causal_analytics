@@ -3,7 +3,7 @@
 This module defines measurable success criteria and validates constraints.
 """
 
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, List
 
 
 async def define_success_criteria(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -51,9 +51,7 @@ async def define_success_criteria(state: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _define_classification_criteria(
-    performance_reqs: Dict[str, float]
-) -> Dict[str, Any]:
+def _define_classification_criteria(performance_reqs: Dict[str, float]) -> Dict[str, Any]:
     """Define success criteria for classification problems."""
     return {
         "minimum_auc": performance_reqs.get("min_auc", 0.75),
@@ -66,9 +64,7 @@ def _define_classification_criteria(
     }
 
 
-def _define_regression_criteria(
-    performance_reqs: Dict[str, float]
-) -> Dict[str, Any]:
+def _define_regression_criteria(performance_reqs: Dict[str, float]) -> Dict[str, Any]:
     """Define success criteria for regression problems."""
     return {
         "minimum_auc": None,  # Not applicable
@@ -81,9 +77,7 @@ def _define_regression_criteria(
     }
 
 
-def _define_causal_criteria(
-    performance_reqs: Dict[str, float]
-) -> Dict[str, Any]:
+def _define_causal_criteria(performance_reqs: Dict[str, float]) -> Dict[str, Any]:
     """Define success criteria for causal inference problems."""
     return {
         "minimum_auc": None,
@@ -96,9 +90,7 @@ def _define_causal_criteria(
     }
 
 
-def _define_timeseries_criteria(
-    performance_reqs: Dict[str, float]
-) -> Dict[str, Any]:
+def _define_timeseries_criteria(performance_reqs: Dict[str, float]) -> Dict[str, Any]:
     """Define success criteria for time series problems."""
     return {
         "minimum_auc": None,
@@ -123,9 +115,7 @@ def _define_baseline_model(problem_type: str) -> str:
     return baselines.get(problem_type, "random_baseline")
 
 
-def _validate_criteria(
-    criteria: Dict[str, Any], state: Dict[str, Any]
-) -> Dict[str, Any]:
+def _validate_criteria(criteria: Dict[str, Any], state: Dict[str, Any]) -> Dict[str, Any]:
     """Validate success criteria for consistency and feasibility.
 
     Returns:
@@ -146,8 +136,7 @@ def _validate_criteria(
     min_auc = criteria.get("minimum_auc")
     if min_auc and min_auc > 0.95:
         warnings.append(
-            f"Minimum AUC ({min_auc}) is very high. "
-            "May be difficult to achieve in production."
+            f"Minimum AUC ({min_auc}) is very high. " "May be difficult to achieve in production."
         )
 
     min_r2 = criteria.get("minimum_r2")

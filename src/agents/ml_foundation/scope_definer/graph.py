@@ -4,16 +4,17 @@ This module defines the LangGraph workflow for transforming business
 requirements into formal ML problem specifications.
 """
 
-from typing import Dict, Any
 from datetime import datetime, timezone
-from langgraph.graph import StateGraph, END
+from typing import Any, Dict
 
-from .state import ScopeDefinerState
+from langgraph.graph import END, StateGraph
+
 from .nodes import (
-    classify_problem,
     build_scope_spec,
+    classify_problem,
     define_success_criteria,
 )
+from .state import ScopeDefinerState
 
 
 async def finalize_scope(state: Dict[str, Any]) -> Dict[str, Any]:

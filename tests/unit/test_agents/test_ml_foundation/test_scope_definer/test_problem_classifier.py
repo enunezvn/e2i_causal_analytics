@@ -1,11 +1,12 @@
 """Tests for problem classification logic."""
 
 import pytest
+
 from src.agents.ml_foundation.scope_definer.nodes.problem_classifier import (
-    classify_problem,
+    _infer_prediction_horizon,
     _infer_problem_type,
     _infer_target_variable,
-    _infer_prediction_horizon,
+    classify_problem,
 )
 
 

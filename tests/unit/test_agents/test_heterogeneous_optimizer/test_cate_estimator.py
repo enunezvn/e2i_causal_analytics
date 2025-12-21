@@ -1,6 +1,7 @@
 """Tests for CATE Estimator Node."""
 
 import pytest
+
 from src.agents.heterogeneous_optimizer.nodes.cate_estimator import CATEEstimatorNode
 from src.agents.heterogeneous_optimizer.state import HeterogeneousOptimizerState
 
@@ -111,7 +112,7 @@ class TestCATEEstimatorNode:
         result = await node.execute(state)
 
         cate_by_segment = result["cate_by_segment"]
-        for segment_var, results in cate_by_segment.items():
+        for _segment_var, results in cate_by_segment.items():
             assert isinstance(results, list)
             assert len(results) > 0
 
@@ -134,7 +135,7 @@ class TestCATEEstimatorNode:
         result = await node.execute(state)
 
         cate_by_segment = result["cate_by_segment"]
-        for segment_var, results in cate_by_segment.items():
+        for _segment_var, results in cate_by_segment.items():
             for cate_result in results:
                 ci_lower = cate_result["cate_ci_lower"]
                 ci_upper = cate_result["cate_ci_upper"]
@@ -152,7 +153,7 @@ class TestCATEEstimatorNode:
         result = await node.execute(state)
 
         cate_by_segment = result["cate_by_segment"]
-        for segment_var, results in cate_by_segment.items():
+        for _segment_var, results in cate_by_segment.items():
             for cate_result in results:
                 significance = cate_result["statistical_significance"]
                 assert isinstance(significance, bool)
@@ -192,13 +193,12 @@ class TestCATEEstimatorNode:
         # Create mock connector that returns small dataset
         class SmallDataConnector:
             async def query(self, source, columns, filters=None):
-                import pandas as pd
                 import numpy as np
+                import pandas as pd
+
                 np.random.seed(42)
                 # Only 50 rows
-                return pd.DataFrame({
-                    col: np.random.randn(50) for col in columns
-                })
+                return pd.DataFrame({col: np.random.randn(50) for col in columns})
 
         node.data_connector = SmallDataConnector()
         state = self._create_test_state()
@@ -241,7 +241,7 @@ class TestCATEEstimatorNode:
 
         result = await node.execute(state)
 
-        for segment_var, results in result["cate_by_segment"].items():
+        for _segment_var, results in result["cate_by_segment"].items():
             # Check sorting (descending)
             for i in range(len(results) - 1):
                 assert results[i]["cate_estimate"] >= results[i + 1]["cate_estimate"]
@@ -307,8 +307,9 @@ class TestCATEEstimatorEdgeCases:
         # Mock connector with continuous treatment
         class ContinuousTreatmentConnector:
             async def query(self, source, columns, filters=None):
-                import pandas as pd
                 import numpy as np
+                import pandas as pd
+
                 np.random.seed(42)
                 n = 1000
                 data = {}
@@ -340,8 +341,8 @@ class TestCATEEstimatorEdgeCases:
     @pytest.mark.asyncio
     async def test_many_effect_modifiers(self):
         """Test with many effect modifiers."""
-        import pandas as pd
         import numpy as np
+        import pandas as pd
 
         # Custom mock connector with 10 effect modifiers
         class ManyModifiersConnector:

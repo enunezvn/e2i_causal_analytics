@@ -38,12 +38,12 @@ Usage:
 import json
 import logging
 import uuid
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
-from src.memory.services.factories import get_supabase_client, get_embedding_service
+from src.memory.services.factories import get_embedding_service, get_supabase_client
 
 logger = logging.getLogger(__name__)
 
@@ -52,8 +52,10 @@ logger = logging.getLogger(__name__)
 # E2I DATA LAYER ENTITY TYPES
 # ============================================================================
 
+
 class E2IEntityType(str, Enum):
     """E2I data layer entity types for foreign key references."""
+
     PATIENT = "patient"
     HCP = "hcp"
     TREATMENT = "treatment"
@@ -66,6 +68,7 @@ class E2IEntityType(str, Enum):
 
 class E2IBrand(str, Enum):
     """E2I brand values."""
+
     REMIBRUTINIB = "Remibrutinib"
     FABHALTA = "Fabhalta"
     KISQALI = "Kisqali"
@@ -74,6 +77,7 @@ class E2IBrand(str, Enum):
 
 class E2IRegion(str, Enum):
     """E2I region values."""
+
     NORTHEAST = "northeast"
     SOUTH = "south"
     MIDWEST = "midwest"
@@ -83,6 +87,7 @@ class E2IRegion(str, Enum):
 
 class E2IAgentName(str, Enum):
     """E2I agent architecture names."""
+
     # Tier 1: Coordination
     ORCHESTRATOR = "orchestrator"
     TOOL_COMPOSER = "tool_composer"
@@ -106,9 +111,11 @@ class E2IAgentName(str, Enum):
 # DATA CLASSES FOR E2I ENTITY CONTEXT
 # ============================================================================
 
+
 @dataclass
 class E2IEntityContext:
     """Context about linked E2I entities for a memory."""
+
     patient: Optional[Dict[str, Any]] = None
     hcp: Optional[Dict[str, Any]] = None
     trigger: Optional[Dict[str, Any]] = None
@@ -122,6 +129,7 @@ class E2IEntityContext:
 @dataclass
 class E2IEntityReferences:
     """Foreign key references to E2I data layer entities."""
+
     patient_journey_id: Optional[str] = None
     patient_id: Optional[str] = None
     hcp_id: Optional[str] = None
@@ -138,6 +146,7 @@ class E2IEntityReferences:
 @dataclass
 class EpisodicMemoryInput:
     """Input for creating an episodic memory with E2I integration."""
+
     event_type: str
     description: str
     event_subtype: Optional[str] = None
@@ -154,6 +163,7 @@ class EpisodicMemoryInput:
 @dataclass
 class EpisodicSearchFilters:
     """Filters for episodic memory search with E2I entity support."""
+
     event_type: Optional[str] = None
     agent_name: Optional[str] = None
     brand: Optional[str] = None
@@ -169,6 +179,7 @@ class EpisodicSearchFilters:
 @dataclass
 class EnrichedEpisodicMemory:
     """Episodic memory with full E2I entity context attached."""
+
     memory_id: str
     event_type: str
     description: str
@@ -188,6 +199,7 @@ class EnrichedEpisodicMemory:
 @dataclass
 class AgentActivityContext:
     """Full context for an agent activity."""
+
     activity_id: str
     agent_name: str
     action_type: str
@@ -204,6 +216,7 @@ class AgentActivityContext:
 # ============================================================================
 # MEMORY STATISTICS TRACKING
 # ============================================================================
+
 
 async def _increment_memory_stats(memory_type: str, event_type: str) -> None:
     """
@@ -222,12 +235,13 @@ async def _increment_memory_stats(memory_type: str, event_type: str) -> None:
 # EPISODIC MEMORY SEARCH FUNCTIONS
 # ============================================================================
 
+
 async def search_episodic_memory(
     embedding: List[float],
     filters: Optional[EpisodicSearchFilters] = None,
     limit: int = 10,
     min_similarity: float = 0.5,
-    include_entity_context: bool = False
+    include_entity_context: bool = False,
 ) -> List[Dict[str, Any]]:
     """
     Search episodic memories by embedding similarity with E2I entity filters.
@@ -254,7 +268,7 @@ async def search_episodic_memory(
         "filter_brand": None,
         "filter_region": None,
         "filter_patient_id": None,
-        "filter_hcp_id": None
+        "filter_hcp_id": None,
     }
 
     if filters:
@@ -283,7 +297,7 @@ async def search_episodic_by_text(
     filters: Optional[EpisodicSearchFilters] = None,
     limit: int = 10,
     min_similarity: float = 0.5,
-    include_entity_context: bool = False
+    include_entity_context: bool = False,
 ) -> List[Dict[str, Any]]:
     """
     Search episodic memories by text query (auto-generates embedding).
@@ -306,7 +320,7 @@ async def search_episodic_by_text(
         filters=filters,
         limit=limit,
         min_similarity=min_similarity,
-        include_entity_context=include_entity_context
+        include_entity_context=include_entity_context,
     )
 
 
@@ -314,7 +328,7 @@ async def search_episodic_by_e2i_entity(
     entity_type: E2IEntityType,
     entity_id: str,
     limit: int = 20,
-    event_types: Optional[List[str]] = None
+    event_types: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Search episodic memories linked to a specific E2I entity.
@@ -339,24 +353,28 @@ async def search_episodic_by_e2i_entity(
         E2IEntityType.CAUSAL_PATH: "causal_path_id",
         E2IEntityType.EXPERIMENT: "experiment_id",
         E2IEntityType.TREATMENT: "treatment_event_id",
-        E2IEntityType.AGENT_ACTIVITY: "agent_activity_id"
+        E2IEntityType.AGENT_ACTIVITY: "agent_activity_id",
     }
 
     column = column_map.get(entity_type)
     if not column:
         raise ValueError(f"Unknown entity type: {entity_type}")
 
-    query = client.table("episodic_memories") \
-        .select("*") \
-        .eq(column, entity_id) \
-        .order("occurred_at", desc=True) \
+    query = (
+        client.table("episodic_memories")
+        .select("*")
+        .eq(column, entity_id)
+        .order("occurred_at", desc=True)
         .limit(limit)
+    )
 
     if event_types:
         query = query.in_("event_type", event_types)
 
     result = query.execute()
-    logger.debug(f"Entity search ({entity_type.value}/{entity_id}) found {len(result.data or [])} results")
+    logger.debug(
+        f"Entity search ({entity_type.value}/{entity_id}) found {len(result.data or [])} results"
+    )
     return result.data or []
 
 
@@ -364,11 +382,12 @@ async def search_episodic_by_e2i_entity(
 # EPISODIC MEMORY INSERT FUNCTIONS
 # ============================================================================
 
+
 async def insert_episodic_memory(
     memory: EpisodicMemoryInput,
     embedding: List[float],
     session_id: Optional[str] = None,
-    cycle_id: Optional[str] = None
+    cycle_id: Optional[str] = None,
 ) -> str:
     """
     Insert new episodic memory with E2I entity references.
@@ -401,7 +420,7 @@ async def insert_episodic_memory(
         "agent_name": memory.agent_name,
         "importance_score": memory.importance_score,
         "embedding": embedding,
-        "occurred_at": datetime.now(timezone.utc).isoformat()
+        "occurred_at": datetime.now(timezone.utc).isoformat(),
     }
 
     # Filter out None values
@@ -446,7 +465,7 @@ async def insert_episodic_memory_with_text(
     memory: EpisodicMemoryInput,
     text_to_embed: Optional[str] = None,
     session_id: Optional[str] = None,
-    cycle_id: Optional[str] = None
+    cycle_id: Optional[str] = None,
 ) -> str:
     """
     Insert episodic memory with auto-generated embedding.
@@ -465,17 +484,14 @@ async def insert_episodic_memory_with_text(
     embedding = await embedding_service.embed(text)
 
     return await insert_episodic_memory(
-        memory=memory,
-        embedding=embedding,
-        session_id=session_id,
-        cycle_id=cycle_id
+        memory=memory, embedding=embedding, session_id=session_id, cycle_id=cycle_id
     )
 
 
 async def bulk_insert_episodic_memories(
     memories: List[Tuple[EpisodicMemoryInput, List[float]]],
     session_id: Optional[str] = None,
-    cycle_id: Optional[str] = None
+    cycle_id: Optional[str] = None,
 ) -> List[str]:
     """
     Bulk insert multiple episodic memories for performance.
@@ -512,7 +528,7 @@ async def bulk_insert_episodic_memories(
             "agent_name": memory.agent_name,
             "importance_score": memory.importance_score,
             "embedding": embedding,
-            "occurred_at": now
+            "occurred_at": now,
         }
 
         # Filter out None values
@@ -557,6 +573,7 @@ async def bulk_insert_episodic_memories(
 # EPISODIC MEMORY CONTEXT FUNCTIONS
 # ============================================================================
 
+
 async def get_memory_entity_context(memory_id: str) -> E2IEntityContext:
     """
     Get linked E2I entity details for a memory.
@@ -580,7 +597,7 @@ async def get_memory_entity_context(memory_id: str) -> E2IEntityContext:
             details = {
                 "id": row.get("entity_id"),
                 "name": row.get("entity_name"),
-                **row.get("entity_details", {})
+                **row.get("entity_details", {}),
             }
 
             if entity_type == "patient":
@@ -620,11 +637,9 @@ async def get_enriched_episodic_memory(memory_id: str) -> Optional[EnrichedEpiso
     client = get_supabase_client()
 
     # Fetch the base memory
-    result = client.table("episodic_memories") \
-        .select("*") \
-        .eq("memory_id", memory_id) \
-        .single() \
-        .execute()
+    result = (
+        client.table("episodic_memories").select("*").eq("memory_id", memory_id).single().execute()
+    )
 
     if not result.data:
         return None
@@ -648,7 +663,7 @@ async def get_enriched_episodic_memory(memory_id: str) -> Optional[EnrichedEpiso
         trigger_context=asdict(context)["trigger"] if context.trigger else None,
         causal_path_context=asdict(context)["causal_path"] if context.causal_path else None,
         treatment_context=asdict(context)["treatment"] if context.treatment else None,
-        prediction_context=asdict(context)["prediction"] if context.prediction else None
+        prediction_context=asdict(context)["prediction"] if context.prediction else None,
     )
 
 
@@ -684,7 +699,7 @@ async def get_agent_activity_with_context(activity_id: str) -> Optional[AgentAct
             causal_paths=data.get("causal_paths"),
             predictions=data.get("predictions"),
             duration_ms=data.get("duration_ms"),
-            tokens_used=data.get("tokens_used")
+            tokens_used=data.get("tokens_used"),
         )
     except Exception as e:
         logger.warning(f"get_agent_activity_context failed: {e}")
@@ -704,11 +719,7 @@ async def get_causal_path_context(path_id: str) -> Optional[Dict[str, Any]]:
     client = get_supabase_client()
 
     # Get causal path details
-    path_result = client.table("causal_paths") \
-        .select("*") \
-        .eq("path_id", path_id) \
-        .single() \
-        .execute()
+    path_result = client.table("causal_paths").select("*").eq("path_id", path_id).single().execute()
 
     if not path_result.data:
         return None
@@ -717,9 +728,7 @@ async def get_causal_path_context(path_id: str) -> Optional[Dict[str, Any]]:
 
     # Get related episodic memories
     memories = await search_episodic_by_e2i_entity(
-        entity_type=E2IEntityType.CAUSAL_PATH,
-        entity_id=path_id,
-        limit=10
+        entity_type=E2IEntityType.CAUSAL_PATH, entity_id=path_id, limit=10
     )
 
     return {
@@ -730,7 +739,7 @@ async def get_causal_path_context(path_id: str) -> Optional[Dict[str, Any]]:
         "confidence": path.get("confidence"),
         "method_used": path.get("method_used"),
         "discovery_date": path.get("created_at"),
-        "related_memories": memories
+        "related_memories": memories,
     }
 
 
@@ -738,11 +747,12 @@ async def get_causal_path_context(path_id: str) -> Optional[Dict[str, Any]]:
 # EPISODIC MEMORY UTILITY FUNCTIONS
 # ============================================================================
 
+
 async def get_recent_memories(
     limit: int = 20,
     event_types: Optional[List[str]] = None,
     agent_name: Optional[str] = None,
-    brand: Optional[str] = None
+    brand: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Get recent episodic memories ordered by time.
@@ -758,10 +768,9 @@ async def get_recent_memories(
     """
     client = get_supabase_client()
 
-    query = client.table("episodic_memories") \
-        .select("*") \
-        .order("occurred_at", desc=True) \
-        .limit(limit)
+    query = (
+        client.table("episodic_memories").select("*").order("occurred_at", desc=True).limit(limit)
+    )
 
     if event_types:
         query = query.in_("event_type", event_types)
@@ -786,11 +795,9 @@ async def get_memory_by_id(memory_id: str) -> Optional[Dict[str, Any]]:
     """
     client = get_supabase_client()
 
-    result = client.table("episodic_memories") \
-        .select("*") \
-        .eq("memory_id", memory_id) \
-        .single() \
-        .execute()
+    result = (
+        client.table("episodic_memories").select("*").eq("memory_id", memory_id).single().execute()
+    )
 
     return result.data
 
@@ -807,10 +814,7 @@ async def delete_memory(memory_id: str) -> bool:
     """
     client = get_supabase_client()
 
-    result = client.table("episodic_memories") \
-        .delete() \
-        .eq("memory_id", memory_id) \
-        .execute()
+    result = client.table("episodic_memories").delete().eq("memory_id", memory_id).execute()
 
     deleted = len(result.data or []) > 0
     if deleted:
@@ -819,9 +823,7 @@ async def delete_memory(memory_id: str) -> bool:
 
 
 async def count_memories_by_type(
-    event_type: Optional[str] = None,
-    brand: Optional[str] = None,
-    days_back: int = 30
+    event_type: Optional[str] = None, brand: Optional[str] = None, days_back: int = 30
 ) -> int:
     """
     Count episodic memories with optional filters.
@@ -836,8 +838,7 @@ async def count_memories_by_type(
     """
     client = get_supabase_client()
 
-    query = client.table("episodic_memories") \
-        .select("memory_id", count="exact")
+    query = client.table("episodic_memories").select("memory_id", count="exact")
 
     if event_type:
         query = query.eq("event_type", event_type)

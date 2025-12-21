@@ -4,20 +4,19 @@ Version: 4.3
 Tests the Causal Validation Protocol implementation.
 """
 
+
 import pytest
-from unittest.mock import Mock, patch
-import numpy as np
 
 from src.causal_engine import (
-    RefutationRunner,
-    RefutationSuite,
-    RefutationResult,
-    RefutationStatus,
-    GateDecision,
-    RefutationTestType,
-    run_refutation_suite,
-    is_estimate_valid,
     DOWHY_AVAILABLE,
+    GateDecision,
+    RefutationResult,
+    RefutationRunner,
+    RefutationStatus,
+    RefutationSuite,
+    RefutationTestType,
+    is_estimate_valid,
+    run_refutation_suite,
 )
 
 
@@ -112,20 +111,24 @@ class TestRefutationSuite:
     def _create_test_results(self, passed_count: int = 4, failed_count: int = 1) -> list:
         """Helper to create test results."""
         results = []
-        for i in range(passed_count):
-            results.append(RefutationResult(
-                test_name=RefutationTestType.PLACEBO_TREATMENT,
-                status=RefutationStatus.PASSED,
-                original_effect=0.5,
-                refuted_effect=0.02,
-            ))
-        for i in range(failed_count):
-            results.append(RefutationResult(
-                test_name=RefutationTestType.BOOTSTRAP,
-                status=RefutationStatus.FAILED,
-                original_effect=0.5,
-                refuted_effect=0.8,
-            ))
+        for _i in range(passed_count):
+            results.append(
+                RefutationResult(
+                    test_name=RefutationTestType.PLACEBO_TREATMENT,
+                    status=RefutationStatus.PASSED,
+                    original_effect=0.5,
+                    refuted_effect=0.02,
+                )
+            )
+        for _i in range(failed_count):
+            results.append(
+                RefutationResult(
+                    test_name=RefutationTestType.BOOTSTRAP,
+                    status=RefutationStatus.FAILED,
+                    original_effect=0.5,
+                    refuted_effect=0.8,
+                )
+            )
         return results
 
     def test_create_suite(self):
@@ -212,7 +215,7 @@ class TestRefutationSuite:
         )
 
         assert suite.total_tests == 1  # Skipped excluded
-        assert len(suite.tests) == 2   # But still in list
+        assert len(suite.tests) == 2  # But still in list
 
     def test_to_dict(self):
         """Test RefutationSuite.to_dict() serialization."""
@@ -344,7 +347,11 @@ class TestRefutationRunner:
 
         assert suite.passed is not None
         assert 0.0 <= suite.confidence_score <= 1.0
-        assert suite.gate_decision in [GateDecision.PROCEED, GateDecision.REVIEW, GateDecision.BLOCK]
+        assert suite.gate_decision in [
+            GateDecision.PROCEED,
+            GateDecision.REVIEW,
+            GateDecision.BLOCK,
+        ]
 
     def test_run_all_tests_negative_effect(self):
         """Test refutation with negative effect."""
@@ -375,9 +382,11 @@ class TestRefutationRunner:
 
     def test_run_all_tests_with_disabled_test(self):
         """Test that disabled tests are skipped."""
-        runner = RefutationRunner(config={
-            "bootstrap": {"enabled": False},
-        })
+        runner = RefutationRunner(
+            config={
+                "bootstrap": {"enabled": False},
+            }
+        )
 
         suite = runner.run_all_tests(
             original_effect=0.5,
@@ -399,7 +408,11 @@ class TestRefutationRunner:
         )
 
         # In mock mode, should typically get high confidence
-        assert suite.gate_decision in [GateDecision.PROCEED, GateDecision.REVIEW, GateDecision.BLOCK]
+        assert suite.gate_decision in [
+            GateDecision.PROCEED,
+            GateDecision.REVIEW,
+            GateDecision.BLOCK,
+        ]
 
     def test_execution_time_tracking(self):
         """Test that execution time is tracked."""
@@ -439,7 +452,11 @@ class TestGateDecisionLogic:
 
         if suite.confidence_score >= 0.70:
             # Could still be REVIEW/BLOCK if critical test failed
-            assert suite.gate_decision in [GateDecision.PROCEED, GateDecision.REVIEW, GateDecision.BLOCK]
+            assert suite.gate_decision in [
+                GateDecision.PROCEED,
+                GateDecision.REVIEW,
+                GateDecision.BLOCK,
+            ]
         elif suite.confidence_score >= 0.50:
             assert suite.gate_decision in [GateDecision.REVIEW, GateDecision.BLOCK]
         else:

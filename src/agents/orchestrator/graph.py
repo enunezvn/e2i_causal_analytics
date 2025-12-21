@@ -7,18 +7,19 @@ Total latency target: <2 seconds for orchestration overhead
 (excluding agent execution time)
 """
 
-from typing import Optional, Dict, Any
-from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.memory import MemorySaver
+from typing import Any, Dict, Optional
 
-from .state import OrchestratorState
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import END, StateGraph
+
 from .nodes import (
     classify_intent,
+    dispatch_to_agents,
     retrieve_rag_context,
     route_to_agents,
-    dispatch_to_agents,
     synthesize_response,
 )
+from .state import OrchestratorState
 
 
 def create_orchestrator_graph(

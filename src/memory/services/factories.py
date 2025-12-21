@@ -25,12 +25,12 @@ Usage:
     graphiti = await get_graphiti_service()
 """
 
-import os
 import json
 import logging
+import os
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
 from functools import lru_cache
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -79,14 +79,12 @@ class OpenAIEmbeddingService(EmbeddingService):
                 api_key = os.environ.get("OPENAI_API_KEY")
                 if not api_key:
                     raise ServiceConnectionError(
-                        "OpenAI",
-                        "OPENAI_API_KEY environment variable is not set"
+                        "OpenAI", "OPENAI_API_KEY environment variable is not set"
                     )
                 self._client = openai.OpenAI(api_key=api_key)
             except ImportError:
                 raise ServiceConnectionError(
-                    "OpenAI",
-                    "openai package is not installed. Run: pip install openai"
+                    "OpenAI", "openai package is not installed. Run: pip install openai"
                 )
         return self._client
 
@@ -98,10 +96,7 @@ class OpenAIEmbeddingService(EmbeddingService):
 
         client = self._get_client()
         try:
-            response = client.embeddings.create(
-                model=self.model,
-                input=text
-            )
+            response = client.embeddings.create(model=self.model, input=text)
             embedding = response.data[0].embedding
             self._cache[cache_key] = embedding
             return embedding
@@ -112,10 +107,7 @@ class OpenAIEmbeddingService(EmbeddingService):
         """Generate embeddings for multiple texts."""
         client = self._get_client()
         try:
-            response = client.embeddings.create(
-                model=self.model,
-                input=texts
-            )
+            response = client.embeddings.create(model=self.model, input=texts)
             return [item.embedding for item in response.data]
         except Exception as e:
             raise ServiceConnectionError("OpenAI", f"Failed to generate batch embeddings: {e}", e)
@@ -137,8 +129,7 @@ class BedrockEmbeddingService(EmbeddingService):
                 self._client = boto3.client("bedrock-runtime", region_name=self.region)
             except ImportError:
                 raise ServiceConnectionError(
-                    "Bedrock",
-                    "boto3 package is not installed. Run: pip install boto3"
+                    "Bedrock", "boto3 package is not installed. Run: pip install boto3"
                 )
             except Exception as e:
                 raise ServiceConnectionError("Bedrock", f"Failed to create Bedrock client: {e}", e)
@@ -148,10 +139,7 @@ class BedrockEmbeddingService(EmbeddingService):
         """Generate embedding using Bedrock."""
         client = self._get_client()
         try:
-            response = client.invoke_model(
-                modelId=self.model,
-                body=json.dumps({"inputText": text})
-            )
+            response = client.invoke_model(modelId=self.model, body=json.dumps({"inputText": text}))
             result = json.loads(response["body"].read())
             return result["embedding"]
         except Exception as e:
@@ -187,7 +175,7 @@ class AnthropicLLMService(LLMService):
         self,
         model: str = "claude-3-5-sonnet-20241022",
         max_tokens: int = 4096,
-        temperature: float = 0.3
+        temperature: float = 0.3,
     ):
         self._client = None
         self.model = model
@@ -202,14 +190,12 @@ class AnthropicLLMService(LLMService):
                 api_key = os.environ.get("ANTHROPIC_API_KEY")
                 if not api_key:
                     raise ServiceConnectionError(
-                        "Anthropic",
-                        "ANTHROPIC_API_KEY environment variable is not set"
+                        "Anthropic", "ANTHROPIC_API_KEY environment variable is not set"
                     )
                 self._client = anthropic.Anthropic(api_key=api_key)
             except ImportError:
                 raise ServiceConnectionError(
-                    "Anthropic",
-                    "anthropic package is not installed. Run: pip install anthropic"
+                    "Anthropic", "anthropic package is not installed. Run: pip install anthropic"
                 )
         return self._client
 
@@ -221,7 +207,7 @@ class AnthropicLLMService(LLMService):
                 model=self.model,
                 max_tokens=max_tokens or self.max_tokens,
                 temperature=self.temperature,
-                messages=[{"role": "user", "content": prompt}]
+                messages=[{"role": "user", "content": prompt}],
             )
             return response.content[0].text
         except Exception as e:
@@ -235,7 +221,7 @@ class BedrockLLMService(LLMService):
         self,
         model: str = "anthropic.claude-3-5-sonnet-20241022-v2:0",
         max_tokens: int = 4096,
-        region: str = "us-east-1"
+        region: str = "us-east-1",
     ):
         self._client = None
         self.model = model
@@ -250,8 +236,7 @@ class BedrockLLMService(LLMService):
                 self._client = boto3.client("bedrock-runtime", region_name=self.region)
             except ImportError:
                 raise ServiceConnectionError(
-                    "Bedrock",
-                    "boto3 package is not installed. Run: pip install boto3"
+                    "Bedrock", "boto3 package is not installed. Run: pip install boto3"
                 )
             except Exception as e:
                 raise ServiceConnectionError("Bedrock", f"Failed to create Bedrock client: {e}", e)
@@ -263,11 +248,13 @@ class BedrockLLMService(LLMService):
         try:
             response = client.invoke_model(
                 modelId=self.model,
-                body=json.dumps({
-                    "anthropic_version": "bedrock-2023-05-31",
-                    "max_tokens": max_tokens or self.max_tokens,
-                    "messages": [{"role": "user", "content": prompt}]
-                })
+                body=json.dumps(
+                    {
+                        "anthropic_version": "bedrock-2023-05-31",
+                        "max_tokens": max_tokens or self.max_tokens,
+                        "messages": [{"role": "user", "content": prompt}],
+                    }
+                ),
             )
             result = json.loads(response["body"].read())
             return result["content"][0]["text"]
@@ -304,8 +291,7 @@ def get_redis_client():
         import redis.asyncio as redis
     except ImportError:
         raise ServiceConnectionError(
-            "Redis",
-            "redis package is not installed. Run: pip install redis"
+            "Redis", "redis package is not installed. Run: pip install redis"
         )
 
     url = os.environ.get("REDIS_URL", "redis://localhost:6382")
@@ -339,25 +325,20 @@ def get_supabase_client():
         return _supabase_client
 
     try:
-        from supabase import create_client, Client
+        from supabase import Client, create_client
     except ImportError:
         raise ServiceConnectionError(
-            "Supabase",
-            "supabase package is not installed. Run: pip install supabase"
+            "Supabase", "supabase package is not installed. Run: pip install supabase"
         )
 
     url = os.environ.get("SUPABASE_URL")
     key = os.environ.get("SUPABASE_ANON_KEY")
 
     if not url:
-        raise ServiceConnectionError(
-            "Supabase",
-            "SUPABASE_URL environment variable is not set"
-        )
+        raise ServiceConnectionError("Supabase", "SUPABASE_URL environment variable is not set")
     if not key:
         raise ServiceConnectionError(
-            "Supabase",
-            "SUPABASE_ANON_KEY environment variable is not set"
+            "Supabase", "SUPABASE_ANON_KEY environment variable is not set"
         )
 
     logger.info(f"Creating Supabase client for: {url}")
@@ -393,8 +374,7 @@ def get_falkordb_client():
         from falkordb import FalkorDB
     except ImportError:
         raise ServiceConnectionError(
-            "FalkorDB",
-            "falkordb package is not installed. Run: pip install falkordb"
+            "FalkorDB", "falkordb package is not installed. Run: pip install falkordb"
         )
 
     host = os.environ.get("FALKORDB_HOST", "localhost")
@@ -492,18 +472,12 @@ async def get_graphiti_service():
     """
     try:
         from ..graphiti_service import get_graphiti_service as _get_graphiti_service
+
         return await _get_graphiti_service()
     except ImportError as e:
-        raise ServiceConnectionError(
-            "Graphiti",
-            f"Failed to import graphiti_service: {e}"
-        )
+        raise ServiceConnectionError("Graphiti", f"Failed to import graphiti_service: {e}")
     except Exception as e:
-        raise ServiceConnectionError(
-            "Graphiti",
-            f"Failed to get Graphiti service: {e}",
-            e
-        )
+        raise ServiceConnectionError("Graphiti", f"Failed to get Graphiti service: {e}", e)
 
 
 # ============================================================================

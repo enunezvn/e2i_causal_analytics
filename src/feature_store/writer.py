@@ -13,7 +13,7 @@ from uuid import UUID
 import redis
 from supabase import Client
 
-from .models import Feature, FeatureValue
+from .models import FeatureValue
 
 logger = logging.getLogger(__name__)
 
@@ -127,14 +127,10 @@ class FeatureWriter:
         entities_to_invalidate = set()
 
         for fv in feature_values:
-            feature_id = self._get_feature_id(
-                fv["feature_name"], fv.get("feature_group")
-            )
+            feature_id = self._get_feature_id(fv["feature_name"], fv.get("feature_group"))
 
             if not feature_id:
-                logger.warning(
-                    f"Feature not found: {fv['feature_name']}, skipping..."
-                )
+                logger.warning(f"Feature not found: {fv['feature_name']}, skipping...")
                 continue
 
             resolved_data.append(

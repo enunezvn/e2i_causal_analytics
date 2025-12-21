@@ -4,9 +4,11 @@ Estimates Average Treatment Effect (ATE) and Conditional ATE (CATE).
 """
 
 import time
+from typing import Dict, List
+
 import numpy as np
 import pandas as pd
-from typing import Dict, List, Optional
+
 from src.agents.causal_impact.state import CausalImpactState, EstimationResult
 
 
@@ -41,9 +43,7 @@ class EstimationNode:
             treatment = causal_graph["treatment_nodes"][0]
             outcome = causal_graph["outcome_nodes"][0]
             adjustment_set = (
-                causal_graph["adjustment_sets"][0]
-                if causal_graph["adjustment_sets"]
-                else []
+                causal_graph["adjustment_sets"][0] if causal_graph["adjustment_sets"] else []
             )
 
             # Get or generate data
@@ -54,17 +54,11 @@ class EstimationNode:
 
             # Estimate effect
             if method == "CausalForestDML":
-                result = self._estimate_causal_forest(
-                    data, treatment, outcome, adjustment_set
-                )
+                result = self._estimate_causal_forest(data, treatment, outcome, adjustment_set)
             elif method == "LinearDML":
-                result = self._estimate_linear_dml(
-                    data, treatment, outcome, adjustment_set
-                )
+                result = self._estimate_linear_dml(data, treatment, outcome, adjustment_set)
             elif method == "linear_regression":
-                result = self._estimate_linear_regression(
-                    data, treatment, outcome, adjustment_set
-                )
+                result = self._estimate_linear_regression(data, treatment, outcome, adjustment_set)
             elif method == "propensity_score_weighting":
                 result = self._estimate_propensity_weighting(
                     data, treatment, outcome, adjustment_set
@@ -122,9 +116,7 @@ class EstimationNode:
 
         # Treatment (influenced by confounders)
         hcp_engagement_level = (
-            0.3 * region_numeric
-            + 0.2 * specialty_numeric
-            + np.random.normal(0, 0.5, n)
+            0.3 * region_numeric + 0.2 * specialty_numeric + np.random.normal(0, 0.5, n)
         )
 
         # Outcome (influenced by treatment and confounders)

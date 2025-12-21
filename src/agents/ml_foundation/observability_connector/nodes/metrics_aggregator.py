@@ -1,8 +1,7 @@
 """Metrics Aggregator Node - Compute quality metrics from spans."""
 
-from typing import Dict, Any, List
 from collections import defaultdict
-from datetime import datetime, timedelta
+from typing import Any, Dict, List
 
 
 async def aggregate_metrics(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -16,8 +15,8 @@ async def aggregate_metrics(state: Dict[str, Any]) -> Dict[str, Any]:
     """
     try:
         time_window = state.get("time_window", "24h")
-        agent_filter = state.get("agent_name_filter")
-        trace_filter = state.get("trace_id_filter")
+        state.get("agent_name_filter")
+        state.get("trace_id_filter")
 
         # In production, query ml_observability_spans table
         # spans = await db.query(
@@ -67,9 +66,7 @@ async def aggregate_metrics(state: Dict[str, Any]) -> Dict[str, Any]:
             overall_p99 = 0.0
 
         # Fallback invocation rate
-        fallback_spans = sum(
-            1 for s in spans if s.get("metadata", {}).get("fallback_used", False)
-        )
+        fallback_spans = sum(1 for s in spans if s.get("metadata", {}).get("fallback_used", False))
         fallback_rate = fallback_spans / total_spans if total_spans > 0 else 0.0
 
         # Status distribution
@@ -209,9 +206,7 @@ def _compute_latency_stats(
     return stats
 
 
-def _compute_error_rates(
-    spans: List[Dict[str, Any]], group_by: str
-) -> Dict[str, float]:
+def _compute_error_rates(spans: List[Dict[str, Any]], group_by: str) -> Dict[str, float]:
     """Compute error rates grouped by field.
 
     Args:
