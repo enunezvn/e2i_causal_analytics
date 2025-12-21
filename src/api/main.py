@@ -28,6 +28,7 @@ from fastapi.responses import JSONResponse
 from src.api.routes.explain import router as explain_router
 from src.api.routes.memory import router as memory_router
 from src.api.routes.cognitive import router as cognitive_router
+from src.api.routes.graph import router as graph_router
 
 # Configure logging
 logging.basicConfig(
@@ -190,6 +191,9 @@ app.include_router(memory_router)
 
 # Cognitive workflow endpoints
 app.include_router(cognitive_router)
+
+# Knowledge graph endpoints
+app.include_router(graph_router)
 
 # TODO: Add additional routers as they're developed:
 # - Agent orchestration: /api/agents
