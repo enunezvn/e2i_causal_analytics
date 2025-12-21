@@ -98,3 +98,4 @@ Thumbs.db
 
 # Auto Claude data directory
 .auto-claude/
+.playwright-mcp/
