@@ -677,15 +677,24 @@ class SignalCollectorAdapter:
 
         try:
             # Convert to storage format
+            # Transform signals to match database schema
             records = [
                 {
-                    "signal_type": s.signal_type,
-                    "query": s.query,
-                    "response": s.response[:1000] if s.response else "",  # Truncate
-                    "feedback": s.feedback,
+                    "source_agent": s.signal_type,  # Map signal_type to source_agent
+                    "batch_id": s.metadata.get("batch_id"),
+                    "input_context": {
+                        "query": s.query,
+                        "timestamp": s.timestamp.isoformat(),
+                        **s.metadata,
+                    },
+                    "output": {
+                        "response": s.response[:1000] if s.response else "",
+                    },
+                    "quality_metrics": {
+                        "feedback": s.feedback,
+                    } if s.feedback else {},
                     "reward": s.reward,
-                    "timestamp": s.timestamp.isoformat(),
-                    "metadata": s.metadata,
+                    "latency_breakdown": s.metadata.get("latency", {}),
                 }
                 for s in signals_to_flush
             ]
@@ -693,7 +702,7 @@ class SignalCollectorAdapter:
             # Persist to database
             await asyncio.get_event_loop().run_in_executor(
                 None,
-                lambda: self._client.table("dspy_training_signals")
+                lambda: self._client.table("dspy_agent_training_signals")
                     .insert(records)
                     .execute()
             )
@@ -729,7 +738,7 @@ class SignalCollectorAdapter:
             return []
 
         try:
-            query = self._client.table("dspy_training_signals").select("*")
+            query = self._client.table("dspy_agent_training_signals").select("*")
 
             if signal_type:
                 query = query.eq("signal_type", signal_type)
