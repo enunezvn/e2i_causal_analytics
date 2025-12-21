@@ -525,8 +525,8 @@ def main():
     parser.add_argument(
         "--port",
         type=int,
-        default=int(os.getenv("FALKORDB_PORT", "6379")),
-        help="FalkorDB port (default: 6379)"
+        default=int(os.getenv("FALKORDB_PORT", "6381")),
+        help="FalkorDB port (default: 6381)"
     )
     parser.add_argument(
         "--graph-name",

@@ -308,7 +308,7 @@ def get_redis_client():
             "redis package is not installed. Run: pip install redis"
         )
 
-    url = os.environ.get("REDIS_URL", "redis://localhost:6379")
+    url = os.environ.get("REDIS_URL", "redis://localhost:6382")
     logger.info(f"Creating Redis client for: {url.split('@')[-1]}")  # Hide auth in logs
 
     try:

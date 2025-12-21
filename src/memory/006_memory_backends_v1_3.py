@@ -252,7 +252,7 @@ def get_redis_client():
     """Get Redis client for working memory."""
     import redis.asyncio as redis
     
-    url = os.environ.get("REDIS_URL", "redis://localhost:6379")
+    url = os.environ.get("REDIS_URL", "redis://localhost:6382")
     return redis.from_url(url, decode_responses=True)
 
 
@@ -404,7 +404,7 @@ class RedisWorkingMemory:
         """Get LangGraph checkpointer backed by Redis."""
         if self._checkpointer is None:
             from langgraph.checkpoint.redis import RedisSaver
-            redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
+            redis_url = os.environ.get("REDIS_URL", "redis://localhost:6382")
             self._checkpointer = RedisSaver.from_conn_string(redis_url)
         return self._checkpointer
     

@@ -101,7 +101,7 @@ services:
     container_name: e2i_redis
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "6382:6379"  # 6382 external to avoid conflict with archon Redis (6379)
     volumes:
       - redis_data:/data
     command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru

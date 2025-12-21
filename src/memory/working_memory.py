@@ -95,7 +95,7 @@ class RedisWorkingMemory:
             try:
                 from langgraph.checkpoint.redis import RedisSaver
 
-                redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
+                redis_url = os.environ.get("REDIS_URL", "redis://localhost:6382")
                 self._checkpointer = RedisSaver.from_conn_string(redis_url)
                 logger.info("LangGraph RedisSaver checkpointer initialized")
             except ImportError:

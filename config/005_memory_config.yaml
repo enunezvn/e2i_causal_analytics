@@ -39,7 +39,7 @@ memory_backends:
     description: "Current context, scratchpad, immediate message history"
     local_pilot:
       backend: "redis"
-      connection: "${REDIS_URL}"  # Default: redis://localhost:6379
+      connection: "${REDIS_URL}"  # Default: redis://localhost:6382
       # LangGraph integration
       langgraph_checkpointer: "RedisSaver"
       checkpoint_prefix: "e2i:checkpoint:"
@@ -94,7 +94,7 @@ memory_backends:
     description: "Facts and relationships, knowledge graph"
     local_pilot:
       backend: "falkordb"
-      connection: "${FALKORDB_URL}"  # Default: redis://localhost:6379 (FalkorDB uses Redis protocol)
+      connection: "${FALKORDB_URL}"  # Default: redis://localhost:6381 (FalkorDB uses Redis protocol)
       graph_name: "e2i_semantic"
       # Graphity integration for automatic graph building
       graphity:
