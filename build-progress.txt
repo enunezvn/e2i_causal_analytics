@@ -1,0 +1,340 @@
+=== AUTO-BUILD PROGRESS ===
+
+Project: E2I Causal Analytics - React Dashboard Transformation
+Spec Number: 002
+Started: 2025-12-21
+Workspace: Managed by orchestrator
+
+Workflow Type: feature
+Rationale: Large-scale frontend transformation to convert 5,591-line HTML dashboard into production-ready React 18 application with complex visualizations, state management, and backend API integration
+
+Session 1 (Planner):
+- Created implementation_plan.json
+- Phases: 12
+- Total subtasks: 60
+- Created init.sh setup script
+- Updated context.json with detailed findings
+
+=== TASK OVERVIEW ===
+
+**Scope:** Transform HTML dashboard prototype into modern React application
+**Estimated Effort:** 136-170 hours
+**Estimated Files:** 150+ new files
+**Risk Level:** HIGH
+**Services Involved:** frontend (primary)
+
+=== PHASE SUMMARY ===
+
+Phase 1: Project Setup & Dependencies (5 subtasks)
+- Install core dependencies (React Router, TanStack Query, Zustand, Axios)
+- Install styling dependencies (Tailwind CSS, PostCSS)
+- Install visualization libraries (Recharts, Plotly, Cytoscape, D3.js)
+- Install form handling (React Hook Form, Zod)
+- Install testing dependencies (Vitest, Playwright, Testing Library, MSW)
+- Status: PENDING
+- Dependencies: None
+
+Phase 2: Foundation Infrastructure (5 subtasks)
+- Configure Tailwind CSS and global styles
+- Create Axios API client with interceptors
+- Set up TanStack Query provider
+- Create Zustand stores (theme, user, UI state)
+- Set up React Router v6 with lazy loading
+- Status: PENDING
+- Dependencies: Phase 1
+
+Phase 3: UI Component Library Setup (3 subtasks)
+- Initialize shadcn/ui and base components
+- Create layout components (Header, Sidebar, Footer)
+- Create loading and error boundary components
+- Status: PENDING
+- Dependencies: Phase 2
+- **CAN RUN IN PARALLEL WITH Phase 4**
+
+Phase 4: Backend API Integration (6 subtasks)
+- Create Graph API service and hooks
+- Create Memory API service and hooks
+- Create Cognitive API service and hooks
+- Create Explain API service and hooks
+- Create RAG API service and hooks
+- Set up Mock Service Worker (MSW) for development
+- Status: PENDING
+- Dependencies: Phase 2
+- **CAN RUN IN PARALLEL WITH Phase 3**
+
+Phase 5: Recharts Visualization Components (2 subtasks)
+- Create base Recharts wrapper components
+- Create chart utilities and formatters
+- Status: PENDING
+- Dependencies: Phase 3
+- **CAN RUN IN PARALLEL WITH Phases 6, 7, 8**
+
+Phase 6: Cytoscape Graph Visualization (2 subtasks)
+- Create Cytoscape React wrapper component
+- Add graph interaction features (selection, filtering, search)
+- Status: PENDING
+- Dependencies: Phase 3
+- **CAN RUN IN PARALLEL WITH Phases 5, 7, 8**
+
+Phase 7: Plotly Interactive Visualizations (2 subtasks)
+- Create Plotly React wrapper component
+- Create specific Plotly chart types (heatmap, 3D, contour)
+- Status: PENDING
+- Dependencies: Phase 3
+- **CAN RUN IN PARALLEL WITH Phases 5, 6, 8**
+
+Phase 8: D3.js Custom Visualizations (2 subtasks)
+- Create D3 React integration pattern
+- Create custom D3 visualizations (tree, force graph, sankey)
+- Status: PENDING
+- Dependencies: Phase 3
+- **CAN RUN IN PARALLEL WITH Phases 5, 6, 7**
+
+Phase 9: Dashboard Pages Implementation (6 subtasks)
+- Create Knowledge Graph Dashboard page
+- Create Causal Discovery Results page
+- Create Model Performance & Metrics page
+- Create Feature Importance & Analysis page
+- Create Time Series Analysis page
+- Create System Health & Monitoring page
+- Status: PENDING
+- Dependencies: Phases 4, 5, 6, 7, 8
+
+Phase 10: Integration & Polish (5 subtasks)
+- Create main dashboard navigation
+- Add theme switching (dark mode)
+- Optimize performance (code splitting, lazy loading)
+- Add error handling and retry logic
+- End-to-end integration verification
+- Status: PENDING
+- Dependencies: Phase 9
+
+Phase 11: Comprehensive Testing (3 subtasks)
+- Write unit tests for utilities and hooks
+- Write component tests for UI components
+- Write E2E tests for critical user flows
+- Status: PENDING
+- Dependencies: Phase 10
+- **CAN RUN IN PARALLEL** (different test types)
+
+Phase 12: Docker & Production Setup (4 subtasks)
+- Create multi-stage Dockerfile
+- Create Nginx configuration for SPA routing
+- Update docker-compose.yml
+- Create production environment configuration
+- Status: PENDING
+- Dependencies: Phase 11
+
+=== KEY TECHNOLOGIES ===
+
+Frontend Stack:
+- React 18.3.1 (functional components, hooks, createRoot API)
+- TypeScript 5.6.2 (strict mode enabled)
+- Vite 6.0.5 (dev server, HMR, bundler)
+
+State Management:
+- TanStack Query (server state, caching, invalidation)
+- Zustand (client state, theme, UI preferences)
+
+Routing:
+- React Router v6 (lazy loading, code splitting)
+
+Styling:
+- Tailwind CSS
+- shadcn/ui component library
+
+Visualization Libraries:
+- Recharts (standard charts: line, bar, area, pie)
+- Plotly.js (interactive: heatmaps, 3D plots, contour)
+- Cytoscape.js (knowledge graphs, network visualization)
+- D3.js (custom SVG: tree diagrams, force graphs, sankey)
+
+Form Handling:
+- React Hook Form
+- Zod (validation)
+
+Testing:
+- Vitest (unit tests)
+- React Testing Library (component tests)
+- Playwright (E2E tests)
+- MSW (API mocking)
+
+Backend API Endpoints:
+- /api/graph - Graph and network data
+- /api/memory - Memory management
+- /api/cognitive - Cognitive functions
+- /api/explain - Explainability features
+- /api/rag - Retrieval Augmented Generation
+
+=== PARALLELISM ANALYSIS ===
+
+Max Parallel Phases: 4
+Recommended Workers: 2
+
+Parallel Group 1:
+- Phase 3 (UI Components) + Phase 4 (API Integration)
+- Reason: Both depend only on Phase 2, completely different file sets
+- Speedup: 2x
+
+Parallel Group 2:
+- Phase 5 (Recharts) + Phase 6 (Cytoscape) + Phase 7 (Plotly) + Phase 8 (D3.js)
+- Reason: All visualization phases depend only on Phase 3, independent implementations
+- Speedup: Up to 4x with 4 workers
+
+Overall Speedup Estimate: 1.5x faster than sequential (with 2 workers)
+
+=== VERIFICATION STRATEGY ===
+
+Risk Level: HIGH
+Test Types Required: Unit, Integration, E2E
+Security Scan Required: No (frontend only)
+Staging Deployment Required: Yes (Docker + Nginx verification)
+
+Blocking Verification Steps:
+1. TypeScript compilation (npx tsc --noEmit)
+2. ESLint (npm run lint)
+3. Unit tests (npm run test)
+4. Component tests with coverage (npm run test -- --coverage, >70%)
+5. E2E tests (npx playwright test)
+6. Production build (npm run build)
+7. Docker build (docker build -t e2i-frontend:test frontend/)
+
+Additional Verification:
+- Browser compatibility: Chrome, Firefox, Safari, Edge
+- Accessibility: WCAG AA compliance (axe-core)
+- Bundle size: Under 1MB gzipped
+- HMR functionality in development
+- Theme switching works correctly
+- All visualizations render without errors
+
+=== STARTUP COMMAND ===
+
+To continue building this spec, run:
+
+  source auto-claude/.venv/bin/activate && python auto-claude/run.py --spec 002 --parallel 2
+
+Example with different parallelism:
+
+  # Sequential (safest, slower)
+  python auto-claude/run.py --spec 002 --parallel 1
+
+  # Parallel (faster, recommended)
+  python auto-claude/run.py --spec 002 --parallel 2
+
+  # Maximum parallelism (visualization phases)
+  python auto-claude/run.py --spec 002 --parallel 4
+
+=== DEVELOPMENT ENVIRONMENT ===
+
+Start development environment:
+  ./init.sh
+
+Manual startup:
+  cd frontend && npm install && npm run dev
+
+Frontend Dev Server: http://localhost:5173
+Backend API: http://localhost:8000 (if running)
+API Docs: http://localhost:8000/api/docs
+
+Environment Variables (frontend/.env):
+  VITE_API_URL=http://localhost:8000
+  VITE_USE_MOCKS=false
+
+=== KEY CHALLENGES IDENTIFIED ===
+
+1. D3.js Integration in React
+   - Challenge: Imperative D3 code vs React declarative model
+   - Solution: Use useRef + useEffect pattern, proper cleanup
+
+2. Performance with Large Datasets
+   - Challenge: Complex visualizations with many data points
+   - Solution: Virtualization, memoization, lazy loading
+
+3. Backend API Readiness
+   - Challenge: Backend endpoints may not be fully implemented
+   - Solution: Use MSW for API mocking during development
+
+4. Complex State Management
+   - Challenge: 14 dashboard sections with shared state
+   - Solution: TanStack Query for server state, Zustand for client state
+
+5. Multiple Visualization Libraries
+   - Challenge: Different APIs and React integration patterns
+   - Solution: Create wrapper components, standardize interfaces
+
+=== CRITICAL GOTCHAS ===
+
+1. VITE_ Prefix Required
+   - All client-side env vars MUST use VITE_ prefix
+   - Access via import.meta.env.VITE_VARIABLE_NAME
+
+2. React 18 StrictMode
+   - Components render twice in development
+   - Must handle gracefully without side effects
+
+3. TypeScript Strict Mode
+   - No implicit 'any' types allowed
+   - All types must be explicitly defined
+
+4. Cytoscape Cleanup
+   - Must call cytoscape.destroy() on component unmount
+   - Memory leaks if not handled properly
+
+5. Plotly Dynamic Import
+   - Use dynamic import to reduce initial bundle size
+   - const Plotly = await import('plotly.js-dist-min')
+
+6. Module Resolution
+   - TSConfig uses 'bundler' mode for Vite compatibility
+   - Standard 'node' resolution may cause issues
+
+=== FILES TO REFERENCE ===
+
+Patterns to Follow:
+- frontend/src/main.tsx - React 18 initialization pattern
+- frontend/src/App.tsx - Component structure
+- frontend/E2I_Causal_Dashboard_V3.html - Dashboard layout and features
+- src/api/routes/*.py - Backend API contracts
+
+Configuration:
+- frontend/tsconfig.app.json - TypeScript strict mode settings
+- frontend/vite.config.ts - Vite configuration
+- frontend/package.json - Dependencies and scripts
+
+=== QA ACCEPTANCE CRITERIA ===
+
+Must Pass:
+✓ All TypeScript compilation errors resolved
+✓ All ESLint errors resolved
+✓ Production build succeeds
+✓ Unit test coverage >70%
+✓ All E2E tests pass
+✓ Docker build succeeds
+✓ No console errors in production
+✓ Works in Chrome, Firefox, Safari, Edge
+✓ Bundle size under 1MB gzipped
+✓ HMR works in development
+✓ Theme switching functional
+✓ Responsive design verified
+✓ Accessibility WCAG AA compliant
+
+Dashboard Sections Must Work:
+✓ Knowledge Graph Visualization (Cytoscape)
+✓ Causal Discovery Results
+✓ Model Performance Metrics (Recharts)
+✓ Feature Importance Analysis
+✓ Time Series Analysis (Plotly)
+✓ Intervention Impact Analysis
+✓ Predictive Analytics
+✓ Data Quality Metrics
+✓ System Health Dashboard
+✓ User Activity Logs
+✓ API Usage Statistics
+✓ Error Tracking
+✓ Performance Monitoring
+✓ Configuration Management
+
+=== END SESSION 1 ===
+
+Next session will be implementation (Coder Agent).
+Planner has prepared comprehensive plan with 60 subtasks across 12 phases.

@@ -1,0 +1,1074 @@
+{
+  "feature": "E2I Causal Analytics React Dashboard Transformation",
+  "workflow_type": "feature",
+  "workflow_rationale": "This is a large-scale feature implementation to convert a 5,591-line HTML dashboard prototype into a production-ready React 18 application. The feature workflow is appropriate as it involves creating new frontend capabilities with complex visualizations, state management, and backend API integration. The implementation follows service dependency order: setup → foundation → components → features → integration → testing → deployment.",
+
+  "phases": [
+    {
+      "id": "phase-1-setup",
+      "name": "Project Setup & Dependencies",
+      "type": "setup",
+      "description": "Install and configure all required dependencies including React Router, TanStack Query, Zustand, Tailwind CSS, visualization libraries, and testing frameworks",
+      "depends_on": [],
+      "parallel_safe": true,
+      "subtasks": [
+        {
+          "id": "subtask-1-1",
+          "description": "Install core dependencies (react-router-dom, @tanstack/react-query, zustand, axios)",
+          "service": "frontend",
+          "files_to_modify": ["frontend/package.json"],
+          "files_to_create": [],
+          "patterns_from": [],
+          "verification": {
+            "type": "command",
+            "command": "cd frontend && npm list react-router-dom @tanstack/react-query zustand axios",
+            "expected": "All packages listed without errors"
+          },
+          "status": "pending"
+        },
+        {
+          "id": "subtask-1-2",
+          "description": "Install styling dependencies (tailwindcss, postcss, autoprefixer, clsx, tailwind-merge)",
+          "service": "frontend",
+          "files_to_modify": ["frontend/package.json"],
+          "files_to_create": ["frontend/tailwind.config.ts", "frontend/postcss.config.js"],
+          "patterns_from": [],
+          "verification": {
+            "type": "command",
+            "command": "cd frontend && npm list tailwindcss postcss autoprefixer",
+            "expected": "All packages listed without errors"
+          },
+          "status": "pending"
+        },
+        {
+          "id": "subtask-1-3",
+          "description": "Install visualization libraries (recharts, plotly.js-dist-min, cytoscape, d3, @types/d3)",
+          "service": "frontend",
+          "files_to_modify": ["frontend/package.json"],
+          "files_to_create": [],
+          "patterns_from": [],
+          "verification": {
+            "type": "command",
+            "command": "cd frontend && npm list recharts plotly.js-dist-min cytoscape d3",
+            "expected": "All packages listed without errors"
+          },
+          "status": "pending"
+        },
+        {
+          "id": "subtask-1-4",
+          "description": "Install form handling (react-hook-form, zod, @hookform/resolvers)",
+          "service": "frontend",
+          "files_to_modify": ["frontend/package.json"],
+          "files_to_create": [],
+          "patterns_from": [],
+          "verification": {
+            "type": "command",
+            "command": "cd frontend && npm list react-hook-form zod @hookform/resolvers",
+            "expected": "All packages listed without errors"
+          },
+          "status": "pending"
+        },
+        {
+          "id": "subtask-1-5",
+          "description": "Install testing dependencies (vitest, @testing-library/react, @testing-library/user-event, @playwright/test, msw)",
+          "service": "frontend",
+          "files_to_modify": ["frontend/package.json"],
+          "files_to_create": ["frontend/vitest.config.ts", "frontend/playwright.config.ts"],
+          "patterns_from": [],
+          "verification": {
+            "type": "command",
+            "command": "cd frontend && npm list vitest @testing-library/react @playwright/test msw",
+            "expected": "All packages listed without errors"
+          },
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "id": "phase-2-foundation",
+      "name": "Foundation Infrastructure",
+      "type": "implementation",
+      "description": "Set up core infrastructure including routing, API client, TanStack Query provider, Zustand stores, and utility functions",
+      "depends_on": ["phase-1-setup"],
+      "parallel_safe": false,
+      "subtasks": [
+        {
+          "id": "subtask-2-1",
+          "description": "Configure Tailwind CSS and create global styles",
+          "service": "frontend",
+          "files_to_modify": ["frontend/src/index.css", "frontend/vite.config.ts"],
+          "files_to_create": ["frontend/src/lib/utils.ts"],
+          "patterns_from": [],
+          "verification": {
+            "type": "command",
+            "command": "cd frontend && npm run build",
+            "expected": "Build succeeds with Tailwind processed"
+          },
+          "status": "pending"
+        },
+        {
+          "id": "subtask-2-2",
+          "description": "Create Axios API client with interceptors and base configuration",
+          "service": "frontend",
+          "files_to_modify": [],
+          "files_to_create": ["frontend/src/api/client.ts", "frontend/src/api/types.ts"],
+          "patterns_from": ["src/api/main.py"],
+          "verification": {
+            "type": "command",
+            "command": "cd frontend && npx tsc --noEmit",
+            "expected": "No TypeScript errors"
+          },
+          "status": "pending",
+          "notes": "Configure base URL as VITE_API_URL env variable, add auth interceptors if needed"
+        },
+        {
+          "id": "subtask-2-3",
+          "description": "Set up TanStack Query provider and default configuration",
+          "service": "frontend",
+          "files_to_modify": ["frontend/src/main.tsx"],
+          "files_to_create": ["frontend/src/lib/query-client.ts"],
+          "patterns_from": ["frontend/src/main.tsx"],
+          "verification": {
+            "type": "browser",
+            "url": "http://localhost:5173",
+            "checks": ["App loads without errors", "React Query DevTools visible in dev mode"]
+          },
+          "status": "pending"
+        },
+        {
+          "id": "subtask-2-4",
+          "description": "Create Zustand stores for global state (theme, user preferences, UI state)",
+          "service": "frontend",
+          "files_to_modify": [],
+          "files_to_create": [
+            "frontend/src/stores/theme.ts",
+            "frontend/src/stores/user.ts",
+            "frontend/src/stores/ui.ts",
+            "frontend/src/stores/index.ts"
+          ],
+          "patterns_from": [],
+          "verification": {
+            "type": "command",
+            "command": "cd frontend && npx tsc --noEmit",
+            "expected": "No TypeScript errors"
+          },
+          "status": "pending"
+        },
+        {
+          "id": "subtask-2-5",
+          "description": "Set up React Router v6 with lazy loading and route configuration",
+          "service": "frontend",
+          "files_to_modify": ["frontend/src/App.tsx"],
+          "files_to_create": [
+            "frontend/src/routes/index.tsx",
+            "frontend/src/pages/DashboardPage.tsx",
+            "frontend/src/pages/NotFoundPage.tsx",
+            "frontend/src/components/layouts/RootLayout.tsx"
+          ],
+          "patterns_from": ["frontend/src/App.tsx"],
+          "verification": {
+            "type": "browser",
+            "url": "http://localhost:5173",
+            "checks": ["Routes work", "Lazy loading functional", "404 page accessible"]
+          },
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "id": "phase-3-ui-components",
+      "name": "UI Component Library Setup",
+      "type": "implementation",
+      "description": "Install and configure shadcn/ui components, create base UI components (Button, Card, Input, etc.)",
+      "depends_on": ["phase-2-foundation"],
+      "parallel_safe": true,
+      "subtasks": [
+        {
+          "id": "subtask-3-1",
+          "description": "Initialize shadcn/ui and install base components (button, card, input, select, table)",
+          "service": "frontend",
+          "files_to_modify": ["frontend/components.json"],
+          "files_to_create": [
+            "frontend/src/components/ui/button.tsx",
+            "frontend/src/components/ui/card.tsx",
+            "frontend/src/components/ui/input.tsx",
+            "frontend/src/components/ui/select.tsx",
+            "frontend/src/components/ui/table.tsx"
+          ],
+          "patterns_from": [],
+          "verification": {
+            "type": "command",
+            "command": "cd frontend && npx tsc --noEmit",
+            "expected": "No TypeScript errors"
+          },
+          "status": "pending",
+          "notes": "Use npx shadcn@latest init and npx shadcn@latest add {component}"
+        },
+        {
+          "id": "subtask-3-2",
+          "description": "Create common layout components (Header, Sidebar, Footer, Container)",
+          "service": "frontend",
+          "files_to_modify": [],
+          "files_to_create": [
+            "frontend/src/components/layouts/Header.tsx",
+            "frontend/src/components/layouts/Sidebar.tsx",
+            "frontend/src/components/layouts/Footer.tsx",
+            "frontend/src/components/layouts/Container.tsx"
+          ],
+          "patterns_from": ["frontend/E2I_Causal_Dashboard_V3.html"],
+          "verification": {
+            "type": "browser",
+            "url": "http://localhost:5173",
+            "checks": ["Layout components render", "Responsive design works"]
+          },
+          "status": "pending"
+        },
+        {
+          "id": "subtask-3-3",
+          "description": "Create loading and error boundary components",
+          "service": "frontend",
+          "files_to_modify": [],
+          "files_to_create": [
+            "frontend/src/components/common/Loading.tsx",
+            "frontend/src/components/common/ErrorBoundary.tsx",
+            "frontend/src/components/common/ErrorFallback.tsx"
+          ],
+          "patterns_from": [],
+          "verification": {
+            "type": "browser",
+            "url": "http://localhost:5173",
+            "checks": ["Loading states display", "Error boundaries catch errors"]
+          },
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "id": "phase-4-api-integration",
+      "name": "Backend API Integration",
+      "type": "implementation",
+      "description": "Create API service modules for each backend endpoint (graph, memory, cognitive, explain, rag) with TanStack Query hooks",
+      "depends_on": ["phase-2-foundation"],
+      "parallel_safe": true,
+      "subtasks": [
+        {
+          "id": "subtask-4-1",
+          "description": "Create Graph API service and hooks",
+          "service": "frontend",
+          "files_to_modify": [],
+          "files_to_create": [
+            "frontend/src/api/services/graph.ts",
+            "frontend/src/hooks/api/useGraph.ts",
+            "frontend/src/types/graph.ts"
+          ],
+          "patterns_from": ["src/api/routes/graph.py"],
+          "verification": {
+            "type": "command",
+            "command": "cd frontend && npx tsc --noEmit",
+            "expected": "No TypeScript errors"
+          },
+          "status": "pending"
+        },
+        {
+          "id": "subtask-4-2",
+          "description": "Create Memory API service and hooks",
+          "service": "frontend",
+          "files_to_modify": [],
+          "files_to_create": [
+            "frontend/src/api/services/memory.ts",
+            "frontend/src/hooks/api/useMemory.ts",
+            "frontend/src/types/memory.ts"
+          ],
+          "patterns_from": ["src/api/routes/memory.py"],
+          "verification": {
+            "type": "command",
+            "command": "cd frontend && npx tsc --noEmit",
+            "expected": "No TypeScript errors"
+          },
+          "status": "pending"
+        },
+        {
+          "id": "subtask-4-3",
+          "description": "Create Cognitive API service and hooks",
+          "service": "frontend",
+          "files_to_modify": [],
+          "files_to_create": [
+            "frontend/src/api/services/cognitive.ts",
+            "frontend/src/hooks/api/useCognitive.ts",
+            "frontend/src/types/cognitive.ts"
+          ],
+          "patterns_from": ["src/api/routes/cognitive.py"],
+          "verification": {
+            "type": "command",
+            "command": "cd frontend && npx tsc --noEmit",
+            "expected": "No TypeScript errors"
+          },
+          "status": "pending"
+        },
+        {
+          "id": "subtask-4-4",
+          "description": "Create Explain API service and hooks",
+          "service": "frontend",
+          "files_to_modify": [],
+          "files_to_create": [
+            "frontend/src/api/services/explain.ts",
+            "frontend/src/hooks/api/useExplain.ts",
+            "frontend/src/types/explain.ts"
+          ],
+          "patterns_from": ["src/api/routes/explain.py"],
+          "verification": {
+            "type": "command",
+            "command": "cd frontend && npx tsc --noEmit",
+            "expected": "No TypeScript errors"
+          },
+          "status": "pending"
+        },
+        {
+          "id": "subtask-4-5",
+          "description": "Create RAG API service and hooks",
+          "service": "frontend",
+          "files_to_modify": [],
+          "files_to_create": [
+            "frontend/src/api/services/rag.ts",
+            "frontend/src/hooks/api/useRag.ts",
+            "frontend/src/types/rag.ts"
+          ],
+          "patterns_from": ["src/api/routes/rag.py"],
+          "verification": {
+            "type": "command",
+            "command": "cd frontend && npx tsc --noEmit",
+            "expected": "No TypeScript errors"
+          },
+          "status": "pending"
+        },
+        {
+          "id": "subtask-4-6",
+          "description": "Set up Mock Service Worker (MSW) for API mocking during development",
+          "service": "frontend",
+          "files_to_modify": ["frontend/src/main.tsx"],
+          "files_to_create": [
+            "frontend/src/mocks/handlers.ts",
+            "frontend/src/mocks/browser.ts",
+            "frontend/src/mocks/data.ts"
+          ],
+          "patterns_from": [],
+          "verification": {
+            "type": "browser",
+            "url": "http://localhost:5173",
+            "checks": ["MSW intercepts requests", "Mock data returned"]
+          },
+          "status": "pending",
+          "notes": "Enable MSW conditionally based on VITE_USE_MOCKS env variable"
+        }
+      ]
+    },
+    {
+      "id": "phase-5-viz-recharts",
+      "name": "Recharts Visualization Components",
+      "type": "implementation",
+      "description": "Create reusable chart components using Recharts for standard visualizations (line, bar, area, pie charts)",
+      "depends_on": ["phase-3-ui-components"],
+      "parallel_safe": true,
+      "subtasks": [
+        {
+          "id": "subtask-5-1",
+          "description": "Create base Recharts wrapper components (LineChart, BarChart, AreaChart, PieChart)",
+          "service": "frontend",
+          "files_to_modify": [],
+          "files_to_create": [
+            "frontend/src/components/charts/LineChart.tsx",
+            "frontend/src/components/charts/BarChart.tsx",
+            "frontend/src/components/charts/AreaChart.tsx",
+            "frontend/src/components/charts/PieChart.tsx",
+            "frontend/src/components/charts/ChartContainer.tsx"
+          ],
+          "patterns_from": ["frontend/E2I_Causal_Dashboard_V3.html"],
+          "verification": {
+            "type": "browser",
+            "url": "http://localhost:5173/charts",
+            "checks": ["Charts render with sample data", "Responsive sizing works", "No console errors"]
+          },
+          "status": "pending"
+        },
+        {
+          "id": "subtask-5-2",
+          "description": "Create chart utilities (color schemes, formatters, tooltips)",
+          "service": "frontend",
+          "files_to_modify": [],
+          "files_to_create": [
+            "frontend/src/lib/chart-utils.ts",
+            "frontend/src/lib/chart-colors.ts",
+            "frontend/src/components/charts/CustomTooltip.tsx"
+          ],
+          "patterns_from": ["frontend/E2I_Causal_Dashboard_V3.html"],
+          "verification": {
+            "type": "command",
+            "command": "cd frontend && npx tsc --noEmit",
+            "expected": "No TypeScript errors"
+          },
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "id": "phase-6-viz-cytoscape",
+      "name": "Cytoscape Graph Visualization",
+      "type": "implementation",
+      "description": "Integrate Cytoscape.js for knowledge graph and network visualizations",
+      "depends_on": ["phase-3-ui-components"],
+      "parallel_safe": true,
+      "subtasks": [
+        {
+          "id": "subtask-6-1",
+          "description": "Create Cytoscape React wrapper component with layout algorithms",
+          "service": "frontend",
+          "files_to_modify": [],
+          "files_to_create": [
+            "frontend/src/components/graphs/CytoscapeGraph.tsx",
+            "frontend/src/components/graphs/GraphControls.tsx",
+            "frontend/src/lib/cytoscape-config.ts",
+            "frontend/src/types/cytoscape.ts"
+          ],
+          "patterns_from": ["frontend/E2I_Causal_Dashboard_V3.html"],
+          "verification": {
+            "type": "browser",
+            "url": "http://localhost:5173/graph",
+            "checks": ["Graph renders with sample nodes", "Layout algorithms work", "Pan/zoom functional"]
+          },
+          "status": "pending",
+          "notes": "Use useEffect for imperative Cytoscape initialization, handle React lifecycle properly"
+        },
+        {
+          "id": "subtask-6-2",
+          "description": "Add graph interaction features (node selection, filtering, search)",
+          "service": "frontend",
+          "files_to_modify": ["frontend/src/components/graphs/CytoscapeGraph.tsx"],
+          "files_to_create": [
+            "frontend/src/components/graphs/NodeDetails.tsx",
+            "frontend/src/components/graphs/GraphFilters.tsx",
+            "frontend/src/hooks/useCytoscapeEvents.ts"
+          ],
+          "patterns_from": [],
+          "verification": {
+            "type": "browser",
+            "url": "http://localhost:5173/graph",
+            "checks": ["Node click shows details", "Filters work", "Search highlights nodes"]
+          },
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "id": "phase-7-viz-plotly",
+      "name": "Plotly Interactive Visualizations",
+      "type": "implementation",
+      "description": "Integrate Plotly.js for advanced interactive visualizations (3D plots, heatmaps, contour plots)",
+      "depends_on": ["phase-3-ui-components"],
+      "parallel_safe": true,
+      "subtasks": [
+        {
+          "id": "subtask-7-1",
+          "description": "Create Plotly React wrapper component",
+          "service": "frontend",
+          "files_to_modify": [],
+          "files_to_create": [
+            "frontend/src/components/charts/PlotlyChart.tsx",
+            "frontend/src/lib/plotly-config.ts",
+            "frontend/src/types/plotly.ts"
+          ],
+          "patterns_from": ["frontend/E2I_Causal_Dashboard_V3.html"],
+          "verification": {
+            "type": "browser",
+            "url": "http://localhost:5173/plotly",
+            "checks": ["Plotly chart renders", "Interactive features work", "No memory leaks on unmount"]
+          },
+          "status": "pending",
+          "notes": "Use dynamic import for Plotly to reduce initial bundle size"
+        },
+        {
+          "id": "subtask-7-2",
+          "description": "Create specific Plotly chart types (heatmap, 3D scatter, contour)",
+          "service": "frontend",
+          "files_to_modify": [],
+          "files_to_create": [
+            "frontend/src/components/charts/Heatmap.tsx",
+            "frontend/src/components/charts/Scatter3D.tsx",
+            "frontend/src/components/charts/ContourPlot.tsx"
+          ],
+          "patterns_from": ["frontend/E2I_Causal_Dashboard_V3.html"],
+          "verification": {
+            "type": "browser",
+            "url": "http://localhost:5173/plotly",
+            "checks": ["All chart types render", "Performance acceptable with sample data"]
+          },
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "id": "phase-8-viz-d3",
+      "name": "D3.js Custom Visualizations",
+      "type": "implementation",
+      "description": "Integrate D3.js for custom SVG visualizations with React lifecycle management",
+      "depends_on": ["phase-3-ui-components"],
+      "parallel_safe": true,
+      "subtasks": [
+        {
+          "id": "subtask-8-1",
+          "description": "Create D3 React integration pattern with useRef and useEffect",
+          "service": "frontend",
+          "files_to_modify": [],
+          "files_to_create": [
+            "frontend/src/components/charts/D3Chart.tsx",
+            "frontend/src/hooks/useD3.ts",
+            "frontend/src/lib/d3-utils.ts"
+          ],
+          "patterns_from": ["frontend/E2I_Causal_Dashboard_V3.html"],
+          "verification": {
+            "type": "browser",
+            "url": "http://localhost:5173/d3",
+            "checks": ["D3 chart renders", "Updates on data change", "Cleanup on unmount"]
+          },
+          "status": "pending",
+          "notes": "Handle imperative D3 code in useEffect, ensure proper cleanup"
+        },
+        {
+          "id": "subtask-8-2",
+          "description": "Create custom D3 visualizations (tree diagram, force-directed graph, sankey)",
+          "service": "frontend",
+          "files_to_modify": [],
+          "files_to_create": [
+            "frontend/src/components/charts/TreeDiagram.tsx",
+            "frontend/src/components/charts/ForceGraph.tsx",
+            "frontend/src/components/charts/SankeyDiagram.tsx"
+          ],
+          "patterns_from": ["frontend/E2I_Causal_Dashboard_V3.html"],
+          "verification": {
+            "type": "browser",
+            "url": "http://localhost:5173/d3",
+            "checks": ["All D3 charts render", "Animations smooth", "No memory leaks"]
+          },
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "id": "phase-9-dashboard-pages",
+      "name": "Dashboard Pages Implementation",
+      "type": "implementation",
+      "description": "Create main dashboard pages integrating all visualization components with real data",
+      "depends_on": ["phase-4-api-integration", "phase-5-viz-recharts", "phase-6-viz-cytoscape", "phase-7-viz-plotly", "phase-8-viz-d3"],
+      "parallel_safe": false,
+      "subtasks": [
+        {
+          "id": "subtask-9-1",
+          "description": "Create Knowledge Graph Dashboard page",
+          "service": "frontend",
+          "files_to_modify": [],
+          "files_to_create": [
+            "frontend/src/pages/KnowledgeGraphPage.tsx",
+            "frontend/src/components/dashboard/KnowledgeGraphSection.tsx"
+          ],
+          "patterns_from": ["frontend/E2I_Causal_Dashboard_V3.html"],
+          "verification": {
+            "type": "browser",
+            "url": "http://localhost:5173/dashboard/knowledge-graph",
+            "checks": ["Page loads", "Graph data fetched", "Cytoscape graph renders"]
+          },
+          "status": "pending"
+        },
+        {
+          "id": "subtask-9-2",
+          "description": "Create Causal Discovery Results page",
+          "service": "frontend",
+          "files_to_modify": [],
+          "files_to_create": [
+            "frontend/src/pages/CausalDiscoveryPage.tsx",
+            "frontend/src/components/dashboard/CausalDiscoverySection.tsx"
+          ],
+          "patterns_from": ["frontend/E2I_Causal_Dashboard_V3.html"],
+          "verification": {
+            "type": "browser",
+            "url": "http://localhost:5173/dashboard/causal-discovery",
+            "checks": ["Page loads", "Results displayed", "Charts render"]
+          },
+          "status": "pending"
+        },
+        {
+          "id": "subtask-9-3",
+          "description": "Create Model Performance & Metrics page",
+          "service": "frontend",
+          "files_to_modify": [],
+          "files_to_create": [
+            "frontend/src/pages/ModelPerformancePage.tsx",
+            "frontend/src/components/dashboard/MetricsSection.tsx",
+            "frontend/src/components/dashboard/PerformanceCharts.tsx"
+          ],
+          "patterns_from": ["frontend/E2I_Causal_Dashboard_V3.html"],
+          "verification": {
+            "type": "browser",
+            "url": "http://localhost:5173/dashboard/performance",
+            "checks": ["Metrics display", "Recharts render", "Data updates"]
+          },
+          "status": "pending"
+        },
+        {
+          "id": "subtask-9-4",
+          "description": "Create Feature Importance & Analysis page",
+          "service": "frontend",
+          "files_to_modify": [],
+          "files_to_create": [
+            "frontend/src/pages/FeatureImportancePage.tsx",
+            "frontend/src/components/dashboard/FeatureImportanceChart.tsx"
+          ],
+          "patterns_from": ["frontend/E2I_Causal_Dashboard_V3.html"],
+          "verification": {
+            "type": "browser",
+            "url": "http://localhost:5173/dashboard/features",
+            "checks": ["Feature list displayed", "Importance charts render"]
+          },
+          "status": "pending"
+        },
+        {
+          "id": "subtask-9-5",
+          "description": "Create Time Series Analysis page",
+          "service": "frontend",
+          "files_to_modify": [],
+          "files_to_create": [
+            "frontend/src/pages/TimeSeriesPage.tsx",
+            "frontend/src/components/dashboard/TimeSeriesChart.tsx"
+          ],
+          "patterns_from": ["frontend/E2I_Causal_Dashboard_V3.html"],
+          "verification": {
+            "type": "browser",
+            "url": "http://localhost:5173/dashboard/timeseries",
+            "checks": ["Time series data displays", "Plotly chart interactive"]
+          },
+          "status": "pending"
+        },
+        {
+          "id": "subtask-9-6",
+          "description": "Create System Health & Monitoring page",
+          "service": "frontend",
+          "files_to_modify": [],
+          "files_to_create": [
+            "frontend/src/pages/SystemHealthPage.tsx",
+            "frontend/src/components/dashboard/HealthMetrics.tsx",
+            "frontend/src/components/dashboard/LogsViewer.tsx"
+          ],
+          "patterns_from": ["frontend/E2I_Causal_Dashboard_V3.html"],
+          "verification": {
+            "type": "browser",
+            "url": "http://localhost:5173/dashboard/health",
+            "checks": ["Health status displays", "Logs stream properly"]
+          },
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "id": "phase-10-integration",
+      "name": "Integration & Polish",
+      "type": "integration",
+      "description": "Integrate all dashboard sections, add navigation, polish UI/UX, optimize performance",
+      "depends_on": ["phase-9-dashboard-pages"],
+      "parallel_safe": false,
+      "subtasks": [
+        {
+          "id": "subtask-10-1",
+          "description": "Create main dashboard navigation and menu system",
+          "service": "frontend",
+          "files_to_modify": ["frontend/src/components/layouts/Sidebar.tsx"],
+          "files_to_create": [
+            "frontend/src/components/navigation/NavMenu.tsx",
+            "frontend/src/components/navigation/Breadcrumbs.tsx"
+          ],
+          "patterns_from": ["frontend/E2I_Causal_Dashboard_V3.html"],
+          "verification": {
+            "type": "browser",
+            "url": "http://localhost:5173",
+            "checks": ["Navigation works", "Active states correct", "Breadcrumbs update"]
+          },
+          "status": "pending"
+        },
+        {
+          "id": "subtask-10-2",
+          "description": "Add theme switching (dark mode) functionality",
+          "service": "frontend",
+          "files_to_modify": [
+            "frontend/src/stores/theme.ts",
+            "frontend/src/components/layouts/Header.tsx"
+          ],
+          "files_to_create": ["frontend/src/components/common/ThemeToggle.tsx"],
+          "patterns_from": [],
+          "verification": {
+            "type": "browser",
+            "url": "http://localhost:5173",
+            "checks": ["Theme switches", "Preference persists", "All components adapt"]
+          },
+          "status": "pending"
+        },
+        {
+          "id": "subtask-10-3",
+          "description": "Optimize performance (code splitting, lazy loading, memoization)",
+          "service": "frontend",
+          "files_to_modify": [
+            "frontend/src/routes/index.tsx",
+            "frontend/src/components/charts/LineChart.tsx"
+          ],
+          "files_to_create": [],
+          "patterns_from": [],
+          "verification": {
+            "type": "command",
+            "command": "cd frontend && npm run build && du -sh dist/",
+            "expected": "Bundle size reasonable, under 1MB gzipped"
+          },
+          "status": "pending",
+          "notes": "Use React.lazy, React.memo, useMemo, useCallback where appropriate"
+        },
+        {
+          "id": "subtask-10-4",
+          "description": "Add error handling and retry logic throughout application",
+          "service": "frontend",
+          "files_to_modify": [
+            "frontend/src/App.tsx",
+            "frontend/src/lib/query-client.ts"
+          ],
+          "files_to_create": ["frontend/src/components/common/ErrorRetry.tsx"],
+          "patterns_from": [],
+          "verification": {
+            "type": "browser",
+            "url": "http://localhost:5173",
+            "checks": ["Errors display user-friendly messages", "Retry buttons work", "Network errors handled"]
+          },
+          "status": "pending"
+        },
+        {
+          "id": "subtask-10-5",
+          "description": "End-to-end integration verification across all dashboard sections",
+          "service": "frontend",
+          "files_to_modify": [],
+          "files_to_create": [],
+          "patterns_from": [],
+          "verification": {
+            "type": "e2e",
+            "steps": [
+              "Navigate to all dashboard pages",
+              "Verify data loads from API or mocks",
+              "Test all visualizations render",
+              "Test theme switching",
+              "Test error states",
+              "Verify responsive design"
+            ]
+          },
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "id": "phase-11-testing",
+      "name": "Comprehensive Testing",
+      "type": "implementation",
+      "description": "Write unit tests, component tests, and E2E tests for all features",
+      "depends_on": ["phase-10-integration"],
+      "parallel_safe": true,
+      "subtasks": [
+        {
+          "id": "subtask-11-1",
+          "description": "Write unit tests for utilities and hooks",
+          "service": "frontend",
+          "files_to_modify": [],
+          "files_to_create": [
+            "frontend/src/lib/__tests__/utils.test.ts",
+            "frontend/src/lib/__tests__/chart-utils.test.ts",
+            "frontend/src/hooks/__tests__/useGraph.test.ts"
+          ],
+          "patterns_from": [],
+          "verification": {
+            "type": "command",
+            "command": "cd frontend && npm run test",
+            "expected": "All unit tests pass"
+          },
+          "status": "pending"
+        },
+        {
+          "id": "subtask-11-2",
+          "description": "Write component tests for UI components",
+          "service": "frontend",
+          "files_to_modify": [],
+          "files_to_create": [
+            "frontend/src/components/__tests__/Button.test.tsx",
+            "frontend/src/components/__tests__/Card.test.tsx",
+            "frontend/src/components/charts/__tests__/LineChart.test.tsx"
+          ],
+          "patterns_from": [],
+          "verification": {
+            "type": "command",
+            "command": "cd frontend && npm run test -- --coverage",
+            "expected": "Component tests pass, coverage > 70%"
+          },
+          "status": "pending"
+        },
+        {
+          "id": "subtask-11-3",
+          "description": "Write E2E tests for critical user flows",
+          "service": "frontend",
+          "files_to_modify": [],
+          "files_to_create": [
+            "frontend/e2e/dashboard.spec.ts",
+            "frontend/e2e/navigation.spec.ts",
+            "frontend/e2e/visualizations.spec.ts"
+          ],
+          "patterns_from": [],
+          "verification": {
+            "type": "command",
+            "command": "cd frontend && npx playwright test",
+            "expected": "All E2E tests pass"
+          },
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "id": "phase-12-docker-deployment",
+      "name": "Docker & Production Setup",
+      "type": "setup",
+      "description": "Create production Docker configuration with multi-stage builds and Nginx",
+      "depends_on": ["phase-11-testing"],
+      "parallel_safe": false,
+      "subtasks": [
+        {
+          "id": "subtask-12-1",
+          "description": "Create multi-stage Dockerfile for frontend production build",
+          "service": "frontend",
+          "files_to_modify": [],
+          "files_to_create": ["frontend/Dockerfile"],
+          "patterns_from": ["docker/Dockerfile"],
+          "verification": {
+            "type": "command",
+            "command": "docker build -t e2i-frontend:test frontend/",
+            "expected": "Docker build succeeds"
+          },
+          "status": "pending"
+        },
+        {
+          "id": "subtask-12-2",
+          "description": "Create Nginx configuration for SPA routing and API proxy",
+          "service": "frontend",
+          "files_to_modify": [],
+          "files_to_create": [
+            "frontend/nginx.conf",
+            "frontend/.dockerignore"
+          ],
+          "patterns_from": [],
+          "verification": {
+            "type": "command",
+            "command": "docker run -p 8080:80 e2i-frontend:test",
+            "expected": "Container runs, app accessible on :8080"
+          },
+          "status": "pending",
+          "notes": "Configure proxy_pass to FastAPI backend, handle SPA routing with try_files"
+        },
+        {
+          "id": "subtask-12-3",
+          "description": "Update docker-compose.yml to include frontend service",
+          "service": "frontend",
+          "files_to_modify": ["docker-compose.yml"],
+          "files_to_create": [],
+          "patterns_from": ["docker-compose.yml"],
+          "verification": {
+            "type": "command",
+            "command": "docker-compose up -d frontend",
+            "expected": "Frontend service starts, accessible at configured port"
+          },
+          "status": "pending"
+        },
+        {
+          "id": "subtask-12-4",
+          "description": "Create production environment configuration",
+          "service": "frontend",
+          "files_to_modify": [],
+          "files_to_create": [
+            "frontend/.env.production",
+            "frontend/.env.example"
+          ],
+          "patterns_from": [".env.example"],
+          "verification": {
+            "type": "manual",
+            "instructions": "Verify all VITE_ variables documented, no secrets in .env.example"
+          },
+          "status": "pending"
+        }
+      ]
+    }
+  ],
+
+  "summary": {
+    "total_phases": 12,
+    "total_subtasks": 60,
+    "services_involved": ["frontend"],
+    "estimated_effort": "136-170 hours",
+    "estimated_files": "150+",
+    "parallelism": {
+      "max_parallel_phases": 4,
+      "parallel_groups": [
+        {
+          "phases": ["phase-3-ui-components", "phase-4-api-integration"],
+          "reason": "Both depend only on phase-2-foundation, different file sets (UI vs API)"
+        },
+        {
+          "phases": ["phase-5-viz-recharts", "phase-6-viz-cytoscape", "phase-7-viz-plotly", "phase-8-viz-d3"],
+          "reason": "All visualization phases depend only on phase-3, completely independent implementations"
+        }
+      ],
+      "recommended_workers": 2,
+      "speedup_estimate": "1.5x faster than sequential with proper coordination"
+    },
+    "startup_command": "source auto-claude/.venv/bin/activate && python auto-claude/run.py --spec 002 --parallel 2"
+  },
+
+  "verification_strategy": {
+    "risk_level": "high",
+    "skip_validation": false,
+    "test_creation_phase": "phase-11-testing",
+    "test_types_required": ["unit", "integration", "e2e"],
+    "security_scanning_required": false,
+    "staging_deployment_required": true,
+    "acceptance_criteria": [
+      "All TypeScript compilation errors resolved",
+      "All ESLint errors resolved",
+      "Production build succeeds without errors",
+      "All unit tests pass (>70% coverage)",
+      "All component tests pass",
+      "All E2E tests pass",
+      "All visualization libraries integrated correctly",
+      "All backend API endpoints have corresponding frontend services",
+      "Docker build succeeds",
+      "Application loads in all target browsers (Chrome, Firefox, Safari, Edge)",
+      "No console errors in production build",
+      "Bundle size under 1MB gzipped",
+      "HMR works in development",
+      "Theme switching functional",
+      "Responsive design works on mobile and desktop"
+    ],
+    "verification_steps": [
+      {
+        "name": "TypeScript Compilation",
+        "command": "cd frontend && npx tsc --noEmit",
+        "expected_outcome": "No TypeScript errors",
+        "type": "test",
+        "required": true,
+        "blocking": true
+      },
+      {
+        "name": "ESLint",
+        "command": "cd frontend && npm run lint",
+        "expected_outcome": "No linting errors",
+        "type": "test",
+        "required": true,
+        "blocking": true
+      },
+      {
+        "name": "Unit Tests",
+        "command": "cd frontend && npm run test",
+        "expected_outcome": "All tests pass",
+        "type": "test",
+        "required": true,
+        "blocking": true
+      },
+      {
+        "name": "Component Tests with Coverage",
+        "command": "cd frontend && npm run test -- --coverage",
+        "expected_outcome": "Coverage >70%",
+        "type": "test",
+        "required": true,
+        "blocking": true
+      },
+      {
+        "name": "E2E Tests",
+        "command": "cd frontend && npx playwright test",
+        "expected_outcome": "All E2E tests pass",
+        "type": "test",
+        "required": true,
+        "blocking": true
+      },
+      {
+        "name": "Production Build",
+        "command": "cd frontend && npm run build",
+        "expected_outcome": "Build succeeds, dist/ created",
+        "type": "test",
+        "required": true,
+        "blocking": true
+      },
+      {
+        "name": "Docker Build",
+        "command": "docker build -t e2i-frontend:test frontend/",
+        "expected_outcome": "Docker image builds successfully",
+        "type": "test",
+        "required": true,
+        "blocking": true
+      }
+    ],
+    "reasoning": "High risk due to large scope (150+ files), multiple complex visualization libraries, and significant architectural decisions. Comprehensive testing required including unit, component, and E2E tests. Staging deployment needed to verify Docker builds and Nginx configuration. No security scan required as this is frontend UI without auth handling, but accessibility audit recommended."
+  },
+
+  "qa_acceptance": {
+    "unit_tests": {
+      "required": true,
+      "commands": ["cd frontend && npm run test"],
+      "minimum_coverage": 70
+    },
+    "integration_tests": {
+      "required": true,
+      "commands": ["cd frontend && npm run test -- --coverage"],
+      "services_to_test": ["frontend"]
+    },
+    "e2e_tests": {
+      "required": true,
+      "commands": ["cd frontend && npx playwright test"],
+      "flows": [
+        "dashboard-navigation",
+        "knowledge-graph-visualization",
+        "chart-interactions",
+        "theme-switching",
+        "api-data-loading"
+      ]
+    },
+    "browser_verification": {
+      "required": true,
+      "pages": [
+        {
+          "url": "http://localhost:5173/",
+          "checks": ["renders", "no-console-errors", "navigation-works"]
+        },
+        {
+          "url": "http://localhost:5173/dashboard/knowledge-graph",
+          "checks": ["cytoscape-graph-renders", "data-loads", "interactions-work"]
+        },
+        {
+          "url": "http://localhost:5173/dashboard/performance",
+          "checks": ["recharts-render", "metrics-display", "responsive"]
+        }
+      ],
+      "browsers": ["Chrome", "Firefox", "Safari", "Edge"]
+    },
+    "build_verification": {
+      "required": true,
+      "checks": [
+        "typescript-compilation",
+        "eslint-passes",
+        "production-build-succeeds",
+        "bundle-size-acceptable",
+        "docker-build-succeeds"
+      ]
+    },
+    "accessibility_verification": {
+      "required": true,
+      "tool": "axe-core",
+      "standard": "WCAG AA",
+      "checks": ["keyboard-navigation", "screen-reader-support", "color-contrast"]
+    }
+  },
+
+  "qa_signoff": null
+}
