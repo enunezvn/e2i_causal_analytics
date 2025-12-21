@@ -14,17 +14,21 @@
  * - Relationship type-based edge styling
  * - Loading and empty states
  * - Selection and interaction callbacks
+ * - Graph controls (zoom, pan, layout selection)
+ * - Graph filters (entity types, relationship types)
  *
  * @module components/visualizations/KnowledgeGraph
  */
 
 import * as React from 'react';
-import { useMemo, useCallback } from 'react';
+import { useMemo, useCallback, useState, useRef } from 'react';
 import type { ElementDefinition, StylesheetStyle } from 'cytoscape';
 import { cn } from '@/lib/utils';
-import { CytoscapeGraph } from './graph/CytoscapeGraph';
+import { CytoscapeGraph, type CytoscapeGraphRef } from './graph/CytoscapeGraph';
+import { GraphControls } from './graph/GraphControls';
+import { GraphFilters, ALL_ENTITY_TYPES, ALL_RELATIONSHIP_TYPES } from './graph/GraphFilters';
 import type { LayoutName } from '@/hooks/use-cytoscape';
-import type { GraphNode, GraphRelationship } from '@/types/graph';
+import type { GraphNode, GraphRelationship, EntityType, RelationshipType } from '@/types/graph';
 
 // =============================================================================
 // TYPES
@@ -43,6 +47,10 @@ export interface KnowledgeGraphProps {
   minHeight?: number | string;
   /** Whether the data is currently loading */
   isLoading?: boolean;
+  /** Whether to show controls (zoom, layout, etc.) */
+  showControls?: boolean;
+  /** Whether to show filters (entity types, relationship types) */
+  showFilters?: boolean;
   /** Called when a node is clicked */
   onNodeSelect?: (node: GraphNode | null) => void;
   /** Called when an edge is clicked */
@@ -316,23 +324,57 @@ const KnowledgeGraph = React.forwardRef<HTMLDivElement, KnowledgeGraphProps>(
     {
       nodes,
       relationships,
-      layout = 'cose',
+      layout: initialLayout = 'cose',
       className,
       minHeight = 500,
       isLoading = false,
+      showControls = true,
+      showFilters = true,
       onNodeSelect,
       onEdgeSelect,
       onNodeHover,
     },
     ref
   ) => {
+    // Graph ref for imperative control
+    const graphRef = useRef<CytoscapeGraphRef>(null);
+
+    // State for controls
+    const [currentLayout, setCurrentLayout] = useState<LayoutName>(initialLayout);
+    const [currentZoom, setCurrentZoom] = useState(1);
+
+    // State for filters
+    const [selectedEntityTypes, setSelectedEntityTypes] = useState<EntityType[]>(
+      [...ALL_ENTITY_TYPES] as EntityType[]
+    );
+    const [selectedRelationshipTypes, setSelectedRelationshipTypes] = useState<RelationshipType[]>(
+      [...ALL_RELATIONSHIP_TYPES] as RelationshipType[]
+    );
+
     // Memoize stylesheet (static)
     const stylesheet = useMemo(() => generateStylesheet(), []);
 
+    // Filter nodes by selected entity types
+    const filteredNodes = useMemo(
+      () => nodes.filter((node) => selectedEntityTypes.includes(node.type as EntityType)),
+      [nodes, selectedEntityTypes]
+    );
+
+    // Filter relationships by selected types and ensure endpoints exist
+    const filteredRelationships = useMemo(() => {
+      const filteredNodeIds = new Set(filteredNodes.map((n) => n.id));
+      return relationships.filter(
+        (rel) =>
+          selectedRelationshipTypes.includes(rel.type as RelationshipType) &&
+          filteredNodeIds.has(rel.source_id) &&
+          filteredNodeIds.has(rel.target_id)
+      );
+    }, [relationships, selectedRelationshipTypes, filteredNodes]);
+
     // Memoize elements transformation
     const elements = useMemo(
-      () => transformGraphData(nodes, relationships),
-      [nodes, relationships]
+      () => transformGraphData(filteredNodes, filteredRelationships),
+      [filteredNodes, filteredRelationships]
     );
 
     // Create node lookup for callbacks
@@ -387,6 +429,36 @@ const KnowledgeGraph = React.forwardRef<HTMLDivElement, KnowledgeGraphProps>(
       onEdgeSelect?.(null);
     }, [onNodeSelect, onEdgeSelect]);
 
+    // Control handlers
+    const handleZoomChange = useCallback((newZoom: number) => {
+      setCurrentZoom(newZoom);
+      graphRef.current?.setZoom(newZoom);
+    }, []);
+
+    const handleLayoutChange = useCallback((newLayout: LayoutName) => {
+      setCurrentLayout(newLayout);
+      graphRef.current?.runLayout(newLayout);
+    }, []);
+
+    const handleFit = useCallback(() => {
+      graphRef.current?.fit();
+    }, []);
+
+    const handleCenter = useCallback(() => {
+      graphRef.current?.center();
+    }, []);
+
+    const handleExport = useCallback(() => {
+      const pngData = graphRef.current?.exportPng();
+      if (pngData) {
+        // Create download link
+        const link = document.createElement('a');
+        link.download = 'knowledge-graph.png';
+        link.href = pngData;
+        link.click();
+      }
+    }, []);
+
     // Show empty state if no data
     if (!isLoading && nodes.length === 0) {
       return (
@@ -411,23 +483,57 @@ const KnowledgeGraph = React.forwardRef<HTMLDivElement, KnowledgeGraphProps>(
     }
 
     return (
-      <CytoscapeGraph
-        ref={ref}
-        elements={elements}
-        style={stylesheet}
-        layout={layout}
-        className={className}
-        minHeight={minHeight}
-        showLoading={isLoading}
-        minZoom={0.1}
-        maxZoom={3}
-        onNodeClick={handleNodeClick}
-        onEdgeClick={handleEdgeClick}
-        onNodeMouseOver={handleNodeMouseOver}
-        onNodeMouseOut={handleNodeMouseOut}
-        onBackgroundClick={handleBackgroundClick}
-        ariaLabel="E2I Knowledge Graph visualization showing entities and their relationships"
-      />
+      <div ref={ref} className={cn('flex flex-col gap-4', className)}>
+        {/* Controls */}
+        {showControls && (
+          <GraphControls
+            zoom={currentZoom}
+            minZoom={0.1}
+            maxZoom={3}
+            layout={currentLayout}
+            disabled={isLoading}
+            onZoomChange={handleZoomChange}
+            onLayoutChange={handleLayoutChange}
+            onFit={handleFit}
+            onCenter={handleCenter}
+            onExport={handleExport}
+          />
+        )}
+
+        <div className="flex gap-4">
+          {/* Filters */}
+          {showFilters && (
+            <GraphFilters
+              selectedEntityTypes={selectedEntityTypes}
+              selectedRelationshipTypes={selectedRelationshipTypes}
+              disabled={isLoading}
+              onEntityTypesChange={setSelectedEntityTypes}
+              onRelationshipTypesChange={setSelectedRelationshipTypes}
+              className="w-64 shrink-0"
+            />
+          )}
+
+          {/* Graph */}
+          <div className="flex-1 min-w-0">
+            <CytoscapeGraph
+              ref={graphRef}
+              elements={elements}
+              style={stylesheet}
+              layout={currentLayout}
+              minHeight={minHeight}
+              showLoading={isLoading}
+              minZoom={0.1}
+              maxZoom={3}
+              onNodeClick={handleNodeClick}
+              onEdgeClick={handleEdgeClick}
+              onNodeMouseOver={handleNodeMouseOver}
+              onNodeMouseOut={handleNodeMouseOut}
+              onBackgroundClick={handleBackgroundClick}
+              ariaLabel="E2I Knowledge Graph visualization showing entities and their relationships"
+            />
+          </div>
+        </div>
+      </div>
     );
   }
 );

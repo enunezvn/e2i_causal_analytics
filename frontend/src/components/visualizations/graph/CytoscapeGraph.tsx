@@ -12,12 +12,13 @@
  * - Error boundary for graph errors
  * - Themeable through CSS custom properties
  * - Full keyboard and mouse interaction support
+ * - Imperative API for external control
  *
  * @module components/visualizations/graph/CytoscapeGraph
  */
 
 import * as React from 'react';
-import { useEffect, useCallback } from 'react';
+import { useEffect, useImperativeHandle } from 'react';
 import type { ElementDefinition, StylesheetStyle } from 'cytoscape';
 import { cn } from '@/lib/utils';
 import {
@@ -26,6 +27,28 @@ import {
   type LayoutName,
   type CytoscapeEventHandlers,
 } from '@/hooks/use-cytoscape';
+
+// =============================================================================
+// IMPERATIVE HANDLE TYPES
+// =============================================================================
+
+/**
+ * Methods exposed via ref for external control
+ */
+interface CytoscapeGraphRef {
+  /** Get current zoom level */
+  getZoom: () => number;
+  /** Set zoom level */
+  setZoom: (level: number) => void;
+  /** Fit graph to viewport */
+  fit: (padding?: number) => void;
+  /** Center the graph */
+  center: () => void;
+  /** Run a layout algorithm */
+  runLayout: (name: LayoutName) => void;
+  /** Export graph as PNG data URL */
+  exportPng: () => string | undefined;
+}
 
 // =============================================================================
 // TYPES
@@ -116,7 +139,7 @@ function LoadingSpinner() {
  * />
  * ```
  */
-const CytoscapeGraph = React.forwardRef<HTMLDivElement, CytoscapeGraphProps>(
+const CytoscapeGraph = React.forwardRef<CytoscapeGraphRef, CytoscapeGraphProps>(
   (
     {
       elements,
@@ -146,6 +169,11 @@ const CytoscapeGraph = React.forwardRef<HTMLDivElement, CytoscapeGraphProps>(
       isLoading,
       setElements,
       runLayout,
+      fit,
+      center,
+      zoom,
+      getZoom,
+      exportPng,
     } = useCytoscape(
       {
         elements,
@@ -170,6 +198,20 @@ const CytoscapeGraph = React.forwardRef<HTMLDivElement, CytoscapeGraphProps>(
       }
     );
 
+    // Expose imperative methods via ref
+    useImperativeHandle(
+      ref,
+      () => ({
+        getZoom,
+        setZoom: zoom,
+        fit,
+        center,
+        runLayout,
+        exportPng,
+      }),
+      [getZoom, zoom, fit, center, runLayout, exportPng]
+    );
+
     // Update elements when they change
     useEffect(() => {
       if (!isLoading && elements.length > 0) {
@@ -177,22 +219,6 @@ const CytoscapeGraph = React.forwardRef<HTMLDivElement, CytoscapeGraphProps>(
         runLayout(layout);
       }
     }, [elements, isLoading, setElements, runLayout, layout]);
-
-    // Combine refs
-    const setRefs = useCallback(
-      (node: HTMLDivElement | null) => {
-        // Set internal ref
-        (containerRef as React.MutableRefObject<HTMLDivElement | null>).current = node;
-
-        // Set forwarded ref
-        if (typeof ref === 'function') {
-          ref(node);
-        } else if (ref) {
-          ref.current = node;
-        }
-      },
-      [containerRef, ref]
-    );
 
     const heightStyle = typeof minHeight === 'number' ? `${minHeight}px` : minHeight;
 
@@ -209,7 +235,7 @@ const CytoscapeGraph = React.forwardRef<HTMLDivElement, CytoscapeGraphProps>(
 
         {/* Graph Container */}
         <div
-          ref={setRefs}
+          ref={containerRef as React.RefObject<HTMLDivElement>}
           className="absolute inset-0"
           role="img"
           aria-label={ariaLabel}
@@ -222,5 +248,5 @@ const CytoscapeGraph = React.forwardRef<HTMLDivElement, CytoscapeGraphProps>(
 
 CytoscapeGraph.displayName = 'CytoscapeGraph';
 
-export { CytoscapeGraph };
+export { CytoscapeGraph, type CytoscapeGraphRef };
 export default CytoscapeGraph;
