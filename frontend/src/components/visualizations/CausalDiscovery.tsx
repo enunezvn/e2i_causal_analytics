@@ -7,6 +7,7 @@
  *
  * This component provides:
  * - Causal DAG visualization using D3.js
+ * - Effect estimates table with confidence intervals
  * - Sample/demo data for initial rendering
  * - Controls for zoom, fit, and export
  * - Node selection and details panel integration points
@@ -22,6 +23,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { CausalDAG, type CausalDAGRef, type CausalNode, type CausalEdge } from './causal/CausalDAG';
+import { EffectsTable, type CausalEffect } from './causal/EffectsTable';
 import { ZoomIn, ZoomOut, Maximize2, Download, RotateCcw } from 'lucide-react';
 
 // =============================================================================
@@ -33,6 +35,8 @@ export interface CausalDiscoveryProps {
   nodes?: CausalNode[];
   /** Causal graph edges (uses sample data if not provided) */
   edges?: CausalEdge[];
+  /** Causal effect estimates (uses sample data if not provided) */
+  effects?: CausalEffect[];
   /** Whether data is loading */
   isLoading?: boolean;
   /** Error object */
@@ -43,12 +47,16 @@ export interface CausalDiscoveryProps {
   showControls?: boolean;
   /** Whether to show node details panel */
   showDetails?: boolean;
+  /** Whether to show effects table */
+  showEffectsTable?: boolean;
   /** Additional CSS classes */
   className?: string;
   /** Called when a node is selected */
   onNodeSelect?: (node: CausalNode | null) => void;
   /** Called when an edge is selected */
   onEdgeSelect?: (edge: CausalEdge | null) => void;
+  /** Called when an effect row is selected */
+  onEffectSelect?: (effect: CausalEffect | null) => void;
 }
 
 // =============================================================================
@@ -81,6 +89,84 @@ const SAMPLE_EDGES: CausalEdge[] = [
   { id: 'e7', source: 'severity', target: 'treatment', type: 'confounding', confidence: 0.9 },
   { id: 'e8', source: 'severity', target: 'outcome', type: 'confounding', confidence: 0.85 },
   { id: 'e9', source: 'genetics', target: 'treatment', type: 'instrumental', confidence: 0.6 },
+];
+
+/**
+ * Sample causal effect estimates for demonstration
+ */
+const SAMPLE_EFFECTS: CausalEffect[] = [
+  {
+    id: 'effect-1',
+    treatment: 'Treatment',
+    outcome: 'Health Outcome',
+    estimate: 0.45,
+    standardError: 0.12,
+    ciLower: 0.21,
+    ciUpper: 0.69,
+    confidenceLevel: 0.95,
+    pValue: 0.002,
+    isSignificant: true,
+  },
+  {
+    id: 'effect-2',
+    treatment: 'Treatment Adherence',
+    outcome: 'Health Outcome',
+    estimate: 0.32,
+    standardError: 0.08,
+    ciLower: 0.16,
+    ciUpper: 0.48,
+    confidenceLevel: 0.95,
+    pValue: 0.008,
+    isSignificant: true,
+  },
+  {
+    id: 'effect-3',
+    treatment: 'Biomarker Level',
+    outcome: 'Health Outcome',
+    estimate: 0.18,
+    standardError: 0.09,
+    ciLower: 0.00,
+    ciUpper: 0.36,
+    confidenceLevel: 0.95,
+    pValue: 0.051,
+    isSignificant: false,
+  },
+  {
+    id: 'effect-4',
+    treatment: 'Patient Age',
+    outcome: 'Health Outcome',
+    estimate: -0.25,
+    standardError: 0.11,
+    ciLower: -0.47,
+    ciUpper: -0.03,
+    confidenceLevel: 0.95,
+    pValue: 0.026,
+    isSignificant: true,
+  },
+  {
+    id: 'effect-5',
+    treatment: 'Disease Severity',
+    outcome: 'Health Outcome',
+    estimate: -0.52,
+    standardError: 0.14,
+    ciLower: -0.79,
+    ciUpper: -0.25,
+    confidenceLevel: 0.95,
+    pValue: 0.001,
+    isSignificant: true,
+  },
+  {
+    id: 'effect-6',
+    treatment: 'Genetic Factors',
+    outcome: 'Treatment Response',
+    estimate: 0.12,
+    standardError: 0.15,
+    ciLower: -0.17,
+    ciUpper: 0.41,
+    confidenceLevel: 0.95,
+    pValue: 0.42,
+    isSignificant: false,
+  },
 ];
 
 // =============================================================================
@@ -126,25 +212,30 @@ const CausalDiscovery = React.forwardRef<HTMLDivElement, CausalDiscoveryProps>(
     {
       nodes: propNodes,
       edges: propEdges,
+      effects: propEffects,
       isLoading = false,
       error = null,
       onRetry,
       showControls = true,
       showDetails = true,
+      showEffectsTable = true,
       className,
       onNodeSelect,
       onEdgeSelect,
+      onEffectSelect,
     },
     ref
   ) => {
     const dagRef = useRef<CausalDAGRef>(null);
     const [selectedNode, setSelectedNode] = useState<CausalNode | null>(null);
     const [selectedEdge, setSelectedEdge] = useState<CausalEdge | null>(null);
+    const [selectedEffect, setSelectedEffect] = useState<CausalEffect | null>(null);
     const [currentZoom, setCurrentZoom] = useState(1);
 
     // Use provided data or fall back to sample data
     const nodes = useMemo(() => propNodes ?? SAMPLE_NODES, [propNodes]);
     const edges = useMemo(() => propEdges ?? SAMPLE_EDGES, [propEdges]);
+    const effects = useMemo(() => propEffects ?? SAMPLE_EFFECTS, [propEffects]);
 
     // Handle node click
     const handleNodeClick = useCallback(
@@ -170,10 +261,23 @@ const CausalDiscovery = React.forwardRef<HTMLDivElement, CausalDiscoveryProps>(
     const handleBackgroundClick = useCallback(() => {
       setSelectedNode(null);
       setSelectedEdge(null);
+      setSelectedEffect(null);
       onNodeSelect?.(null);
       onEdgeSelect?.(null);
+      onEffectSelect?.(null);
       dagRef.current?.clearHighlights();
-    }, [onNodeSelect, onEdgeSelect]);
+    }, [onNodeSelect, onEdgeSelect, onEffectSelect]);
+
+    // Handle effect row selection
+    const handleEffectSelect = useCallback(
+      (effect: CausalEffect) => {
+        setSelectedEffect(effect);
+        setSelectedNode(null);
+        setSelectedEdge(null);
+        onEffectSelect?.(effect);
+      },
+      [onEffectSelect]
+    );
 
 
     // Control handlers
@@ -425,6 +529,28 @@ const CausalDiscovery = React.forwardRef<HTMLDivElement, CausalDiscoveryProps>(
             </Card>
           )}
         </div>
+
+        {/* Effects Table */}
+        {showEffectsTable && (
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">Causal Effect Estimates</CardTitle>
+              <CardDescription>
+                Treatment effects with 95% confidence intervals
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <EffectsTable
+                effects={effects}
+                isLoading={isLoading}
+                onRowSelect={handleEffectSelect}
+                selectedEffectId={selectedEffect?.id}
+                showCIBars
+                sortable
+              />
+            </CardContent>
+          </Card>
+        )}
       </div>
     );
   }
