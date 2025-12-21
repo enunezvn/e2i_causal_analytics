@@ -18,6 +18,7 @@ from src.rag.retriever import (
     GRAPH_WEIGHT,
 )
 from src.rag.models.retrieval_models import RetrievalResult
+from src.rag.types import RetrievalSource
 
 
 # ============================================================================
@@ -40,20 +41,18 @@ def sample_dense_results():
     """Sample results from dense retrieval."""
     return [
         RetrievalResult(
+            id="dense-1",
             content="Dense result 1 about Kisqali adoption",
-            source="episodic_memories",
-            source_id="dense-1",
+            source=RetrievalSource.VECTOR,
             score=0.95,
-            retrieval_method="dense",
-            metadata={"brand": "Kisqali"}
+            metadata={"brand": "Kisqali", "retrieval_method": "dense", "source_name": "episodic_memories"}
         ),
         RetrievalResult(
+            id="dense-2",
             content="Dense result 2 about HCP engagement",
-            source="procedural_memories",
-            source_id="dense-2",
+            source=RetrievalSource.VECTOR,
             score=0.85,
-            retrieval_method="dense",
-            metadata={}
+            metadata={"retrieval_method": "dense", "source_name": "procedural_memories"}
         ),
     ]
 
@@ -63,20 +62,18 @@ def sample_sparse_results():
     """Sample results from sparse retrieval."""
     return [
         RetrievalResult(
+            id="sparse-1",
             content="Sparse result 1 - causal path",
-            source="causal_paths",
-            source_id="sparse-1",
+            source=RetrievalSource.FULLTEXT,
             score=0.9,
-            retrieval_method="sparse",
-            metadata={}
+            metadata={"retrieval_method": "sparse", "source_name": "causal_paths"}
         ),
         RetrievalResult(
+            id="sparse-2",
             content="Sparse result 2 - agent activity",
-            source="agent_activities",
-            source_id="sparse-2",
+            source=RetrievalSource.FULLTEXT,
             score=0.7,
-            retrieval_method="sparse",
-            metadata={}
+            metadata={"retrieval_method": "sparse", "source_name": "agent_activities"}
         ),
     ]
 
@@ -86,12 +83,11 @@ def sample_graph_results():
     """Sample results from graph retrieval."""
     return [
         RetrievalResult(
+            id="graph-1",
             content="Graph result: Sales → TRx",
-            source="semantic_graph",
-            source_id="graph-1",
+            source=RetrievalSource.GRAPH,
             score=0.8,
-            retrieval_method="graph",
-            metadata={"path_length": 2}
+            metadata={"path_length": 2, "retrieval_method": "graph", "source_name": "semantic_graph"}
         ),
     ]
 
@@ -140,7 +136,7 @@ class TestDenseRetriever:
             results = await retriever.search("Kisqali adoption trends", k=10)
 
             assert len(results) == 2
-            assert all(r.retrieval_method == "dense" for r in results)
+            assert all(r.metadata.get("retrieval_method") == "dense" for r in results)
             mock_memory_connector.vector_search_by_text.assert_called_once()
 
     @pytest.mark.asyncio
@@ -198,7 +194,7 @@ class TestBM25Retriever:
             results = await retriever.search("TRx trend analysis", k=10)
 
             assert len(results) == 2
-            assert all(r.retrieval_method == "sparse" for r in results)
+            assert all(r.metadata.get("retrieval_method") == "sparse" for r in results)
 
     @pytest.mark.asyncio
     async def test_search_with_filters(self, mock_memory_connector):
@@ -257,7 +253,7 @@ class TestGraphRetriever:
             )
 
             assert len(results) == 1
-            assert results[0].retrieval_method == "graph"
+            assert results[0].metadata.get("retrieval_method") == "graph"
 
     def test_traverse_multiple_entities(self, mock_memory_connector):
         """Test graph traversal with multiple entities."""
@@ -265,12 +261,11 @@ class TestGraphRetriever:
         def mock_traverse(entity_id, relationship, max_depth):
             return [
                 RetrievalResult(
+                    id=f"g-{entity_id}",
                     content=f"Result for {entity_id}",
-                    source="semantic_graph",
-                    source_id=f"g-{entity_id}",
+                    source=RetrievalSource.GRAPH,
                     score=0.8,
-                    retrieval_method="graph",
-                    metadata={}
+                    metadata={"retrieval_method": "graph", "source_name": "semantic_graph"}
                 )
             ]
 
@@ -291,12 +286,11 @@ class TestGraphRetriever:
     def test_traverse_deduplication(self, mock_memory_connector):
         """Test that duplicate results are removed."""
         duplicate_result = RetrievalResult(
+            id="same-id",
             content="Same result",
-            source="semantic_graph",
-            source_id="same-id",
+            source=RetrievalSource.GRAPH,
             score=0.9,
-            retrieval_method="graph",
-            metadata={}
+            metadata={"retrieval_method": "graph", "source_name": "semantic_graph"}
         )
         mock_memory_connector.graph_traverse.return_value = [duplicate_result]
 
@@ -307,7 +301,7 @@ class TestGraphRetriever:
             retriever = GraphRetriever()
             results = retriever.traverse(entities=["e1", "e2"])
 
-            # Should deduplicate by source_id
+            # Should deduplicate by id
             assert len(results) == 1
 
     def test_traverse_error_handling(self, mock_memory_connector):
@@ -317,12 +311,11 @@ class TestGraphRetriever:
                 raise Exception("Traversal failed")
             return [
                 RetrievalResult(
+                    id=entity_id,
                     content=f"Result for {entity_id}",
-                    source="semantic_graph",
-                    source_id=entity_id,
+                    source=RetrievalSource.GRAPH,
                     score=0.8,
-                    retrieval_method="graph",
-                    metadata={}
+                    metadata={"retrieval_method": "graph", "source_name": "semantic_graph"}
                 )
             ]
 
@@ -337,7 +330,7 @@ class TestGraphRetriever:
             results = retriever.traverse(entities=["bad", "good"])
 
             assert len(results) == 1
-            assert "good" in results[0].source_id
+            assert "good" in results[0].id
 
     def test_traverse_kpi_basic(self, mock_memory_connector, sample_graph_results):
         """Test KPI graph traversal."""
@@ -498,12 +491,12 @@ class TestReciprocalRankFusion:
         retriever = HybridRetriever()
 
         results1 = [
-            RetrievalResult(content="A", source="s", source_id="1", score=0.9, retrieval_method="dense", metadata={}),
-            RetrievalResult(content="B", source="s", source_id="2", score=0.8, retrieval_method="dense", metadata={}),
+            RetrievalResult(id="1", content="A", source=RetrievalSource.VECTOR, score=0.9, metadata={"retrieval_method": "dense"}),
+            RetrievalResult(id="2", content="B", source=RetrievalSource.VECTOR, score=0.8, metadata={"retrieval_method": "dense"}),
         ]
         results2 = [
-            RetrievalResult(content="B", source="s", source_id="2", score=0.85, retrieval_method="sparse", metadata={}),
-            RetrievalResult(content="C", source="s", source_id="3", score=0.7, retrieval_method="sparse", metadata={}),
+            RetrievalResult(id="2", content="B", source=RetrievalSource.FULLTEXT, score=0.85, metadata={"retrieval_method": "sparse"}),
+            RetrievalResult(id="3", content="C", source=RetrievalSource.FULLTEXT, score=0.7, metadata={"retrieval_method": "sparse"}),
         ]
 
         fused = retriever._reciprocal_rank_fusion(
@@ -512,7 +505,7 @@ class TestReciprocalRankFusion:
         )
 
         # "B" should be ranked highest (appears in both lists)
-        assert fused[0].source_id == "2"  # B
+        assert fused[0].id == "2"  # B
 
     def test_rrf_empty_lists(self):
         """Test RRF with empty result lists."""
@@ -530,7 +523,7 @@ class TestReciprocalRankFusion:
         retriever = HybridRetriever()
 
         results = [
-            RetrievalResult(content="A", source="s", source_id="1", score=0.9, retrieval_method="dense", metadata={}),
+            RetrievalResult(id="1", content="A", source=RetrievalSource.VECTOR, score=0.9, metadata={"retrieval_method": "dense"}),
         ]
 
         fused = retriever._reciprocal_rank_fusion(
@@ -539,14 +532,14 @@ class TestReciprocalRankFusion:
         )
 
         assert len(fused) == 1
-        assert fused[0].source_id == "1"
+        assert fused[0].id == "1"
 
     def test_rrf_score_in_metadata(self):
         """Test that RRF score is added to metadata."""
         retriever = HybridRetriever()
 
         results = [
-            RetrievalResult(content="A", source="s", source_id="1", score=0.9, retrieval_method="dense", metadata={}),
+            RetrievalResult(id="1", content="A", source=RetrievalSource.VECTOR, score=0.9, metadata={"retrieval_method": "dense"}),
         ]
 
         fused = retriever._reciprocal_rank_fusion(
@@ -559,11 +552,11 @@ class TestReciprocalRankFusion:
         assert fused[0].metadata["original_score"] == 0.9
 
     def test_rrf_preserves_retrieval_method(self):
-        """Test that retrieval method is preserved."""
+        """Test that retrieval method is preserved in metadata."""
         retriever = HybridRetriever()
 
         results = [
-            RetrievalResult(content="A", source="s", source_id="1", score=0.9, retrieval_method="graph", metadata={}),
+            RetrievalResult(id="1", content="A", source=RetrievalSource.GRAPH, score=0.9, metadata={"retrieval_method": "graph"}),
         ]
 
         fused = retriever._reciprocal_rank_fusion(
@@ -571,7 +564,7 @@ class TestReciprocalRankFusion:
             weights=[1.0]
         )
 
-        assert fused[0].retrieval_method == "graph"
+        assert fused[0].metadata.get("retrieval_method") == "graph"
 
 
 # ============================================================================
@@ -663,26 +656,24 @@ class TestRetrieverIntegration:
         """Test that results are properly ranked by RRF."""
         # Create results where one item appears in multiple lists
         high_overlap_result = RetrievalResult(
+            id="overlap-1",
             content="High value result",
-            source="test",
-            source_id="overlap-1",
+            source=RetrievalSource.VECTOR,
             score=0.9,
-            retrieval_method="dense",
-            metadata={}
+            metadata={"retrieval_method": "dense"}
         )
 
         dense_results = [
             high_overlap_result,
-            RetrievalResult(content="Dense only", source="test", source_id="d1", score=0.8, retrieval_method="dense", metadata={})
+            RetrievalResult(id="d1", content="Dense only", source=RetrievalSource.VECTOR, score=0.8, metadata={"retrieval_method": "dense"})
         ]
         sparse_results = [
             RetrievalResult(
+                id="overlap-1",
                 content="High value result",
-                source="test",
-                source_id="overlap-1",
+                source=RetrievalSource.FULLTEXT,
                 score=0.85,
-                retrieval_method="sparse",
-                metadata={}
+                metadata={"retrieval_method": "sparse"}
             ),
         ]
 
@@ -697,4 +688,4 @@ class TestRetrieverIntegration:
             results = await retriever.search(query="test", k=10)
 
             # The overlapping result should be ranked first
-            assert results[0].source_id == "overlap-1"
+            assert results[0].id == "overlap-1"

@@ -13,6 +13,7 @@ from src.rag.memory_connector import (
     reset_memory_connector,
 )
 from src.rag.models.retrieval_models import RetrievalResult
+from src.rag.types import RetrievalSource
 
 
 # ============================================================================
@@ -116,10 +117,11 @@ class TestVectorSearch:
             assert len(results) == 1
             assert isinstance(results[0], RetrievalResult)
             assert results[0].content == "Test content"
-            assert results[0].source == "episodic_memories"
-            assert results[0].source_id == "mem-123"
+            assert results[0].source == RetrievalSource.VECTOR
+            assert results[0].id == "mem-123"
             assert results[0].score == 0.85
-            assert results[0].retrieval_method == "dense"
+            assert results[0].metadata["retrieval_method"] == "dense"
+            assert results[0].metadata["source_name"] == "episodic_memories"
             assert results[0].metadata["brand"] == "Kisqali"
 
     @pytest.mark.asyncio
@@ -250,7 +252,7 @@ class TestFulltextSearch:
             )
 
             assert len(results) == 2
-            assert results[0].retrieval_method == "sparse"
+            assert results[0].metadata["retrieval_method"] == "sparse"
             # Score should be normalized
             assert results[0].score == 1.0  # Max score normalized to 1
             assert results[1].score == pytest.approx(0.666, rel=0.01)
@@ -359,8 +361,9 @@ class TestGraphTraverse:
             )
 
             assert len(results) == 1
-            assert results[0].retrieval_method == "graph"
-            assert results[0].source == "semantic_graph"
+            assert results[0].metadata["retrieval_method"] == "graph"
+            assert results[0].source == RetrievalSource.GRAPH
+            assert results[0].metadata["source_name"] == "semantic_graph"
             assert "Sales visit" in results[0].content
             assert results[0].score == 0.85
 
@@ -666,9 +669,9 @@ class TestEdgeCases:
 
     @pytest.mark.asyncio
     async def test_vector_search_missing_fields(self, memory_connector, mock_supabase_client):
-        """Test handling of results with missing fields."""
+        """Test handling of results with missing fields - now defaults are applied."""
         mock_supabase_client.rpc.return_value.execute.return_value.data = [
-            {"content": "Test", "similarity": 0.8}  # Missing source_table, id, metadata
+            {"content": "Test", "similarity": 0.8, "id": "test-1"}  # Missing source_table, metadata
         ]
 
         with patch(
@@ -681,9 +684,9 @@ class TestEdgeCases:
             )
 
             assert len(results) == 1
-            assert results[0].source == "unknown"
-            assert results[0].source_id == ""
-            assert results[0].metadata == {}
+            assert results[0].source == RetrievalSource.VECTOR
+            assert results[0].id == "test-1"
+            assert results[0].metadata["source_name"] == "unknown"
 
     def test_depth_score_calculation(self, memory_connector):
         """Test that connection scores decrease with depth correctly."""
