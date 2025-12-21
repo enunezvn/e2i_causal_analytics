@@ -16,6 +16,12 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
+# Import procedural memory functions for semantic search
+from src.memory.procedural_memory import (
+    find_relevant_procedures,
+    find_relevant_procedures_by_text,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -426,7 +432,14 @@ class ProceduralMemoryAdapter:
 
     async def procedure_search(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
         """
-        Search for relevant procedures/patterns.
+        Search for relevant procedures/patterns using semantic similarity.
+
+        Uses find_relevant_procedures for embedding-based search with
+        E2I context matching (brand, intent, procedure type).
+
+        If an embedding model is provided to the adapter, uses it directly.
+        Otherwise falls back to find_relevant_procedures_by_text which
+        uses the global embedding service.
 
         Args:
             query: Query describing the task or problem
@@ -435,22 +448,72 @@ class ProceduralMemoryAdapter:
         Returns:
             List of dicts with "content" describing procedures
         """
-        if self._client is None:
-            logger.warning("ProceduralMemoryAdapter: No client configured, returning empty")
-            return []
-
         try:
-            # Search for relevant procedures
-            procedures = await self._execute_procedure_search(query, limit)
+            procedures = await self._semantic_procedure_search(query, limit)
 
-            return self._transform_procedure_results(procedures)
+            if procedures:
+                logger.debug(f"Found {len(procedures)} procedures via semantic search")
+                return self._transform_procedure_results(procedures)
+
+            # Fall back to RPC/table search if no semantic results
+            logger.debug("No semantic results, trying RPC fallback")
+            if self._client is not None:
+                procedures = await self._execute_procedure_search(query, limit)
+                if procedures:
+                    return self._transform_procedure_results(procedures)
+
+            return self._get_fallback_procedures(query)
 
         except ImportError:
-            logger.warning("Procedural memory module not available")
+            logger.warning("Procedural memory module not available, using fallback")
             return self._get_fallback_procedures(query)
         except Exception as e:
             logger.error(f"Procedural memory search failed: {e}")
+            # Try RPC fallback on error
+            if self._client is not None:
+                try:
+                    procedures = await self._execute_procedure_search(query, limit)
+                    if procedures:
+                        return self._transform_procedure_results(procedures)
+                except Exception as fallback_error:
+                    logger.debug(f"Fallback also failed: {fallback_error}")
             return self._get_fallback_procedures(query)
+
+    async def _semantic_procedure_search(self, query: str, limit: int) -> List[Any]:
+        """
+        Execute semantic search using embedding similarity.
+
+        Uses the adapter's embedding model if available, otherwise
+        falls back to the global embedding service.
+        """
+        # If we have an embedding model, generate embedding and use find_relevant_procedures
+        if self._embedding_model is not None:
+            embedding = await self._generate_embedding(query)
+            return await find_relevant_procedures(
+                embedding=embedding,
+                limit=limit,
+                min_similarity=0.5,
+            )
+
+        # Otherwise use the text-based search which uses global embedding service
+        return await find_relevant_procedures_by_text(
+            query_text=query,
+            limit=limit,
+            min_similarity=0.5,
+        )
+
+    async def _generate_embedding(self, text: str) -> List[float]:
+        """Generate embedding for text using configured model."""
+        if hasattr(self._embedding_model, "embed"):
+            return await self._embedding_model.embed(text)
+        elif hasattr(self._embedding_model, "encode"):
+            # Synchronous model (e.g., sentence-transformers)
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(None, self._embedding_model.encode, text)
+        elif hasattr(self._embedding_model, "encode_async"):
+            return await self._embedding_model.encode_async(text)
+        else:
+            raise ValueError("Embedding model must have 'embed', 'encode', or 'encode_async' method")
 
     async def _execute_procedure_search(self, query: str, limit: int) -> List[Any]:
         """Execute procedure search via Supabase."""

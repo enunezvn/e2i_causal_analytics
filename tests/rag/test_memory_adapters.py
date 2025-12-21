@@ -375,13 +375,19 @@ class TestProceduralMemoryAdapter:
         assert results[0]["success_rate"] == 0.95
 
     @pytest.mark.asyncio
-    async def test_procedure_search_no_client_returns_empty(self):
-        """Test that missing client returns empty list."""
+    async def test_procedure_search_no_client_returns_fallback(self):
+        """Test that missing client gracefully returns fallback procedures.
+
+        With semantic search integration, when the database is unavailable,
+        the adapter returns hardcoded fallback procedures for common queries.
+        """
         adapter = ProceduralMemoryAdapter(supabase_client=None)
 
-        results = await adapter.procedure_search("any query")
+        results = await adapter.procedure_search("adoption trends")
 
-        assert results == []
+        # Should return fallback procedures when database unavailable
+        assert len(results) > 0
+        assert all(r.get("source") == "procedural_fallback" for r in results)
 
     @pytest.mark.asyncio
     async def test_procedure_search_fallback_procedures(self):
