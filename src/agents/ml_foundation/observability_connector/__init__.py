@@ -12,10 +12,36 @@ being invoked in the main pipeline.
 """
 
 from .agent import ObservabilityConnectorAgent, Span
+from .models import (
+    AgentNameEnum,
+    AgentTierEnum,
+    LatencyStats,
+    ObservabilitySpan,
+    QualityMetrics,
+    SpanEvent,
+    SpanStatusEnum,
+    TokenUsage,
+    create_llm_span,
+    create_span,
+)
 from .state import ObservabilityConnectorState
 
 __all__ = [
+    # Agent
     "ObservabilityConnectorAgent",
     "Span",
     "ObservabilityConnectorState",
+    # Models
+    "ObservabilitySpan",
+    "SpanEvent",
+    "TokenUsage",
+    "LatencyStats",
+    "QualityMetrics",
+    # Enums
+    "AgentNameEnum",
+    "AgentTierEnum",
+    "SpanStatusEnum",
+    # Factory functions
+    "create_span",
+    "create_llm_span",
 ]

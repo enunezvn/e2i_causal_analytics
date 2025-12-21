@@ -3,23 +3,26 @@
 Provides telemetry and monitoring across all 18 agents.
 
 Responsibilities:
-- Span emission to Opik
-- Quality metrics computation
+- Span emission to Opik SDK
+- Quality metrics computation from database
 - Trace context propagation
 - Latency and error rate tracking
 - Token usage monitoring
 
 Outputs:
-- Spans (to Opik and database)
-- QualityMetrics (aggregated stats)
+- Spans (to Opik and ml_observability_spans table)
+- QualityMetrics (aggregated stats from database)
 - ObservabilityContext (distributed tracing)
 
 Integration:
 - Upstream: ALL agents (cross-cutting)
-- Downstream: Database (ml_observability_spans)
+- Downstream: Database (ml_observability_spans), Opik dashboard
 - Used via: span() context manager, track_llm_call(), get_quality_metrics()
+
+Version: 2.0.0 (Phase 2 Integration)
 """
 
+import logging
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -28,12 +31,18 @@ from typing import Any, Dict, List, Optional
 from .graph import create_observability_connector_graph
 from .state import ObservabilityConnectorState
 
+logger = logging.getLogger(__name__)
+
 
 class ObservabilityConnectorAgent:
     """Observability Connector: Telemetry and monitoring for all agents.
 
     This agent operates differently from others - it wraps operations with
     spans rather than being invoked in the main pipeline.
+
+    Attributes:
+        opik_connector: OpikConnector singleton for SDK access
+        span_repository: ObservabilitySpanRepository for database access
     """
 
     tier = 0
@@ -44,8 +53,63 @@ class ObservabilityConnectorAgent:
     def __init__(self):
         """Initialize observability_connector agent."""
         self.graph = create_observability_connector_graph()
-        # In production, initialize Opik client
-        # self.opik = OpikClient()
+        # Lazy-initialized connectors (avoid import at module load time)
+        self._opik_connector = None
+        self._span_repository = None
+
+    @property
+    def opik_connector(self):
+        """Get OpikConnector singleton (lazy initialization).
+
+        Returns:
+            OpikConnector instance for SDK-based observability
+        """
+        if self._opik_connector is None:
+            try:
+                from src.mlops.opik_connector import OpikConnector
+
+                self._opik_connector = OpikConnector()
+            except Exception as e:
+                logger.warning(f"Failed to initialize OpikConnector: {e}")
+        return self._opik_connector
+
+    @property
+    def span_repository(self):
+        """Get ObservabilitySpanRepository (lazy initialization).
+
+        Returns:
+            ObservabilitySpanRepository instance or None if unavailable
+        """
+        if self._span_repository is None:
+            try:
+                from src.repositories import get_supabase_client
+                from src.repositories.observability_span import ObservabilitySpanRepository
+
+                client = get_supabase_client()
+                if client:
+                    self._span_repository = ObservabilitySpanRepository(client=client)
+            except Exception as e:
+                logger.warning(f"Failed to initialize span repository: {e}")
+        return self._span_repository
+
+    @property
+    def is_opik_enabled(self) -> bool:
+        """Check if Opik SDK is available and enabled.
+
+        Returns:
+            True if Opik is available for tracing
+        """
+        connector = self.opik_connector
+        return connector is not None and connector.is_enabled
+
+    @property
+    def is_db_enabled(self) -> bool:
+        """Check if database repository is available.
+
+        Returns:
+            True if database writes are available
+        """
+        return self.span_repository is not None
 
     # ========================================================================
     # HELPER METHODS (Primary Interface)
@@ -383,7 +447,7 @@ class ObservabilityConnectorAgent:
 
         except Exception as e:
             # Log but don't fail - observability should not break operations
-            print(f"Warning: Failed to emit span: {e}")
+            logger.warning(f"Failed to emit span: {e}")
 
     def _generate_trace_id(self) -> str:
         """Generate new trace ID."""

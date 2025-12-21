@@ -1,7 +1,93 @@
-"""Metrics Aggregator Node - Compute quality metrics from spans."""
+"""Metrics Aggregator Node - Compute quality metrics from spans.
 
+This module computes quality metrics from observability spans using:
+- ObservabilitySpanRepository for real database queries
+- Fallback to mock data when repository unavailable
+
+Version: 2.0.0 (Phase 2 Integration)
+"""
+
+import logging
 from collections import defaultdict
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
+
+# Import repository for real data access
+_span_repository = None
+
+
+def _get_span_repository():
+    """Get the ObservabilitySpanRepository singleton."""
+    global _span_repository
+    if _span_repository is None:
+        try:
+            from src.repositories import get_supabase_client
+            from src.repositories.observability_span import ObservabilitySpanRepository
+
+            client = get_supabase_client()
+            if client:
+                _span_repository = ObservabilitySpanRepository(client=client)
+        except Exception as e:
+            logger.warning(f"Failed to initialize span repository: {e}")
+    return _span_repository
+
+
+async def _get_spans_from_repository(
+    time_window: str,
+    agent_name_filter: Optional[str] = None,
+    trace_id_filter: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Get spans from repository and convert to dict format.
+
+    Args:
+        time_window: Time window (1h, 24h, 7d)
+        agent_name_filter: Optional agent name filter
+        trace_id_filter: Optional trace ID filter
+
+    Returns:
+        List of span dicts compatible with existing aggregation logic
+    """
+    repository = _get_span_repository()
+    if not repository:
+        return []
+
+    try:
+        # Get spans from repository
+        spans = await repository.get_spans_by_time_window(
+            window=time_window,
+            agent_name=agent_name_filter,
+            limit=10000,  # Reasonable limit for aggregation
+        )
+
+        # If trace filter specified, further filter
+        if trace_id_filter:
+            spans = [s for s in spans if s.trace_id == trace_id_filter]
+
+        # Convert ObservabilitySpan models to dicts for existing aggregation logic
+        span_dicts = []
+        for span in spans:
+            span_dict = {
+                "span_id": span.span_id,
+                "trace_id": span.trace_id,
+                "agent_name": span.agent_name.value if span.agent_name else "unknown",
+                "agent_tier": span.agent_tier.value if span.agent_tier else "ml_foundation",
+                "duration_ms": span.duration_ms or 0,
+                "status": span.status.value if span.status else "success",
+                "metadata": span.attributes or {},
+                "input_tokens": span.input_tokens,
+                "output_tokens": span.output_tokens,
+                "total_tokens": span.total_tokens,
+            }
+            # Add fallback_used from metadata or model field
+            span_dict["metadata"]["fallback_used"] = span.fallback_used or False
+            span_dicts.append(span_dict)
+
+        return span_dicts
+
+    except Exception as e:
+        logger.warning(f"Failed to get spans from repository: {e}")
+        return []
 
 
 async def aggregate_metrics(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -15,21 +101,20 @@ async def aggregate_metrics(state: Dict[str, Any]) -> Dict[str, Any]:
     """
     try:
         time_window = state.get("time_window", "24h")
-        state.get("agent_name_filter")
-        state.get("trace_id_filter")
+        agent_name_filter = state.get("agent_name_filter")
+        trace_id_filter = state.get("trace_id_filter")
 
-        # In production, query ml_observability_spans table
-        # spans = await db.query(
-        #     "ml_observability_spans",
-        #     filters={
-        #         "start_time": {">=": cutoff_time},
-        #         "agent_name": agent_filter if agent_filter else None,
-        #         "trace_id": trace_filter if trace_filter else None,
-        #     }
-        # )
+        # Try to get real spans from repository
+        spans = await _get_spans_from_repository(
+            time_window=time_window,
+            agent_name_filter=agent_name_filter,
+            trace_id_filter=trace_id_filter,
+        )
 
-        # For now, simulate with mock data
-        spans = _get_mock_spans(time_window)
+        # Fall back to mock data if no spans from repository
+        if not spans:
+            logger.debug("No spans from repository, using mock data")
+            spans = _get_mock_spans(time_window)
 
         # Compute latency by agent
         latency_by_agent = _compute_latency_stats(spans, group_by="agent_name")

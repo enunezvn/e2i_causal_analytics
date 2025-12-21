@@ -1,4 +1,10 @@
-"""Tests for span_emitter node (emit_spans)."""
+"""Tests for span_emitter node (emit_spans).
+
+Version: 2.0.0 (Phase 2 Integration)
+Tests use mocked OpikConnector and ObservabilitySpanRepository.
+"""
+
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -7,12 +13,49 @@ from src.agents.ml_foundation.observability_connector.nodes.span_emitter import 
 )
 
 
+@pytest.fixture
+def mock_opik_connector():
+    """Create a mock OpikConnector."""
+    mock = MagicMock()
+    mock.is_enabled = True
+    mock.config.project_name = "e2i-causal-analytics"
+    mock.config.workspace = "default"
+    mock.log_metric = MagicMock()
+    return mock
+
+
+@pytest.fixture
+def mock_span_repository():
+    """Create a mock ObservabilitySpanRepository."""
+    mock = MagicMock()
+    mock.insert_span = AsyncMock(return_value=MagicMock(span_id="test-span"))
+    return mock
+
+
+@pytest.fixture(autouse=True)
+def reset_module_singletons():
+    """Reset module-level singletons before each test."""
+    import src.agents.ml_foundation.observability_connector.nodes.span_emitter as module
+
+    module._opik_connector = None
+    module._span_repository = None
+    yield
+    module._opik_connector = None
+    module._span_repository = None
+
+
 class TestEmitSpans:
     """Test emit_spans node."""
 
     @pytest.mark.asyncio
-    async def test_emit_spans_success(self):
-        """Test successful span emission."""
+    async def test_emit_spans_success(self, mock_opik_connector, mock_span_repository):
+        """Test successful span emission with mocked dependencies."""
+        import src.agents.ml_foundation.observability_connector.nodes.span_emitter as module
+
+        # Inject mocks
+        module._opik_connector = mock_opik_connector
+        module._span_repository = mock_span_repository
+
         state = {
             "events_to_log": [
                 {
@@ -39,6 +82,10 @@ class TestEmitSpans:
         assert result["db_writes_successful"] is True
         assert result["db_write_count"] == 1
 
+        # Verify mock interactions
+        mock_opik_connector.log_metric.assert_called_once()
+        mock_span_repository.insert_span.assert_called_once()
+
     @pytest.mark.asyncio
     async def test_emit_spans_empty_events(self):
         """Test span emission with no events."""
@@ -53,8 +100,13 @@ class TestEmitSpans:
         assert result["db_write_count"] == 0
 
     @pytest.mark.asyncio
-    async def test_emit_spans_multiple_events(self):
+    async def test_emit_spans_multiple_events(self, mock_opik_connector, mock_span_repository):
         """Test span emission with multiple events."""
+        import src.agents.ml_foundation.observability_connector.nodes.span_emitter as module
+
+        module._opik_connector = mock_opik_connector
+        module._span_repository = mock_span_repository
+
         state = {
             "events_to_log": [
                 {
@@ -87,10 +139,17 @@ class TestEmitSpans:
         assert result["events_logged"] == 3
         assert len(result["span_ids_logged"]) == 3
         assert len(result["trace_ids_logged"]) == 2  # 2 unique traces
+        assert result["db_write_count"] == 3  # 3 DB writes
+        assert mock_span_repository.insert_span.call_count == 3
 
     @pytest.mark.asyncio
-    async def test_emit_spans_with_error_status(self):
+    async def test_emit_spans_with_error_status(self, mock_opik_connector, mock_span_repository):
         """Test span emission with error status."""
+        import src.agents.ml_foundation.observability_connector.nodes.span_emitter as module
+
+        module._opik_connector = mock_opik_connector
+        module._span_repository = mock_span_repository
+
         state = {
             "events_to_log": [
                 {
@@ -109,10 +168,16 @@ class TestEmitSpans:
 
         assert result["emission_successful"] is True
         assert result["events_logged"] == 1
+        assert result["db_write_count"] == 1
 
     @pytest.mark.asyncio
-    async def test_emit_spans_with_llm_metrics(self):
+    async def test_emit_spans_with_llm_metrics(self, mock_opik_connector, mock_span_repository):
         """Test span emission with LLM token metrics."""
+        import src.agents.ml_foundation.observability_connector.nodes.span_emitter as module
+
+        module._opik_connector = mock_opik_connector
+        module._span_repository = mock_span_repository
+
         state = {
             "events_to_log": [
                 {
@@ -133,10 +198,16 @@ class TestEmitSpans:
 
         assert result["emission_successful"] is True
         assert result["events_logged"] == 1
+        assert result["db_write_count"] == 1
 
     @pytest.mark.asyncio
-    async def test_emit_spans_with_metadata(self):
+    async def test_emit_spans_with_metadata(self, mock_opik_connector, mock_span_repository):
         """Test span emission with custom metadata."""
+        import src.agents.ml_foundation.observability_connector.nodes.span_emitter as module
+
+        module._opik_connector = mock_opik_connector
+        module._span_repository = mock_span_repository
+
         state = {
             "events_to_log": [
                 {
@@ -160,13 +231,18 @@ class TestEmitSpans:
         assert result["events_logged"] == 1
 
     @pytest.mark.asyncio
-    async def test_emit_spans_generates_ids_if_missing(self):
+    async def test_emit_spans_generates_ids_if_missing(self, mock_opik_connector, mock_span_repository):
         """Test that span/trace IDs are generated if missing."""
+        import src.agents.ml_foundation.observability_connector.nodes.span_emitter as module
+
+        module._opik_connector = mock_opik_connector
+        module._span_repository = mock_span_repository
+
         state = {
             "events_to_log": [
                 {
                     # Missing span_id and trace_id
-                    "agent_name": "test_agent",
+                    "agent_name": "orchestrator",  # Use valid agent name
                     "operation": "execute",
                     "status": "ok",
                 }
@@ -181,14 +257,19 @@ class TestEmitSpans:
         assert len(result["trace_ids_logged"]) == 1
 
     @pytest.mark.asyncio
-    async def test_emit_spans_opik_url(self):
+    async def test_emit_spans_opik_url(self, mock_opik_connector, mock_span_repository):
         """Test that Opik URL is included."""
+        import src.agents.ml_foundation.observability_connector.nodes.span_emitter as module
+
+        module._opik_connector = mock_opik_connector
+        module._span_repository = mock_span_repository
+
         state = {
             "events_to_log": [
                 {
                     "span_id": "span_1",
                     "trace_id": "trace_1",
-                    "agent_name": "test_agent",
+                    "agent_name": "orchestrator",
                     "operation": "execute",
                     "status": "ok",
                 }
@@ -198,3 +279,100 @@ class TestEmitSpans:
         result = await emit_spans(state)
 
         assert result["opik_url"] == "https://www.comet.com/opik"
+
+
+class TestEmitSpansGracefulDegradation:
+    """Test graceful degradation when connectors are unavailable."""
+
+    @pytest.fixture(autouse=True)
+    def reset_singletons(self):
+        """Reset module-level singletons."""
+        import src.agents.ml_foundation.observability_connector.nodes.span_emitter as module
+
+        module._opik_connector = None
+        module._span_repository = None
+        yield
+        module._opik_connector = None
+        module._span_repository = None
+
+    @pytest.mark.asyncio
+    async def test_emit_spans_without_opik(self, mock_span_repository):
+        """Test emission works without Opik connector."""
+        import src.agents.ml_foundation.observability_connector.nodes.span_emitter as module
+
+        # No Opik, only repository
+        module._opik_connector = None
+        module._span_repository = mock_span_repository
+
+        state = {
+            "events_to_log": [
+                {
+                    "span_id": "span_1",
+                    "trace_id": "trace_1",
+                    "agent_name": "orchestrator",
+                    "operation": "execute",
+                    "status": "ok",
+                }
+            ]
+        }
+
+        result = await emit_spans(state)
+
+        # Should still succeed with DB-only
+        assert result["emission_successful"] is True
+        assert result["db_write_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_emit_spans_without_repository(self, mock_opik_connector):
+        """Test emission works without repository."""
+        import src.agents.ml_foundation.observability_connector.nodes.span_emitter as module
+
+        # Only Opik, no repository
+        module._opik_connector = mock_opik_connector
+        module._span_repository = None
+
+        state = {
+            "events_to_log": [
+                {
+                    "span_id": "span_1",
+                    "trace_id": "trace_1",
+                    "agent_name": "orchestrator",
+                    "operation": "execute",
+                    "status": "ok",
+                }
+            ]
+        }
+
+        result = await emit_spans(state)
+
+        # Should still succeed with Opik-only
+        assert result["emission_successful"] is True
+        assert result["db_write_count"] == 0
+        assert result["db_writes_successful"] is True  # None repository = success
+
+    @pytest.mark.asyncio
+    async def test_emit_spans_without_both_connectors(self):
+        """Test emission handles missing connectors gracefully."""
+        import src.agents.ml_foundation.observability_connector.nodes.span_emitter as module
+
+        # Neither connector available
+        module._opik_connector = None
+        module._span_repository = None
+
+        state = {
+            "events_to_log": [
+                {
+                    "span_id": "span_1",
+                    "trace_id": "trace_1",
+                    "agent_name": "orchestrator",
+                    "operation": "execute",
+                    "status": "ok",
+                }
+            ]
+        }
+
+        result = await emit_spans(state)
+
+        # Should not raise, but emission may fail
+        assert result["events_logged"] == 1
+        assert result["db_write_count"] == 0
