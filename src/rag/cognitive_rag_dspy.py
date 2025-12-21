@@ -819,24 +819,32 @@ class CognitiveRAGOptimizer:
         Good summarization leads to better retrieval.
         """
         score = 0.0
-        
+
+        # Helper to get value from prediction (handles both dict and object)
+        def get_val(key, default=""):
+            if isinstance(prediction, dict):
+                return prediction.get(key, default)
+            return getattr(prediction, key, default)
+
         # Query rewrite should be more specific than original
-        if len(prediction.rewritten_query) > len(example.original_query):
+        rewritten = get_val("rewritten_query", "")
+        original = getattr(example, "original_query", "")
+        if len(str(rewritten)) > len(str(original)):
             score += 0.2
-        
+
         # Should extract at least one entity
-        if prediction.graph_entities:
+        if get_val("graph_entities"):
             score += 0.3
-        
+
         # Intent should be confident (not GENERAL)
-        if prediction.primary_intent != "GENERAL":
+        if get_val("primary_intent") != "GENERAL":
             score += 0.3
-        
+
         # Search keywords should be pharmaceutical domain-specific
         pharma_terms = ["hcp", "patient", "brand", "conversion", "adoption"]
-        if any(term in str(prediction.search_keywords).lower() for term in pharma_terms):
+        if any(term in str(get_val("search_keywords")).lower() for term in pharma_terms):
             score += 0.2
-        
+
         return score
     
     def investigator_metric(self, example, prediction, trace=None) -> float:
@@ -913,6 +921,7 @@ class CognitiveRAGOptimizer:
         
         optimizer = MIPROv2(
             metric=metrics[phase],
+            auto=None,  # Disable auto mode to allow manual configuration
             num_candidates=10,
             max_bootstrapped_demos=4,
             num_threads=4
