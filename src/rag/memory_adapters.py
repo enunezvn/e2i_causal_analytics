@@ -440,9 +440,6 @@ class ProceduralMemoryAdapter:
             return []
 
         try:
-            # Import procedural memory functions
-            from src.memory.procedural_memory import find_relevant_procedures
-
             # Search for relevant procedures
             procedures = await self._execute_procedure_search(query, limit)
 
