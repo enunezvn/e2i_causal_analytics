@@ -158,6 +158,41 @@ services:
       - "e2i.service=infrastructure"
       - "e2i.memory=semantic"
 
+  # ---------------------------------------------------------------------------
+  # FalkorDB Browser - Interactive Graph Visualization
+  # ---------------------------------------------------------------------------
+  falkordb-browser:
+    image: falkordb/falkordb-browser:latest
+    container_name: e2i_falkordb_browser
+    restart: unless-stopped
+    ports:
+      - "3003:3000"  # Port 3000 used by BentoML
+    environment:
+      - FALKORDB_HOST=falkordb
+      - FALKORDB_PORT=6379
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    networks:
+      - e2i_network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    depends_on:
+      falkordb:
+        condition: service_healthy
+    labels:
+      - "e2i.service=infrastructure"
+      - "e2i.memory=semantic-browser"
+
   # ===========================================================================
   # TIER 2: MLOPS SERVICES
   # ===========================================================================
