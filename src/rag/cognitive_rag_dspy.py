@@ -647,56 +647,74 @@ class ReflectorModule(dspy.Module):
     ) -> List[Dict]:
         """
         Collect training signals for DSPy optimization.
-        These flow to the Feedback Learner agent.
+        These flow to the Feedback Learner agent via SignalCollectorAdapter.
+
+        Signal format must match SignalCollectorAdapter.collect() expectations:
+        - type: Signal type (e.g., "summarizer", "investigator", "agent")
+        - query: The input query/prompt
+        - response: The output/response
+        - reward: Quality score (0.0 to 1.0)
+        - feedback: Optional user feedback dict
+        - metadata: Additional context
         """
         signals = []
-        
-        # Signal for Summarizer optimization
+
+        # Calculate rewards based on workflow outcomes
+        summarizer_reward = min(1.0, len(state.evidence_board) / 4.0) if state.sufficient_evidence else 0.3
+        investigator_reward = min(1.0, sum(e.relevance_score for e in state.evidence_board) / 3.0) if state.evidence_board else 0.0
+        agent_reward = 0.8 if state.response else 0.0
+
+        # Adjust rewards based on user feedback if provided
+        if user_feedback:
+            feedback_boost = 0.2 if "positive" in user_feedback.lower() else -0.1
+            summarizer_reward = min(1.0, max(0.0, summarizer_reward + feedback_boost))
+            investigator_reward = min(1.0, max(0.0, investigator_reward + feedback_boost))
+            agent_reward = min(1.0, max(0.0, agent_reward + feedback_boost))
+
+        # Signal for Summarizer optimization (query rewrite, entity extraction, intent)
         signals.append({
-            "phase": "summarizer",
-            "input": {
-                "original_query": state.user_query,
+            "type": "summarizer",
+            "query": state.user_query,
+            "response": state.rewritten_query or state.user_query,
+            "reward": summarizer_reward,
+            "feedback": {"user_feedback": user_feedback} if user_feedback else None,
+            "metadata": {
                 "entities": state.extracted_entities,
-                "intent": state.detected_intent
-            },
-            "output": {
-                "rewritten_query": state.rewritten_query
-            },
-            "success": state.sufficient_evidence,
-            "metric_score": len(state.evidence_board) / 4.0  # Normalize by max hops
+                "intent": state.detected_intent,
+                "conversation_id": state.conversation_id,
+            }
         })
-        
-        # Signal for Investigator optimization
+
+        # Signal for Investigator optimization (multi-hop retrieval)
         signals.append({
-            "phase": "investigator",
-            "input": {
-                "goal": state.investigation_goal,
-                "hop_count": state.hop_count
-            },
-            "output": {
+            "type": "investigator",
+            "query": state.investigation_goal or state.rewritten_query or state.user_query,
+            "response": f"Found {len(state.evidence_board)} evidence items in {state.hop_count} hops",
+            "reward": investigator_reward,
+            "feedback": {"sufficient_evidence": state.sufficient_evidence} if state.sufficient_evidence else None,
+            "metadata": {
+                "hop_count": state.hop_count,
                 "evidence_count": len(state.evidence_board),
-                "evidence_sources": [e.source.value for e in state.evidence_board]
-            },
-            "success": state.sufficient_evidence,
-            "metric_score": min(1.0, sum(e.relevance_score for e in state.evidence_board) / 3.0)
+                "evidence_sources": [e.source.value for e in state.evidence_board],
+                "conversation_id": state.conversation_id,
+            }
         })
-        
+
         # Signal for Agent/Synthesis optimization
         signals.append({
-            "phase": "agent",
-            "input": {
-                "evidence_board": str([e.content[:100] for e in state.evidence_board]),
-                "intent": state.detected_intent
-            },
-            "output": {
-                "response_length": len(state.response),
+            "type": "agent",
+            "query": f"Intent: {state.detected_intent}, Evidence: {len(state.evidence_board)} items",
+            "response": state.response[:500] if state.response else "",
+            "reward": agent_reward,
+            "feedback": {"user_feedback": user_feedback} if user_feedback else None,
+            "metadata": {
                 "routed_agents": state.routed_agents,
-                "has_visualization": bool(state.visualization_config)
-            },
-            "success": user_feedback and "positive" in user_feedback.lower() if user_feedback else None,
-            "metric_score": 0.8 if state.response else 0.0  # Placeholder
+                "has_visualization": bool(state.visualization_config),
+                "response_length": len(state.response) if state.response else 0,
+                "conversation_id": state.conversation_id,
+            }
         })
-        
+
         return signals
 
 
