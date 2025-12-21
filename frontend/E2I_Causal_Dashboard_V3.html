@@ -2632,11 +2632,14 @@
                             <button class="kg-btn-secondary" data-filter="Brand">Brands</button>
                             <button class="kg-btn-secondary" data-filter="KPI">KPIs</button>
                             <button class="kg-btn-secondary" data-filter="Agent">Agents</button>
+                            <button class="kg-btn-secondary" data-filter="HCP">HCPs</button>
+                            <button class="kg-btn-secondary" data-filter="Episode">Episodes</button>
                             <button class="kg-btn-secondary" data-filter="causal">Causal Only</button>
                         </div>
 
                         <div class="kg-toolbar-group">
-                            <button class="kg-btn-primary" id="kg-resetBtn">🔄 Reset View</button>
+                            <button class="kg-btn-primary" id="kg-refreshBtn">🔄 Refresh</button>
+                            <button class="kg-btn-secondary" id="kg-resetBtn">↩️ Reset View</button>
                             <button class="kg-btn-secondary" id="kg-fitBtn">📐 Fit</button>
                         </div>
                     </div>
@@ -5042,8 +5045,235 @@ USER QUERY: "Why did Remibrutinib conversion drop in Midwest?"
 
         // Knowledge Graph Initialization
         let kgCy = null;
+        let kgWebSocket = null;
+        const GRAPH_API_BASE = '/api/v1/graph';
 
-        function initKnowledgeGraph() {
+        // Fetch graph data from API
+        async function fetchGraphData() {
+            try {
+                // Fetch nodes and relationships in parallel
+                const [nodesRes, relsRes] = await Promise.all([
+                    fetch(`${GRAPH_API_BASE}/nodes?limit=200`),
+                    fetch(`${GRAPH_API_BASE}/relationships?limit=500`)
+                ]);
+
+                if (!nodesRes.ok || !relsRes.ok) {
+                    throw new Error('API request failed');
+                }
+
+                const nodesData = await nodesRes.json();
+                const relsData = await relsRes.json();
+
+                // Convert API response to Cytoscape format
+                const nodes = nodesData.nodes.map(node => ({
+                    data: {
+                        id: node.id,
+                        label: node.name,
+                        type: node.type,
+                        ...node.properties
+                    }
+                }));
+
+                const edges = relsData.relationships.map(rel => ({
+                    data: {
+                        id: rel.id,
+                        source: rel.source_id,
+                        target: rel.target_id,
+                        type: rel.type,
+                        effect: rel.properties?.effect,
+                        confidence: rel.confidence,
+                        ...rel.properties
+                    }
+                }));
+
+                return { nodes, edges };
+            } catch (error) {
+                console.warn('Failed to fetch graph data from API, using sample data:', error);
+                return getSampleGraphData();
+            }
+        }
+
+        // Sample data fallback
+        function getSampleGraphData() {
+            return {
+                nodes: [
+                    // Brands
+                    { data: { id: 'rem', label: 'Remibrutinib', type: 'Brand', therapeutic: 'CSU' }},
+                    { data: { id: 'fab', label: 'Fabhalta', type: 'Brand', therapeutic: 'PNH' }},
+                    { data: { id: 'kis', label: 'Kisqali', type: 'Brand', therapeutic: 'Oncology' }},
+                    // Regions
+                    { data: { id: 'ne', label: 'Northeast', type: 'Region', abbrev: 'NE' }},
+                    { data: { id: 'mw', label: 'Midwest', type: 'Region', abbrev: 'MW' }},
+                    { data: { id: 'se', label: 'Southeast', type: 'Region', abbrev: 'SE' }},
+                    { data: { id: 'we', label: 'West', type: 'Region', abbrev: 'W' }},
+                    // KPIs
+                    { data: { id: 'conv', label: 'Conversion Rate', type: 'KPI', workstream: 'WS2' }},
+                    { data: { id: 'trx', label: 'TRx Volume', type: 'KPI', workstream: 'WS3' }},
+                    { data: { id: 'eng', label: 'Engagement Score', type: 'KPI', workstream: 'WS2' }},
+                    { data: { id: 'cov', label: 'HCP Coverage', type: 'KPI', workstream: 'WS1' }},
+                    { data: { id: 'ttt', label: 'Time to Therapy', type: 'KPI', workstream: 'WS3' }},
+                    // Agents
+                    { data: { id: 'ci', label: 'Causal Impact', type: 'Agent', tier: 1 }},
+                    { data: { id: 'ga', label: 'Gap Analyzer', type: 'Agent', tier: 1 }},
+                    { data: { id: 'dm', label: 'Drift Monitor', type: 'Agent', tier: 2 }},
+                    { data: { id: 'exp', label: 'Explainer', type: 'Agent', tier: 4 }},
+                    // Causal Variables
+                    { data: { id: 'trigger', label: 'Trigger Quality', type: 'CausalVariable' }},
+                    { data: { id: 'leadtime', label: 'Lead Time', type: 'CausalVariable' }},
+                    { data: { id: 'dataqual', label: 'Data Quality', type: 'CausalVariable' }},
+                    // Insights / Episodes
+                    { data: { id: 'ins1', label: 'MW Conv Drop', type: 'Episode', date: '2025-Q3' }},
+                    { data: { id: 'ins2', label: 'NE Engagement Up', type: 'Episode', date: '2025-Q3' }},
+                ],
+                edges: [
+                    // Causal relationships
+                    { data: { source: 'cov', target: 'eng', type: 'CAUSES', effect: 0.23 }},
+                    { data: { source: 'eng', target: 'conv', type: 'CAUSES', effect: 0.31 }},
+                    { data: { source: 'conv', target: 'trx', type: 'CAUSES', effect: 0.45 }},
+                    { data: { source: 'trigger', target: 'conv', type: 'CAUSES', effect: 0.28 }},
+                    { data: { source: 'leadtime', target: 'trigger', type: 'IMPACTS', effect: 0.18 }},
+                    { data: { source: 'dataqual', target: 'cov', type: 'IMPACTS', effect: 0.15 }},
+                    { data: { source: 'ttt', target: 'trx', type: 'IMPACTS', effect: -0.12 }},
+                    // Agent-KPI relationships
+                    { data: { source: 'ci', target: 'conv', type: 'DISCOVERED' }},
+                    { data: { source: 'ci', target: 'trx', type: 'DISCOVERED' }},
+                    { data: { source: 'ga', target: 'cov', type: 'DISCOVERED' }},
+                    { data: { source: 'dm', target: 'eng', type: 'DISCOVERED' }},
+                    { data: { source: 'exp', target: 'ins1', type: 'GENERATED' }},
+                    // Brand-Region relationships
+                    { data: { source: 'rem', target: 'ne', type: 'RELATES_TO', share: 0.12 }},
+                    { data: { source: 'rem', target: 'mw', type: 'RELATES_TO', share: 0.08 }},
+                    { data: { source: 'fab', target: 'ne', type: 'RELATES_TO', share: 0.15 }},
+                    { data: { source: 'fab', target: 'se', type: 'RELATES_TO', share: 0.11 }},
+                    { data: { source: 'kis', target: 'we', type: 'RELATES_TO', share: 0.22 }},
+                    { data: { source: 'kis', target: 'mw', type: 'RELATES_TO', share: 0.18 }},
+                    // Episode connections
+                    { data: { source: 'ins1', target: 'rem', type: 'MENTIONS' }},
+                    { data: { source: 'ins1', target: 'mw', type: 'MENTIONS' }},
+                    { data: { source: 'ins1', target: 'conv', type: 'MENTIONS' }},
+                    { data: { source: 'ins2', target: 'ne', type: 'MENTIONS' }},
+                    { data: { source: 'ins2', target: 'eng', type: 'MENTIONS' }},
+                    // Influences
+                    { data: { source: 'eng', target: 'cov', type: 'INFLUENCES', strength: 0.65 }},
+                ]
+            };
+        }
+
+        // WebSocket connection for real-time graph updates
+        function connectGraphWebSocket() {
+            const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${wsProtocol}//${window.location.host}${GRAPH_API_BASE}/stream`;
+
+            try {
+                kgWebSocket = new WebSocket(wsUrl);
+
+                kgWebSocket.onopen = () => {
+                    console.log('Graph WebSocket connected');
+                    // Subscribe to all entity types
+                    kgWebSocket.send(JSON.stringify({
+                        entity_types: ['Patient', 'HCP', 'Brand', 'Region', 'KPI', 'CausalPath', 'Trigger', 'Agent', 'Episode', 'Community'],
+                        include_properties: true
+                    }));
+                };
+
+                kgWebSocket.onmessage = (event) => {
+                    const message = JSON.parse(event.data);
+                    handleGraphUpdate(message);
+                };
+
+                kgWebSocket.onerror = (error) => {
+                    console.warn('Graph WebSocket error:', error);
+                };
+
+                kgWebSocket.onclose = () => {
+                    console.log('Graph WebSocket closed, reconnecting in 5s...');
+                    setTimeout(connectGraphWebSocket, 5000);
+                };
+            } catch (error) {
+                console.warn('Failed to connect Graph WebSocket:', error);
+            }
+        }
+
+        // Handle real-time graph updates
+        function handleGraphUpdate(message) {
+            if (!kgCy) return;
+
+            const { event_type, payload } = message;
+
+            switch (event_type) {
+                case 'node_added':
+                    kgCy.add({
+                        group: 'nodes',
+                        data: {
+                            id: payload.id,
+                            label: payload.name,
+                            type: payload.type,
+                            ...payload.properties
+                        }
+                    });
+                    updateKGStats();
+                    break;
+
+                case 'edge_added':
+                    kgCy.add({
+                        group: 'edges',
+                        data: {
+                            id: payload.id,
+                            source: payload.source_id,
+                            target: payload.target_id,
+                            type: payload.type,
+                            ...payload.properties
+                        }
+                    });
+                    updateKGStats();
+                    break;
+
+                case 'node_updated':
+                    const node = kgCy.getElementById(payload.id);
+                    if (node.length) {
+                        node.data(payload.properties);
+                    }
+                    break;
+
+                case 'episode_added':
+                    // Add episode as a special node with connections
+                    kgCy.add({
+                        group: 'nodes',
+                        data: {
+                            id: payload.episode_id,
+                            label: payload.content_summary || 'Episode',
+                            type: 'Episode',
+                            source: payload.source
+                        }
+                    });
+                    // Add MENTIONS edges to extracted entities
+                    (payload.extracted_entities || []).forEach(entity => {
+                        if (kgCy.getElementById(entity.id).length) {
+                            kgCy.add({
+                                group: 'edges',
+                                data: {
+                                    source: payload.episode_id,
+                                    target: entity.id,
+                                    type: 'MENTIONS'
+                                }
+                            });
+                        }
+                    });
+                    updateKGStats();
+                    break;
+            }
+
+            // Re-run layout if nodes were added
+            if (['node_added', 'edge_added', 'episode_added'].includes(event_type)) {
+                kgCy.layout({
+                    name: document.getElementById('kg-layoutSelect').value,
+                    animate: true,
+                    animationDuration: 300
+                }).run();
+            }
+        }
+
+        async function initKnowledgeGraph() {
             // Only initialize if the tab is active and cy hasn't been initialized
             if (document.getElementById('knowledge-graph').classList.contains('active') && !kgCy) {
                 // Register dagre layout
@@ -5051,97 +5281,37 @@ USER QUERY: "Why did Remibrutinib conversion drop in Midwest?"
                     cytoscape.use(cytoscapeDagre);
                 }
 
-                // E2I Sample Knowledge Graph Data
-                const graphData = {
-                    nodes: [
-                        // Brands
-                        { data: { id: 'rem', label: 'Remibrutinib', type: 'Brand', therapeutic: 'CSU' }},
-                        { data: { id: 'fab', label: 'Fabhalta', type: 'Brand', therapeutic: 'PNH' }},
-                        { data: { id: 'kis', label: 'Kisqali', type: 'Brand', therapeutic: 'Oncology' }},
+                // Fetch graph data from API (with fallback to sample data)
+                const graphData = await fetchGraphData();
 
-                        // Regions
-                        { data: { id: 'ne', label: 'Northeast', type: 'Region', abbrev: 'NE' }},
-                        { data: { id: 'mw', label: 'Midwest', type: 'Region', abbrev: 'MW' }},
-                        { data: { id: 'se', label: 'Southeast', type: 'Region', abbrev: 'SE' }},
-                        { data: { id: 'we', label: 'West', type: 'Region', abbrev: 'W' }},
-
-                        // KPIs
-                        { data: { id: 'conv', label: 'Conversion Rate', type: 'KPI', workstream: 'WS2' }},
-                        { data: { id: 'trx', label: 'TRx Volume', type: 'KPI', workstream: 'WS3' }},
-                        { data: { id: 'eng', label: 'Engagement Score', type: 'KPI', workstream: 'WS2' }},
-                        { data: { id: 'cov', label: 'HCP Coverage', type: 'KPI', workstream: 'WS1' }},
-                        { data: { id: 'ttt', label: 'Time to Therapy', type: 'KPI', workstream: 'WS3' }},
-
-                        // Agents
-                        { data: { id: 'ci', label: 'Causal Impact', type: 'Agent', tier: 1 }},
-                        { data: { id: 'ga', label: 'Gap Analyzer', type: 'Agent', tier: 1 }},
-                        { data: { id: 'dm', label: 'Drift Monitor', type: 'Agent', tier: 2 }},
-                        { data: { id: 'exp', label: 'Explainer', type: 'Agent', tier: 4 }},
-
-                        // Causal Variables
-                        { data: { id: 'trigger', label: 'Trigger Quality', type: 'CausalVariable' }},
-                        { data: { id: 'leadtime', label: 'Lead Time', type: 'CausalVariable' }},
-                        { data: { id: 'dataqual', label: 'Data Quality', type: 'CausalVariable' }},
-
-                        // Insights
-                        { data: { id: 'ins1', label: 'MW Conv Drop', type: 'Insight', date: '2025-Q3' }},
-                        { data: { id: 'ins2', label: 'NE Engagement Up', type: 'Insight', date: '2025-Q3' }},
-                    ],
-
-                    edges: [
-                        // Causal relationships
-                        { data: { source: 'cov', target: 'eng', type: 'CAUSES', effect: 0.23 }},
-                        { data: { source: 'eng', target: 'conv', type: 'CAUSES', effect: 0.31 }},
-                        { data: { source: 'conv', target: 'trx', type: 'CAUSES', effect: 0.45 }},
-                        { data: { source: 'trigger', target: 'conv', type: 'CAUSES', effect: 0.28 }},
-                        { data: { source: 'leadtime', target: 'trigger', type: 'AFFECTS', effect: 0.18 }},
-                        { data: { source: 'dataqual', target: 'cov', type: 'AFFECTS', effect: 0.15 }},
-                        { data: { source: 'ttt', target: 'trx', type: 'AFFECTS', effect: -0.12 }},
-
-                        // Agent-KPI relationships
-                        { data: { source: 'ci', target: 'conv', type: 'ANALYZES' }},
-                        { data: { source: 'ci', target: 'trx', type: 'ANALYZES' }},
-                        { data: { source: 'ga', target: 'cov', type: 'ANALYZES' }},
-                        { data: { source: 'dm', target: 'eng', type: 'ANALYZES' }},
-                        { data: { source: 'exp', target: 'ins1', type: 'ANALYZES' }},
-
-                        // Brand-Region relationships
-                        { data: { source: 'rem', target: 'ne', type: 'SOLD_IN', share: 0.12 }},
-                        { data: { source: 'rem', target: 'mw', type: 'SOLD_IN', share: 0.08 }},
-                        { data: { source: 'fab', target: 'ne', type: 'SOLD_IN', share: 0.15 }},
-                        { data: { source: 'fab', target: 'se', type: 'SOLD_IN', share: 0.11 }},
-                        { data: { source: 'kis', target: 'we', type: 'SOLD_IN', share: 0.22 }},
-                        { data: { source: 'kis', target: 'mw', type: 'SOLD_IN', share: 0.18 }},
-
-                        // Insight connections
-                        { data: { source: 'ins1', target: 'rem', type: 'RELATES_TO' }},
-                        { data: { source: 'ins1', target: 'mw', type: 'RELATES_TO' }},
-                        { data: { source: 'ins1', target: 'conv', type: 'RELATES_TO' }},
-                        { data: { source: 'ins2', target: 'ne', type: 'RELATES_TO' }},
-                        { data: { source: 'ins2', target: 'eng', type: 'RELATES_TO' }},
-
-                        // Correlations
-                        { data: { source: 'eng', target: 'cov', type: 'CORRELATES', strength: 0.65 }},
-                    ]
-                };
-
-                // Node colors
+                // Node colors - includes all E2I and Graphiti entity types
                 const nodeColors = {
+                    'Patient': '#ed64a6',
+                    'HCP': '#38b2ac',
                     'Brand': '#667eea',
                     'Region': '#48bb78',
                     'KPI': '#f6ad55',
+                    'CausalPath': '#e53e3e',
+                    'Trigger': '#dd6b20',
                     'Agent': '#fc8181',
+                    'Episode': '#b794f4',
+                    'Community': '#9f7aea',
                     'CausalVariable': '#4fd1c5',
                     'Insight': '#b794f4'
                 };
 
-                // Edge colors
+                // Edge colors - matches Graphiti relationship types
                 const edgeColors = {
+                    'TREATED_BY': '#38b2ac',
+                    'PRESCRIBED': '#667eea',
+                    'PRESCRIBES': '#667eea',
                     'CAUSES': '#e53e3e',
-                    'AFFECTS': '#dd6b20',
-                    'CORRELATES': '#38a169',
-                    'ANALYZES': '#3182ce',
-                    'SOLD_IN': '#805ad5',
+                    'IMPACTS': '#dd6b20',
+                    'INFLUENCES': '#38a169',
+                    'DISCOVERED': '#3182ce',
+                    'GENERATED': '#805ad5',
+                    'MENTIONS': '#9f7aea',
+                    'MEMBER_OF': '#ed64a6',
                     'RELATES_TO': '#718096'
                 };
 
@@ -5337,6 +5507,33 @@ USER QUERY: "Why did Remibrutinib conversion drop in Midwest?"
                 });
 
                 // Reset button
+                // Refresh button - reload graph data from API
+                document.getElementById('kg-refreshBtn').addEventListener('click', async function() {
+                    this.disabled = true;
+                    this.textContent = '⏳ Loading...';
+                    try {
+                        const newData = await fetchGraphData();
+                        kgCy.elements().remove();
+                        kgCy.add(newData.nodes);
+                        kgCy.add(newData.edges);
+                        kgCy.layout({
+                            name: document.getElementById('kg-layoutSelect').value,
+                            animate: true,
+                            animationDuration: 500,
+                            rankDir: 'LR',
+                            nodeSep: 60,
+                            rankSep: 100
+                        }).run();
+                        updateKGStats();
+                    } catch (error) {
+                        console.error('Failed to refresh graph:', error);
+                    } finally {
+                        this.disabled = false;
+                        this.textContent = '🔄 Refresh';
+                    }
+                });
+
+                // Reset button
                 document.getElementById('kg-resetBtn').addEventListener('click', function() {
                     kgCy.elements().removeClass('faded highlighted');
                     document.querySelectorAll('#knowledge-graph [data-filter]').forEach(b => b.classList.remove('active'));
@@ -5348,6 +5545,9 @@ USER QUERY: "Why did Remibrutinib conversion drop in Midwest?"
                 document.getElementById('kg-fitBtn').addEventListener('click', function() {
                     kgCy.fit(50);
                 });
+
+                // Connect WebSocket for real-time updates
+                connectGraphWebSocket();
 
                 // Search functionality
                 document.getElementById('kg-searchBtn').addEventListener('click', function() {

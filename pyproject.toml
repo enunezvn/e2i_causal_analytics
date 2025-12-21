@@ -61,6 +61,9 @@ dependencies = [
     "ragas>=0.1.0",                # RAG evaluation
     "dspy-ai>=2.4.0",              # Prompt optimization
 
+    # Knowledge Graph
+    "graphiti-core[falkordb,anthropic]>=0.10.0",  # Temporal knowledge graph
+
     # API & Web
     "fastapi>=0.115.0",
     "uvicorn>=0.30.0",
