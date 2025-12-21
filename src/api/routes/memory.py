@@ -315,7 +315,7 @@ async def search_memory(request: MemorySearchRequest) -> MemorySearchResponse:
 
     except Exception as e:
         logger.error(f"Memory search failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Memory search failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Memory search failed: {str(e)}") from e
 
 
 @router.post("/episodic", response_model=EpisodicMemoryResponse)
@@ -364,7 +364,7 @@ async def create_episodic_memory(
 
     except Exception as e:
         logger.error(f"Episodic memory insertion failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to create episodic memory: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to create episodic memory: {str(e)}") from e
 
 
 @router.get("/episodic/{memory_id}", response_model=EpisodicMemoryResponse)
@@ -394,7 +394,7 @@ async def get_episodic_memory_endpoint(memory_id: str) -> EpisodicMemoryResponse
         raise
     except Exception as e:
         logger.error(f"Failed to retrieve episodic memory: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to retrieve memory: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve memory: {str(e)}") from e
 
 
 @router.post("/procedural/feedback", response_model=ProceduralFeedbackResponse)
@@ -444,7 +444,7 @@ async def record_procedural_feedback(
 
     except Exception as e:
         logger.error(f"Failed to record procedural feedback: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to record feedback: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to record feedback: {str(e)}") from e
 
 
 @router.get("/semantic/paths", response_model=SemanticPathResponse)
@@ -493,7 +493,7 @@ async def query_semantic_paths(
 
     except Exception as e:
         logger.error(f"Semantic path query failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Path query failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Path query failed: {str(e)}") from e
 
 
 # =============================================================================
@@ -518,4 +518,4 @@ async def get_memory_stats() -> Dict[str, Any]:
         }
     except Exception as e:
         logger.error(f"Failed to get memory stats: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e

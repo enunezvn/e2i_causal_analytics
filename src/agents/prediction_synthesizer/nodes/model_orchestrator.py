@@ -189,8 +189,8 @@ class ModelOrchestratorNode:
                 features_used=result.get("features_used", []),
             )
 
-        except asyncio.TimeoutError:
-            raise TimeoutError(f"Model {model_id} timed out")
+        except asyncio.TimeoutError as e:
+            raise TimeoutError(f"Model {model_id} timed out") from e
 
     def _create_mock_prediction(self, model_id: str, start_time: float) -> ModelPrediction:
         """Create mock prediction for testing."""

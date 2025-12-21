@@ -134,21 +134,21 @@ class GraphBackend:
 
             return results
 
-        except asyncio.TimeoutError:
+        except asyncio.TimeoutError as e:
             self._last_latency_ms = self.search_config.graph_timeout_ms
             logger.warning(f"Graph search timeout after {self.search_config.graph_timeout_ms}ms")
             raise GraphSearchError(
                 message=f"Graph search timeout after {self.search_config.graph_timeout_ms}ms",
                 backend="falkordb_graph",
                 details={"timeout_ms": self.search_config.graph_timeout_ms},
-            )
+            ) from e
 
         except Exception as e:
             self._last_latency_ms = (time.time() - start_time) * 1000
             logger.error(f"Graph search error: {e}")
             raise GraphSearchError(
                 message=f"Graph search failed: {e}", backend="falkordb_graph", original_error=e
-            )
+            ) from e
 
     def _execute_query(self, cypher_query: str) -> Any:
         """Execute Cypher query synchronously."""
@@ -353,15 +353,15 @@ class GraphBackend:
 
             return self._parse_graph_for_visualization(result, center_node_id, max_depth)
 
-        except asyncio.TimeoutError:
-            raise GraphSearchError(message="Graph subgraph query timeout", backend="falkordb_graph")
+        except asyncio.TimeoutError as e:
+            raise GraphSearchError(message="Graph subgraph query timeout", backend="falkordb_graph") from e
 
         except Exception as e:
             raise GraphSearchError(
                 message=f"Graph subgraph query failed: {e}",
                 backend="falkordb_graph",
                 original_error=e,
-            )
+            ) from e
 
     def _parse_graph_for_visualization(
         self, result: Any, center_node_id: Optional[str], max_depth: int
@@ -472,7 +472,7 @@ class GraphBackend:
         except Exception as e:
             raise GraphSearchError(
                 message=f"Causal path query failed: {e}", backend="falkordb_graph", original_error=e
-            )
+            ) from e
 
     async def health_check(self) -> Dict[str, Any]:
         """
