@@ -72,7 +72,7 @@ def rag_config():
         ),
         falkordb=FalkorDBConfig(
             host="localhost",
-            port=6379,
+            port=6381,
             graph_name="test_graph",
         )
     )

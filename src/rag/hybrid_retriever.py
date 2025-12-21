@@ -65,7 +65,7 @@ class HybridRetriever:
         from src.rag.config import RAGConfig
 
         supabase = create_client(url, key)
-        falkordb = FalkorDB(host="localhost", port=6379)
+        falkordb = FalkorDB(host="localhost", port=6381)
 
         retriever = HybridRetriever(
             supabase_client=supabase,

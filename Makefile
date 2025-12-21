@@ -48,13 +48,13 @@ clean:
 	rm -rf build/ dist/ .pytest_cache/ .mypy_cache/ .ruff_cache/
 
 docker-up:
-	docker run -d --name redis-working-memory -p 6379:6379 redis:latest || true
-	docker run -d --name falkordb -p 6380:6379 falkordb/falkordb:latest || true
-	@echo "Docker services started: Redis (6379), FalkorDB (6380)"
+	docker run -d --name e2i_redis -p 6382:6379 redis:latest || true
+	docker run -d --name e2i_falkordb -p 6381:6379 falkordb/falkordb:latest || true
+	@echo "Docker services started: Redis (6382), FalkorDB (6381)"
 
 docker-down:
-	docker stop redis-working-memory falkordb 2>/dev/null || true
-	docker rm redis-working-memory falkordb 2>/dev/null || true
+	docker stop e2i_redis e2i_falkordb 2>/dev/null || true
+	docker rm e2i_redis e2i_falkordb 2>/dev/null || true
 	@echo "Docker services stopped"
 
 db-init:

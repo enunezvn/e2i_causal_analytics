@@ -43,7 +43,7 @@ class GraphBackend:
         from src.rag.backends import GraphBackend
         from src.rag.config import FalkorDBConfig, HybridSearchConfig
 
-        falkordb = FalkorDB(host="localhost", port=6379)
+        falkordb = FalkorDB(host="localhost", port=6381)
         backend = GraphBackend(
             falkordb_client=falkordb,
             falkordb_config=FalkorDBConfig(),

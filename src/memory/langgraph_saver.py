@@ -46,7 +46,7 @@ def create_checkpointer(
         ImportError: If required packages are not installed and fallback is disabled
         ConnectionError: If Redis connection fails and fallback is disabled
     """
-    url = redis_url or os.environ.get("REDIS_URL", "redis://localhost:6379")
+    url = redis_url or os.environ.get("REDIS_URL", "redis://localhost:6382")
 
     try:
         from langgraph.checkpoint.redis import RedisSaver
@@ -98,7 +98,7 @@ def create_async_checkpointer(
     Returns:
         Checkpointer: AsyncRedisSaver or MemorySaver instance
     """
-    url = redis_url or os.environ.get("REDIS_URL", "redis://localhost:6379")
+    url = redis_url or os.environ.get("REDIS_URL", "redis://localhost:6382")
 
     try:
         from langgraph.checkpoint.redis.aio import AsyncRedisSaver
@@ -152,7 +152,7 @@ class CheckpointerConfig:
         ttl_seconds: Optional[int] = 86400,
         fallback_to_memory: bool = True
     ):
-        self.redis_url = redis_url or os.environ.get("REDIS_URL", "redis://localhost:6379")
+        self.redis_url = redis_url or os.environ.get("REDIS_URL", "redis://localhost:6382")
         self.checkpoint_prefix = checkpoint_prefix
         self.ttl_seconds = ttl_seconds
         self.fallback_to_memory = fallback_to_memory
