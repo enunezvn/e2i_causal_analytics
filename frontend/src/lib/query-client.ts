@@ -153,7 +153,13 @@ export const queryKeys = {
     all: () => [...queryKeys.all, 'memory'] as const,
     working: () => [...queryKeys.memory.all(), 'working'] as const,
     semantic: () => [...queryKeys.memory.all(), 'semantic'] as const,
+    semanticPaths: () => [...queryKeys.memory.all(), 'semantic', 'paths'] as const,
     episodic: () => [...queryKeys.memory.all(), 'episodic'] as const,
+    episodicMemory: (id: string) =>
+      [...queryKeys.memory.all(), 'episodic', id] as const,
+    search: (query: string) =>
+      [...queryKeys.memory.all(), 'search', query] as const,
+    stats: () => [...queryKeys.memory.all(), 'stats'] as const,
   },
 
   /**
@@ -162,6 +168,11 @@ export const queryKeys = {
   cognitive: {
     all: () => [...queryKeys.all, 'cognitive'] as const,
     status: () => [...queryKeys.cognitive.all(), 'status'] as const,
+    sessions: () => [...queryKeys.cognitive.all(), 'sessions'] as const,
+    session: (id: string) =>
+      [...queryKeys.cognitive.all(), 'session', id] as const,
+    rag: (query: string) =>
+      [...queryKeys.cognitive.all(), 'rag', query] as const,
   },
 
   /**
@@ -169,11 +180,12 @@ export const queryKeys = {
    */
   explain: {
     all: () => [...queryKeys.all, 'explain'] as const,
-    model: () => [...queryKeys.explain.all(), 'model'] as const,
+    models: () => [...queryKeys.explain.all(), 'models'] as const,
     prediction: (predictionId: string) =>
       [...queryKeys.explain.all(), 'prediction', predictionId] as const,
-    shap: (modelId: string) =>
-      [...queryKeys.explain.all(), 'shap', modelId] as const,
+    history: (patientId: string) =>
+      [...queryKeys.explain.all(), 'history', patientId] as const,
+    health: () => [...queryKeys.explain.all(), 'health'] as const,
   },
 
   /**
@@ -182,8 +194,16 @@ export const queryKeys = {
   rag: {
     all: () => [...queryKeys.all, 'rag'] as const,
     documents: () => [...queryKeys.rag.all(), 'documents'] as const,
-    query: (queryText: string) =>
-      [...queryKeys.rag.all(), 'query', queryText] as const,
+    search: (query: string) =>
+      [...queryKeys.rag.all(), 'search', query] as const,
+    entities: (query: string) =>
+      [...queryKeys.rag.all(), 'entities', query] as const,
+    subgraph: (entity: string) =>
+      [...queryKeys.rag.all(), 'subgraph', entity] as const,
+    paths: (source: string, target: string) =>
+      [...queryKeys.rag.all(), 'paths', source, target] as const,
+    stats: () => [...queryKeys.rag.all(), 'stats'] as const,
+    health: () => [...queryKeys.rag.all(), 'health'] as const,
   },
 
   /**
