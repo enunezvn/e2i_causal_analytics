@@ -25,7 +25,6 @@ import numpy as np
 
 # Conditional DoWhy import for graceful degradation
 try:
-    import dowhy
     from dowhy import CausalModel
 
     DOWHY_AVAILABLE = True

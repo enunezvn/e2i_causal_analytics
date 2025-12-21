@@ -328,16 +328,11 @@ class RAGASEvaluator:
 
     def _check_ragas(self) -> bool:
         """Check if RAGAS is available."""
-        try:
-            from ragas.metrics import (
-                answer_relevancy,
-                context_precision,
-                context_recall,
-                faithfulness,
-            )
+        import importlib.util
 
+        if importlib.util.find_spec("ragas") is not None:
             return True
-        except ImportError:
+        else:
             logger.warning("RAGAS not installed. Using fallback metrics.")
             return False
 
