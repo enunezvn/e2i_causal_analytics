@@ -6,125 +6,19 @@
  * Displays the interactive graph with nodes and relationships
  * from the E2I Causal Analytics system.
  *
+ * Uses TanStack Query hooks to fetch data from the graph API
+ * with automatic caching, loading states, and error handling.
+ *
  * @module pages/KnowledgeGraph
  */
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import { KnowledgeGraph as KnowledgeGraphViz } from '@/components/visualizations/KnowledgeGraph';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import type { GraphNode, GraphRelationship, EntityType, RelationshipType } from '@/types/graph';
+import { useNodes, useRelationships, useGraphStats } from '@/hooks/api/use-graph';
+import type { GraphNode, GraphRelationship } from '@/types/graph';
 
-// =============================================================================
-// SAMPLE DATA
-// =============================================================================
-
-/**
- * Sample nodes for demonstration
- * In production, this would come from useNodes() hook
- */
-const SAMPLE_NODES: GraphNode[] = [
-  {
-    id: 'patient_001',
-    type: 'Patient' as EntityType,
-    name: 'Patient A',
-    properties: { age: 45, condition: 'Type 2 Diabetes' },
-    created_at: '2024-01-15T10:00:00Z',
-    updated_at: '2024-01-15T10:00:00Z',
-  },
-  {
-    id: 'hcp_001',
-    type: 'HCP' as EntityType,
-    name: 'Dr. Smith',
-    properties: { specialty: 'Endocrinology', region: 'Northeast' },
-    created_at: '2024-01-10T09:00:00Z',
-    updated_at: '2024-01-10T09:00:00Z',
-  },
-  {
-    id: 'brand_001',
-    type: 'Brand' as EntityType,
-    name: 'Kisqali',
-    properties: { category: 'Oncology', manufacturer: 'Novartis' },
-    created_at: '2024-01-05T08:00:00Z',
-    updated_at: '2024-01-05T08:00:00Z',
-  },
-  {
-    id: 'kpi_001',
-    type: 'KPI' as EntityType,
-    name: 'TRx Volume',
-    properties: { metric_type: 'prescription', unit: 'count' },
-    created_at: '2024-01-01T00:00:00Z',
-    updated_at: '2024-01-01T00:00:00Z',
-  },
-  {
-    id: 'region_001',
-    type: 'Region' as EntityType,
-    name: 'Northeast',
-    properties: { country: 'USA', population: 55000000 },
-    created_at: '2024-01-01T00:00:00Z',
-    updated_at: '2024-01-01T00:00:00Z',
-  },
-  {
-    id: 'treatment_001',
-    type: 'Treatment' as EntityType,
-    name: 'CDK4/6 Inhibitor Therapy',
-    properties: { indication: 'Breast Cancer', stage: 'Phase 3' },
-    created_at: '2024-01-08T12:00:00Z',
-    updated_at: '2024-01-08T12:00:00Z',
-  },
-];
-
-/**
- * Sample relationships for demonstration
- * In production, this would come from useRelationships() hook
- */
-const SAMPLE_RELATIONSHIPS: GraphRelationship[] = [
-  {
-    id: 'rel_001',
-    type: 'TREATED_BY' as RelationshipType,
-    source_id: 'patient_001',
-    target_id: 'hcp_001',
-    properties: { since: '2023-06-01' },
-    confidence: 0.95,
-    created_at: '2024-01-15T10:00:00Z',
-  },
-  {
-    id: 'rel_002',
-    type: 'PRESCRIBES' as RelationshipType,
-    source_id: 'hcp_001',
-    target_id: 'brand_001',
-    properties: { frequency: 'regular' },
-    confidence: 0.88,
-    created_at: '2024-01-12T14:00:00Z',
-  },
-  {
-    id: 'rel_003',
-    type: 'IMPACTS' as RelationshipType,
-    source_id: 'brand_001',
-    target_id: 'kpi_001',
-    properties: { effect_size: 0.34 },
-    confidence: 0.76,
-    created_at: '2024-01-10T11:00:00Z',
-  },
-  {
-    id: 'rel_004',
-    type: 'PRACTICES_IN' as RelationshipType,
-    source_id: 'hcp_001',
-    target_id: 'region_001',
-    properties: {},
-    confidence: 1.0,
-    created_at: '2024-01-10T09:00:00Z',
-  },
-  {
-    id: 'rel_005',
-    type: 'RELATES_TO' as RelationshipType,
-    source_id: 'brand_001',
-    target_id: 'treatment_001',
-    properties: { relationship: 'primary_drug' },
-    confidence: 0.92,
-    created_at: '2024-01-08T12:00:00Z',
-  },
-];
 
 // =============================================================================
 // PAGE COMPONENT
@@ -135,19 +29,74 @@ function KnowledgeGraphPage() {
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
   const [selectedEdge, setSelectedEdge] = useState<GraphRelationship | null>(null);
 
-  // Calculate stats
+  // Fetch nodes from API with pagination (get first 100 nodes)
+  const {
+    data: nodesData,
+    isLoading: isLoadingNodes,
+    error: nodesError,
+    refetch: refetchNodes,
+  } = useNodes({ limit: 100 });
+
+  // Fetch relationships from API with pagination (get first 200 relationships)
+  const {
+    data: relationshipsData,
+    isLoading: isLoadingRelationships,
+    error: relationshipsError,
+    refetch: refetchRelationships,
+  } = useRelationships({ limit: 200 });
+
+  // Fetch graph stats for the overview cards
+  const { data: graphStats, isLoading: isLoadingStats } = useGraphStats();
+
+  // Combined loading state
+  const isLoading = isLoadingNodes || isLoadingRelationships;
+
+  // Combined error state (prioritize nodes error, then relationships error)
+  const error = nodesError || relationshipsError;
+
+  // Retry handler for error state
+  const handleRetry = useCallback(() => {
+    if (nodesError) {
+      void refetchNodes();
+    }
+    if (relationshipsError) {
+      void refetchRelationships();
+    }
+  }, [nodesError, relationshipsError, refetchNodes, refetchRelationships]);
+
+  // Extract nodes and relationships from API response (memoized to prevent unnecessary re-renders)
+  const nodes = useMemo(() => nodesData?.nodes ?? [], [nodesData?.nodes]);
+  const relationships = useMemo(
+    () => relationshipsData?.relationships ?? [],
+    [relationshipsData?.relationships]
+  );
+
+  // Calculate stats from API data or use graph stats if available
   const stats = useMemo(() => {
-    const nodesByType = SAMPLE_NODES.reduce((acc, node) => {
-      acc[node.type] = (acc[node.type] || 0) + 1;
-      return acc;
-    }, {} as Record<string, number>);
+    // If we have graph stats from the API, use those
+    if (graphStats) {
+      return {
+        totalNodes: graphStats.total_nodes,
+        totalRelationships: graphStats.total_relationships,
+        nodesByType: graphStats.nodes_by_type,
+      };
+    }
+
+    // Fall back to calculating from the loaded data
+    const nodesByType = nodes.reduce(
+      (acc, node) => {
+        acc[node.type] = (acc[node.type] || 0) + 1;
+        return acc;
+      },
+      {} as Record<string, number>
+    );
 
     return {
-      totalNodes: SAMPLE_NODES.length,
-      totalRelationships: SAMPLE_RELATIONSHIPS.length,
+      totalNodes: nodes.length,
+      totalRelationships: relationships.length,
       nodesByType,
     };
-  }, []);
+  }, [graphStats, nodes, relationships]);
 
   return (
     <div className="container mx-auto px-4 py-8">
@@ -165,23 +114,42 @@ function KnowledgeGraphPage() {
         <Card>
           <CardHeader className="pb-2">
             <CardDescription>Total Nodes</CardDescription>
-            <CardTitle className="text-2xl">{stats.totalNodes}</CardTitle>
+            <CardTitle className="text-2xl">
+              {isLoading || isLoadingStats ? (
+                <span className="inline-block h-8 w-16 animate-pulse rounded bg-[var(--color-muted)]" />
+              ) : (
+                stats.totalNodes
+              )}
+            </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="flex flex-wrap gap-1">
-              {Object.entries(stats.nodesByType).map(([type, count]) => (
-                <Badge key={type} variant="secondary" className="text-xs">
-                  {type}: {count}
-                </Badge>
-              ))}
-            </div>
+            {isLoading || isLoadingStats ? (
+              <div className="flex gap-1">
+                <span className="h-5 w-16 animate-pulse rounded bg-[var(--color-muted)]" />
+                <span className="h-5 w-16 animate-pulse rounded bg-[var(--color-muted)]" />
+              </div>
+            ) : (
+              <div className="flex flex-wrap gap-1">
+                {Object.entries(stats.nodesByType).map(([type, count]) => (
+                  <Badge key={type} variant="secondary" className="text-xs">
+                    {type}: {count}
+                  </Badge>
+                ))}
+              </div>
+            )}
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader className="pb-2">
             <CardDescription>Total Relationships</CardDescription>
-            <CardTitle className="text-2xl">{stats.totalRelationships}</CardTitle>
+            <CardTitle className="text-2xl">
+              {isLoading || isLoadingStats ? (
+                <span className="inline-block h-8 w-16 animate-pulse rounded bg-[var(--color-muted)]" />
+              ) : (
+                stats.totalRelationships
+              )}
+            </CardTitle>
           </CardHeader>
           <CardContent>
             <p className="text-sm text-[var(--color-muted-foreground)]">
@@ -202,8 +170,8 @@ function KnowledgeGraphPage() {
               {selectedNode
                 ? `Type: ${selectedNode.type}`
                 : selectedEdge
-                ? `Confidence: ${((selectedEdge.confidence ?? 0) * 100).toFixed(0)}%`
-                : 'Click a node or edge'}
+                  ? `Confidence: ${((selectedEdge.confidence ?? 0) * 100).toFixed(0)}%`
+                  : 'Click a node or edge'}
             </p>
           </CardContent>
         </Card>
@@ -219,10 +187,13 @@ function KnowledgeGraphPage() {
         </CardHeader>
         <CardContent className="p-0">
           <KnowledgeGraphViz
-            nodes={SAMPLE_NODES}
-            relationships={SAMPLE_RELATIONSHIPS}
+            nodes={nodes}
+            relationships={relationships}
             layout="cose"
             minHeight={500}
+            isLoading={isLoading}
+            error={error}
+            onRetry={handleRetry}
             onNodeSelect={(node) => {
               setSelectedNode(node);
               setSelectedEdge(null);
