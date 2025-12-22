@@ -10,6 +10,8 @@ from .nodes import (
     evaluate_model,
     fit_preprocessing,
     load_splits,
+    log_to_mlflow,
+    save_checkpoint,
     train_model,
     tune_hyperparameters,
 )
@@ -58,6 +60,10 @@ def create_model_trainer_graph() -> StateGraph:
           ↓
         evaluate_model (eval on train/val/test)
           ↓
+        log_to_mlflow (track experiment)
+          ↓
+        save_checkpoint (persist model)
+          ↓
         END
 
     Critical gates:
@@ -67,6 +73,8 @@ def create_model_trainer_graph() -> StateGraph:
     - HPO uses validation set
     - Test set touched ONCE for final eval
     - Holdout locked until post-deployment
+    - MLflow logs all metrics, params, and model artifacts
+    - Checkpoint saves model to disk for persistence
     """
     workflow = StateGraph(ModelTrainerState)
 
@@ -78,6 +86,8 @@ def create_model_trainer_graph() -> StateGraph:
     workflow.add_node("tune_hyperparameters", tune_hyperparameters)
     workflow.add_node("train_model", train_model)
     workflow.add_node("evaluate_model", evaluate_model)
+    workflow.add_node("log_to_mlflow", log_to_mlflow)
+    workflow.add_node("save_checkpoint", save_checkpoint)
 
     # Set entry point
     workflow.set_entry_point("check_qc_gate")
@@ -115,7 +125,13 @@ def create_model_trainer_graph() -> StateGraph:
     # Training → evaluation (always)
     workflow.add_edge("train_model", "evaluate_model")
 
-    # Evaluation → END
-    workflow.add_edge("evaluate_model", END)
+    # Evaluation → MLflow logging (always)
+    workflow.add_edge("evaluate_model", "log_to_mlflow")
+
+    # MLflow logging → checkpointing (always)
+    workflow.add_edge("log_to_mlflow", "save_checkpoint")
+
+    # Checkpointing → END
+    workflow.add_edge("save_checkpoint", END)
 
     return workflow.compile()

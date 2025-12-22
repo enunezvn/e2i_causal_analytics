@@ -1,7 +1,9 @@
 """Node functions for model_trainer agent."""
 
+from .checkpointer import save_checkpoint, load_checkpoint, list_checkpoints
 from .evaluator import evaluate_model
 from .hyperparameter_tuner import tune_hyperparameters
+from .mlflow_logger import log_to_mlflow
 from .model_trainer_node import train_model
 from .preprocessor import fit_preprocessing
 from .qc_gate_checker import check_qc_gate
@@ -16,4 +18,8 @@ __all__ = [
     "tune_hyperparameters",
     "train_model",
     "evaluate_model",
+    "log_to_mlflow",
+    "save_checkpoint",
+    "load_checkpoint",
+    "list_checkpoints",
 ]

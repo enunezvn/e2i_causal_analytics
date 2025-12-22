@@ -1,0 +1,280 @@
+# MLflow Configuration for E2I Causal Analytics
+# Version: 1.0.0
+#
+# This file configures MLflow experiment tracking, model registry,
+# and artifact storage for the ML foundation agents.
+
+# ============================================================================
+# TRACKING SERVER
+# ============================================================================
+
+tracking:
+  # Tracking server URI
+  # Options:
+  #   - Local: "mlruns" or file:///path/to/mlruns
+  #   - Remote: http://localhost:5000 or https://mlflow.example.com
+  #   - Database: postgresql://user:pass@host:port/mlflow
+  uri: ${MLFLOW_TRACKING_URI:-mlruns}
+
+  # Default artifact location
+  artifact_location: ${MLFLOW_ARTIFACT_URI:-mlartifacts}
+
+  # Request timeout in seconds
+  request_timeout: 30
+
+  # Retry configuration
+  retry:
+    max_attempts: 3
+    backoff_factor: 0.5
+    max_backoff: 10
+
+# ============================================================================
+# EXPERIMENTS
+# ============================================================================
+
+experiments:
+  # Prefix for all experiment names
+  prefix: "e2i"
+
+  # Default tags applied to all experiments
+  default_tags:
+    project: "e2i_causal_analytics"
+    environment: ${ENVIRONMENT:-development}
+
+  # Predefined experiments for E2I use cases
+  predefined:
+    - name: "churn_prediction"
+      description: "Patient churn prediction models"
+      tags:
+        domain: "patient_analytics"
+        kpi: "churn_rate"
+
+    - name: "conversion_optimization"
+      description: "HCP conversion rate optimization"
+      tags:
+        domain: "hcp_analytics"
+        kpi: "conversion_rate"
+
+    - name: "market_share_forecast"
+      description: "Market share forecasting models"
+      tags:
+        domain: "market_analytics"
+        kpi: "market_share"
+
+    - name: "trx_prediction"
+      description: "TRx volume prediction models"
+      tags:
+        domain: "prescription_analytics"
+        kpi: "trx_volume"
+
+    - name: "gap_analysis"
+      description: "Gap analysis and ROI optimization"
+      tags:
+        domain: "business_analytics"
+        kpi: "roi"
+
+# ============================================================================
+# MODEL REGISTRY
+# ============================================================================
+
+registry:
+  # Enable model registry features
+  enabled: true
+
+  # Default model naming pattern
+  # Placeholders: {experiment}, {algorithm}, {version}
+  naming_pattern: "e2i_{experiment}_{algorithm}"
+
+  # Stage transition rules
+  stages:
+    development:
+      description: "Initial model development"
+      auto_transition: false
+
+    staging:
+      description: "Model validation and testing"
+      auto_transition: false
+      validation_required:
+        - min_auc: 0.7
+        - min_samples: 1000
+
+    shadow:
+      description: "Shadow mode production testing"
+      auto_transition: false
+      validation_required:
+        - min_auc: 0.75
+        - shadow_duration_days: 7
+
+    production:
+      description: "Full production deployment"
+      auto_transition: false
+      validation_required:
+        - min_auc: 0.8
+        - shadow_metrics_threshold: 0.95
+        - approval_required: true
+
+    archived:
+      description: "Retired models"
+      auto_transition: false
+
+    deprecated:
+      description: "Models marked for removal"
+      auto_transition: true
+      auto_archive_days: 30
+
+# ============================================================================
+# AUTOLOGGING
+# ============================================================================
+
+autolog:
+  # Enable automatic logging for supported frameworks
+  enabled: true
+
+  # Framework-specific settings
+  sklearn:
+    enabled: true
+    log_models: true
+    log_input_examples: false
+    log_model_signatures: true
+
+  xgboost:
+    enabled: true
+    log_models: true
+    log_input_examples: false
+    log_model_signatures: true
+
+  lightgbm:
+    enabled: true
+    log_models: true
+    log_input_examples: false
+    log_model_signatures: true
+
+# ============================================================================
+# METRICS
+# ============================================================================
+
+metrics:
+  # Standard metrics to log for all models
+  classification:
+    - accuracy
+    - precision
+    - recall
+    - f1_score
+    - auc_roc
+    - auc_pr
+    - log_loss
+    - brier_score
+
+  regression:
+    - rmse
+    - mae
+    - mape
+    - r2_score
+    - explained_variance
+
+  # Custom E2I metrics
+  custom:
+    - calibration_slope
+    - fairness_disparity
+    - feature_importance_stability
+
+# ============================================================================
+# ARTIFACTS
+# ============================================================================
+
+artifacts:
+  # Standard artifacts to save
+  model_artifacts:
+    - model.pkl
+    - preprocessor.pkl
+    - feature_names.json
+    - hyperparameters.json
+
+  analysis_artifacts:
+    - shap_summary.png
+    - feature_importance.png
+    - calibration_plot.png
+    - roc_curve.png
+    - pr_curve.png
+    - confusion_matrix.png
+
+  # Compression for large artifacts
+  compression:
+    enabled: true
+    threshold_mb: 10
+    algorithm: gzip
+
+# ============================================================================
+# CIRCUIT BREAKER
+# ============================================================================
+
+circuit_breaker:
+  # Number of consecutive failures before opening
+  failure_threshold: 5
+
+  # Time in seconds before attempting to half-open
+  reset_timeout_seconds: 30
+
+  # Maximum test calls in half-open state
+  half_open_max_calls: 3
+
+  # Successful calls needed to close from half-open
+  success_threshold: 2
+
+# ============================================================================
+# DATABASE SYNC
+# ============================================================================
+
+database_sync:
+  # Enable synchronization with Supabase tables
+  enabled: true
+
+  # Tables to sync
+  tables:
+    experiments: "ml_experiments"
+    training_runs: "ml_training_runs"
+    model_registry: "ml_model_registry"
+
+  # Sync frequency (if background sync is enabled)
+  sync_interval_seconds: 60
+
+  # Sync mode: "immediate" or "batch"
+  sync_mode: "immediate"
+
+# ============================================================================
+# LOGGING
+# ============================================================================
+
+logging:
+  # Log level for MLflow operations
+  level: INFO
+
+  # Log successful operations
+  log_success: true
+
+  # Log parameter values (may contain sensitive data)
+  log_params: true
+
+  # Mask sensitive parameter names
+  mask_params:
+    - password
+    - api_key
+    - secret
+    - token
+
+# ============================================================================
+# UI
+# ============================================================================
+
+ui:
+  # MLflow UI host
+  host: ${MLFLOW_UI_HOST:-0.0.0.0}
+
+  # MLflow UI port
+  port: ${MLFLOW_UI_PORT:-5000}
+
+  # Authentication (if enabled)
+  auth:
+    enabled: false
+    username: ${MLFLOW_UI_USERNAME:-admin}
+    password: ${MLFLOW_UI_PASSWORD:-}

@@ -1,1 +1,1 @@
-"""Unit tests for MLOps components."""
+"""Unit tests for MLOps module."""

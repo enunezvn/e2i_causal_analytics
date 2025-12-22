@@ -20,7 +20,7 @@ Integration:
 
 from typing import Any, Dict
 
-from .graph import create_feature_analyzer_graph
+from .graph import create_feature_analyzer_graph, create_shap_analysis_graph
 from .state import FeatureAnalyzerState
 
 
@@ -40,7 +40,20 @@ class FeatureAnalyzerAgent:
 
     def __init__(self):
         """Initialize feature_analyzer agent."""
-        self.graph = create_feature_analyzer_graph()
+        self._full_graph = None  # Lazy load
+        self._shap_graph = None  # Lazy load
+
+    def _get_full_graph(self):
+        """Get full feature analyzer graph (lazy loaded)."""
+        if self._full_graph is None:
+            self._full_graph = create_feature_analyzer_graph()
+        return self._full_graph
+
+    def _get_shap_graph(self):
+        """Get SHAP-only analysis graph (lazy loaded)."""
+        if self._shap_graph is None:
+            self._shap_graph = create_shap_analysis_graph()
+        return self._shap_graph
 
     async def run(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """Execute feature analysis workflow.
@@ -77,15 +90,25 @@ class FeatureAnalyzerAgent:
             "max_samples": input_data.get("max_samples", 1000),
             "compute_interactions": input_data.get("compute_interactions", True),
             "store_in_semantic_memory": input_data.get("store_in_semantic_memory", True),
-            # Optional data
+            # Optional data - support both X_train (for full pipeline) and X_sample (for SHAP-only)
             "X_sample": input_data.get("X_sample"),
             "y_sample": input_data.get("y_sample"),
+            "X_train": input_data.get("X_train"),
+            "y_train": input_data.get("y_train"),
             # Status
             "status": "in_progress",
         }
 
+        # Select appropriate workflow based on inputs
+        # If X_train is provided, use full pipeline (feature generation -> selection -> SHAP)
+        # If only model_uri is provided, use SHAP-only pipeline
+        if input_data.get("X_train") is not None:
+            graph = self._get_full_graph()
+        else:
+            graph = self._get_shap_graph()
+
         # Execute LangGraph workflow
-        final_state = await self.graph.ainvoke(initial_state)
+        final_state = await graph.ainvoke(initial_state)
 
         # Check for errors
         if final_state.get("error"):

@@ -140,6 +140,9 @@ class ModelTrainerAgent:
             # IDs
             "training_run_id": training_run_id,
             "model_id": model_id,
+            # MLflow and checkpointing config
+            "enable_mlflow": input_data.get("enable_mlflow", True),
+            "enable_checkpointing": input_data.get("enable_checkpointing", True),
             # Optional: Pre-loaded splits
             "train_data": input_data.get("train_data"),
             "validation_data": input_data.get("validation_data"),

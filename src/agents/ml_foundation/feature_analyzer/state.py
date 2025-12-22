@@ -1,29 +1,85 @@
 """State definition for feature_analyzer agent.
 
-This agent is a HYBRID agent with 3 nodes:
-1. SHAP Computation (NO LLM) - Compute SHAP values
-2. Interaction Detection (NO LLM) - Detect feature interactions
-3. NL Interpretation (LLM) - Generate human-readable explanations
+This agent is a HYBRID agent with 5 nodes:
+1. Feature Generation (NO LLM) - Generate engineered features
+2. Feature Selection (NO LLM) - Select optimal features
+3. SHAP Computation (NO LLM) - Compute SHAP values
+4. Interaction Detection (NO LLM) - Detect feature interactions
+5. NL Interpretation (LLM) - Generate human-readable explanations
 """
 
 from typing import Any, Dict, List, Optional, Tuple, TypedDict
 
 import numpy as np
+import pandas as pd
 
 
 class FeatureAnalyzerState(TypedDict, total=False):
     """State for feature_analyzer agent.
 
     Follows hybrid execution pattern:
-    - Computation nodes (1-2): Populate SHAP-related fields
-    - LLM node (3): Add interpretation fields
+    - Feature engineering nodes (1-2): Generate and select features
+    - SHAP analysis nodes (3-4): Compute importance and interactions
+    - LLM node (5): Add interpretation fields
     """
 
-    # === INPUT FIELDS (from model_trainer) ===
+    # === INPUT FIELDS (from data_preparer) ===
+
+    X_train: Any  # Training features (DataFrame or ndarray)
+    X_val: Any  # Validation features (optional)
+    X_test: Any  # Test features (optional)
+    y_train: Any  # Training target
+    y_val: Any  # Validation target (optional)
+    y_test: Any  # Test target (optional)
+    problem_type: str  # "classification" | "regression"
+
+    # === INPUT FIELDS (for SHAP - from model_trainer) ===
 
     model_uri: str  # MLflow model URI (e.g., "runs:/abc123/model")
     experiment_id: str  # Experiment identifier
     training_run_id: str  # Training run identifier
+
+    # === FEATURE GENERATION CONFIGURATION ===
+
+    feature_config: Dict[str, Any]  # Feature generation configuration
+    temporal_columns: List[str]  # Columns for temporal features
+    categorical_columns: List[str]  # Columns for interaction features
+    numeric_columns: List[str]  # Numeric columns
+
+    # === FEATURE SELECTION CONFIGURATION ===
+
+    selection_config: Dict[str, Any]  # Feature selection configuration
+
+    # === NODE 1 OUTPUT: Feature Generation (NO LLM) ===
+
+    X_train_generated: Any  # DataFrame with generated features
+    X_val_generated: Any  # Validation with generated features
+    X_test_generated: Any  # Test with generated features
+    generated_features: List[Dict[str, Any]]  # Metadata for generated features
+    feature_metadata: Dict[str, List[Dict[str, Any]]]  # By type: temporal, interaction, domain
+    original_feature_count: int  # Features before generation
+    new_feature_count: int  # New features added
+    new_feature_names: List[str]  # Names of new features
+    feature_generation_time_seconds: float
+    temporal_columns_used: List[str]
+    categorical_columns_used: List[str]
+    numeric_columns_used: List[str]
+
+    # === NODE 2 OUTPUT: Feature Selection (NO LLM) ===
+
+    X_train_selected: Any  # DataFrame with selected features
+    X_val_selected: Any  # Validation with selected features
+    X_test_selected: Any  # Test with selected features
+    selected_features: List[str]  # List of selected numeric feature names
+    selected_features_all: List[str]  # All selected features (including non-numeric)
+    feature_importance: Dict[str, float]  # Importance scores from selection
+    feature_importance_ranked: List[Tuple[str, float]]  # Ranked features
+    removed_features: Dict[str, List[str]]  # By method: variance, correlation, vif
+    selection_history: List[Dict[str, Any]]  # Step-by-step selection log
+    feature_statistics: Dict[str, Dict[str, Any]]  # Statistics per feature
+    selected_feature_count: int  # Features after selection
+    total_selected_count: int  # Total including non-numeric
+    selection_time_seconds: float
 
     # === SHAP CONFIGURATION ===
 
@@ -31,7 +87,7 @@ class FeatureAnalyzerState(TypedDict, total=False):
     compute_interactions: bool  # Whether to compute interactions (default: True)
     store_in_semantic_memory: bool  # Whether to store in semantic memory (default: True)
 
-    # === NODE 1 OUTPUT: SHAP Computation (NO LLM) ===
+    # === NODE 3 OUTPUT: SHAP Computation (NO LLM) ===
 
     # Loaded model
     loaded_model: Any  # sklearn/xgboost/etc model object

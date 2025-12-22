@@ -60,6 +60,9 @@ class TestModelTrainerAgent:
                 "y": np.random.randint(0, 2, 50),
                 "row_count": 50,
             },
+            # Disable MLflow for unit tests
+            "enable_mlflow": False,
+            "enable_checkpointing": False,
         }
 
     async def test_complete_training_workflow(self, agent, valid_input_data):
