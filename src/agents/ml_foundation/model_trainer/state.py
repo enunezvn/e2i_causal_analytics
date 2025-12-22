@@ -35,6 +35,8 @@ class ModelTrainerState(TypedDict, total=False):
     hpo_timeout_hours: Optional[float]  # HPO timeout
     early_stopping: bool  # Enable early stopping
     early_stopping_patience: int  # Early stopping patience epochs
+    enable_mlflow: bool  # Whether to log to MLflow
+    enable_checkpointing: bool  # Whether to save model checkpoints
 
     # === INTERMEDIATE FIELDS ===
     # QC Gate

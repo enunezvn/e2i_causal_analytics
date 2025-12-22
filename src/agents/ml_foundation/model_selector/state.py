@@ -17,6 +17,7 @@ class ModelSelectorState(TypedDict, total=False):
     # From scope_definer
     scope_spec: Dict[str, Any]  # Complete ScopeSpec
     experiment_id: str  # Extracted from scope_spec
+    kpi_category: Optional[str]  # KPI category for domain-specific recommendations
 
     # From data_preparer
     qc_report: Dict[str, Any]  # Must have passed QC gate
@@ -26,6 +27,14 @@ class ModelSelectorState(TypedDict, total=False):
     algorithm_preferences: Optional[List[str]]  # Preferred algorithms
     excluded_algorithms: Optional[List[str]]  # Algorithms to exclude
     interpretability_required: bool  # Whether model must be interpretable
+
+    # Sample data for benchmarking (optional)
+    X_sample: Any  # Feature matrix for cross-validation
+    y_sample: Any  # Target vector for cross-validation
+
+    # Control flags
+    skip_benchmarks: bool  # Skip cross-validation benchmarks
+    skip_mlflow: bool  # Skip MLflow registration
 
     # === INTERMEDIATE FIELDS ===
     # Problem analysis
@@ -83,11 +92,37 @@ class ModelSelectorState(TypedDict, total=False):
     # Baseline comparison
     baseline_to_beat: Dict[str, float]  # Baseline model metrics
     baseline_candidates: List[str]  # Baseline models for comparison
+    baseline_comparison: Dict[str, Any]  # Full baseline comparison results
+
+    # Benchmarking
+    benchmark_results: Dict[str, Dict[str, Any]]  # Algorithm -> benchmark results
+    benchmark_rankings: List[Dict[str, Any]]  # Candidates ranked by benchmark
+    benchmarks_skipped: bool  # Whether benchmarks were skipped
+    benchmark_skip_reason: Optional[str]  # Reason benchmarks skipped
+    benchmark_time_seconds: float  # Time spent on benchmarks
+    combined_score: Optional[float]  # Combined selection + benchmark score
+    benchmark_score: Optional[float]  # Benchmark-only score
+    max_benchmark_candidates: int  # Max candidates to benchmark
+    cv_folds: int  # Number of CV folds
+
+    # Historical analysis
+    historical_data_available: bool  # Whether historical data was found
+    historical_experiments_count: int  # Number of historical experiments
+    history_recommended_algorithms: List[str]  # Algorithms recommended by history
+    recommendation_source: str  # "historical" or "prior_knowledge"
+    algorithm_trends: Dict[str, Dict[str, Any]]  # Performance trends
 
     # MLflow registration
     registered_in_mlflow: bool  # Whether registered in MLflow
     model_version_id: str  # MLflow model version ID
     mlflow_run_id: Optional[str]  # MLflow run ID
+    mlflow_experiment_id: Optional[str]  # MLflow experiment ID
+    mlflow_registration_error: Optional[str]  # Registration error message
+    benchmark_logged: bool  # Whether benchmarks logged to MLflow
+    benchmark_log_error: Optional[str]  # Benchmark logging error
+
+    # Selection summary (for database storage)
+    selection_summary: Dict[str, Any]  # Complete summary for persistence
 
     # Stage
     stage: str  # Model stage: "development"
