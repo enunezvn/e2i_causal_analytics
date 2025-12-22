@@ -5,7 +5,7 @@ Tests the observability span repository CRUD operations.
 """
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
@@ -55,10 +55,9 @@ class TestObservabilitySpanRepository:
     @pytest.mark.asyncio
     async def test_insert_span(self, repo, mock_client, sample_span):
         """Test inserting a single span."""
-        mock_execute = AsyncMock(
-            return_value=MagicMock(data=[sample_span.to_db_dict()])
-        )
-        mock_client.table.return_value.insert.return_value.execute = mock_execute
+        # Note: Supabase client uses sync execute(), not async
+        mock_response = MagicMock(data=[sample_span.to_db_dict()])
+        mock_client.table.return_value.insert.return_value.execute.return_value = mock_response
 
         result = await repo.insert_span(sample_span)
 
@@ -90,8 +89,8 @@ class TestObservabilitySpanRepository:
         ]
 
         mock_data = [s.to_db_dict() for s in spans]
-        mock_execute = AsyncMock(return_value=MagicMock(data=mock_data))
-        mock_client.table.return_value.insert.return_value.execute = mock_execute
+        mock_response = MagicMock(data=mock_data)
+        mock_client.table.return_value.insert.return_value.execute.return_value = mock_response
 
         result = await repo.insert_spans_batch(spans)
 
@@ -146,9 +145,9 @@ class TestObservabilitySpanRepository:
                 "status": "success",
             }
         ]
-        mock_execute = AsyncMock(return_value=MagicMock(data=mock_data))
+        mock_response = MagicMock(data=mock_data)
         mock_query = MagicMock()
-        mock_query.execute = mock_execute
+        mock_query.execute.return_value = mock_response
         mock_query.order.return_value.limit.return_value = mock_query
         mock_client.table.return_value.select.return_value.gte.return_value = mock_query
 
@@ -160,9 +159,9 @@ class TestObservabilitySpanRepository:
     @pytest.mark.asyncio
     async def test_get_spans_by_time_window_with_agent_filter(self, repo, mock_client):
         """Test getting spans filtered by agent."""
-        mock_execute = AsyncMock(return_value=MagicMock(data=[]))
+        mock_response = MagicMock(data=[])
         mock_query = MagicMock()
-        mock_query.execute = mock_execute
+        mock_query.execute.return_value = mock_response
         mock_query.order.return_value.limit.return_value = mock_query
         mock_query.eq.return_value = mock_query
         mock_client.table.return_value.select.return_value.gte.return_value = mock_query
@@ -199,9 +198,9 @@ class TestObservabilitySpanRepository:
             }
             for i in range(3)
         ]
-        mock_execute = AsyncMock(return_value=MagicMock(data=mock_data))
+        mock_response = MagicMock(data=mock_data)
         mock_query = MagicMock()
-        mock_query.execute = mock_execute
+        mock_query.execute.return_value = mock_response
         mock_query.order.return_value = mock_query
         mock_client.table.return_value.select.return_value.eq.return_value = mock_query
 
@@ -212,9 +211,9 @@ class TestObservabilitySpanRepository:
     @pytest.mark.asyncio
     async def test_get_spans_by_trace_id_empty(self, repo, mock_client):
         """Test getting spans for non-existent trace."""
-        mock_execute = AsyncMock(return_value=MagicMock(data=[]))
+        mock_response = MagicMock(data=[])
         mock_query = MagicMock()
-        mock_query.execute = mock_execute
+        mock_query.execute.return_value = mock_response
         mock_query.order.return_value = mock_query
         mock_client.table.return_value.select.return_value.eq.return_value = mock_query
 
@@ -252,9 +251,9 @@ class TestObservabilitySpanRepository:
                 "total_tokens": 300,
             },
         ]
-        mock_execute = AsyncMock(return_value=MagicMock(data=mock_data))
+        mock_response = MagicMock(data=mock_data)
         mock_query = MagicMock()
-        mock_query.execute = mock_execute
+        mock_query.execute.return_value = mock_response
         mock_query.order.return_value = mock_query
         mock_client.table.return_value.select.return_value.eq.return_value = mock_query
 
@@ -284,9 +283,9 @@ class TestObservabilitySpanRepository:
                 "status": "success",
             }
         ]
-        mock_execute = AsyncMock(return_value=MagicMock(data=mock_data))
+        mock_response = MagicMock(data=mock_data)
         mock_query = MagicMock()
-        mock_query.execute = mock_execute
+        mock_query.execute.return_value = mock_response
         mock_query.order.return_value.limit.return_value = mock_query
         mock_client.table.return_value.select.return_value.eq.return_value.gte.return_value = (
             mock_query
@@ -299,9 +298,9 @@ class TestObservabilitySpanRepository:
     @pytest.mark.asyncio
     async def test_get_spans_by_tier(self, repo, mock_client):
         """Test getting spans for specific tier."""
-        mock_execute = AsyncMock(return_value=MagicMock(data=[]))
+        mock_response = MagicMock(data=[])
         mock_query = MagicMock()
-        mock_query.execute = mock_execute
+        mock_query.execute.return_value = mock_response
         mock_query.order.return_value.limit.return_value = mock_query
         mock_client.table.return_value.select.return_value.eq.return_value.gte.return_value = (
             mock_query
@@ -332,9 +331,9 @@ class TestObservabilitySpanRepository:
                 "total_tokens_used": 50000,
             }
         ]
-        mock_execute = AsyncMock(return_value=MagicMock(data=mock_data))
+        mock_response = MagicMock(data=mock_data)
         mock_query = MagicMock()
-        mock_query.execute = mock_execute
+        mock_query.execute.return_value = mock_response
         mock_client.table.return_value.select.return_value = mock_query
 
         result = await repo.get_latency_stats()
@@ -346,9 +345,9 @@ class TestObservabilitySpanRepository:
     @pytest.mark.asyncio
     async def test_get_latency_stats_with_filter(self, repo, mock_client):
         """Test getting latency stats filtered by agent."""
-        mock_execute = AsyncMock(return_value=MagicMock(data=[]))
+        mock_response = MagicMock(data=[])
         mock_query = MagicMock()
-        mock_query.execute = mock_execute
+        mock_query.execute.return_value = mock_response
         mock_query.eq.return_value = mock_query
         mock_client.table.return_value.select.return_value = mock_query
 
@@ -376,9 +375,9 @@ class TestObservabilitySpanRepository:
             }
             for i in range(10)
         ]
-        mock_execute = AsyncMock(return_value=MagicMock(data=mock_data))
+        mock_response = MagicMock(data=mock_data)
         mock_query = MagicMock()
-        mock_query.execute = mock_execute
+        mock_query.execute.return_value = mock_response
         mock_query.order.return_value.limit.return_value = mock_query
         mock_query.eq.return_value = mock_query
         mock_client.table.return_value.select.return_value.gte.return_value = mock_query
@@ -398,9 +397,9 @@ class TestObservabilitySpanRepository:
     async def test_delete_old_spans(self, repo, mock_client):
         """Test deleting old spans."""
         mock_data = [{"id": str(uuid4())} for _ in range(5)]
-        mock_execute = AsyncMock(return_value=MagicMock(data=mock_data))
+        mock_response = MagicMock(data=mock_data)
         mock_query = MagicMock()
-        mock_query.execute = mock_execute
+        mock_query.execute.return_value = mock_response
         mock_query.limit.return_value = mock_query
         mock_client.table.return_value.delete.return_value.lt.return_value = mock_query
 
@@ -439,9 +438,9 @@ class TestObservabilitySpanRepository:
                 "error_message": "Invalid input",
             }
         ]
-        mock_execute = AsyncMock(return_value=MagicMock(data=mock_data))
+        mock_response = MagicMock(data=mock_data)
         mock_query = MagicMock()
-        mock_query.execute = mock_execute
+        mock_query.execute.return_value = mock_response
         mock_query.order.return_value.limit.return_value = mock_query
         mock_client.table.return_value.select.return_value.eq.return_value.gte.return_value = (
             mock_query
@@ -468,9 +467,9 @@ class TestObservabilitySpanRepository:
                 "fallback_chain": ["claude-3-5-sonnet", "gpt-4"],
             }
         ]
-        mock_execute = AsyncMock(return_value=MagicMock(data=mock_data))
+        mock_response = MagicMock(data=mock_data)
         mock_query = MagicMock()
-        mock_query.execute = mock_execute
+        mock_query.execute.return_value = mock_response
         mock_query.order.return_value.limit.return_value = mock_query
         mock_client.table.return_value.select.return_value.eq.return_value.gte.return_value = (
             mock_query
