@@ -28,6 +28,9 @@ class TestTuneHyperparameters:
         state = {
             "enable_hpo": True,
             "hpo_trials": 10,
+            "algorithm_name": "RandomForest",
+            "problem_type": "binary_classification",
+            "experiment_id": "test_exp_123",
             "default_hyperparameters": {"n_estimators": 100},
             "hyperparameter_search_space": {
                 "n_estimators": {"type": "int", "low": 50, "high": 200}

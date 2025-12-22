@@ -8,7 +8,14 @@ from typing import Any, Dict
 
 from langgraph.graph import END, StateGraph
 
-from .nodes import compute_baseline_metrics, detect_leakage, run_quality_checks
+from .nodes import (
+    compute_baseline_metrics,
+    detect_leakage,
+    load_data,
+    run_ge_validation,
+    run_quality_checks,
+    transform_data,
+)
 from .state import DataPreparerState
 
 logger = logging.getLogger(__name__)
@@ -18,10 +25,13 @@ def create_data_preparer_graph() -> StateGraph:
     """Create the data_preparer LangGraph.
 
     The graph executes the following pipeline:
-    1. run_quality_checks - Validate data quality with Great Expectations
-    2. detect_leakage - Check for data leakage (temporal, target, train-test)
-    3. compute_baseline_metrics - Compute baseline metrics from train split
-    4. finalize_output - Generate final output and QC gate decision
+    1. load_data - Load and split data from Supabase using MLDataLoader
+    2. run_quality_checks - Validate data quality (completeness, validity, etc.)
+    3. run_ge_validation - Great Expectations validation (Phase 3)
+    4. detect_leakage - Check for data leakage (temporal, target, train-test)
+    5. transform_data - Encode, scale, and impute features
+    6. compute_baseline_metrics - Compute baseline metrics from train split
+    7. finalize_output - Generate final output and QC gate decision
 
     Returns:
         StateGraph ready to be compiled
@@ -30,15 +40,21 @@ def create_data_preparer_graph() -> StateGraph:
     graph = StateGraph(DataPreparerState)
 
     # Add nodes
+    graph.add_node("load_data", load_data)
     graph.add_node("run_quality_checks", run_quality_checks)
+    graph.add_node("run_ge_validation", run_ge_validation)
     graph.add_node("detect_leakage", detect_leakage)
+    graph.add_node("transform_data", transform_data)
     graph.add_node("compute_baseline_metrics", compute_baseline_metrics)
     graph.add_node("finalize_output", finalize_output)
 
     # Define edges (sequential execution)
-    graph.set_entry_point("run_quality_checks")
-    graph.add_edge("run_quality_checks", "detect_leakage")
-    graph.add_edge("detect_leakage", "compute_baseline_metrics")
+    graph.set_entry_point("load_data")
+    graph.add_edge("load_data", "run_quality_checks")
+    graph.add_edge("run_quality_checks", "run_ge_validation")
+    graph.add_edge("run_ge_validation", "detect_leakage")
+    graph.add_edge("detect_leakage", "transform_data")
+    graph.add_edge("transform_data", "compute_baseline_metrics")
     graph.add_edge("compute_baseline_metrics", "finalize_output")
     graph.add_edge("finalize_output", END)
 
