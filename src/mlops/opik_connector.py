@@ -1184,14 +1184,38 @@ class OpikConnector:
         }
 
 
-# Convenience function for getting singleton instance
-def get_opik_connector(config: Optional[OpikConfig] = None) -> OpikConnector:
+# Singleton instance
+_opik_connector_instance: Optional[OpikConnector] = None
+_opik_connector_lock = threading.Lock()
+
+
+def get_opik_connector(
+    config: Optional[OpikConfig] = None,
+    force_new: bool = False,
+) -> OpikConnector:
     """Get the OpikConnector singleton instance.
 
     Args:
-        config: Optional configuration (only used on first call)
+        config: Optional configuration (only used on first call or force_new)
+        force_new: Force creation of a new instance
 
     Returns:
         OpikConnector instance
     """
-    return OpikConnector(config)
+    global _opik_connector_instance
+
+    with _opik_connector_lock:
+        if _opik_connector_instance is None or force_new:
+            _opik_connector_instance = OpikConnector(config)
+        return _opik_connector_instance
+
+
+def reset_opik_connector() -> None:
+    """Reset the OpikConnector singleton instance.
+
+    Useful for testing to ensure clean state between tests.
+    """
+    global _opik_connector_instance
+
+    with _opik_connector_lock:
+        _opik_connector_instance = None

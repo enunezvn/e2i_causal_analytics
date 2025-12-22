@@ -295,6 +295,11 @@ class ObservabilitySpan(BaseModel):
         data["agent_name"] = data["agent_name"].value
         data["agent_tier"] = data["agent_tier"].value
         data["status"] = data["status"].value
+        # Convert datetime objects to ISO format strings for JSON serialization
+        if data.get("started_at") and isinstance(data["started_at"], datetime):
+            data["started_at"] = data["started_at"].isoformat()
+        if data.get("ended_at") and isinstance(data["ended_at"], datetime):
+            data["ended_at"] = data["ended_at"].isoformat()
         return data
 
     class Config:

@@ -37,6 +37,9 @@ from src.repositories.prediction import PredictionRepository
 from src.repositories.trigger import TriggerRepository
 from src.repositories.user_session import UserSessionRepository
 
+# Re-export get_supabase_client for convenience
+from src.memory.services.factories import get_supabase_client
+
 __all__ = [
     "BaseRepository",
     "SplitAwareRepository",
@@ -52,4 +55,5 @@ __all__ = [
     "CausalValidationRepository",
     "ExpertReviewRepository",
     "ObservabilitySpanRepository",
+    "get_supabase_client",
 ]

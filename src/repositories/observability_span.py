@@ -68,13 +68,16 @@ class ObservabilitySpanRepository(BaseRepository[ObservabilitySpan]):
 
         try:
             data = span.to_db_dict()
-            result = await self.client.table(self.table_name).insert(data).execute()
+            # Note: Using sync Supabase client, no await needed
+            result = self.client.table(self.table_name).insert(data).execute()
 
             if result.data:
                 return self._to_model(result.data[0])
             return None
-        except Exception:
+        except Exception as e:
             # Log error and return None for graceful degradation
+            import logging
+            logging.getLogger(__name__).warning(f"insert_span failed: {e}")
             return None
 
     async def insert_spans_batch(
@@ -105,7 +108,8 @@ class ObservabilitySpanRepository(BaseRepository[ObservabilitySpan]):
 
         try:
             data = [span.to_db_dict() for span in spans]
-            result = await self.client.table(self.table_name).insert(data).execute()
+            # Note: Using sync Supabase client, no await needed
+            result = self.client.table(self.table_name).insert(data).execute()
 
             inserted_count = len(result.data) if result.data else 0
             span_ids = [row.get("span_id", "") for row in (result.data or [])]
@@ -116,7 +120,9 @@ class ObservabilitySpanRepository(BaseRepository[ObservabilitySpan]):
                 "failed_count": len(spans) - inserted_count,
                 "span_ids": span_ids,
             }
-        except Exception:
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"insert_spans_batch failed: {e}")
             return {
                 "success": False,
                 "inserted_count": 0,
@@ -166,7 +172,8 @@ class ObservabilitySpanRepository(BaseRepository[ObservabilitySpan]):
         if status:
             query = query.eq("status", status)
 
-        result = await query.order("started_at", desc=True).limit(limit).execute()
+        # Note: Using sync Supabase client, no await needed
+        result = query.order("started_at", desc=True).limit(limit).execute()
 
         return [self._to_model(row) for row in (result.data or [])]
 
@@ -217,7 +224,8 @@ class ObservabilitySpanRepository(BaseRepository[ObservabilitySpan]):
         if not self.client:
             return []
 
-        result = await (
+        # Note: Using sync Supabase client, no await needed
+        result = (
             self.client.table(self.table_name)
             .select("*")
             .eq("trace_id", trace_id)
@@ -311,7 +319,8 @@ class ObservabilitySpanRepository(BaseRepository[ObservabilitySpan]):
 
         cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
 
-        result = await (
+        # Note: Using sync Supabase client, no await needed
+        result = (
             self.client.table(self.table_name)
             .select("*")
             .eq("agent_name", agent_name)
@@ -345,7 +354,8 @@ class ObservabilitySpanRepository(BaseRepository[ObservabilitySpan]):
 
         cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
 
-        result = await (
+        # Note: Using sync Supabase client, no await needed
+        result = (
             self.client.table(self.table_name)
             .select("*")
             .eq("agent_tier", agent_tier)
@@ -385,7 +395,8 @@ class ObservabilitySpanRepository(BaseRepository[ObservabilitySpan]):
             if agent_name:
                 query = query.eq("agent_name", agent_name)
 
-            result = await query.execute()
+            # Note: Using sync Supabase client, no await needed
+            result = query.execute()
 
             stats_list = []
             for row in result.data or []:
@@ -625,7 +636,8 @@ class ObservabilitySpanRepository(BaseRepository[ObservabilitySpan]):
         cutoff_time = datetime.now(timezone.utc) - timedelta(days=retention_days)
 
         try:
-            result = await (
+            # Note: Using sync Supabase client, no await needed
+            result = (
                 self.client.table(self.table_name)
                 .delete()
                 .lt("started_at", cutoff_time.isoformat())
@@ -664,7 +676,8 @@ class ObservabilitySpanRepository(BaseRepository[ObservabilitySpan]):
 
         cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
 
-        result = await (
+        # Note: Using sync Supabase client, no await needed
+        result = (
             self.client.table(self.table_name)
             .select("*")
             .eq("status", "error")
@@ -696,7 +709,8 @@ class ObservabilitySpanRepository(BaseRepository[ObservabilitySpan]):
 
         cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
 
-        result = await (
+        # Note: Using sync Supabase client, no await needed
+        result = (
             self.client.table(self.table_name)
             .select("*")
             .eq("fallback_used", True)
