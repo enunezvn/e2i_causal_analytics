@@ -25,6 +25,7 @@ from .opik_connector import (
     OpikConnector,
     SpanContext,
     get_opik_connector,
+    reset_opik_connector,
 )
 from .shap_explainer_realtime import (
     ExplainerType,
@@ -45,6 +46,7 @@ __all__ = [
     "SpanContext",
     "LLMSpanContext",
     "get_opik_connector",
+    "reset_opik_connector",
     # Circuit Breaker
     "CircuitBreaker",
     "CircuitBreakerConfig",
