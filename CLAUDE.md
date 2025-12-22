@@ -357,6 +357,12 @@ All PRs use:
 - `.claude/.agent_docs/code-review-checklist.md`
 - Priority: Security → Data Leakage → Correctness → Performance
 
+### Testing
+
+- **Always use pytest-xdist** for parallel test execution: `pytest -n auto` or `pytest -n <num_workers>`
+- This significantly speeds up test runs, especially for large test suites
+- The `-n auto` flag automatically detects the number of CPU cores
+
 ---
 
 ## Quick Commands
@@ -364,7 +370,7 @@ All PRs use:
 ```bash
 # Development
 make dev              # Start dev environment
-make test             # Run all tests
+make test             # Run all tests (use pytest -n auto for parallel)
 make lint             # Lint and format
 
 # Database
