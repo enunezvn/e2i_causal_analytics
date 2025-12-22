@@ -44,6 +44,23 @@ class ModelDeployerState(TypedDict, total=False):
     max_batch_size: int  # Maximum batch size
     max_latency_ms: int  # Maximum latency in milliseconds
 
+    # === DEPLOYMENT PLANNING ===
+
+    # Planning inputs
+    model_type: Optional[str]  # Model type: classification, regression, causal, ensemble
+
+    # Plan outputs
+    deployment_plan: Optional[Dict[str, Any]]  # DeploymentPlan as dict
+    deployment_strategy: Optional[str]  # direct, blue_green, canary, shadow
+    service_template: Optional[str]  # classification, regression, causal
+    health_check_config: Optional[Dict[str, Any]]  # Health check configuration
+    traffic_config: Optional[Dict[str, Any]]  # Traffic routing configuration
+    rollback_config: Optional[Dict[str, Any]]  # Rollback thresholds
+
+    # Plan validation
+    plan_validated: bool
+    plan_validation_errors: List[str]
+
     # === DEPLOYMENT ACTION ===
 
     deployment_action: Literal["register", "promote", "deploy", "rollback"]
@@ -97,6 +114,12 @@ class ModelDeployerState(TypedDict, total=False):
     bento_tag: str  # "e2i_exp123_model:v1.2.3"
     bento_packaging_successful: bool
     bento_packaging_error: Optional[str]
+
+    # Containerization
+    container_image: Optional[str]  # Docker image tag
+    container_config: Optional[Dict[str, Any]]  # ContainerConfig as dict
+    containerization_successful: bool
+    containerization_error: Optional[str]
 
     # Endpoint deployment
     endpoint_name: str

@@ -63,6 +63,26 @@ from src.repositories.data_quality_report import (
     get_data_quality_report_repository,
 )
 
+# ML Experiment Tracking (Phase 5)
+from src.repositories.ml_experiment import (
+    MLExperiment,
+    MLExperimentRepository,
+    MLModelRegistry,
+    MLModelRegistryRepository,
+    MLTrainingRun,
+    MLTrainingRunRepository,
+    ModelStage,
+    TrainingStatus,
+)
+
+# ML Deployment (Phase 10)
+from src.repositories.deployment import (
+    DeploymentEnvironment,
+    DeploymentStatus,
+    MLDeployment,
+    MLDeploymentRepository,
+)
+
 # Re-export get_supabase_client for convenience
 from src.memory.services.factories import get_supabase_client
 
@@ -99,6 +119,20 @@ __all__ = [
     # Data Quality (Phase 3)
     "DataQualityReportRepository",
     "get_data_quality_report_repository",
+    # ML Experiment Tracking (Phase 5)
+    "MLExperiment",
+    "MLExperimentRepository",
+    "MLModelRegistry",
+    "MLModelRegistryRepository",
+    "MLTrainingRun",
+    "MLTrainingRunRepository",
+    "ModelStage",
+    "TrainingStatus",
+    # ML Deployment (Phase 10)
+    "DeploymentEnvironment",
+    "DeploymentStatus",
+    "MLDeployment",
+    "MLDeploymentRepository",
     # Utilities
     "get_supabase_client",
 ]
