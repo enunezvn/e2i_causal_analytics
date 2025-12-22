@@ -315,7 +315,7 @@
 ### Documentation
 - [ ] Update `.claude/specialists/ml_foundation/observability_connector.md` if needed
 - [ ] Update `.claude/context/implementation-status.md`
-- [ ] Update `README.md` with Opik setup instructions
+- [x] Update `README.md` with Opik setup instructions ✅
 
 ### Production Readiness ✅ VERIFIED
 - [ ] All tests pass in CI (pending CI setup)

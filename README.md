@@ -4,7 +4,7 @@
 Multi-Agent Causal Analytics for Pharmaceutical Drug Adoption Analysis
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
-[![Version 4.2.0](https://img.shields.io/badge/version-4.2.0-green.svg)]()
+[![Version 4.2.1](https://img.shields.io/badge/version-4.2.1-green.svg)]()
 [![License: Proprietary](https://img.shields.io/badge/license-Proprietary-red.svg)]()
 
 ## Overview
@@ -163,9 +163,10 @@ Handle complex, multi-faceted queries with dynamic tool orchestration:
 ### Prerequisites
 
 - Python 3.12+
-- Docker (for Redis & FalkorDB)
+- Docker (for Redis, FalkorDB, and Opik)
 - Supabase account
 - Anthropic API key
+- Opik (optional, for LLM/Agent observability)
 
 ### Installation
 
@@ -194,7 +195,34 @@ Handle complex, multi-faceted queries with dynamic tool orchestration:
    # Starts Redis (port 6379) and FalkorDB (port 6380)
    ```
 
-5. **Initialize database**
+5. **Setup Opik Observability** (Optional)
+   ```bash
+   # Clone and start Opik locally
+   git clone https://github.com/comet-ml/opik.git /tmp/opik
+   cd /tmp/opik/deployment/docker-compose
+   docker compose up -d
+
+   # Wait for services to be healthy (~2-3 minutes)
+   docker compose ps
+
+   # Access Opik dashboard at http://localhost:5173
+   ```
+
+   Configure Python SDK:
+   ```bash
+   # For local Opik instance (no API key needed)
+   export OPIK_URL_OVERRIDE=http://localhost:5173/api
+   export OPIK_WORKSPACE=default
+   ```
+
+   Or create `~/.opik.config`:
+   ```ini
+   [opik]
+   url_override = http://localhost:5173/api/
+   workspace = default
+   ```
+
+6. **Initialize database**
    ```bash
    # Apply schemas in order:
    # 1. database/core/e2i_ml_complete_v3_schema.sql
@@ -211,13 +239,13 @@ Handle complex, multi-faceted queries with dynamic tool orchestration:
    python scripts/run_migration.py database/migrations/004_create_feature_store_schema.sql
    ```
 
-6. **Generate synthetic data**
+7. **Generate synthetic data**
    ```bash
    make data-generate
    # Or: python src/ml/data_generator.py
    ```
 
-7. **Start API server** (includes Real-Time SHAP endpoints)
+8. **Start API server** (includes Real-Time SHAP endpoints)
    ```bash
    # See docs/realtime_shap_api.md for SHAP setup details
    uvicorn main:app --reload
@@ -322,6 +350,53 @@ features = fs.get_entity_features(
 
 See `docs/FEATURE_STORE.md` for complete documentation and `docs/FEATURE_STORE_QUICKSTART.md` for setup guide.
 
+### Opik LLM/Agent Observability
+
+**Production-Grade Observability**
+Full observability for LLM calls and agent workflows with the Opik integration:
+- **Trace Visualization**: Hierarchical span view with timing, inputs, outputs
+- **Multi-Backend**: Opik dashboard (primary) + Supabase (persistence)
+- **Circuit Breaker**: Graceful degradation when Opik is unavailable
+- **Batch Processing**: Efficient span buffering (100 spans or 5 seconds)
+- **Self-Monitoring**: Health spans, latency tracking, alert thresholds
+- **Metrics Caching**: Redis (primary) + in-memory fallback with TTL
+
+**Architecture**
+```
+Agent Workflow → OpikConnector → Opik Dashboard
+                     ↓
+              BatchProcessor → ObservabilitySpanRepository → Supabase
+                     ↓
+              MetricsCache (Redis/Memory) ← SelfMonitor
+```
+
+**Quick Start**
+```python
+from src.mlops.opik_connector import OpikConnector
+from opik import track
+
+# Initialize connector (auto-configures from ~/.opik.config)
+connector = OpikConnector()
+
+# Use @track decorator for automatic tracing
+@track(project_name='e2i-analytics')
+def analyze_kpi(kpi_name: str, value: float) -> dict:
+    # Your analysis logic
+    return {'kpi': kpi_name, 'status': 'healthy' if value > 50 else 'warning'}
+
+# Or use context manager for custom spans
+async with connector.trace_agent("gap_analyzer", metadata={"brand": "Kisqali"}):
+    result = await run_gap_analysis()
+```
+
+**Production Features**
+- Circuit breaker: Opens after 5 failures, recovers after 30 seconds
+- Batch flush: Every 100 spans or 5 seconds (configurable)
+- Config file: `config/observability.yaml` with environment overrides
+- Contract compliance: 100% (69/69 checks) validated
+
+See `docs/OPIK_TODO.md` for implementation details and `config/observability.yaml` for configuration.
+
 ### Tri-Memory System
 
 **Working Memory** (Redis)
@@ -371,6 +446,8 @@ Gate decisions: **proceed** | **review** | **block**
 - **Real-Time SHAP API**: `docs/realtime_shap_api.md` ⭐ NEW v4.1
 - **Feature Store**: `docs/FEATURE_STORE.md` (complete guide) ⭐ NEW v4.2
 - **Feature Store Quick Start**: `docs/FEATURE_STORE_QUICKSTART.md` ⭐ NEW v4.2
+- **Opik Observability**: `docs/OPIK_TODO.md` (implementation status)
+- **Observability Config**: `config/observability.yaml` (production settings)
 - **RAG Implementation**: `docs/rag_implementation_plan.md`
 - **Codebase Index**: `.claude/codebase_index.md`
 - **Project Structure**: `PROJECT_STRUCTURE.txt`
@@ -399,5 +476,6 @@ For questions or issues, please contact the E2I development team.
 
 ---
 
-**Version**: 4.1.0
+**Version**: 4.2.1
 **Last Updated**: December 2025
+**Recent**: Added Opik LLM/Agent Observability integration
