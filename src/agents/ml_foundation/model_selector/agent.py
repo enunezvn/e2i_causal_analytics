@@ -1,11 +1,22 @@
 """ModelSelectorAgent - Tier 0 ML Foundation Agent.
 
 This agent selects optimal ML algorithms based on problem scope and constraints.
+
+Outputs:
+- ModelCandidate: Selected algorithm with configuration
+- SelectionRationale: Explanation of selection decision
+
+Integration:
+- Upstream: data_preparer (requires QC gate passed)
+- Downstream: model_trainer (consumes ModelCandidate)
+- Database: ml_model_registry table
+- Memory: Procedural memory (successful selection patterns)
+- Observability: Opik tracing
 """
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, Literal
+from typing import Any, Dict, List, Literal, Optional
 
 from .graph import (
     create_conditional_selector_graph,
@@ -15,6 +26,39 @@ from .graph import (
 from .state import ModelSelectorState
 
 logger = logging.getLogger(__name__)
+
+
+def _get_model_registry_repository():
+    """Get MLModelRegistryRepository (lazy import to avoid circular deps)."""
+    try:
+        from src.repositories.ml_experiment import MLModelRegistryRepository
+        from src.memory.services.factories import get_supabase_client
+
+        client = get_supabase_client()
+        return MLModelRegistryRepository(supabase_client=client)
+    except Exception as e:
+        logger.warning(f"Could not get model registry repository: {e}")
+        return None
+
+
+def _get_opik_connector():
+    """Get OpikConnector (lazy import to avoid circular deps)."""
+    try:
+        from src.mlops.opik_connector import get_opik_connector
+        return get_opik_connector()
+    except Exception as e:
+        logger.warning(f"Could not get Opik connector: {e}")
+        return None
+
+
+def _get_procedural_memory():
+    """Get procedural memory client (lazy import with graceful degradation)."""
+    try:
+        from src.memory.procedural_memory import get_procedural_memory_client
+        return get_procedural_memory_client()
+    except Exception as e:
+        logger.debug(f"Procedural memory not available: {e}")
+        return None
 
 
 class ModelSelectorAgent:
@@ -49,8 +93,10 @@ class ModelSelectorAgent:
     # Agent metadata
     tier = 0
     tier_name = "ml_foundation"
+    agent_name = "model_selector"
     agent_type = "standard"
     sla_seconds = 120  # 2 minutes for algorithm selection
+    tools = ["mlflow", "optuna"]  # MLflow for registration, Optuna for hyperparameter search
 
     def __init__(
         self,
@@ -156,14 +202,38 @@ class ModelSelectorAgent:
             "registered_in_mlflow": False,
         }
 
+        start_time = datetime.now(timezone.utc)
         logger.info(
             f"Starting model selection for experiment {experiment_id}, "
             f"problem_type={problem_type}, mode={self.mode}"
         )
 
+        # Execute with optional Opik tracing
+        opik = _get_opik_connector()
         try:
-            # Execute LangGraph workflow
-            final_state = await self.graph.ainvoke(initial_state)
+            if opik and opik.is_enabled:
+                async with opik.trace_agent(
+                    agent_name=self.agent_name,
+                    operation="select_model",
+                    metadata={
+                        "tier": self.tier,
+                        "experiment_id": experiment_id,
+                        "problem_type": problem_type,
+                        "mode": self.mode,
+                    },
+                    tags=[self.agent_name, "tier_0", "model_selection"],
+                    input_data={"experiment_id": experiment_id, "problem_type": problem_type},
+                ) as span:
+                    final_state = await self.graph.ainvoke(initial_state)
+                    # Set output on span
+                    if span and not final_state.get("error"):
+                        span.set_output({
+                            "algorithm_name": final_state.get("algorithm_name"),
+                            "selection_score": final_state.get("selection_score"),
+                            "registered_in_mlflow": final_state.get("registered_in_mlflow"),
+                        })
+            else:
+                final_state = await self.graph.ainvoke(initial_state)
 
             # Check for errors
             if final_state.get("error"):
@@ -179,10 +249,22 @@ class ModelSelectorAgent:
             # Build output
             output = self._build_output(final_state, experiment_id)
 
+            # Persist model candidate to database
+            await self._persist_model_candidate(output)
+
+            # Update procedural memory with successful selection pattern
+            await self._update_procedural_memory(output)
+
+            # Log execution time
+            duration = (datetime.now(timezone.utc) - start_time).total_seconds()
             logger.info(
                 f"Model selection complete: {output['model_candidate']['algorithm_name']} "
-                f"(score: {output['model_candidate']['selection_score']:.3f})"
+                f"(score: {output['model_candidate']['selection_score']:.3f}) in {duration:.2f}s"
             )
+
+            # Check SLA
+            if duration > self.sla_seconds:
+                logger.warning(f"SLA violation: {duration:.2f}s > {self.sla_seconds}s")
 
             return output
 
@@ -279,3 +361,82 @@ class ModelSelectorAgent:
             "experiment_id": experiment_id,
             "status": "completed",
         }
+
+    async def _persist_model_candidate(self, output: Dict[str, Any]) -> None:
+        """Persist ModelCandidate to ml_model_registry table.
+
+        Graceful degradation: If repository is unavailable,
+        logs a debug message and continues without error.
+
+        Args:
+            output: Agent output containing model_candidate and metadata
+        """
+        try:
+            repo = _get_model_registry_repository()
+            if repo is None:
+                logger.debug("Skipping model persistence (no repository)")
+                return
+
+            model_candidate = output.get("model_candidate", {})
+            experiment_id = output.get("experiment_id", "")
+
+            # Register model in ml_model_registry table
+            result = await repo.register_model(
+                experiment_id=experiment_id,
+                model_name=model_candidate.get("algorithm_name", "unknown"),
+                model_type=model_candidate.get("algorithm_family", "unknown"),
+                model_class=model_candidate.get("algorithm_class", ""),
+                hyperparameters=model_candidate.get("default_hyperparameters", {}),
+                hyperparameter_search_space=model_candidate.get("hyperparameter_search_space", {}),
+                selection_score=model_candidate.get("selection_score", 0.0),
+                selection_rationale=output.get("selection_rationale", {}).get("selection_rationale", ""),
+                stage="candidate",
+                created_by="model_selector",
+            )
+
+            if result:
+                logger.info(f"Persisted model candidate: {model_candidate.get('algorithm_name')} for {experiment_id}")
+            else:
+                logger.debug("Model candidate not persisted (no result returned)")
+
+        except Exception as e:
+            logger.warning(f"Failed to persist model candidate: {e}")
+
+    async def _update_procedural_memory(self, output: Dict[str, Any]) -> None:
+        """Update procedural memory with successful selection pattern.
+
+        Graceful degradation: If memory is unavailable,
+        logs a debug message and continues without error.
+
+        Args:
+            output: Agent output containing model_candidate and selection_rationale
+        """
+        try:
+            memory = _get_procedural_memory()
+            if memory is None:
+                logger.debug("Procedural memory not available, skipping update")
+                return
+
+            model_candidate = output.get("model_candidate", {})
+            selection_rationale = output.get("selection_rationale", {})
+
+            # Store successful selection pattern for future reference
+            await memory.store_pattern(
+                agent_name=self.agent_name,
+                pattern_type="model_selection",
+                pattern_data={
+                    "algorithm_name": model_candidate.get("algorithm_name"),
+                    "algorithm_family": model_candidate.get("algorithm_family"),
+                    "problem_type": output.get("selection_summary", {}).get("problem_type"),
+                    "selection_score": model_candidate.get("selection_score"),
+                    "primary_reason": selection_rationale.get("primary_reason"),
+                    "supporting_factors": selection_rationale.get("supporting_factors", []),
+                    "experiment_id": output.get("experiment_id"),
+                },
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            )
+
+            logger.info(f"Updated procedural memory for experiment: {output.get('experiment_id')}")
+
+        except Exception as e:
+            logger.debug(f"Failed to update procedural memory: {e}")
