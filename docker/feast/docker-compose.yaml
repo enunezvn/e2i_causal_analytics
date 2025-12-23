@@ -1,0 +1,78 @@
+# Feast Feature Store Infrastructure
+# This compose file sets up the core infrastructure for Feast:
+# - Redis (online store)
+# - Feature server (optional, for serving features via REST API)
+
+version: '3.8'
+
+services:
+  # Redis for online feature serving
+  feast-redis:
+    image: redis:7-alpine
+    container_name: e2i-feast-redis
+    ports:
+      - "${FEAST_REDIS_PORT:-6379}:6379"
+    volumes:
+      - feast-redis-data:/data
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - feast-network
+
+  # Feast Feature Server (optional - for REST API serving)
+  feast-server:
+    build:
+      context: ../..
+      dockerfile: docker/feast/Dockerfile.feast-server
+    container_name: e2i-feast-server
+    ports:
+      - "${FEAST_SERVER_PORT:-6566}:6566"
+    environment:
+      - FEAST_REPO_PATH=/app/feature_repo
+      - REDIS_URL=redis://feast-redis:6379
+      - SUPABASE_DB_HOST=${SUPABASE_DB_HOST}
+      - SUPABASE_DB_PORT=${SUPABASE_DB_PORT:-5432}
+      - SUPABASE_DB_NAME=${SUPABASE_DB_NAME:-postgres}
+      - SUPABASE_DB_USER=${SUPABASE_DB_USER}
+      - SUPABASE_DB_PASSWORD=${SUPABASE_DB_PASSWORD}
+    depends_on:
+      feast-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6566/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - feast-network
+
+  # Feast UI (optional - for feature exploration)
+  feast-ui:
+    image: feastdev/feast-ui:latest
+    container_name: e2i-feast-ui
+    ports:
+      - "${FEAST_UI_PORT:-8080}:8080"
+    environment:
+      - FEAST_REGISTRY_PATH=/app/feature_repo/data/registry.db
+    volumes:
+      - ../../feature_repo:/app/feature_repo:ro
+    depends_on:
+      - feast-server
+    restart: unless-stopped
+    networks:
+      - feast-network
+
+volumes:
+  feast-redis-data:
+    driver: local
+
+networks:
+  feast-network:
+    driver: bridge
+    name: e2i-feast-network

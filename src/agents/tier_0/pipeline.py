@@ -10,6 +10,11 @@ This module orchestrates the complete ML training pipeline using the 7 Tier 0 ag
 
 The pipeline enforces strict handoff protocols between agents and maintains
 observability context throughout the workflow.
+
+Feast Integration:
+- Feature freshness validation in QC Gate
+- Point-in-time correct training data via Feast
+- Feature references logged for reproducibility
 """
 
 import logging
@@ -59,6 +64,13 @@ class PipelineConfig:
     skip_leakage_check: bool = False
     use_sample_data: bool = False
 
+    # Feast Feature Store
+    enable_feast: bool = True
+    feast_feature_refs: Optional[List[str]] = None  # Feature refs to use
+    feast_freshness_check: bool = True  # Check feature freshness in QC gate
+    feast_max_staleness_hours: float = 24.0  # Max allowed feature staleness
+    feast_fallback_enabled: bool = True  # Fall back to custom store if Feast fails
+
     # Observability
     enable_observability: bool = True
     sample_rate: float = 1.0
@@ -86,6 +98,11 @@ class PipelineResult:
     training_result: Optional[Dict[str, Any]] = None
     shap_analysis: Optional[Dict[str, Any]] = None
     deployment_result: Optional[Dict[str, Any]] = None
+
+    # Feast feature store outputs
+    feature_freshness: Optional[Dict[str, Any]] = None
+    feature_refs_used: Optional[List[str]] = None
+    feast_enabled: bool = False
 
     # Metadata
     stages_completed: List[str] = field(default_factory=list)
@@ -127,6 +144,8 @@ class MLFoundationPipeline:
         self.config = config or PipelineConfig()
         self._agents: Dict[str, Any] = {}
         self._observability = None
+        self._feast_adapter = None
+        self._feast_initialized = False
 
     def _get_agent(self, agent_name: str) -> Any:
         """Lazy-load an agent instance.
@@ -182,6 +201,87 @@ class MLFoundationPipeline:
                 logger.warning(f"Failed to initialize observability: {e}")
         return self._observability
 
+    async def _get_feast_adapter(self):
+        """Get Feast adapter (lazy initialization).
+
+        Returns:
+            FeatureAnalyzerAdapter with Feast enabled, or None if disabled
+        """
+        if not self.config.enable_feast:
+            return None
+
+        if self._feast_initialized:
+            return self._feast_adapter
+
+        try:
+            from src.feature_store.client import FeatureStoreClient
+            from src.feature_store.feature_analyzer_adapter import (
+                get_feature_analyzer_adapter,
+            )
+
+            # Create feature store client
+            fs_client = FeatureStoreClient()
+
+            # Create adapter with Feast enabled
+            self._feast_adapter = get_feature_analyzer_adapter(
+                feature_store_client=fs_client,
+                enable_feast=True,
+            )
+            self._feast_initialized = True
+            logger.info("Feast adapter initialized successfully")
+
+        except Exception as e:
+            logger.warning(f"Failed to initialize Feast adapter: {e}")
+            self._feast_adapter = None
+            self._feast_initialized = True  # Don't retry
+
+        return self._feast_adapter
+
+    async def _check_feature_freshness(
+        self,
+        feature_refs: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Check feature freshness via Feast.
+
+        Args:
+            feature_refs: Feature references to check. If None, uses config.
+
+        Returns:
+            Freshness check result dict
+        """
+        refs = feature_refs or self.config.feast_feature_refs
+
+        if not refs:
+            return {
+                "fresh": True,
+                "stale_features": [],
+                "recommendations": ["No feature refs configured - skipping freshness check"],
+            }
+
+        adapter = await self._get_feast_adapter()
+        if not adapter:
+            return {
+                "fresh": True,
+                "stale_features": [],
+                "recommendations": ["Feast adapter not available - skipping freshness check"],
+            }
+
+        try:
+            result = await adapter.check_feature_freshness(
+                feature_refs=refs,
+                max_staleness_hours=self.config.feast_max_staleness_hours,
+            )
+            return result
+
+        except Exception as e:
+            logger.warning(f"Feature freshness check failed: {e}")
+            return {
+                "fresh": True,  # Don't block on freshness check failures
+                "stale_features": [],
+                "recommendations": [f"Freshness check failed: {str(e)}"],
+                "error": str(e),
+            }
+
     async def run(self, input_data: Dict[str, Any]) -> PipelineResult:
         """Execute the complete ML Foundation pipeline.
 
@@ -201,6 +301,7 @@ class MLFoundationPipeline:
                 - candidate_features (List[str]): Candidate features
                 - algorithm_preferences (List[str]): Preferred algorithms
                 - target_environment (str): Deployment environment
+                - feature_refs (List[str]): Feast feature references for training
 
         Returns:
             PipelineResult with complete pipeline outputs
@@ -224,14 +325,21 @@ class MLFoundationPipeline:
         pipeline_run_id = f"pipeline_{uuid.uuid4().hex[:12]}"
         started_at = datetime.now(timezone.utc)
 
+        # Get feature refs from input or config
+        feature_refs = input_data.get("feature_refs") or self.config.feast_feature_refs
+
         result = PipelineResult(
             pipeline_run_id=pipeline_run_id,
             status="in_progress",
             current_stage=PipelineStage.SCOPE_DEFINITION,
             started_at=started_at.isoformat(),
+            feast_enabled=self.config.enable_feast,
+            feature_refs_used=feature_refs,
         )
 
         logger.info(f"Starting ML Foundation Pipeline: {pipeline_run_id}")
+        if self.config.enable_feast:
+            logger.info(f"Feast enabled with {len(feature_refs or [])} feature refs")
 
         # Create observability context
         observability = self._get_observability()
@@ -384,6 +492,7 @@ class MLFoundationPipeline:
         - qc_report: Data quality report with qc_passed status
         - baseline_metrics: Baseline statistics from training split
         - gate_passed: CRITICAL - if False, pipeline MUST STOP
+        - feature_freshness: Feast feature freshness validation (if enabled)
 
         Returns:
             True if QC gate passed, False otherwise
@@ -392,6 +501,23 @@ class MLFoundationPipeline:
         stage_start = datetime.now(timezone.utc)
 
         logger.info("Stage 2: Running data_preparer (QC GATE)")
+
+        # Check feature freshness via Feast (if enabled)
+        if self.config.enable_feast and self.config.feast_freshness_check:
+            logger.info("Checking feature freshness via Feast...")
+            freshness_result = await self._check_feature_freshness(
+                feature_refs=result.feature_refs_used
+            )
+            result.feature_freshness = freshness_result
+
+            # Log freshness status
+            if freshness_result.get("fresh"):
+                logger.info("Feature freshness check: PASSED")
+            else:
+                stale = freshness_result.get("stale_features", [])
+                logger.warning(f"Feature freshness check: {len(stale)} stale features")
+                for rec in freshness_result.get("recommendations", []):
+                    logger.warning(f"  - {rec}")
 
         # Prepare data_preparer input
         data_prep_input = {
@@ -434,9 +560,18 @@ class MLFoundationPipeline:
         result.stage_timings["data_preparation"] = stage_duration
         result.stages_completed.append("data_preparation")
 
+        # Build log message with optional freshness info
+        freshness_status = ""
+        if result.feature_freshness:
+            stale_count = len(result.feature_freshness.get("stale_features", []))
+            freshness_status = f", features_fresh={result.feature_freshness.get('fresh', True)}"
+            if stale_count > 0:
+                freshness_status += f" ({stale_count} stale)"
+
         logger.info(
             f"Stage 2 complete: gate_passed={gate_passed}, "
-            f"qc_score={result.qc_report.get('overall_score', 0):.2f}, "
+            f"qc_score={result.qc_report.get('overall_score', 0):.2f}"
+            f"{freshness_status}, "
             f"duration={stage_duration:.2f}s"
         )
 
@@ -450,6 +585,14 @@ class MLFoundationPipeline:
                 "error_type": "QCGateError",
                 "blocking_issues": result.qc_report.get("blocking_issues", []),
             })
+
+        # Add warning for stale features (non-blocking by default)
+        if result.feature_freshness and not result.feature_freshness.get("fresh", True):
+            stale_features = result.feature_freshness.get("stale_features", [])
+            result.warnings.append(
+                f"Stale features detected: {', '.join(stale_features)}. "
+                "Consider refreshing features before production use."
+            )
 
         return gate_passed
 
@@ -524,11 +667,14 @@ class MLFoundationPipeline:
         - validation_metrics: Performance metrics on validation set
         - test_metrics: Final performance metrics on test set
         - success_criteria_met: Whether performance thresholds were met
+        - feature_refs_used: Feast feature references used (for reproducibility)
         """
         result.current_stage = PipelineStage.MODEL_TRAINING
         stage_start = datetime.now(timezone.utc)
 
         logger.info("Stage 4: Running model_trainer")
+        if result.feature_refs_used:
+            logger.info(f"Using {len(result.feature_refs_used)} Feast feature refs")
 
         # Prepare model_trainer input
         trainer_input = {
@@ -547,6 +693,9 @@ class MLFoundationPipeline:
             "validation_data": input_data.get("validation_data"),
             "test_data": input_data.get("test_data"),
             "holdout_data": input_data.get("holdout_data"),
+            # Feast feature references for reproducibility
+            "feature_refs": result.feature_refs_used,
+            "feast_enabled": result.feast_enabled,
         }
 
         # Execute model_trainer
@@ -571,11 +720,16 @@ class MLFoundationPipeline:
             0.0
         )
 
+        feature_refs_info = ""
+        if result.feature_refs_used:
+            feature_refs_info = f", feature_refs={len(result.feature_refs_used)}"
+
         logger.info(
             f"Stage 4 complete: training_run_id={trainer_output.get('training_run_id')}, "
             f"success_criteria_met={success}, "
             f"primary_metric={primary_metric:.4f}, "
-            f"hpo_trials={trainer_output.get('hpo_trials_run', 0)}, "
+            f"hpo_trials={trainer_output.get('hpo_trials_run', 0)}"
+            f"{feature_refs_info}, "
             f"duration={stage_duration:.2f}s"
         )
 

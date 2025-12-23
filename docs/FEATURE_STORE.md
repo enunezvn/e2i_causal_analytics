@@ -1,23 +1,38 @@
-
-
-# E2I Lightweight Feature Store
+# E2I Feature Store
 
 **Status**: Production-Ready ✅
 **Created**: 2025-12-18
-**Architecture**: Supabase (PostgreSQL) + Redis + MLflow
+**Updated**: 2025-12-22 (Feast Integration)
+**Architecture**: Supabase (PostgreSQL) + Redis + MLflow + Feast
 
 ---
 
 ## Overview
 
-A lightweight, integrated feature store for E2I Causal Analytics that replaces Feast with a simpler, more integrated solution.
+E2I uses a **hybrid feature store architecture** combining a custom lightweight implementation with Feast 0.58.0 for advanced capabilities.
 
-**Why We Built This (Instead of Feast/Hopsworks)**:
-- ✅ Feast was overkill for our current stage (no K8s, no 100+ features yet)
-- ✅ Hopsworks is a full platform (even more complex than Feast)
-- ✅ We already have Supabase, Redis, and MLflow running
-- ✅ Need tight integration with our 18-agent LangGraph system
-- ✅ Want to leverage existing infrastructure without additional overhead
+### Hybrid Architecture
+
+| Layer | Custom Store | Feast |
+|-------|--------------|-------|
+| **Primary Use** | Simple feature serving | Point-in-time joins, versioning |
+| **Offline Store** | Supabase PostgreSQL | Supabase PostgreSQL |
+| **Online Store** | Redis (1hr TTL) | Redis |
+| **Feature Registry** | Basic metadata | Full registry with statistics |
+| **Agent Integration** | Direct LangGraph | Via adapter |
+
+### When to Use Which
+
+| Use Case | Recommended |
+|----------|-------------|
+| Simple online feature lookup | Custom Store |
+| Training data with point-in-time joins | Feast |
+| Feature versioning/time-travel | Feast |
+| Real-time agent features | Custom Store |
+| Feature statistics/monitoring | Feast |
+
+> **Note**: The system uses Feast as primary with Custom Store as fallback.
+> See [Phase 13 Documentation](mlops/phase-13-feast-feature-store.md) for migration details.
 
 ---
 

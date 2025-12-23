@@ -1,6 +1,10 @@
 # Feature Store Quick Start Guide
 
-**Goal**: Get the E2I Lightweight Feature Store running in under 10 minutes.
+**Goal**: Get the E2I Feature Store running in under 10 minutes.
+
+> **Note**: This guide covers the custom lightweight feature store. For Feast integration,
+> see [Phase 13 Documentation](mlops/phase-13-feast-feature-store.md) and the
+> [feature_repo/](../feature_repo/) directory.
 
 ---
 
