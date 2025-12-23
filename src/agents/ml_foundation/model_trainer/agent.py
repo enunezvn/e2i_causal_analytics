@@ -2,14 +2,62 @@
 
 This agent trains ML models with strict split enforcement, hyperparameter
 optimization, and MLflow logging.
+
+Outputs:
+- TrainedModel: Trained model with hyperparameters
+- ValidationMetrics: Train/validation/test metrics
+- MLflowInfo: MLflow run and artifact information
+
+Integration:
+- Upstream: model_selector (requires ModelCandidate + QC gate passed)
+- Downstream: feature_analyzer (consumes trained model)
+- Database: ml_training_runs table
+- Memory: Procedural memory (successful training patterns)
+- Observability: Opik tracing
 """
 
+import logging
 import uuid
-from datetime import datetime
-from typing import Any, Dict
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional
 
 from .graph import create_model_trainer_graph
 from .state import ModelTrainerState
+
+logger = logging.getLogger(__name__)
+
+
+def _get_training_run_repository():
+    """Get MLTrainingRunRepository (lazy import to avoid circular deps)."""
+    try:
+        from src.repositories.ml_experiment import MLTrainingRunRepository
+        from src.memory.services.factories import get_supabase_client
+
+        client = get_supabase_client()
+        return MLTrainingRunRepository(supabase_client=client)
+    except Exception as e:
+        logger.warning(f"Could not get training run repository: {e}")
+        return None
+
+
+def _get_opik_connector():
+    """Get OpikConnector (lazy import to avoid circular deps)."""
+    try:
+        from src.mlops.opik_connector import get_opik_connector
+        return get_opik_connector()
+    except Exception as e:
+        logger.warning(f"Could not get Opik connector: {e}")
+        return None
+
+
+def _get_procedural_memory():
+    """Get procedural memory client (lazy import with graceful degradation)."""
+    try:
+        from src.memory.procedural_memory import get_procedural_memory_client
+        return get_procedural_memory_client()
+    except Exception as e:
+        logger.debug(f"Procedural memory not available: {e}")
+        return None
 
 
 class ModelTrainerAgent:
@@ -34,10 +82,13 @@ class ModelTrainerAgent:
     - ALWAYS log to MLflow
     """
 
+    # Agent metadata
     tier = 0
     tier_name = "ml_foundation"
+    agent_name = "model_trainer"
     agent_type = "standard"
     sla_seconds = None  # Variable (depends on model complexity)
+    tools = ["optuna", "mlflow", "feast"]  # Optuna for HPO, MLflow for tracking, Feast for features
 
     def __init__(self):
         """Initialize ModelTrainerAgent."""
@@ -150,10 +201,47 @@ class ModelTrainerAgent:
             "holdout_data": input_data.get("holdout_data"),
         }
 
-        # Execute LangGraph workflow
+        # Execute LangGraph workflow with optional Opik tracing
+        start_time = datetime.now(timezone.utc)
+        logger.info(
+            f"Starting model training for experiment {experiment_id}, "
+            f"algorithm={algorithm_name}, problem_type={problem_type}"
+        )
+
+        opik = _get_opik_connector()
         try:
-            final_state = await self.graph.ainvoke(initial_state)
+            if opik and opik.is_enabled:
+                async with opik.trace_agent(
+                    agent_name=self.agent_name,
+                    operation="train_model",
+                    metadata={
+                        "tier": self.tier,
+                        "experiment_id": experiment_id,
+                        "algorithm_name": algorithm_name,
+                        "problem_type": problem_type,
+                        "enable_hpo": enable_hpo,
+                        "hpo_trials": hpo_trials,
+                    },
+                    tags=[self.agent_name, "tier_0", "model_training"],
+                    input_data={
+                        "experiment_id": experiment_id,
+                        "algorithm_name": algorithm_name,
+                        "problem_type": problem_type,
+                    },
+                ) as span:
+                    final_state = await self.graph.ainvoke(initial_state)
+                    # Set output on span
+                    if span and not final_state.get("error"):
+                        span.set_output({
+                            "training_run_id": training_run_id,
+                            "model_id": model_id,
+                            "success_criteria_met": final_state.get("success_criteria_met"),
+                            "hpo_trials_run": final_state.get("hpo_trials_run", 0),
+                        })
+            else:
+                final_state = await self.graph.ainvoke(initial_state)
         except Exception as e:
+            logger.exception(f"Model training failed: {e}")
             raise RuntimeError(f"Model training workflow failed: {str(e)}") from e
 
         # Check for errors in final state
@@ -237,23 +325,8 @@ class ModelTrainerAgent:
         model_artifact_uri = "TODO://mlflow/artifacts/model"
         preprocessing_artifact_uri = "TODO://mlflow/artifacts/preprocessor"
 
-        # TODO: Database Persistence
-        # Save to ml_training_runs table
-        # training_run_repo = MLTrainingRunRepository()
-        # await training_run_repo.create({
-        #     "training_run_id": training_run_id,
-        #     "experiment_id": experiment_id,
-        #     "algorithm_name": algorithm_name,
-        #     "hyperparameters": best_hyperparameters,
-        #     "test_metrics": test_metrics,
-        #     "success_criteria_met": success_criteria_met,
-        #     ...
-        # })
-
-        persisted_to_db = False  # TODO: Set to True after DB save
-
         # Construct output
-        return {
+        output = {
             # Core outputs
             "training_run_id": training_run_id,
             "model_id": model_id,
@@ -282,7 +355,7 @@ class ModelTrainerAgent:
             # Success criteria
             "success_criteria_met": success_criteria_met,
             "success_criteria_results": success_criteria_results,
-            # MLflow info (TODO)
+            # MLflow info (TODO: Full MLflow integration)
             "mlflow_run_id": mlflow_run_id,
             "mlflow_experiment_id": mlflow_experiment_id,
             "model_artifact_uri": model_artifact_uri,
@@ -304,11 +377,134 @@ class ModelTrainerAgent:
             "validation_samples": validation_samples,
             "test_samples": test_samples,
             "total_samples": total_samples,
-            # Database
-            "persisted_to_db": persisted_to_db,  # TODO
+            # Database (updated after persistence)
+            "persisted_to_db": False,
+            # Context
+            "experiment_id": experiment_id,
+            "problem_type": problem_type,
             # Status
             "training_status": "completed",
             "framework": "sklearn",  # TODO: Detect from algorithm_class
             "trained_by": "model_trainer",
-            "created_at": datetime.now(tz=None).isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
         }
+
+        # Persist training run to database
+        persisted = await self._persist_training_run(output)
+        output["persisted_to_db"] = persisted
+
+        # Update procedural memory with successful training pattern
+        await self._update_procedural_memory(output)
+
+        # Log completion
+        duration = (datetime.now(timezone.utc) - start_time).total_seconds()
+        logger.info(
+            f"Model training complete: {algorithm_name} "
+            f"(success_criteria_met: {success_criteria_met}) in {duration:.2f}s"
+        )
+
+        return output
+
+    async def _persist_training_run(self, output: Dict[str, Any]) -> bool:
+        """Persist training run to ml_training_runs table.
+
+        Graceful degradation: If repository is unavailable,
+        logs a debug message and continues without error.
+
+        Args:
+            output: Agent output containing training run details
+
+        Returns:
+            True if persisted successfully, False otherwise
+        """
+        try:
+            repo = _get_training_run_repository()
+            if repo is None:
+                logger.debug("Skipping training run persistence (no repository)")
+                return False
+
+            # Create training run record
+            result = await repo.create_run(
+                experiment_id=output.get("experiment_id", ""),
+                training_run_id=output.get("training_run_id", ""),
+                model_id=output.get("model_id", ""),
+                algorithm_name=output.get("algorithm_name", "unknown"),
+                algorithm_class=output.get("algorithm_class", ""),
+                hyperparameters=output.get("best_hyperparameters", {}),
+                problem_type=output.get("problem_type", "binary_classification"),
+                train_samples=output.get("train_samples", 0),
+                validation_samples=output.get("validation_samples", 0),
+                test_samples=output.get("test_samples", 0),
+                hpo_enabled=output.get("hpo_completed", False),
+                hpo_trials_run=output.get("hpo_trials_run", 0),
+                early_stopped=output.get("early_stopped", False),
+                training_duration_seconds=output.get("training_duration_seconds", 0.0),
+                created_by="model_trainer",
+            )
+
+            if result:
+                # Update with metrics
+                await repo.update_run_metrics(
+                    training_run_id=output.get("training_run_id", ""),
+                    train_metrics=output.get("train_metrics", {}),
+                    validation_metrics=output.get("validation_metrics", {}),
+                    test_metrics=output.get("test_metrics", {}),
+                    success_criteria_met=output.get("success_criteria_met", False),
+                )
+
+                logger.info(
+                    f"Persisted training run: {output.get('training_run_id')} "
+                    f"for experiment {output.get('experiment_id')}"
+                )
+                return True
+
+            logger.debug("Training run not persisted (no result returned)")
+            return False
+
+        except Exception as e:
+            logger.warning(f"Failed to persist training run: {e}")
+            return False
+
+    async def _update_procedural_memory(self, output: Dict[str, Any]) -> None:
+        """Update procedural memory with successful training pattern.
+
+        Graceful degradation: If memory is unavailable,
+        logs a debug message and continues without error.
+
+        Args:
+            output: Agent output containing training run details
+        """
+        try:
+            memory = _get_procedural_memory()
+            if memory is None:
+                logger.debug("Procedural memory not available, skipping update")
+                return
+
+            # Store successful training pattern for future reference
+            await memory.store_pattern(
+                agent_name=self.agent_name,
+                pattern_type="model_training",
+                pattern_data={
+                    "algorithm_name": output.get("algorithm_name"),
+                    "algorithm_class": output.get("algorithm_class"),
+                    "problem_type": output.get("problem_type"),
+                    "success_criteria_met": output.get("success_criteria_met"),
+                    "hpo_completed": output.get("hpo_completed"),
+                    "hpo_trials_run": output.get("hpo_trials_run"),
+                    "best_hyperparameters": output.get("best_hyperparameters"),
+                    "training_duration_seconds": output.get("training_duration_seconds"),
+                    "early_stopped": output.get("early_stopped"),
+                    "train_samples": output.get("train_samples"),
+                    "test_metrics": output.get("test_metrics"),
+                    "experiment_id": output.get("experiment_id"),
+                    "training_run_id": output.get("training_run_id"),
+                },
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            )
+
+            logger.info(
+                f"Updated procedural memory for training run: {output.get('training_run_id')}"
+            )
+
+        except Exception as e:
+            logger.debug(f"Failed to update procedural memory: {e}")
