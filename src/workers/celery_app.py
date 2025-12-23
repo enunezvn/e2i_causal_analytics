@@ -149,6 +149,20 @@ celery_app.conf.task_routes = {
     "src.tasks.twin.*": {"queue": "twins"},
     "src.tasks.train_twin_model": {"queue": "ml"},
     "src.tasks.simulate_population": {"queue": "twins"},
+    # -------------------------------------------------------------------------
+    # A/B Testing Tasks (Phase 15)
+    # -------------------------------------------------------------------------
+    # Interim analysis (medium compute)
+    "src.tasks.scheduled_interim_analysis": {"queue": "analytics"},
+    "src.tasks.compute_experiment_results": {"queue": "analytics"},
+    # Health checks (quick)
+    "src.tasks.enrollment_health_check": {"queue": "quick"},
+    "src.tasks.srm_detection_sweep": {"queue": "quick"},
+    "src.tasks.check_all_active_experiments": {"queue": "quick"},
+    # Fidelity tracking (involves Digital Twin comparison)
+    "src.tasks.fidelity_tracking_update": {"queue": "twins"},
+    # Cleanup
+    "src.tasks.cleanup_old_ab_results": {"queue": "quick"},
 }
 
 # =============================================================================
@@ -202,6 +216,33 @@ celery_app.conf.beat_schedule = {
         "schedule": 604800.0,  # 7 days
         "kwargs": {"feature_views": None},  # All feature views
         "options": {"queue": "ml"},
+    },
+    # -------------------------------------------------------------------------
+    # A/B Testing Tasks (Phase 15)
+    # -------------------------------------------------------------------------
+    # Daily interim analysis check at 2 AM
+    "ab-interim-analysis-check": {
+        "task": "src.tasks.check_all_active_experiments",
+        "schedule": 86400.0,  # 24 hours
+        "options": {"queue": "quick"},
+    },
+    # Enrollment health check every 12 hours
+    "ab-enrollment-health-check": {
+        "task": "src.tasks.enrollment_health_check",
+        "schedule": 43200.0,  # 12 hours
+        "options": {"queue": "quick"},
+    },
+    # SRM detection every 6 hours
+    "ab-srm-detection-sweep": {
+        "task": "src.tasks.srm_detection_sweep",
+        "schedule": 21600.0,  # 6 hours
+        "options": {"queue": "quick"},
+    },
+    # Weekly A/B results cleanup (Sundays)
+    "ab-results-cleanup": {
+        "task": "src.tasks.cleanup_old_ab_results",
+        "schedule": 604800.0,  # 7 days
+        "options": {"queue": "quick"},
     },
 }
 

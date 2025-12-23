@@ -28,6 +28,7 @@ from src.api.routes.cognitive import router as cognitive_router
 
 # Import routers
 from src.api.routes.explain import router as explain_router
+from src.api.routes.experiments import router as experiments_router
 from src.api.routes.graph import router as graph_router
 from src.api.routes.memory import router as memory_router
 from src.api.routes.monitoring import router as monitoring_router
@@ -196,6 +197,9 @@ app.include_router(rag_router)
 
 # Model monitoring endpoints (Phase 14)
 app.include_router(monitoring_router)
+
+# A/B testing & experiment execution endpoints (Phase 15)
+app.include_router(experiments_router)
 
 # TODO: Add additional routers as they're developed:
 # - Agent orchestration: /api/agents

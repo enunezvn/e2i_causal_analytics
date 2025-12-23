@@ -12,6 +12,7 @@ Available Routes:
 - graph: Knowledge graph API (nodes, relationships, traversal, Graphiti)
 - rag: Hybrid RAG endpoints
 - monitoring: Model monitoring & drift detection (Phase 14)
+- experiments: A/B testing execution & monitoring (Phase 15)
 
 Author: E2I Causal Analytics Team
 """
