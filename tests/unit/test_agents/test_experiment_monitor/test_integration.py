@@ -1,7 +1,7 @@
 """Integration tests for Experiment Monitor Agent.
 
 Tests cover:
-- End-to-end workflow execution through all 4 nodes
+- End-to-end workflow execution through all 5 nodes
 - Contract compliance with ExperimentMonitorState
 - State propagation between nodes
 - Error handling and recovery
@@ -21,6 +21,7 @@ from src.agents.experiment_monitor.graph import (
 )
 from src.agents.experiment_monitor.nodes import (
     AlertGeneratorNode,
+    FidelityCheckerNode,
     HealthCheckerNode,
     InterimAnalyzerNode,
     SRMDetectorNode,
@@ -151,9 +152,14 @@ class TestEndToEndWorkflows:
             state_arg["monitor_summary"] = "Issues detected"
             return state_arg
 
+        async def track_fidelity(self_obj, state_arg):
+            executed_nodes.append("fidelity_checker")
+            return state_arg
+
         with patch.object(HealthCheckerNode, "execute", track_health), \
              patch.object(SRMDetectorNode, "execute", track_srm), \
              patch.object(InterimAnalyzerNode, "execute", track_interim), \
+             patch.object(FidelityCheckerNode, "execute", track_fidelity), \
              patch.object(AlertGeneratorNode, "execute", track_alert):
             graph = create_experiment_monitor_graph()
             final_state = await graph.ainvoke(state)
@@ -161,6 +167,7 @@ class TestEndToEndWorkflows:
         assert "health_checker" in executed_nodes
         assert "srm_detector" in executed_nodes
         assert "interim_analyzer" in executed_nodes
+        assert "fidelity_checker" in executed_nodes
         assert "alert_generator" in executed_nodes
         assert final_state["status"] == "completed"
         assert len(final_state["srm_issues"]) > 0
@@ -261,6 +268,7 @@ class TestEndToEndWorkflows:
         with patch.object(HealthCheckerNode, "execute", passthrough), \
              patch.object(SRMDetectorNode, "execute", passthrough), \
              patch.object(InterimAnalyzerNode, "execute", passthrough), \
+             patch.object(FidelityCheckerNode, "execute", passthrough), \
              patch.object(AlertGeneratorNode, "execute", complete):
             graph = create_experiment_monitor_graph()
             final_state = await graph.ainvoke(state)
@@ -291,15 +299,20 @@ class TestEndToEndWorkflows:
             s["status"] = "completed"
             return s
 
+        async def add_latency_fidelity(self_obj, s):
+            s["check_latency_ms"] = s.get("check_latency_ms", 0) + 25
+            return s
+
         with patch.object(HealthCheckerNode, "execute", add_latency_health), \
              patch.object(SRMDetectorNode, "execute", add_latency_srm), \
              patch.object(InterimAnalyzerNode, "execute", add_latency_interim), \
+             patch.object(FidelityCheckerNode, "execute", add_latency_fidelity), \
              patch.object(AlertGeneratorNode, "execute", add_latency_alert):
             graph = create_experiment_monitor_graph()
             final_state = await graph.ainvoke(state)
 
-        # Total latency should be 100 + 50 + 30 + 20 = 200
-        assert final_state["check_latency_ms"] == 200
+        # Total latency should be 100 + 50 + 30 + 25 + 20 = 225
+        assert final_state["check_latency_ms"] == 225
 
     @pytest.mark.asyncio
     async def test_workflow_with_multiple_issues(self, state_with_all_issues):
@@ -445,6 +458,7 @@ class TestStatePropagation:
         with patch.object(HealthCheckerNode, "execute", health_output), \
              patch.object(SRMDetectorNode, "execute", srm_capture), \
              patch.object(InterimAnalyzerNode, "execute", passthrough), \
+             patch.object(FidelityCheckerNode, "execute", passthrough), \
              patch.object(AlertGeneratorNode, "execute", passthrough):
             graph = create_experiment_monitor_graph()
             await graph.ainvoke(base_monitor_state)
@@ -475,6 +489,7 @@ class TestStatePropagation:
         with patch.object(HealthCheckerNode, "execute", passthrough), \
              patch.object(SRMDetectorNode, "execute", add_srm), \
              patch.object(InterimAnalyzerNode, "execute", passthrough), \
+             patch.object(FidelityCheckerNode, "execute", passthrough), \
              patch.object(AlertGeneratorNode, "execute", capture_alerts):
             graph = create_experiment_monitor_graph()
             await graph.ainvoke(base_monitor_state)
@@ -496,6 +511,12 @@ class TestStatePropagation:
             ]
             return s
 
+        async def add_error_fidelity(self_obj, s):
+            s["errors"] = s.get("errors", []) + [
+                {"node": "fidelity_checker", "error": "Error 3"}
+            ]
+            return s
+
         async def passthrough(self_obj, s):
             return s
 
@@ -506,11 +527,12 @@ class TestStatePropagation:
         with patch.object(HealthCheckerNode, "execute", add_error_health), \
              patch.object(SRMDetectorNode, "execute", add_error_srm), \
              patch.object(InterimAnalyzerNode, "execute", passthrough), \
+             patch.object(FidelityCheckerNode, "execute", add_error_fidelity), \
              patch.object(AlertGeneratorNode, "execute", complete):
             graph = create_experiment_monitor_graph()
             final_state = await graph.ainvoke(base_monitor_state)
 
-        assert len(final_state["errors"]) == 2
+        assert len(final_state["errors"]) == 3
 
 
 class TestErrorHandling:
@@ -541,15 +563,20 @@ class TestErrorHandling:
             s["status"] = "completed"
             return s
 
+        async def continue_fidelity(self_obj, s):
+            executed.append("fidelity")
+            return s
+
         with patch.object(HealthCheckerNode, "execute", error_health), \
              patch.object(SRMDetectorNode, "execute", continue_srm), \
              patch.object(InterimAnalyzerNode, "execute", continue_interim), \
+             patch.object(FidelityCheckerNode, "execute", continue_fidelity), \
              patch.object(AlertGeneratorNode, "execute", complete):
             graph = create_experiment_monitor_graph()
             final_state = await graph.ainvoke(base_monitor_state)
 
         # All nodes should have executed
-        assert executed == ["health", "srm", "interim", "alert"]
+        assert executed == ["health", "srm", "interim", "fidelity", "alert"]
         assert final_state["status"] == "completed"
         assert len(final_state["errors"]) > 0
 
@@ -603,6 +630,7 @@ class TestEdgeCases:
         with patch.object(HealthCheckerNode, "execute", complete), \
              patch.object(SRMDetectorNode, "execute", complete), \
              patch.object(InterimAnalyzerNode, "execute", complete), \
+             patch.object(FidelityCheckerNode, "execute", complete), \
              patch.object(AlertGeneratorNode, "execute", complete):
             graph = create_experiment_monitor_graph()
             final_state = await graph.ainvoke(state)
@@ -627,6 +655,7 @@ class TestEdgeCases:
         with patch.object(HealthCheckerNode, "execute", complete), \
              patch.object(SRMDetectorNode, "execute", complete), \
              patch.object(InterimAnalyzerNode, "execute", complete), \
+             patch.object(FidelityCheckerNode, "execute", complete), \
              patch.object(AlertGeneratorNode, "execute", complete):
             graph = create_experiment_monitor_graph()
             final_state = await graph.ainvoke(state)
@@ -763,8 +792,8 @@ class TestAgentInterface:
 class TestGraphNodeCount:
     """Tests to verify graph structure."""
 
-    def test_graph_has_exactly_four_processing_nodes(self):
-        """Verify the graph has exactly 4 processing nodes."""
+    def test_graph_has_exactly_five_processing_nodes(self):
+        """Verify the graph has exactly 5 processing nodes."""
         graph = create_experiment_monitor_graph()
         structure = graph.get_graph()
 
@@ -777,14 +806,15 @@ class TestGraphNodeCount:
 
         # Filter out __start__ and __end__
         processing_nodes = [n for n in node_names if n not in ["__start__", "__end__"]]
-        assert len(processing_nodes) == 4
+        assert len(processing_nodes) == 5
         assert "health_checker" in processing_nodes
         assert "srm_detector" in processing_nodes
         assert "interim_analyzer" in processing_nodes
+        assert "fidelity_checker" in processing_nodes
         assert "alert_generator" in processing_nodes
 
     def test_graph_edges_form_linear_chain(self):
-        """Verify edges form linear chain: start -> health -> srm -> interim -> alert -> end."""
+        """Verify edges form linear chain: start -> health -> srm -> interim -> fidelity -> alert -> end."""
         graph = create_experiment_monitor_graph()
         structure = graph.get_graph()
 
@@ -793,5 +823,6 @@ class TestGraphNodeCount:
         assert edges["__start__"] == "health_checker"
         assert edges["health_checker"] == "srm_detector"
         assert edges["srm_detector"] == "interim_analyzer"
-        assert edges["interim_analyzer"] == "alert_generator"
+        assert edges["interim_analyzer"] == "fidelity_checker"
+        assert edges["fidelity_checker"] == "alert_generator"
         assert edges["alert_generator"] == "__end__"
