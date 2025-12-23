@@ -8,10 +8,18 @@ Type: Standard (Computational)
 Latency: Up to 150s
 """
 
+import logging
+import uuid
 from typing import Any, Dict, Literal, Optional
 
 from .graph import create_heterogeneous_optimizer_graph
+from .memory_hooks import (
+    contribute_to_memory,
+    get_heterogeneous_optimizer_memory_hooks,
+)
 from .state import HeterogeneousOptimizerState
+
+logger = logging.getLogger(__name__)
 
 
 class HeterogeneousOptimizerAgent:
@@ -24,13 +32,23 @@ class HeterogeneousOptimizerAgent:
     4. Creates visualization data and insights
     """
 
-    def __init__(self, data_connector=None):
+    def __init__(self, data_connector=None, enable_memory: bool = True):
         """Initialize the Heterogeneous Optimizer agent.
 
         Args:
             data_connector: Data connector for fetching data (optional, uses mock if None)
+            enable_memory: Whether to enable tri-memory integration (default: True)
         """
         self.graph = create_heterogeneous_optimizer_graph(data_connector)
+        self.enable_memory = enable_memory
+        self._memory_hooks = None
+
+    @property
+    def memory_hooks(self):
+        """Lazy-load memory hooks."""
+        if self._memory_hooks is None and self.enable_memory:
+            self._memory_hooks = get_heterogeneous_optimizer_memory_hooks()
+        return self._memory_hooks
 
     async def run(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """Run heterogeneous optimization analysis.
@@ -47,14 +65,49 @@ class HeterogeneousOptimizerAgent:
         # Validate input
         self._validate_input(input_data)
 
-        # Build initial state
-        initial_state = self._build_initial_state(input_data)
+        # Generate session ID if not provided
+        session_id = input_data.get("session_id") or str(uuid.uuid4())
+
+        # Retrieve memory context (if enabled)
+        memory_context = None
+        if self.enable_memory and self.memory_hooks:
+            try:
+                memory_context = await self.memory_hooks.get_context(
+                    session_id=session_id,
+                    query=input_data["query"],
+                    treatment_var=input_data.get("treatment_var"),
+                    outcome_var=input_data.get("outcome_var"),
+                )
+                logger.debug(
+                    f"Retrieved memory context: "
+                    f"working={len(memory_context.working_memory)}, "
+                    f"episodic={len(memory_context.episodic_context)}"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to retrieve memory context: {e}")
+
+        # Build initial state with memory context
+        initial_state = self._build_initial_state(input_data, session_id, memory_context)
 
         # Execute workflow
         final_state = await self.graph.ainvoke(initial_state)
 
         # Build output
         output = self._build_output(final_state)
+
+        # Contribute to memory (if enabled and analysis succeeded)
+        if self.enable_memory and output.get("status") != "failed":
+            try:
+                await contribute_to_memory(
+                    result=output,
+                    state=final_state,
+                    memory_hooks=self.memory_hooks,
+                    session_id=session_id,
+                    brand=input_data.get("brand"),
+                    region=input_data.get("region"),
+                )
+            except Exception as e:
+                logger.warning(f"Failed to contribute to memory: {e}")
 
         return output
 
@@ -112,15 +165,32 @@ class HeterogeneousOptimizerAgent:
             if not isinstance(top_count, int) or not (5 <= top_count <= 50):
                 raise ValueError("top_segments_count must be an integer between 5 and 50")
 
-    def _build_initial_state(self, input_data: Dict[str, Any]) -> HeterogeneousOptimizerState:
+    def _build_initial_state(
+        self,
+        input_data: Dict[str, Any],
+        session_id: str,
+        memory_context: Optional[Any] = None,
+    ) -> HeterogeneousOptimizerState:
         """Build initial state from input data.
 
         Args:
             input_data: Input dictionary
+            session_id: Session identifier for memory operations
+            memory_context: Optional CATEAnalysisContext from memory hooks
 
         Returns:
             Initial state dictionary
         """
+        # Extract memory context if available
+        working_memory_context = None
+        episodic_context = None
+        if memory_context:
+            working_memory_context = {
+                "messages": memory_context.working_memory,
+                "timestamp": memory_context.retrieval_timestamp.isoformat(),
+            }
+            episodic_context = memory_context.episodic_context
+
         return {
             # Input
             "query": input_data["query"],
@@ -162,6 +232,10 @@ class HeterogeneousOptimizerAgent:
             "confidence": None,
             "requires_further_analysis": None,
             "suggested_next_agent": None,
+            # Memory context
+            "session_id": session_id,
+            "working_memory_context": working_memory_context,
+            "episodic_context": episodic_context,
         }
 
     def _build_output(self, final_state: HeterogeneousOptimizerState) -> Dict[str, Any]:

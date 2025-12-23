@@ -771,6 +771,63 @@ logger.error(
 
 ---
 
+### 6.5 Tri-Memory Integration ✅ RESOLVED
+
+**Previous Issue**: Agent lacked tri-memory (Cognitive RAG) integration specified in specialist document lines 1184-1311
+
+**Resolution** (2025-12-23):
+- Created `src/agents/heterogeneous_optimizer/memory_hooks.py` - Complete memory integration
+- Updated `src/agents/heterogeneous_optimizer/state.py` - Added memory context fields
+- Updated `src/agents/heterogeneous_optimizer/agent.py` - Integrated memory hooks
+
+**Memory Integration Features**:
+
+1. **Working Memory (Redis)** - Session-scoped context caching
+   - `cache_cate_analysis()` - Cache analysis results with 24h TTL
+   - `get_cached_cate_analysis()` - Retrieve cached results
+
+2. **Episodic Memory (Supabase + pgvector)** - Historical analysis storage
+   - `store_cate_analysis()` - Store completed analyses with embeddings
+   - `_get_episodic_context()` - Search similar past CATE analyses
+
+3. **Semantic Memory (FalkorDB)** - Knowledge graph integration
+   - `store_segment_profiles()` - Store high/low responder profiles as graph entities
+   - `get_prior_segment_effects()` - Retrieve prior segment effects
+   - `get_causal_context()` - Get causal paths for treatment-outcome pairs
+
+**Key Implementation** (`memory_hooks.py`):
+```python
+async def contribute_to_memory(
+    result: Dict[str, Any],
+    state: Dict[str, Any],
+    memory_hooks: Optional[HeterogeneousOptimizerMemoryHooks] = None,
+    session_id: Optional[str] = None,
+    brand: Optional[str] = None,
+    region: Optional[str] = None,
+) -> Dict[str, int]:
+    """Contribute CATE analysis results to CognitiveRAG's memory systems."""
+    # 1. Cache in working memory
+    # 2. Store in episodic memory
+    # 3. Store segment profiles in semantic memory
+```
+
+**State Fields Added** (`state.py`):
+```python
+# === MEMORY CONTEXT (3 fields) ===
+session_id: Optional[str]  # Session ID for memory operations
+working_memory_context: Optional[Dict[str, Any]]  # Context from working memory
+episodic_context: Optional[List[Dict[str, Any]]]  # Similar past analyses
+```
+
+**Agent Integration** (`agent.py`):
+- Memory context retrieval before workflow execution
+- Memory contribution after successful analysis
+- Graceful degradation if memory systems unavailable
+
+**Status**: ✅ RESOLVED
+
+---
+
 ## 7. File Manifest
 
 ### 7.1 Implementation Files (8 files, 1,500 lines)

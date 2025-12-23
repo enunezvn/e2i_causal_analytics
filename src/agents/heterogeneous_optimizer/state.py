@@ -106,6 +106,12 @@ class HeterogeneousOptimizerState(TypedDict):
     requires_further_analysis: Optional[bool]  # Whether further analysis is recommended
     suggested_next_agent: Optional[str]  # Next agent to invoke if further analysis needed
 
+    # === MEMORY CONTEXT (3 fields) ===
+    # Added for tri-memory integration per specialist document
+    session_id: Optional[str]  # Session ID for memory operations
+    working_memory_context: Optional[Dict[str, Any]]  # Context from working memory
+    episodic_context: Optional[List[Dict[str, Any]]]  # Similar past analyses
+
 
 class HeterogeneousOptimizerInput(TypedDict):
     """Input contract for Heterogeneous Optimizer agent (from orchestrator).
@@ -124,6 +130,10 @@ class HeterogeneousOptimizerInput(TypedDict):
     min_samples_leaf: Optional[int]
     significance_level: Optional[float]
     top_segments_count: Optional[int]
+    # Memory integration (optional)
+    session_id: Optional[str]  # For memory context retrieval/storage
+    brand: Optional[str]  # Brand context for memory
+    region: Optional[str]  # Region context for memory
 
 
 class HeterogeneousOptimizerOutput(TypedDict):
