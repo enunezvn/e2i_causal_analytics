@@ -1,5 +1,7 @@
 """Tests for health_checker node (check_health)."""
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
 
 from src.agents.ml_foundation.model_deployer.nodes.health_checker import check_health
@@ -10,13 +12,19 @@ class TestCheckHealth:
 
     @pytest.mark.asyncio
     async def test_check_health_success(self):
-        """Test successful health check."""
+        """Test successful health check with mocked HTTP."""
         state = {
             "endpoint_url": "https://api.e2i.com/v1/test-staging/predict",
             "deployment_status": "healthy",
         }
 
-        result = await check_health(state)
+        # Mock the HTTP health check to return success
+        with patch(
+            "src.agents.ml_foundation.model_deployer.nodes.health_checker._perform_http_health_check",
+            new_callable=AsyncMock,
+            return_value=(True, 200, None),
+        ):
+            result = await check_health(state)
 
         assert result["health_check_passed"] is True
         assert result["health_check_url"] == "https://api.e2i.com/v1/test-staging/predict/health"
@@ -52,41 +60,59 @@ class TestCheckHealth:
 
     @pytest.mark.asyncio
     async def test_check_health_unhealthy_deployment(self):
-        """Test health check for unhealthy deployment."""
+        """Test health check for unhealthy deployment with mocked HTTP failure."""
         state = {
             "endpoint_url": "https://api.e2i.com/v1/test-staging/predict",
             "deployment_status": "unhealthy",
         }
 
-        result = await check_health(state)
+        # Mock the HTTP health check to return failure
+        with patch(
+            "src.agents.ml_foundation.model_deployer.nodes.health_checker._perform_http_health_check",
+            new_callable=AsyncMock,
+            return_value=(False, 503, "Service unavailable"),
+        ):
+            result = await check_health(state)
 
         assert result["health_check_passed"] is False
         assert result["health_check_url"] == "https://api.e2i.com/v1/test-staging/predict/health"
         assert result["metrics_url"] == "https://api.e2i.com/v1/test-staging/predict/metrics"
-        assert result["health_check_error"] == "Endpoint health check failed"
+        assert "health_check_error" in result
 
     @pytest.mark.asyncio
     async def test_check_health_pending_deployment(self):
-        """Test health check for pending deployment."""
+        """Test health check for pending deployment with mocked HTTP."""
         state = {
             "endpoint_url": "https://api.e2i.com/v1/test-staging/predict",
             "deployment_status": "pending",
         }
 
-        result = await check_health(state)
+        # Mock the HTTP health check to return failure (pending deployment)
+        with patch(
+            "src.agents.ml_foundation.model_deployer.nodes.health_checker._perform_http_health_check",
+            new_callable=AsyncMock,
+            return_value=(False, None, "Connection refused"),
+        ):
+            result = await check_health(state)
 
         assert result["health_check_passed"] is False
         assert "health_check_error" in result
 
     @pytest.mark.asyncio
     async def test_check_health_production_endpoint(self):
-        """Test health check for production endpoint."""
+        """Test health check for production endpoint with mocked HTTP."""
         state = {
             "endpoint_url": "https://api.e2i.com/v1/test-production/predict",
             "deployment_status": "healthy",
         }
 
-        result = await check_health(state)
+        # Mock the HTTP health check to return success
+        with patch(
+            "src.agents.ml_foundation.model_deployer.nodes.health_checker._perform_http_health_check",
+            new_callable=AsyncMock,
+            return_value=(True, 200, None),
+        ):
+            result = await check_health(state)
 
         assert result["health_check_passed"] is True
         assert result["health_check_url"] == "https://api.e2i.com/v1/test-production/predict/health"
@@ -94,13 +120,19 @@ class TestCheckHealth:
 
     @pytest.mark.asyncio
     async def test_check_health_shadow_endpoint(self):
-        """Test health check for shadow endpoint."""
+        """Test health check for shadow endpoint with mocked HTTP."""
         state = {
             "endpoint_url": "https://api.e2i.com/v1/test-shadow/predict",
             "deployment_status": "healthy",
         }
 
-        result = await check_health(state)
+        # Mock the HTTP health check to return success
+        with patch(
+            "src.agents.ml_foundation.model_deployer.nodes.health_checker._perform_http_health_check",
+            new_callable=AsyncMock,
+            return_value=(True, 200, None),
+        ):
+            result = await check_health(state)
 
         assert result["health_check_passed"] is True
         assert result["health_check_url"] == "https://api.e2i.com/v1/test-shadow/predict/health"
@@ -113,7 +145,13 @@ class TestCheckHealth:
             "deployment_status": "healthy",
         }
 
-        result = await check_health(state)
+        # Mock the HTTP health check to return success
+        with patch(
+            "src.agents.ml_foundation.model_deployer.nodes.health_checker._perform_http_health_check",
+            new_callable=AsyncMock,
+            return_value=(True, 200, None),
+        ):
+            result = await check_health(state)
 
         assert "health_check_response_time_ms" in result
         assert isinstance(result["health_check_response_time_ms"], (int, float))
@@ -121,12 +159,18 @@ class TestCheckHealth:
 
     @pytest.mark.asyncio
     async def test_check_health_with_default_deployment_status(self):
-        """Test health check with default deployment_status."""
+        """Test health check with default deployment_status and mocked HTTP."""
         state = {
             "endpoint_url": "https://api.e2i.com/v1/test-staging/predict",
         }
 
-        result = await check_health(state)
+        # Mock the HTTP health check to return failure
+        with patch(
+            "src.agents.ml_foundation.model_deployer.nodes.health_checker._perform_http_health_check",
+            new_callable=AsyncMock,
+            return_value=(False, None, "Connection refused"),
+        ):
+            result = await check_health(state)
 
         # Should treat as pending (default) and fail
         assert result["health_check_passed"] is False

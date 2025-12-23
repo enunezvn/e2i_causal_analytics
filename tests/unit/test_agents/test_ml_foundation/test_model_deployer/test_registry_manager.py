@@ -1,5 +1,7 @@
 """Tests for registry_manager nodes (register_model, validate_promotion, promote_stage)."""
 
+from unittest.mock import patch
+
 import pytest
 
 from src.agents.ml_foundation.model_deployer.nodes.registry_manager import (
@@ -14,14 +16,19 @@ class TestRegisterModel:
 
     @pytest.mark.asyncio
     async def test_register_model_success(self):
-        """Test successful model registration."""
+        """Test successful model registration with mocked MLflow."""
         state = {
             "model_uri": "mlflow://models/test_model/1",
             "deployment_name": "test_deployment",
             "experiment_id": "exp_123",
         }
 
-        result = await register_model(state)
+        # Mock the MLflow registration to return predictable values
+        with patch(
+            "src.agents.ml_foundation.model_deployer.nodes.registry_manager._register_model_mlflow",
+            return_value=("test_deployment", 1, "None"),
+        ):
+            result = await register_model(state)
 
         assert result["registration_successful"] is True
         assert result["registered_model_name"] == "test_deployment"

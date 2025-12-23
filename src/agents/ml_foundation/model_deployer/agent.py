@@ -20,10 +20,14 @@ Integration:
 - Database: ml_deployments, ml_model_registry
 """
 
-from typing import Any, Dict
+import logging
+from typing import Any, Dict, Optional
+from uuid import UUID
 
 from .graph import create_model_deployer_graph
 from .state import ModelDeployerState
+
+logger = logging.getLogger(__name__)
 
 
 class ModelDeployerAgent:
@@ -194,29 +198,79 @@ class ModelDeployerAgent:
             output: Agent output to store
             state: Final agent state
         """
-        # TODO: Implement database storage
-        # This would:
-        # 1. Write to ml_deployments table:
-        #    - deployment_id
-        #    - model_version_id
-        #    - experiment_id
-        #    - target_stage
-        #    - endpoint_name
-        #    - endpoint_url
-        #    - status
-        #    - replicas
-        #    - cpu_limit
-        #    - memory_limit
-        #    - autoscaling (JSONB)
-        #    - bento_tag
-        #    - deployed_by
-        #    - deployed_at
-        #    - deployment_duration_seconds
-        #
-        # 2. Update ml_model_registry table:
-        #    - Update stage to current_stage
-        #    - Update deployment_id
-        #    - Update deployed_at timestamp
-        #
-        # For now, pass (will be implemented in integration phase)
-        pass
+        try:
+            # Import repositories lazily to avoid circular imports
+            from src.repositories.deployment import MLDeploymentRepository
+            from src.repositories.ml_experiment import MLModelRegistryRepository
+
+            deployment_repo = MLDeploymentRepository()
+            registry_repo = MLModelRegistryRepository()
+
+            # Parse model_registry_id from state if available
+            model_registry_id: Optional[UUID] = None
+            if state.get("model_registry_id"):
+                try:
+                    model_registry_id = UUID(str(state["model_registry_id"]))
+                except ValueError:
+                    logger.warning(
+                        f"Invalid model_registry_id: {state.get('model_registry_id')}"
+                    )
+
+            # 1. Write to ml_deployments table
+            manifest = output.get("deployment_manifest", {})
+            deployment_config = {
+                "resources": state.get("resources", {"cpu": "2", "memory": "4Gi"}),
+                "max_batch_size": state.get("max_batch_size", 100),
+                "max_latency_ms": state.get("max_latency_ms", 100),
+                "bento_tag": output.get("bentoml_tag", ""),
+                "deployment_action": state.get("deployment_action", "deploy"),
+            }
+
+            # Create deployment record
+            deployment = await deployment_repo.create_deployment(
+                model_registry_id=model_registry_id,
+                deployment_name=state.get("deployment_name", ""),
+                environment=state.get("target_environment", "staging"),
+                endpoint_name=state.get("endpoint_name"),
+                endpoint_url=state.get("endpoint_url"),
+                deployed_by=state.get("deployed_by", "model_deployer_agent"),
+                deployment_config=deployment_config,
+            )
+
+            # Update deployment status based on outcome
+            if deployment and deployment.id:
+                status = "active" if output.get("deployment_successful") else "pending"
+                await deployment_repo.update_status(
+                    deployment_id=deployment.id,
+                    new_status=status,
+                )
+
+                # Update metrics if available
+                shadow_metrics = state.get("shadow_mode_metrics", {})
+                if shadow_metrics:
+                    await deployment_repo.update_metrics(
+                        deployment_id=deployment.id,
+                        shadow_metrics=shadow_metrics,
+                        latency_p99_ms=state.get("shadow_mode_latency_p99_ms"),
+                        error_rate=state.get("shadow_mode_error_rate"),
+                    )
+
+                logger.info(f"Created deployment record: {deployment.id}")
+
+            # 2. Update ml_model_registry table if promotion occurred
+            if model_registry_id and state.get("promotion_successful"):
+                new_stage = state.get("current_stage", "staging")
+                await registry_repo.transition_stage(
+                    model_id=model_registry_id,
+                    new_stage=new_stage,
+                    archive_existing=(new_stage == "production"),
+                )
+                logger.info(
+                    f"Updated model {model_registry_id} stage to {new_stage}"
+                )
+
+        except ImportError as e:
+            logger.warning(f"Repository import failed (expected in testing): {e}")
+        except Exception as e:
+            # Log error but don't fail the deployment
+            logger.error(f"Database storage failed: {e}")
