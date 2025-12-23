@@ -760,6 +760,102 @@ class MemoryIntegration(ABC):
     async def update_semantic_memory(self, relationships: List[Dict[str, Any]]):
         """Update semantic memory graph."""
         pass
+
+
+class MemoryType(str, Enum):
+    """
+    4-Memory Architecture types (from E2I Agentic Memory Documentation).
+
+    Each type maps to specific technology:
+    - WORKING: Redis + LangGraph MemorySaver (24h TTL, session-scoped)
+    - EPISODIC: Supabase + pgvector 1536 dims (permanent, historical patterns)
+    - SEMANTIC: FalkorDB + Graphity (permanent, knowledge graphs)
+    - PROCEDURAL: Supabase + pgvector (permanent, learned tool sequences)
+    """
+    WORKING = "working"
+    EPISODIC = "episodic"
+    SEMANTIC = "semantic"
+    PROCEDURAL = "procedural"
+
+
+@dataclass
+class MemoryContext:
+    """
+    Context retrieved from memory for agent execution.
+
+    Agents receive this from memory hooks before execution.
+    """
+    session_id: str
+    working_memory: List[Dict[str, Any]]  # Recent conversation/state
+    episodic_context: List[Dict[str, Any]]  # Similar past analyses
+    semantic_context: List[Dict[str, Any]]  # Knowledge graph facts
+    procedural_hints: List[Dict[str, Any]]  # Learned patterns
+    retrieval_timestamp: datetime
+
+
+class MemoryHooksInterface(ABC):
+    """
+    Memory hooks interface for agents (4-Memory Architecture).
+
+    Every agent that integrates with memory MUST implement these methods.
+    This provides a consistent lifecycle for memory-aware agents:
+
+    1. get_context() - Called BEFORE agent execution to load relevant memory
+    2. contribute_to_memory() - Called AFTER agent execution to persist results
+    3. get_required_memory_types() - Declares which memory types this agent needs
+
+    Reference implementation: src/agents/heterogeneous_optimizer/memory_hooks.py
+    """
+
+    @abstractmethod
+    async def get_context(
+        self,
+        session_id: str,
+        query: str,
+        **kwargs
+    ) -> MemoryContext:
+        """
+        Retrieve relevant memory context before agent execution.
+
+        Args:
+            session_id: Session identifier for working memory
+            query: User query for semantic search
+            **kwargs: Agent-specific context filters (brand, region, etc.)
+
+        Returns:
+            MemoryContext with relevant memories from all required types
+        """
+        pass
+
+    @abstractmethod
+    async def contribute_to_memory(
+        self,
+        result: Dict[str, Any],
+        state: Dict[str, Any],
+        session_id: str,
+        **kwargs
+    ) -> None:
+        """
+        Store agent results in appropriate memory types.
+
+        Args:
+            result: Agent output (for episodic/procedural storage)
+            state: Agent state (for working memory update)
+            session_id: Session identifier
+            **kwargs: Agent-specific metadata (brand, region, confidence)
+        """
+        pass
+
+    @abstractmethod
+    def get_required_memory_types(self) -> List[MemoryType]:
+        """
+        Declare which memory types this agent requires.
+
+        Returns:
+            List of MemoryType enums this agent uses.
+            Orchestrator uses this to pre-load appropriate backends.
+        """
+        pass
 ```
 
 ---

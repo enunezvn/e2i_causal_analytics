@@ -826,6 +826,148 @@ class OrchestratorState(BaseModel):
 
 ---
 
+## DSPy Hub Role
+
+The Orchestrator serves as the **Hub** in the DSPy optimization architecture (from E2I DSPy Feedback Learner Architecture V2).
+
+### Hub Responsibilities
+
+```python
+from typing import Dict, Any, List, Optional
+from pydantic import BaseModel, Field
+from datetime import datetime
+
+class DSPyHubInterface:
+    """
+    DSPy Hub role for Orchestrator.
+
+    The Hub coordinates the DSPy optimization loop:
+    1. Collect training signals from Sender agents
+    2. Trigger optimization when thresholds met
+    3. Distribute optimized prompts to Recipients
+    """
+
+    async def collect_training_signal(
+        self,
+        signal: "TrainingSignal"
+    ) -> None:
+        """
+        Collect training signal from a Sender agent.
+
+        Called by: causal_impact, gap_analyzer, heterogeneous_optimizer,
+                   drift_monitor, experiment_designer, prediction_synthesizer
+        """
+        pass
+
+    async def check_optimization_trigger(self) -> bool:
+        """
+        Check if optimization should be triggered.
+
+        Returns True if:
+        - min_signals_for_optimization (100) reached, OR
+        - optimization_interval_hours (24) exceeded
+        """
+        pass
+
+    async def coordinate_optimization_cycle(
+        self,
+        signals: List["TrainingSignal"],
+        target_signatures: List[str]
+    ) -> "OptimizationResult":
+        """
+        Coordinate DSPy optimization with feedback_learner.
+
+        Delegates to feedback_learner for actual MIPROv2 optimization.
+        """
+        pass
+
+    async def distribute_optimized_prompts(
+        self,
+        prompts: Dict[str, str],
+        recipient_agents: List[str]
+    ) -> "DistributionResult":
+        """
+        Distribute optimized prompts to Recipient agents.
+
+        Recipients: health_score, resource_optimizer, explainer
+        Hybrids also receive: tool_composer, feedback_learner
+        """
+        pass
+
+    def get_signal_statistics(self) -> Dict[str, Any]:
+        """
+        Get statistics about collected signals.
+
+        Returns counts by signature, quality metrics, optimization history.
+        """
+        pass
+
+
+class OptimizationResult(BaseModel):
+    """Result from DSPy optimization cycle."""
+    optimization_id: str
+    signatures_optimized: List[str]
+    signals_used: int
+    improvement_scores: Dict[str, float]  # signature -> improvement
+    new_prompts: Dict[str, str]  # signature -> optimized prompt
+    latency_ms: int
+    success: bool
+    errors: List[str] = Field(default_factory=list)
+
+
+class DistributionResult(BaseModel):
+    """Result from distributing optimized prompts."""
+    distribution_id: str
+    prompts_distributed: int
+    recipients_updated: List[str]
+    failures: List[Dict[str, str]] = Field(default_factory=list)
+    latency_ms: int
+```
+
+### Hub Integration with Agent Dispatch
+
+When dispatching to agents, the Hub includes DSPy context:
+
+```python
+class AgentDispatchRequest(BaseModel):
+    # ... existing fields ...
+
+    # === DSPy CONTEXT (Hub provides) ===
+    optimized_prompts: Optional[Dict[str, str]] = Field(
+        None,
+        description="DSPy-optimized prompts for this agent (if recipient)"
+    )
+    collect_signals: bool = Field(
+        default=True,
+        description="Whether this agent should collect training signals"
+    )
+    signal_signature: Optional[str] = Field(
+        None,
+        description="Primary DSPy signature this agent uses"
+    )
+```
+
+### Signal Collection in Agent Response
+
+Agents return collected signals in their response:
+
+```python
+class AgentDispatchResponse(BaseModel):
+    # ... existing fields ...
+
+    # === DSPy SIGNALS (Senders provide) ===
+    training_signals: List["TrainingSignal"] = Field(
+        default_factory=list,
+        description="Training signals collected during execution"
+    )
+    signal_quality: Optional[float] = Field(
+        None, ge=0.0, le=1.0,
+        description="Average quality of collected signals"
+    )
+```
+
+---
+
 ## Testing Requirements
 
 All orchestrator integrations must verify:

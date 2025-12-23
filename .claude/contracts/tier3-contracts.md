@@ -1184,3 +1184,117 @@ async def test_tier3_agent_integration(agent_name: str):
 - `.claude/specialists/Agent_Specialists_Tiers 1-5/experiment-designer.md` - Experiment Designer specialist
 - `.claude/specialists/Agent_Specialists_Tiers 1-5/drift-monitor.md` - Drift Monitor specialist
 - `.claude/specialists/Agent_Specialists_Tiers 1-5/health-score.md` - Health Score specialist
+
+---
+
+## 12. DSPy Signal Contracts
+
+Tier 3 agents have mixed DSPy roles (from E2I DSPy Feedback Learner Architecture V2):
+
+| Agent | DSPy Role | Primary Signature | Behavior |
+|-------|-----------|-------------------|----------|
+| **Drift Monitor** | Sender | `HopDecisionSignature` | Generates signals |
+| **Experiment Designer** | Sender | `InvestigationPlanSignature` | Generates signals |
+| **Health Score** | Recipient | N/A | Consumes optimized prompts |
+
+### 12.1 Sender Agents (Drift Monitor, Experiment Designer)
+
+```python
+# Drift Monitor: Sender
+class DriftMonitorAgent(DSPySenderMixin):
+    @property
+    def agent_name(self) -> str:
+        return "drift_monitor"
+
+    @property
+    def primary_signature(self) -> str:
+        return "HopDecisionSignature"
+
+    async def _decide_investigation_hop(self, state: DriftMonitorState) -> Dict:
+        # ... hop decision logic ...
+        result = await self._call_hop_decision(context)
+
+        # Collect training signal
+        self.collect_training_signal(
+            input_data={"context": context, "drift_type": state["drift_type"]},
+            output_data={"next_hop": result["hop_type"], "reasoning": result["reasoning"]},
+            quality_score=result.get("quality", 0.8),
+            signature_name="HopDecisionSignature",
+            session_id=state.get("session_id")
+        )
+
+        return result
+
+
+# Experiment Designer: Sender
+class ExperimentDesignerAgent(DSPySenderMixin):
+    @property
+    def agent_name(self) -> str:
+        return "experiment_designer"
+
+    @property
+    def primary_signature(self) -> str:
+        return "InvestigationPlanSignature"
+```
+
+### 12.2 Recipient Agent (Health Score)
+
+```python
+class DSPyRecipientMixin(ABC):
+    """
+    Mixin for agents that receive DSPy-optimized prompts.
+
+    Recipients don't generate training signals, but use optimized prompts
+    for improved performance.
+    """
+
+    def __init__(self):
+        self._optimized_prompts: Dict[str, str] = {}
+
+    async def load_optimized_prompts(
+        self,
+        prompts: Dict[str, str]
+    ) -> None:
+        """
+        Load optimized prompts from Hub.
+
+        Called by orchestrator before agent execution.
+        """
+        self._optimized_prompts.update(prompts)
+
+    def get_optimized_prompt(
+        self,
+        signature_name: str,
+        default: str = ""
+    ) -> str:
+        """Get optimized prompt for a signature."""
+        return self._optimized_prompts.get(signature_name, default)
+
+    def has_optimized_prompts(self) -> bool:
+        """Check if optimized prompts are available."""
+        return bool(self._optimized_prompts)
+
+
+class HealthScoreAgent(DSPyRecipientMixin):
+    """Health Score agent receives optimized prompts."""
+    pass
+```
+
+### 12.3 Signal Quality Thresholds
+
+```python
+TIER3_SIGNAL_QUALITY_THRESHOLDS = {
+    "drift_monitor": {
+        "min_quality": 0.6,
+        "min_confidence": 0.5,
+        "max_latency_ms": 30000,
+        "required_fields": ["drift_detected", "drift_type"]
+    },
+    "experiment_designer": {
+        "min_quality": 0.6,
+        "min_confidence": 0.5,
+        "max_latency_ms": 60000,
+        "required_fields": ["experiment_design", "sample_size"]
+    }
+}
+```
