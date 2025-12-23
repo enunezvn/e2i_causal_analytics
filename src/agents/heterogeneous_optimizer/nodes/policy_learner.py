@@ -4,10 +4,13 @@ This node learns optimal treatment allocation policy based on CATE estimates.
 Uses CATE to recommend allocation changes.
 """
 
+import logging
 import time
 from typing import Any, Dict, List
 
 from ..state import HeterogeneousOptimizerState, PolicyRecommendation
+
+logger = logging.getLogger(__name__)
 
 
 class PolicyLearnerNode:
@@ -25,8 +28,18 @@ class PolicyLearnerNode:
     async def execute(self, state: HeterogeneousOptimizerState) -> HeterogeneousOptimizerState:
         """Execute policy learning."""
         start_time = time.time()
+        logger.info(
+            "Starting policy learning",
+            extra={
+                "node": "policy_learner",
+                "segment_count": len(state.get("cate_by_segment", {})),
+                "high_responders": len(state.get("high_responders", [])),
+                "low_responders": len(state.get("low_responders", [])),
+            },
+        )
 
         if state.get("status") == "failed":
+            logger.warning("Skipping policy learning - previous node failed")
             return state
 
         try:
@@ -61,6 +74,28 @@ class PolicyLearnerNode:
                 + int((time.time() - start_time) * 1000)
             )
 
+            # Count increase/decrease recommendations
+            increase_count = sum(
+                1 for r in recommendations
+                if r["recommended_treatment_rate"] > r["current_treatment_rate"]
+            )
+            decrease_count = sum(
+                1 for r in recommendations
+                if r["recommended_treatment_rate"] < r["current_treatment_rate"]
+            )
+
+            logger.info(
+                "Policy learning complete",
+                extra={
+                    "node": "policy_learner",
+                    "recommendation_count": len(recommendations),
+                    "increase_recommendations": increase_count,
+                    "decrease_recommendations": decrease_count,
+                    "expected_total_lift": total_lift,
+                    "total_latency_ms": total_time,
+                },
+            )
+
             return {
                 **state,
                 "policy_recommendations": recommendations[:20],  # Top 20
@@ -71,6 +106,11 @@ class PolicyLearnerNode:
             }
 
         except Exception as e:
+            logger.error(
+                "Policy learning failed",
+                extra={"node": "policy_learner", "error": str(e)},
+                exc_info=True,
+            )
             return {
                 **state,
                 "errors": [{"node": "policy_learner", "error": str(e)}],

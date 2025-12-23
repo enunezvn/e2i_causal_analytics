@@ -2,6 +2,7 @@
 
 import pytest
 
+from src.agents.heterogeneous_optimizer.connectors import MockDataConnector
 from src.agents.heterogeneous_optimizer.nodes.cate_estimator import CATEEstimatorNode
 from src.agents.heterogeneous_optimizer.state import HeterogeneousOptimizerState
 
@@ -50,7 +51,7 @@ class TestCATEEstimatorNode:
     @pytest.mark.asyncio
     async def test_cate_estimation_basic(self):
         """Test basic CATE estimation."""
-        node = CATEEstimatorNode()
+        node = CATEEstimatorNode(data_connector=MockDataConnector())
         state = self._create_test_state()
 
         result = await node.execute(state)
@@ -62,7 +63,7 @@ class TestCATEEstimatorNode:
     @pytest.mark.asyncio
     async def test_heterogeneity_score(self):
         """Test heterogeneity score calculation."""
-        node = CATEEstimatorNode()
+        node = CATEEstimatorNode(data_connector=MockDataConnector())
         state = self._create_test_state()
 
         result = await node.execute(state)
@@ -74,7 +75,7 @@ class TestCATEEstimatorNode:
     @pytest.mark.asyncio
     async def test_feature_importance(self):
         """Test feature importance extraction."""
-        node = CATEEstimatorNode()
+        node = CATEEstimatorNode(data_connector=MockDataConnector())
         state = self._create_test_state()
 
         result = await node.execute(state)
@@ -90,7 +91,7 @@ class TestCATEEstimatorNode:
     @pytest.mark.asyncio
     async def test_cate_by_segment(self):
         """Test CATE calculation by segment."""
-        node = CATEEstimatorNode()
+        node = CATEEstimatorNode(data_connector=MockDataConnector())
         state = self._create_test_state()
 
         result = await node.execute(state)
@@ -106,7 +107,7 @@ class TestCATEEstimatorNode:
     @pytest.mark.asyncio
     async def test_cate_result_structure(self):
         """Test structure of CATE results."""
-        node = CATEEstimatorNode()
+        node = CATEEstimatorNode(data_connector=MockDataConnector())
         state = self._create_test_state()
 
         result = await node.execute(state)
@@ -129,7 +130,7 @@ class TestCATEEstimatorNode:
     @pytest.mark.asyncio
     async def test_confidence_interval(self):
         """Test confidence interval calculation."""
-        node = CATEEstimatorNode()
+        node = CATEEstimatorNode(data_connector=MockDataConnector())
         state = self._create_test_state()
 
         result = await node.execute(state)
@@ -147,7 +148,7 @@ class TestCATEEstimatorNode:
     @pytest.mark.asyncio
     async def test_statistical_significance(self):
         """Test statistical significance determination."""
-        node = CATEEstimatorNode()
+        node = CATEEstimatorNode(data_connector=MockDataConnector())
         state = self._create_test_state()
 
         result = await node.execute(state)
@@ -167,7 +168,7 @@ class TestCATEEstimatorNode:
     @pytest.mark.asyncio
     async def test_estimation_latency(self):
         """Test latency measurement."""
-        node = CATEEstimatorNode()
+        node = CATEEstimatorNode(data_connector=MockDataConnector())
         state = self._create_test_state()
 
         result = await node.execute(state)
@@ -178,7 +179,7 @@ class TestCATEEstimatorNode:
     @pytest.mark.asyncio
     async def test_status_update(self):
         """Test status update to analyzing."""
-        node = CATEEstimatorNode()
+        node = CATEEstimatorNode(data_connector=MockDataConnector())
         state = self._create_test_state()
 
         result = await node.execute(state)
@@ -188,7 +189,7 @@ class TestCATEEstimatorNode:
     @pytest.mark.asyncio
     async def test_insufficient_data(self):
         """Test handling of insufficient data."""
-        node = CATEEstimatorNode()
+        node = CATEEstimatorNode(data_connector=MockDataConnector())
 
         # Create mock connector that returns small dataset
         class SmallDataConnector:
@@ -212,7 +213,7 @@ class TestCATEEstimatorNode:
     @pytest.mark.asyncio
     async def test_multiple_segments(self):
         """Test CATE estimation with multiple segment variables."""
-        node = CATEEstimatorNode()
+        node = CATEEstimatorNode(data_connector=MockDataConnector())
         state = self._create_test_state(
             segment_vars=["hcp_specialty", "region", "patient_volume_decile"]
         )
@@ -224,7 +225,7 @@ class TestCATEEstimatorNode:
     @pytest.mark.asyncio
     async def test_heterogeneity_score_range(self):
         """Test heterogeneity score is properly normalized."""
-        node = CATEEstimatorNode()
+        node = CATEEstimatorNode(data_connector=MockDataConnector())
         state = self._create_test_state()
 
         result = await node.execute(state)
@@ -236,7 +237,7 @@ class TestCATEEstimatorNode:
     @pytest.mark.asyncio
     async def test_cate_sorted_by_estimate(self):
         """Test CATE results are sorted by estimate."""
-        node = CATEEstimatorNode()
+        node = CATEEstimatorNode(data_connector=MockDataConnector())
         state = self._create_test_state()
 
         result = await node.execute(state)
@@ -291,7 +292,7 @@ class TestCATEEstimatorEdgeCases:
     @pytest.mark.asyncio
     async def test_binary_treatment(self):
         """Test with binary treatment variable."""
-        node = CATEEstimatorNode()
+        node = CATEEstimatorNode(data_connector=MockDataConnector())
         state = self._create_test_state()
 
         result = await node.execute(state)
@@ -302,7 +303,7 @@ class TestCATEEstimatorEdgeCases:
     @pytest.mark.asyncio
     async def test_continuous_treatment(self):
         """Test with continuous treatment variable."""
-        node = CATEEstimatorNode()
+        node = CATEEstimatorNode(data_connector=MockDataConnector())
 
         # Mock connector with continuous treatment
         class ContinuousTreatmentConnector:
@@ -331,7 +332,7 @@ class TestCATEEstimatorEdgeCases:
     @pytest.mark.asyncio
     async def test_single_effect_modifier(self):
         """Test with single effect modifier."""
-        node = CATEEstimatorNode()
+        node = CATEEstimatorNode(data_connector=MockDataConnector())
         state = self._create_test_state(effect_modifiers=["hcp_tenure"])
 
         result = await node.execute(state)
@@ -361,8 +362,7 @@ class TestCATEEstimatorEdgeCases:
                         data[col] = np.random.randn(n)
                 return pd.DataFrame(data)
 
-        node = CATEEstimatorNode()
-        node.data_connector = ManyModifiersConnector()
+        node = CATEEstimatorNode(data_connector=ManyModifiersConnector())
         modifiers = [f"modifier_{i}" for i in range(10)]
         state = self._create_test_state(effect_modifiers=modifiers)
 
