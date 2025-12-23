@@ -22,7 +22,7 @@ offline_store:
 # Used for low-latency feature serving during inference
 online_store:
   type: redis
-  connection_string: ${REDIS_URL:-redis://localhost:6379}
+  connection_string: ${REDIS_URL:-redis://localhost:6382}
   # Redis key prefix for all feature values
   key_prefix: e2i_feast_
 
