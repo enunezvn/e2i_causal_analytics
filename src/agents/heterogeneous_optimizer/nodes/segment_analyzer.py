@@ -4,10 +4,13 @@ This node analyzes segments to identify high/low responders based on CATE estima
 Pure computation - no LLM needed.
 """
 
+import logging
 import time
 from typing import Any, Dict, List
 
 from ..state import CATEResult, HeterogeneousOptimizerState, SegmentProfile
+
+logger = logging.getLogger(__name__)
 
 
 class SegmentAnalyzerNode:
@@ -24,8 +27,17 @@ class SegmentAnalyzerNode:
     async def execute(self, state: HeterogeneousOptimizerState) -> HeterogeneousOptimizerState:
         """Execute segment analysis."""
         start_time = time.time()
+        logger.info(
+            "Starting segment analysis",
+            extra={
+                "node": "segment_analyzer",
+                "overall_ate": state.get("overall_ate"),
+                "segment_count": len(state.get("cate_by_segment", {})),
+            },
+        )
 
         if state.get("status") == "failed":
+            logger.warning("Skipping segment analysis - previous node failed")
             return state
 
         try:
@@ -57,6 +69,17 @@ class SegmentAnalyzerNode:
 
             analysis_time = int((time.time() - start_time) * 1000)
 
+            logger.info(
+                "Segment analysis complete",
+                extra={
+                    "node": "segment_analyzer",
+                    "high_responder_count": len(high_responders),
+                    "low_responder_count": len(low_responders),
+                    "effect_ratio": comparison.get("effect_ratio"),
+                    "latency_ms": analysis_time,
+                },
+            )
+
             return {
                 **state,
                 "high_responders": high_responders,
@@ -67,6 +90,11 @@ class SegmentAnalyzerNode:
             }
 
         except Exception as e:
+            logger.error(
+                "Segment analysis failed",
+                extra={"node": "segment_analyzer", "error": str(e)},
+                exc_info=True,
+            )
             return {
                 **state,
                 "errors": [{"node": "segment_analyzer", "error": str(e)}],

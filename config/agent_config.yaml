@@ -487,9 +487,18 @@ agents:
       
   heterogeneous_optimizer:
     tier: causal_analytics
+    tier_num: 2
     enabled: true
     description: "Analyzes treatment effect heterogeneity across segments"
-    
+    agent_type: "hybrid"  # CATE computation + LLM interpretation
+    primary_model: "claude-sonnet-4-20250514"
+    sla_seconds: 180
+    max_retries: 3
+    tools:  # Contract: AgentConfig.tools
+      - "econml"
+      - "sklearn"
+      - "numpy"
+
     segmentation:
       min_segment_size: 50
       max_segments: 10

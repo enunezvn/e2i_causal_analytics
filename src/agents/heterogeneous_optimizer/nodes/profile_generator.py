@@ -4,10 +4,13 @@ This node generates visualization data and executive summaries.
 Pure computation - no LLM needed.
 """
 
+import logging
 import time
 from typing import Any, Dict, List
 
 from ..state import HeterogeneousOptimizerState
+
+logger = logging.getLogger(__name__)
 
 
 class ProfileGeneratorNode:
@@ -15,9 +18,19 @@ class ProfileGeneratorNode:
 
     async def execute(self, state: HeterogeneousOptimizerState) -> HeterogeneousOptimizerState:
         """Execute profile generation."""
-        time.time()
+        start_time = time.time()
+        logger.info(
+            "Starting profile generation",
+            extra={
+                "node": "profile_generator",
+                "high_responders": len(state.get("high_responders", [])),
+                "low_responders": len(state.get("low_responders", [])),
+                "policy_recommendations": len(state.get("policy_recommendations", [])),
+            },
+        )
 
         if state.get("status") == "failed":
+            logger.warning("Skipping profile generation - previous node failed")
             return state
 
         try:
@@ -33,6 +46,18 @@ class ProfileGeneratorNode:
             # Generate key insights
             key_insights = self._generate_key_insights(state)
 
+            generation_time = int((time.time() - start_time) * 1000)
+
+            logger.info(
+                "Profile generation complete",
+                extra={
+                    "node": "profile_generator",
+                    "segment_plot_count": len(cate_plot_data.get("segments", [])),
+                    "insight_count": len(key_insights),
+                    "latency_ms": generation_time,
+                },
+            )
+
             return {
                 **state,
                 "cate_plot_data": cate_plot_data,
@@ -43,6 +68,11 @@ class ProfileGeneratorNode:
             }
 
         except Exception as e:
+            logger.error(
+                "Profile generation failed",
+                extra={"node": "profile_generator", "error": str(e)},
+                exc_info=True,
+            )
             return {
                 **state,
                 "errors": [{"node": "profile_generator", "error": str(e)}],
