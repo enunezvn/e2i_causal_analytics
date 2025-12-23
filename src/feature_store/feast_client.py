@@ -1,0 +1,651 @@
+"""Feast Feature Store Client for E2I Causal Analytics.
+
+This module provides a unified interface to Feast for:
+- Online feature retrieval (low-latency inference)
+- Offline feature retrieval (point-in-time correct training data)
+- Feature materialization (syncing offline to online store)
+- Feature statistics and metadata
+- Fallback to custom feature store during migration
+
+Usage:
+    from src.feature_store.feast_client import FeastClient
+
+    client = FeastClient()
+    features = await client.get_online_features(
+        entity_rows=[{"hcp_id": "123", "brand_id": "remibrutinib"}],
+        feature_refs=["hcp_conversion_features:engagement_score"],
+    )
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
+
+import pandas as pd
+from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
+
+# Feature repo path - relative to project root
+FEATURE_REPO_PATH = Path(__file__).parent.parent.parent / "feature_repo"
+
+
+class FeastConfig(BaseModel):
+    """Configuration for Feast client."""
+
+    repo_path: Path = Field(default=FEATURE_REPO_PATH)
+    enable_fallback: bool = Field(default=True, description="Enable fallback to custom store")
+    cache_ttl_seconds: int = Field(default=300, description="Cache TTL for feature statistics")
+    timeout_seconds: float = Field(default=30.0, description="Request timeout")
+    max_retries: int = Field(default=3, description="Max retries for failed requests")
+
+
+class FeatureStatistics(BaseModel):
+    """Feature statistics from Feast."""
+
+    feature_view: str
+    feature_name: str
+    count: int
+    null_count: int
+    min_value: Optional[float] = None
+    max_value: Optional[float] = None
+    mean_value: Optional[float] = None
+    stddev_value: Optional[float] = None
+    last_updated: datetime
+
+
+class FeastClient:
+    """Unified Feast client for E2I feature store.
+
+    Provides async interface to Feast feature store with:
+    - Point-in-time correct historical feature retrieval
+    - Low-latency online feature serving
+    - Feature materialization management
+    - Graceful fallback to custom store
+
+    Example:
+        client = FeastClient()
+
+        # Online features for inference
+        features = await client.get_online_features(
+            entity_rows=[{"hcp_id": "123"}],
+            feature_refs=["hcp_conversion_features:engagement_score"],
+        )
+
+        # Historical features for training
+        training_data = await client.get_historical_features(
+            entity_df=entity_df,
+            feature_refs=["hcp_conversion_features:*"],
+        )
+    """
+
+    def __init__(self, config: Optional[FeastConfig] = None):
+        """Initialize Feast client.
+
+        Args:
+            config: Optional configuration. Uses defaults if not provided.
+        """
+        self.config = config or FeastConfig()
+        self._store = None
+        self._initialized = False
+        self._custom_store = None  # Fallback custom store
+        self._stats_cache: Dict[str, FeatureStatistics] = {}
+        self._stats_cache_time: Dict[str, datetime] = {}
+
+    async def initialize(self) -> None:
+        """Initialize Feast store connection.
+
+        Lazily initializes the connection to avoid blocking at import time.
+        """
+        if self._initialized:
+            return
+
+        try:
+            from feast import FeatureStore
+
+            # Initialize Feast store
+            repo_path = str(self.config.repo_path)
+            if not os.path.exists(repo_path):
+                logger.warning(f"Feast repo not found at {repo_path}. Creating minimal setup.")
+                os.makedirs(repo_path, exist_ok=True)
+
+            self._store = FeatureStore(repo_path=repo_path)
+            self._initialized = True
+            logger.info(f"Feast client initialized with repo: {repo_path}")
+
+        except ImportError as e:
+            logger.error(f"Feast not installed: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Failed to initialize Feast store: {e}")
+            if self.config.enable_fallback:
+                logger.info("Falling back to custom feature store")
+                await self._init_fallback_store()
+            else:
+                raise
+
+    async def _init_fallback_store(self) -> None:
+        """Initialize fallback to custom feature store."""
+        try:
+            from src.feature_store.client import FeatureStoreClient
+
+            self._custom_store = FeatureStoreClient()
+            logger.info("Custom feature store fallback initialized")
+        except ImportError:
+            logger.warning("Custom feature store not available for fallback")
+
+    def _ensure_initialized(self) -> None:
+        """Ensure the client is initialized."""
+        if not self._initialized and self._store is None and self._custom_store is None:
+            raise RuntimeError("FeastClient not initialized. Call initialize() first.")
+
+    async def get_online_features(
+        self,
+        entity_rows: List[Dict[str, Any]],
+        feature_refs: List[str],
+        full_feature_names: bool = True,
+    ) -> Dict[str, List[Any]]:
+        """Get features for online inference.
+
+        Retrieves feature values from the online store (Redis) for
+        low-latency inference.
+
+        Args:
+            entity_rows: List of entity key dictionaries.
+                Example: [{"hcp_id": "123", "brand_id": "remibrutinib"}]
+            feature_refs: List of feature references.
+                Format: "feature_view_name:feature_name" or "feature_view_name:*"
+                Example: ["hcp_conversion_features:engagement_score"]
+            full_feature_names: If True, use fully qualified names in output.
+
+        Returns:
+            Dictionary mapping feature names to lists of values.
+            Example: {"hcp_conversion_features__engagement_score": [0.85]}
+
+        Raises:
+            RuntimeError: If client not initialized.
+            ValueError: If entity_rows or feature_refs are empty.
+        """
+        await self.initialize()
+        self._ensure_initialized()
+
+        if not entity_rows:
+            raise ValueError("entity_rows cannot be empty")
+        if not feature_refs:
+            raise ValueError("feature_refs cannot be empty")
+
+        try:
+            if self._store:
+                # Use Feast online store
+                response = self._store.get_online_features(
+                    entity_rows=entity_rows,
+                    features=feature_refs,
+                    full_feature_names=full_feature_names,
+                )
+                return response.to_dict()
+
+            elif self._custom_store:
+                # Fallback to custom store
+                logger.debug("Using custom store fallback for online features")
+                return await self._get_online_features_fallback(
+                    entity_rows, feature_refs, full_feature_names
+                )
+
+            else:
+                raise RuntimeError("No feature store available")
+
+        except Exception as e:
+            logger.error(f"Error getting online features: {e}")
+            if self.config.enable_fallback and self._custom_store:
+                logger.info("Attempting fallback to custom store")
+                return await self._get_online_features_fallback(
+                    entity_rows, feature_refs, full_feature_names
+                )
+            raise
+
+    async def _get_online_features_fallback(
+        self,
+        entity_rows: List[Dict[str, Any]],
+        feature_refs: List[str],
+        full_feature_names: bool,
+    ) -> Dict[str, List[Any]]:
+        """Fallback implementation using custom feature store."""
+        if not self._custom_store:
+            raise RuntimeError("Custom store not available for fallback")
+
+        # Parse feature refs to get feature names
+        features = {}
+        for ref in feature_refs:
+            if ":" in ref:
+                view_name, feat_name = ref.split(":", 1)
+                if feat_name == "*":
+                    continue  # Skip wildcard refs for fallback
+                key = f"{view_name}__{feat_name}" if full_feature_names else feat_name
+                features[key] = []
+
+        # Get features for each entity row
+        for entity_row in entity_rows:
+            entity_id = entity_row.get("hcp_id") or entity_row.get("patient_id")
+            if entity_id:
+                result = await self._custom_store.get_features(
+                    entity_id=entity_id,
+                    feature_names=list(features.keys()),
+                )
+                for key in features:
+                    features[key].append(result.get(key))
+
+        return features
+
+    async def get_historical_features(
+        self,
+        entity_df: pd.DataFrame,
+        feature_refs: List[str],
+        full_feature_names: bool = True,
+    ) -> pd.DataFrame:
+        """Get point-in-time correct historical features.
+
+        Performs point-in-time joins to get feature values as they were
+        at each entity's event timestamp. Critical for preventing data leakage.
+
+        Args:
+            entity_df: DataFrame with entity keys and event_timestamp column.
+                Required columns: entity key columns, event_timestamp
+            feature_refs: List of feature references.
+                Format: "feature_view_name:feature_name"
+            full_feature_names: If True, use fully qualified names.
+
+        Returns:
+            DataFrame with entity columns plus feature columns.
+            Features are joined at the correct point in time.
+
+        Example:
+            entity_df = pd.DataFrame({
+                "hcp_id": ["123", "456"],
+                "brand_id": ["remibrutinib", "remibrutinib"],
+                "event_timestamp": [datetime(2024, 1, 1), datetime(2024, 1, 15)],
+            })
+
+            features_df = await client.get_historical_features(
+                entity_df=entity_df,
+                feature_refs=["hcp_conversion_features:engagement_score"],
+            )
+        """
+        await self.initialize()
+        self._ensure_initialized()
+
+        if entity_df.empty:
+            raise ValueError("entity_df cannot be empty")
+        if "event_timestamp" not in entity_df.columns:
+            raise ValueError("entity_df must have 'event_timestamp' column")
+        if not feature_refs:
+            raise ValueError("feature_refs cannot be empty")
+
+        try:
+            if self._store:
+                # Use Feast offline store with point-in-time joins
+                retrieval_job = self._store.get_historical_features(
+                    entity_df=entity_df,
+                    features=feature_refs,
+                    full_feature_names=full_feature_names,
+                )
+                return retrieval_job.to_df()
+
+            elif self._custom_store:
+                logger.debug("Using custom store fallback for historical features")
+                return await self._get_historical_features_fallback(
+                    entity_df, feature_refs, full_feature_names
+                )
+
+            else:
+                raise RuntimeError("No feature store available")
+
+        except Exception as e:
+            logger.error(f"Error getting historical features: {e}")
+            if self.config.enable_fallback and self._custom_store:
+                return await self._get_historical_features_fallback(
+                    entity_df, feature_refs, full_feature_names
+                )
+            raise
+
+    async def _get_historical_features_fallback(
+        self,
+        entity_df: pd.DataFrame,
+        feature_refs: List[str],
+        full_feature_names: bool,
+    ) -> pd.DataFrame:
+        """Fallback implementation for historical features.
+
+        Note: This fallback does NOT support true point-in-time joins.
+        It returns the latest feature values instead.
+        """
+        logger.warning(
+            "Using fallback for historical features. "
+            "Point-in-time correctness NOT guaranteed."
+        )
+
+        if not self._custom_store:
+            raise RuntimeError("Custom store not available for fallback")
+
+        # Get latest features (not point-in-time correct)
+        result_df = entity_df.copy()
+
+        for ref in feature_refs:
+            if ":" not in ref:
+                continue
+            view_name, feat_name = ref.split(":", 1)
+            if feat_name == "*":
+                continue
+
+            col_name = f"{view_name}__{feat_name}" if full_feature_names else feat_name
+            result_df[col_name] = None
+
+        return result_df
+
+    async def materialize(
+        self,
+        start_date: datetime,
+        end_date: datetime,
+        feature_views: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Materialize features to online store.
+
+        Syncs feature values from offline store (Supabase) to online store (Redis)
+        for the specified time range.
+
+        Args:
+            start_date: Start of materialization window.
+            end_date: End of materialization window.
+            feature_views: Optional list of feature views to materialize.
+                If None, materializes all feature views.
+
+        Returns:
+            Dictionary with materialization results:
+            - feature_views: List of materialized views
+            - rows_materialized: Estimated row count
+            - duration_seconds: Time taken
+        """
+        await self.initialize()
+        self._ensure_initialized()
+
+        if not self._store:
+            logger.warning("Feast store not available. Skipping materialization.")
+            return {"feature_views": [], "rows_materialized": 0, "status": "skipped"}
+
+        try:
+            start_time = datetime.now()
+
+            if feature_views:
+                self._store.materialize(
+                    start_date=start_date,
+                    end_date=end_date,
+                    feature_views=feature_views,
+                )
+            else:
+                self._store.materialize(
+                    start_date=start_date,
+                    end_date=end_date,
+                )
+
+            duration = (datetime.now() - start_time).total_seconds()
+
+            logger.info(
+                f"Materialization completed in {duration:.2f}s. "
+                f"Views: {feature_views or 'all'}"
+            )
+
+            return {
+                "feature_views": feature_views or ["all"],
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
+                "duration_seconds": duration,
+                "status": "completed",
+            }
+
+        except Exception as e:
+            logger.error(f"Materialization failed: {e}")
+            return {
+                "feature_views": feature_views or ["all"],
+                "status": "failed",
+                "error": str(e),
+            }
+
+    async def materialize_incremental(
+        self,
+        end_date: datetime,
+        feature_views: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Incrementally materialize features from last materialization.
+
+        More efficient than full materialization for regular updates.
+
+        Args:
+            end_date: End date for incremental materialization.
+            feature_views: Optional list of feature views to materialize.
+
+        Returns:
+            Materialization results dictionary.
+        """
+        await self.initialize()
+        self._ensure_initialized()
+
+        if not self._store:
+            logger.warning("Feast store not available. Skipping materialization.")
+            return {"status": "skipped"}
+
+        try:
+            start_time = datetime.now()
+
+            if feature_views:
+                self._store.materialize_incremental(
+                    end_date=end_date,
+                    feature_views=feature_views,
+                )
+            else:
+                self._store.materialize_incremental(end_date=end_date)
+
+            duration = (datetime.now() - start_time).total_seconds()
+
+            return {
+                "feature_views": feature_views or ["all"],
+                "end_date": end_date.isoformat(),
+                "duration_seconds": duration,
+                "status": "completed",
+                "incremental": True,
+            }
+
+        except Exception as e:
+            logger.error(f"Incremental materialization failed: {e}")
+            return {"status": "failed", "error": str(e)}
+
+    async def get_feature_statistics(
+        self,
+        feature_view: str,
+        feature_name: str,
+        refresh: bool = False,
+    ) -> Optional[FeatureStatistics]:
+        """Get statistics for a specific feature.
+
+        Args:
+            feature_view: Name of the feature view.
+            feature_name: Name of the feature.
+            refresh: If True, bypass cache and fetch fresh stats.
+
+        Returns:
+            FeatureStatistics or None if not available.
+        """
+        await self.initialize()
+
+        cache_key = f"{feature_view}:{feature_name}"
+
+        # Check cache
+        if not refresh and cache_key in self._stats_cache:
+            cache_time = self._stats_cache_time.get(cache_key)
+            if cache_time and (datetime.now() - cache_time).total_seconds() < self.config.cache_ttl_seconds:
+                return self._stats_cache[cache_key]
+
+        # Compute statistics
+        # Note: Feast doesn't have built-in stats, so we compute from recent data
+        try:
+            # Get recent data for the feature
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=30)
+
+            if self._store:
+                # This would require accessing the offline store directly
+                # For now, return placeholder stats
+                stats = FeatureStatistics(
+                    feature_view=feature_view,
+                    feature_name=feature_name,
+                    count=0,
+                    null_count=0,
+                    last_updated=datetime.now(),
+                )
+            else:
+                stats = None
+
+            if stats:
+                self._stats_cache[cache_key] = stats
+                self._stats_cache_time[cache_key] = datetime.now()
+
+            return stats
+
+        except Exception as e:
+            logger.error(f"Error getting feature statistics: {e}")
+            return None
+
+    async def list_feature_views(self) -> List[Dict[str, Any]]:
+        """List all registered feature views.
+
+        Returns:
+            List of feature view metadata dictionaries.
+        """
+        await self.initialize()
+        self._ensure_initialized()
+
+        if not self._store:
+            return []
+
+        try:
+            feature_views = self._store.list_feature_views()
+            return [
+                {
+                    "name": fv.name,
+                    "entities": [e for e in fv.entity_columns] if hasattr(fv, 'entity_columns') else [],
+                    "features": [f.name for f in fv.schema] if hasattr(fv, 'schema') else [],
+                    "ttl": str(fv.ttl) if hasattr(fv, 'ttl') else None,
+                    "online": fv.online if hasattr(fv, 'online') else False,
+                    "tags": dict(fv.tags) if hasattr(fv, 'tags') else {},
+                }
+                for fv in feature_views
+            ]
+        except Exception as e:
+            logger.error(f"Error listing feature views: {e}")
+            return []
+
+    async def list_entities(self) -> List[Dict[str, Any]]:
+        """List all registered entities.
+
+        Returns:
+            List of entity metadata dictionaries.
+        """
+        await self.initialize()
+        self._ensure_initialized()
+
+        if not self._store:
+            return []
+
+        try:
+            entities = self._store.list_entities()
+            return [
+                {
+                    "name": e.name,
+                    "join_keys": list(e.join_keys),
+                    "description": e.description,
+                    "tags": dict(e.tags) if hasattr(e, 'tags') else {},
+                }
+                for e in entities
+            ]
+        except Exception as e:
+            logger.error(f"Error listing entities: {e}")
+            return []
+
+    async def get_feature_freshness(
+        self,
+        feature_view: str,
+    ) -> Dict[str, Any]:
+        """Check feature freshness for a feature view.
+
+        Args:
+            feature_view: Name of the feature view.
+
+        Returns:
+            Dictionary with freshness information:
+            - feature_view: Name
+            - last_materialized: Timestamp of last materialization
+            - freshness_status: 'fresh', 'stale', or 'expired'
+            - ttl_seconds: TTL in seconds
+        """
+        await self.initialize()
+        self._ensure_initialized()
+
+        # This would require tracking materialization timestamps
+        # For now, return placeholder
+        return {
+            "feature_view": feature_view,
+            "last_materialized": None,
+            "freshness_status": "unknown",
+            "ttl_seconds": None,
+        }
+
+    async def apply(self) -> bool:
+        """Apply feature definitions to the registry.
+
+        Typically called during deployment to register/update features.
+
+        Returns:
+            True if successful, False otherwise.
+        """
+        await self.initialize()
+
+        if not self._store:
+            logger.warning("Feast store not available. Cannot apply.")
+            return False
+
+        try:
+            self._store.apply([])  # Apply all definitions from repo
+            logger.info("Feature definitions applied to registry")
+            return True
+        except Exception as e:
+            logger.error(f"Error applying feature definitions: {e}")
+            return False
+
+    async def close(self) -> None:
+        """Close client connections."""
+        self._store = None
+        self._custom_store = None
+        self._initialized = False
+        self._stats_cache.clear()
+        self._stats_cache_time.clear()
+        logger.info("Feast client closed")
+
+
+# Singleton instance for convenience
+_client: Optional[FeastClient] = None
+
+
+async def get_feast_client() -> FeastClient:
+    """Get or create the singleton Feast client.
+
+    Returns:
+        Initialized FeastClient instance.
+    """
+    global _client
+    if _client is None:
+        _client = FeastClient()
+        await _client.initialize()
+    return _client

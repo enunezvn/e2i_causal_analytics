@@ -1,0 +1,37 @@
+# Feast Feature Server Dockerfile
+# Serves features via REST API for online inference
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Feast with PostgreSQL and Redis support
+RUN pip install --no-cache-dir \
+    feast[postgres,redis]>=0.40.0 \
+    psycopg2-binary
+
+# Copy feature repository
+COPY feature_repo/ /app/feature_repo/
+
+# Create data directory for registry
+RUN mkdir -p /app/feature_repo/data
+
+WORKDIR /app/feature_repo
+
+# Apply feature definitions to registry
+RUN feast apply
+
+# Expose feature server port
+EXPOSE 6566
+
+# Health check endpoint
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+    CMD curl -f http://localhost:6566/health || exit 1
+
+# Start feature server
+CMD ["feast", "serve", "-h", "0.0.0.0", "-p", "6566"]
