@@ -5,31 +5,121 @@ Supports multiple gap types: vs_target, vs_benchmark, vs_potential, temporal.
 
 Architecture:
 - Parallel segment analysis using asyncio.gather
-- Mock data connectors for initial implementation
+- Factory pattern for data connectors (mock vs production)
+- Config-driven economic assumptions
 - Gap filtering by min_gap_threshold
 - Aggregation and metadata collection
 """
 
 import asyncio
+import logging
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
 import numpy as np
 import pandas as pd
+import yaml
 
+from ..connectors import get_benchmark_store, get_data_connector
 from ..state import GapAnalyzerState, PerformanceGap
+
+logger = logging.getLogger(__name__)
 
 
 class GapDetectorNode:
     """Detect performance gaps across metrics and segments.
 
     Optimized for parallel execution across segments.
+    Supports configurable connectors and economic assumptions.
     """
 
-    def __init__(self):
-        """Initialize gap detector with mock data connectors."""
-        self.data_connector = MockDataConnector()
-        self.benchmark_store = MockBenchmarkStore()
+    def __init__(
+        self,
+        use_mock: bool = False,
+        config_path: Optional[str] = None,
+    ):
+        """Initialize gap detector with configurable connectors.
+
+        Args:
+            use_mock: If True, use mock connectors for testing.
+                     If False (default), use production Supabase connectors.
+            config_path: Path to YAML config file. Defaults to
+                        'config/agents/gap_analyzer.yaml'.
+        """
+        self.data_connector = get_data_connector(use_mock)
+        self.benchmark_store = get_benchmark_store(use_mock)
+        self.config = self._load_config(config_path)
+
+    def _load_config(self, config_path: Optional[str] = None) -> Dict[str, Any]:
+        """Load economic assumptions and thresholds from YAML config.
+
+        Args:
+            config_path: Path to config file. If None, uses default path.
+
+        Returns:
+            Configuration dictionary with economic assumptions.
+        """
+        if config_path is None:
+            config_path = "config/agents/gap_analyzer.yaml"
+
+        try:
+            path = Path(config_path)
+            if path.exists():
+                with open(path) as f:
+                    full_config = yaml.safe_load(f)
+                    return full_config.get("gap_analyzer", {})
+            else:
+                logger.warning(f"Config file not found: {config_path}, using defaults")
+        except Exception as e:
+            logger.warning(f"Failed to load config from {config_path}: {e}, using defaults")
+
+        # Default values (fallback if config file not available)
+        return {
+            "economic_assumptions": {
+                "discount_rate": 0.10,
+                "planning_horizon_years": 3,
+                "implementation_cost_factor": 0.15,
+                "confidence_adjustment": 0.85,
+            },
+            "gap_thresholds": {
+                "critical": 0.20,
+                "major": 0.10,
+                "minor": 0.05,
+            },
+            "roi_thresholds": {
+                "minimum_viable": 1.5,
+                "target": 2.0,
+                "exceptional": 3.0,
+            },
+            "value_drivers": {
+                "trx_conversion_rate": 0.12,
+                "nrx_conversion_rate": 0.08,
+                "market_share_multiplier": 1.5,
+                "hcp_engagement_multiplier": 0.5,
+                "conversion_rate_multiplier": 2.0,
+            },
+        }
+
+    @property
+    def economic_assumptions(self) -> Dict[str, float]:
+        """Get economic assumptions from config."""
+        return self.config.get("economic_assumptions", {})
+
+    @property
+    def gap_thresholds(self) -> Dict[str, float]:
+        """Get gap severity thresholds from config."""
+        return self.config.get("gap_thresholds", {})
+
+    @property
+    def roi_thresholds(self) -> Dict[str, float]:
+        """Get ROI classification thresholds from config."""
+        return self.config.get("roi_thresholds", {})
+
+    @property
+    def value_drivers(self) -> Dict[str, float]:
+        """Get value driver multipliers from config."""
+        return self.config.get("value_drivers", {})
 
     async def execute(self, state: GapAnalyzerState) -> Dict[str, Any]:
         """Execute gap detection workflow.
