@@ -30,7 +30,7 @@ AGENT_REGISTRY_CONFIG = {
         "tier": 0,
         "module": "src.agents.ml_foundation.scope_definer",
         "class_name": "ScopeDefinerAgent",
-        "enabled": False,  # Not yet implemented
+        "enabled": True,
     },
     "data_preparer": {
         "tier": 0,
