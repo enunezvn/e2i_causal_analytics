@@ -7,43 +7,50 @@ model drift (prediction distribution changes).
 Concept drift occurs when the underlying relationship between features and the
 target variable changes over time, even if feature distributions remain stable.
 
-NOTE: This is a placeholder implementation. Full concept drift detection requires:
-1. Access to ground truth labels for current period
-2. Comparison of feature-target relationships (e.g., feature importance changes)
-3. Performance degradation analysis
+Detection Methods:
+1. Feature Importance Correlation: Compare feature importance between periods
+2. Performance Degradation: Compare model accuracy between periods
+3. Feature-Target Correlation Drift: Detect changes in correlation coefficients
 
 Algorithm: .claude/specialists/Agent_Specialists_Tiers 1-5/drift-monitor.md
 Contract: .claude/contracts/tier3-contracts.md lines 349-562
 """
 
+import asyncio
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from typing import Any
 
+import numpy as np
+from scipy import stats
+
+from src.agents.drift_monitor.connectors import get_connector
+from src.agents.drift_monitor.connectors.base import BaseDataConnector, TimeWindow
 from src.agents.drift_monitor.state import DriftMonitorState, DriftResult, ErrorDetails
 
 
 class ConceptDriftNode:
     """Detects drift in feature-target relationships.
 
-    PLACEHOLDER IMPLEMENTATION:
-    Current implementation returns empty results as full concept drift
-    detection requires:
-    - Ground truth labels for current period
-    - Feature importance comparison
-    - Model performance degradation metrics
+    Concept Drift Detection Strategy:
+    1. Fetch labeled predictions for baseline and current periods
+    2. Calculate feature-target correlations for both periods
+    3. Compare correlations to detect relationship changes
+    4. Detect performance degradation as a concept drift signal
 
-    Future Implementation:
-    1. Fetch ground truth labels for baseline and current periods
-    2. Train lightweight models on both periods
-    3. Compare feature importance/coefficients
-    4. Detect significant changes in feature-target relationships
-
-    Performance Target: <2s (when implemented)
+    Performance Target: <3s for concept drift check
     """
 
-    def __init__(self):
-        """Initialize concept drift node."""
-        pass
+    def __init__(self, connector: BaseDataConnector | None = None):
+        """Initialize concept drift node.
+
+        Args:
+            connector: Data connector instance. If None, uses factory.
+        """
+        self.data_connector = connector or get_connector()
+        self._min_samples = 50  # Higher threshold for concept drift
+        self._correlation_threshold = 0.3  # Minimum correlation change to flag
+        self._accuracy_threshold = 0.1  # 10% accuracy drop threshold
 
     async def execute(self, state: DriftMonitorState) -> DriftMonitorState:
         """Execute concept drift detection.
@@ -64,18 +71,117 @@ class ConceptDriftNode:
             ]
             return state
 
+        # Skip if no model_id provided (concept drift needs model predictions)
+        if not state.get("model_id"):
+            state["concept_drift_results"] = []
+            state["warnings"] = state.get("warnings", []) + [
+                "Concept drift detection skipped (no model_id provided)"
+            ]
+            return state
+
         # Skip if status is failed
         if state.get("status") == "failed":
             state["concept_drift_results"] = []
             return state
 
         try:
-            # PLACEHOLDER: Return empty results
-            # TODO: Implement concept drift detection when requirements are clarified
-            state["concept_drift_results"] = []
-            state["warnings"] = state.get("warnings", []) + [
-                "Concept drift detection not yet implemented (requires ground truth labels)"
-            ]
+            # Parse time window
+            days = int(state["time_window"].replace("d", ""))
+            now = datetime.now(timezone.utc)
+
+            # Baseline period: from 2*days ago to 1*days ago
+            baseline_window = TimeWindow(
+                start=now - timedelta(days=days * 2),
+                end=now - timedelta(days=days),
+                label="baseline",
+            )
+
+            # Current period: from 1*days ago to now
+            current_window = TimeWindow(
+                start=now - timedelta(days=days),
+                end=now,
+                label="current",
+            )
+
+            # Build filters
+            filters = {}
+            if state.get("brand"):
+                filters["brand"] = state["brand"]
+
+            # Fetch labeled predictions in parallel with features
+            baseline_preds_task = self.data_connector.query_labeled_predictions(
+                model_id=state["model_id"],
+                time_window=baseline_window,
+                filters=filters if filters else None,
+            )
+
+            current_preds_task = self.data_connector.query_labeled_predictions(
+                model_id=state["model_id"],
+                time_window=current_window,
+                filters=filters if filters else None,
+            )
+
+            # Also fetch features for correlation analysis
+            features_to_check = state.get("features_to_monitor", [])[:10]  # Limit for performance
+            baseline_features_task = None
+            current_features_task = None
+
+            if features_to_check:
+                baseline_features_task = self.data_connector.query_features(
+                    feature_names=features_to_check,
+                    time_window=baseline_window,
+                    filters=filters if filters else None,
+                )
+                current_features_task = self.data_connector.query_features(
+                    feature_names=features_to_check,
+                    time_window=current_window,
+                    filters=filters if filters else None,
+                )
+
+            # Await predictions
+            baseline_preds, current_preds = await asyncio.gather(
+                baseline_preds_task, current_preds_task
+            )
+
+            # Await features if available
+            baseline_features = {}
+            current_features = {}
+            if baseline_features_task and current_features_task:
+                baseline_features, current_features = await asyncio.gather(
+                    baseline_features_task, current_features_task
+                )
+
+            drift_results = []
+
+            # 1. Performance Degradation Detection
+            perf_drift = self._detect_performance_degradation(
+                baseline_preds.labels,
+                baseline_preds.actual_labels,
+                current_preds.labels,
+                current_preds.actual_labels,
+                state["significance_level"],
+            )
+            if perf_drift:
+                drift_results.append(perf_drift)
+
+            # 2. Feature-Target Correlation Drift
+            if baseline_features and current_features:
+                correlation_drifts = await self._detect_correlation_drift(
+                    baseline_features,
+                    current_features,
+                    baseline_preds,
+                    current_preds,
+                    state["significance_level"],
+                )
+                drift_results.extend(correlation_drifts)
+
+            # Update state
+            state["concept_drift_results"] = drift_results
+
+            if not drift_results:
+                state["warnings"] = state.get("warnings", []) + [
+                    "Concept drift detection completed - no drift detected"
+                ]
 
             # Calculate latency
             latency_ms = int((time.time() - start_time) * 1000)
@@ -88,69 +194,266 @@ class ConceptDriftNode:
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
             state["errors"] = state.get("errors", []) + [error]
-            state["status"] = "failed"
+            # Don't fail the whole pipeline for concept drift issues
             state["concept_drift_results"] = []
+            state["warnings"] = state.get("warnings", []) + [
+                f"Concept drift detection encountered an error: {str(e)}"
+            ]
 
         return state
 
-    # ===== FUTURE IMPLEMENTATION METHODS =====
-
-    async def _fetch_ground_truth(self, time_window: str, brand: str | None) -> tuple[dict, dict]:
-        """Fetch ground truth labels for baseline and current periods.
-
-        TODO: Implement when label storage is available
-
-        Args:
-            time_window: Time window for comparison
-            brand: Optional brand filter
-
-        Returns:
-            (baseline_labels, current_labels) tuple
-        """
-        raise NotImplementedError("Ground truth label fetching not implemented")
-
-    def _detect_feature_importance_drift(
-        self,
-        baseline_features: dict,
-        current_features: dict,
-        baseline_labels: dict,
-        current_labels: dict,
-        significance: float,
-    ) -> list[DriftResult]:
-        """Detect drift in feature importance.
-
-        TODO: Implement feature importance comparison
-
-        Args:
-            baseline_features: Baseline feature values
-            current_features: Current feature values
-            baseline_labels: Baseline labels
-            current_labels: Current labels
-            significance: Statistical significance level
-
-        Returns:
-            List of drift results for features with changed importance
-        """
-        raise NotImplementedError("Feature importance drift detection not implemented")
-
     def _detect_performance_degradation(
         self,
-        baseline_predictions: dict,
-        current_predictions: dict,
-        baseline_labels: dict,
-        current_labels: dict,
+        baseline_predicted: np.ndarray,
+        baseline_actual: np.ndarray | None,
+        current_predicted: np.ndarray,
+        current_actual: np.ndarray | None,
+        significance: float,
     ) -> DriftResult | None:
         """Detect concept drift through performance degradation.
 
-        TODO: Implement performance-based concept drift detection
+        Compares model accuracy between baseline and current periods.
+        Significant accuracy drop indicates concept drift.
 
         Args:
-            baseline_predictions: Baseline model predictions
-            current_predictions: Current model predictions
-            baseline_labels: Baseline ground truth
-            current_labels: Current ground truth
+            baseline_predicted: Baseline predictions
+            baseline_actual: Baseline ground truth
+            current_predicted: Current predictions
+            current_actual: Current ground truth
+            significance: Statistical significance level
 
         Returns:
             DriftResult if significant performance degradation detected
         """
-        raise NotImplementedError("Performance degradation detection not implemented")
+        # Check if we have actual labels
+        if baseline_actual is None or current_actual is None:
+            return None
+
+        if len(baseline_actual) == 0 or len(current_actual) == 0:
+            return None
+
+        # Check minimum sample size
+        if (
+            len(baseline_predicted) < self._min_samples
+            or len(current_predicted) < self._min_samples
+        ):
+            return None
+
+        # Calculate accuracy for both periods
+        baseline_accuracy = np.mean(baseline_predicted == baseline_actual)
+        current_accuracy = np.mean(current_predicted == current_actual)
+
+        accuracy_drop = baseline_accuracy - current_accuracy
+
+        # Statistical test for proportion difference (Z-test for proportions)
+        n1 = len(baseline_predicted)
+        n2 = len(current_predicted)
+        p1 = baseline_accuracy
+        p2 = current_accuracy
+        p_pooled = (p1 * n1 + p2 * n2) / (n1 + n2)
+
+        # Avoid division by zero
+        if p_pooled == 0 or p_pooled == 1:
+            return None
+
+        se = np.sqrt(p_pooled * (1 - p_pooled) * (1 / n1 + 1 / n2))
+        if se == 0:
+            return None
+
+        z_stat = (p1 - p2) / se
+        p_value = 2 * (1 - stats.norm.cdf(abs(z_stat)))  # Two-tailed test
+
+        # Determine severity based on accuracy drop and p-value
+        severity, drift_detected = self._determine_performance_severity(
+            accuracy_drop, p_value, significance
+        )
+
+        result: DriftResult = {
+            "feature": "model_accuracy",
+            "drift_type": "concept",
+            "test_statistic": float(z_stat),
+            "p_value": float(p_value),
+            "drift_detected": drift_detected,
+            "severity": severity,
+            "baseline_period": "baseline",
+            "current_period": "current",
+        }
+
+        return result
+
+    async def _detect_correlation_drift(
+        self,
+        baseline_features: dict[str, Any],
+        current_features: dict[str, Any],
+        baseline_preds: Any,
+        current_preds: Any,
+        significance: float,
+    ) -> list[DriftResult]:
+        """Detect drift in feature-target correlations.
+
+        Compares the correlation between each feature and the target variable
+        across baseline and current periods.
+
+        Args:
+            baseline_features: Baseline feature data
+            current_features: Current feature data
+            baseline_preds: Baseline predictions with labels
+            current_preds: Current predictions with labels
+            significance: Statistical significance level
+
+        Returns:
+            List of drift results for features with correlation drift
+        """
+        results = []
+
+        # Skip if no actual labels available
+        if baseline_preds.actual_labels is None or current_preds.actual_labels is None:
+            return results
+
+        if len(baseline_preds.actual_labels) == 0 or len(current_preds.actual_labels) == 0:
+            return results
+
+        for feature_name in baseline_features:
+            if feature_name not in current_features:
+                continue
+
+            try:
+                baseline_values = baseline_features[feature_name].values
+                current_values = current_features[feature_name].values
+                baseline_targets = baseline_preds.actual_labels
+                current_targets = current_preds.actual_labels
+
+                # Need matching lengths for correlation
+                min_baseline = min(len(baseline_values), len(baseline_targets))
+                min_current = min(len(current_values), len(current_targets))
+
+                if min_baseline < self._min_samples or min_current < self._min_samples:
+                    continue
+
+                baseline_values = baseline_values[:min_baseline]
+                baseline_targets = baseline_targets[:min_baseline]
+                current_values = current_values[:min_current]
+                current_targets = current_targets[:min_current]
+
+                # Calculate correlations
+                baseline_corr, _ = stats.pearsonr(baseline_values, baseline_targets)
+                current_corr, _ = stats.pearsonr(current_values, current_targets)
+
+                # Fisher Z transformation for comparing correlations
+                z_stat, p_value = self._fisher_z_test(
+                    baseline_corr, current_corr, min_baseline, min_current
+                )
+
+                # Determine severity
+                correlation_change = abs(current_corr - baseline_corr)
+                severity, drift_detected = self._determine_correlation_severity(
+                    correlation_change, p_value, significance
+                )
+
+                if drift_detected:
+                    result: DriftResult = {
+                        "feature": f"{feature_name}_correlation",
+                        "drift_type": "concept",
+                        "test_statistic": float(z_stat),
+                        "p_value": float(p_value),
+                        "drift_detected": drift_detected,
+                        "severity": severity,
+                        "baseline_period": "baseline",
+                        "current_period": "current",
+                    }
+                    results.append(result)
+
+            except Exception:
+                # Skip features that can't be processed
+                continue
+
+        return results
+
+    def _fisher_z_test(
+        self, r1: float, r2: float, n1: int, n2: int
+    ) -> tuple[float, float]:
+        """Compare two correlation coefficients using Fisher Z transformation.
+
+        Args:
+            r1: First correlation coefficient
+            r2: Second correlation coefficient
+            n1: First sample size
+            n2: Second sample size
+
+        Returns:
+            (z_statistic, p_value) tuple
+        """
+        # Handle edge cases
+        r1 = np.clip(r1, -0.999, 0.999)
+        r2 = np.clip(r2, -0.999, 0.999)
+
+        # Fisher Z transformation
+        z1 = 0.5 * np.log((1 + r1) / (1 - r1))
+        z2 = 0.5 * np.log((1 + r2) / (1 - r2))
+
+        # Standard error
+        se = np.sqrt(1 / (n1 - 3) + 1 / (n2 - 3))
+
+        # Z statistic
+        z_stat = (z1 - z2) / se
+
+        # P-value (two-tailed)
+        p_value = 2 * (1 - stats.norm.cdf(abs(z_stat)))
+
+        return float(z_stat), float(p_value)
+
+    def _determine_performance_severity(
+        self, accuracy_drop: float, p_value: float, significance: float
+    ) -> tuple[str, bool]:
+        """Determine severity based on performance degradation.
+
+        Args:
+            accuracy_drop: Drop in accuracy (positive = degradation)
+            p_value: Statistical test p-value
+            significance: Significance level
+
+        Returns:
+            (severity, drift_detected) tuple
+        """
+        # Critical: >20% accuracy drop and significant
+        if accuracy_drop >= 0.2 and p_value < significance:
+            return "critical", True
+        # High: >10% accuracy drop and significant
+        elif accuracy_drop >= 0.1 and p_value < significance:
+            return "high", True
+        # Medium: >5% accuracy drop and significant
+        elif accuracy_drop >= 0.05 and p_value < significance:
+            return "medium", True
+        # Low: Small drop but significant
+        elif accuracy_drop > 0 and p_value < significance:
+            return "low", True
+        else:
+            return "none", False
+
+    def _determine_correlation_severity(
+        self, correlation_change: float, p_value: float, significance: float
+    ) -> tuple[str, bool]:
+        """Determine severity based on correlation change.
+
+        Args:
+            correlation_change: Absolute change in correlation
+            p_value: Statistical test p-value
+            significance: Significance level
+
+        Returns:
+            (severity, drift_detected) tuple
+        """
+        # Critical: Large correlation change (>0.5) and significant
+        if correlation_change >= 0.5 and p_value < significance:
+            return "critical", True
+        # High: Moderate change (>0.3) and significant
+        elif correlation_change >= 0.3 and p_value < significance:
+            return "high", True
+        # Medium: Noticeable change (>0.2) and significant
+        elif correlation_change >= 0.2 and p_value < significance:
+            return "medium", True
+        # Low: Small change but significant
+        elif correlation_change >= 0.1 and p_value < significance:
+            return "low", True
+        else:
+            return "none", False

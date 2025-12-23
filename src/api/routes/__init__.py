@@ -10,6 +10,8 @@ Available Routes:
 - memory: Memory system endpoints (episodic, procedural, semantic)
 - cognitive: Cognitive workflow endpoints
 - graph: Knowledge graph API (nodes, relationships, traversal, Graphiti)
+- rag: Hybrid RAG endpoints
+- monitoring: Model monitoring & drift detection (Phase 14)
 
 Author: E2I Causal Analytics Team
 """

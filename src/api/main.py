@@ -30,6 +30,7 @@ from src.api.routes.cognitive import router as cognitive_router
 from src.api.routes.explain import router as explain_router
 from src.api.routes.graph import router as graph_router
 from src.api.routes.memory import router as memory_router
+from src.api.routes.monitoring import router as monitoring_router
 from src.api.routes.rag import router as rag_router
 
 # Configure logging
@@ -192,6 +193,9 @@ app.include_router(graph_router)
 
 # Hybrid RAG endpoints
 app.include_router(rag_router)
+
+# Model monitoring endpoints (Phase 14)
+app.include_router(monitoring_router)
 
 # TODO: Add additional routers as they're developed:
 # - Agent orchestration: /api/agents
