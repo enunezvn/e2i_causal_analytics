@@ -180,6 +180,29 @@ celery_app.conf.beat_schedule = {
         "schedule": 300.0,  # 5 minutes
         "options": {"queue": "quick"},
     },
+    # -------------------------------------------------------------------------
+    # Feast Feature Store Tasks
+    # -------------------------------------------------------------------------
+    # Incremental feature materialization every 6 hours
+    "feast-materialize-incremental": {
+        "task": "src.tasks.materialize_incremental_features",
+        "schedule": 21600.0,  # 6 hours
+        "options": {"queue": "analytics"},
+    },
+    # Feature freshness check every 4 hours
+    "feast-check-freshness": {
+        "task": "src.tasks.check_feature_freshness",
+        "schedule": 14400.0,  # 4 hours
+        "kwargs": {"alert_on_stale": True},
+        "options": {"queue": "analytics"},
+    },
+    # Full materialization weekly (Sunday at midnight UTC)
+    "feast-materialize-full-weekly": {
+        "task": "src.tasks.materialize_features",
+        "schedule": 604800.0,  # 7 days
+        "kwargs": {"feature_views": None},  # All feature views
+        "options": {"queue": "ml"},
+    },
 }
 
 # =============================================================================

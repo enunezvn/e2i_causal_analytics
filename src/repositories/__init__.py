@@ -83,6 +83,20 @@ from src.repositories.deployment import (
     MLDeploymentRepository,
 )
 
+# Drift Monitoring (Phase 14)
+from src.repositories.drift_monitoring import (
+    DriftHistoryRecord,
+    DriftHistoryRepository,
+    MonitoringAlertRecord,
+    MonitoringAlertRepository,
+    MonitoringRunRecord,
+    MonitoringRunRepository,
+    PerformanceMetricRecord,
+    PerformanceMetricRepository,
+    RetrainingHistoryRecord,
+    RetrainingHistoryRepository,
+)
+
 # Re-export get_supabase_client for convenience
 from src.memory.services.factories import get_supabase_client
 
@@ -133,6 +147,17 @@ __all__ = [
     "DeploymentStatus",
     "MLDeployment",
     "MLDeploymentRepository",
+    # Drift Monitoring (Phase 14)
+    "DriftHistoryRecord",
+    "DriftHistoryRepository",
+    "MonitoringAlertRecord",
+    "MonitoringAlertRepository",
+    "MonitoringRunRecord",
+    "MonitoringRunRepository",
+    "PerformanceMetricRecord",
+    "PerformanceMetricRepository",
+    "RetrainingHistoryRecord",
+    "RetrainingHistoryRepository",
     # Utilities
     "get_supabase_client",
 ]

@@ -1,0 +1,92 @@
+# Drift Monitoring Configuration
+# Phase 14: Model Monitoring & Drift Detection
+#
+# This configuration controls drift detection thresholds, schedules, and alerting.
+
+# Detection settings
+detection:
+  # Time window for comparing baseline vs current distributions
+  time_window: "7d"
+
+  # Statistical significance level for tests
+  significance_level: 0.05
+
+  # PSI (Population Stability Index) threshold
+  # < 0.1: No significant shift
+  # 0.1 - 0.25: Moderate shift (warning)
+  # > 0.25: Significant shift (critical)
+  psi_threshold: 0.1
+
+  # Specific features to monitor (empty = all available)
+  features_to_monitor: []
+
+  # Minimum samples required for drift detection
+  min_samples: 30
+
+  # Enable/disable specific drift types
+  enable_data_drift: true
+  enable_model_drift: true
+  enable_concept_drift: true
+
+# Schedule settings
+schedule:
+  # How often to run drift detection (hours)
+  detection_interval_hours: 6
+
+  # Hour to run full model sweep (0-23, UTC)
+  full_sweep_hour: 0
+
+  # Day to run cleanup (0=Monday, 6=Sunday)
+  cleanup_day: 6
+
+  # How many days of history to retain
+  retention_days: 90
+
+# Alert settings
+alerts:
+  # Drift score thresholds for alert severity
+  critical_threshold: 0.8
+  warning_threshold: 0.4
+
+  # Email recipients for alerts (comma-separated)
+  email_recipients: []
+
+  # Slack webhook URL for notifications
+  slack_webhook: null
+
+  # Enable/disable alert channels
+  enable_email: false
+  enable_slack: false
+
+  # Alert aggregation window (minutes) to prevent alert storms
+  aggregation_window_minutes: 60
+
+# Performance tracking
+performance:
+  # Metrics to track for model performance
+  tracked_metrics:
+    - accuracy
+    - precision
+    - recall
+    - f1_score
+    - auc_roc
+
+  # Performance degradation threshold (relative drop)
+  degradation_threshold: 0.1
+
+  # Rolling window for performance trending (days)
+  trending_window_days: 30
+
+# Retraining triggers
+retraining:
+  # Auto-trigger retraining when drift exceeds threshold
+  auto_retrain: false
+
+  # Minimum days between retraining runs
+  min_days_between_retraining: 7
+
+  # Drift score threshold to trigger retraining
+  retrain_drift_threshold: 0.5
+
+  # Maximum number of auto-retraining attempts
+  max_retrain_attempts: 3

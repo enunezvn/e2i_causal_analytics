@@ -12,36 +12,15 @@ Contract: .claude/contracts/tier3-contracts.md lines 349-562
 """
 
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import numpy as np
 from scipy import stats
 
+from src.agents.drift_monitor.connectors import get_connector
+from src.agents.drift_monitor.connectors.base import BaseDataConnector, TimeWindow
 from src.agents.drift_monitor.state import DriftMonitorState, DriftResult, ErrorDetails
-
-
-# ===== MOCK DATA CONNECTOR =====
-class MockDataConnector:
-    """Mock data connector for testing predictions."""
-
-    async def query_predictions(
-        self, model_id: str, time_window: str, filters: dict[str, Any] | None = None
-    ) -> dict[str, np.ndarray]:
-        """Mock query that returns synthetic prediction data."""
-        np.random.seed(42)
-        n_samples = 1000
-
-        if "baseline" in filters.get("period", ""):
-            # Baseline predictions
-            scores = np.random.beta(2, 5, n_samples)  # Predictions skewed toward lower values
-            classes = (scores > 0.5).astype(int)
-        else:
-            # Current predictions (shifted distribution)
-            scores = np.random.beta(2, 3, n_samples)  # More predictions toward higher values
-            classes = (scores > 0.5).astype(int)
-
-        return {"prediction_scores": scores, "prediction_classes": classes}
 
 
 class ModelDriftNode:
@@ -56,9 +35,13 @@ class ModelDriftNode:
     Performance Target: <2s for predictions check
     """
 
-    def __init__(self):
-        """Initialize model drift node."""
-        self.data_connector = MockDataConnector()
+    def __init__(self, connector: BaseDataConnector | None = None):
+        """Initialize model drift node.
+
+        Args:
+            connector: Data connector instance. If None, uses factory.
+        """
+        self.data_connector = connector or get_connector()
         self._min_samples = 30
 
     async def execute(self, state: DriftMonitorState) -> DriftMonitorState:
@@ -94,17 +77,40 @@ class ModelDriftNode:
             return state
 
         try:
+            # Parse time window
+            days = int(state["time_window"].replace("d", ""))
+            now = datetime.now(timezone.utc)
+
+            # Baseline period: from 2*days ago to 1*days ago
+            baseline_window = TimeWindow(
+                start=now - timedelta(days=days * 2),
+                end=now - timedelta(days=days),
+                label="baseline",
+            )
+
+            # Current period: from 1*days ago to now
+            current_window = TimeWindow(
+                start=now - timedelta(days=days),
+                end=now,
+                label="current",
+            )
+
+            # Build filters
+            filters = {}
+            if state.get("brand"):
+                filters["brand"] = state["brand"]
+
             # Fetch baseline and current predictions
             baseline_preds = await self.data_connector.query_predictions(
-                state["model_id"],
-                state["time_window"],
-                {"period": "baseline", "brand": state.get("brand")},
+                model_id=state["model_id"],
+                time_window=baseline_window,
+                filters=filters if filters else None,
             )
 
             current_preds = await self.data_connector.query_predictions(
-                state["model_id"],
-                state["time_window"],
-                {"period": "current", "brand": state.get("brand")},
+                model_id=state["model_id"],
+                time_window=current_window,
+                filters=filters if filters else None,
             )
 
             # Detect drift
@@ -112,8 +118,8 @@ class ModelDriftNode:
 
             # 1. Prediction score drift (KS test)
             score_drift = self._detect_score_drift(
-                baseline_preds["prediction_scores"],
-                current_preds["prediction_scores"],
+                baseline_preds.scores,
+                current_preds.scores,
                 state["significance_level"],
                 state["psi_threshold"],
             )
@@ -122,8 +128,8 @@ class ModelDriftNode:
 
             # 2. Prediction class drift (Chi-square test)
             class_drift = self._detect_class_drift(
-                baseline_preds["prediction_classes"],
-                current_preds["prediction_classes"],
+                baseline_preds.labels,
+                current_preds.labels,
                 state["significance_level"],
             )
             if class_drift:
