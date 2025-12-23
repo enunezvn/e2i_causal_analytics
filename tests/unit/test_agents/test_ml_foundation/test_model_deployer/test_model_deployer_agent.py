@@ -1,18 +1,33 @@
 """Integration tests for ModelDeployerAgent."""
 
 import pytest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from src.agents.ml_foundation.model_deployer.agent import ModelDeployerAgent
 
 
-# Use module-level autouse fixture to mock BENTOML_AVAILABLE for all tests
+# Use module-level autouse fixture to mock external dependencies for all tests
 @pytest.fixture(autouse=True)
-def mock_bentoml_available():
-    """Mock BENTOML_AVAILABLE to use simulated mode (CLI not available)."""
-    with patch(
-        "src.agents.ml_foundation.model_deployer.nodes.deployment_orchestrator.BENTOML_AVAILABLE",
-        False,
+def mock_external_dependencies():
+    """Mock external dependencies (BentoML, MLflow, HTTP) to use simulated mode."""
+    with (
+        patch(
+            "src.agents.ml_foundation.model_deployer.nodes.deployment_orchestrator.BENTOML_AVAILABLE",
+            False,
+        ),
+        patch(
+            "src.agents.ml_foundation.model_deployer.nodes.registry_manager._register_model_mlflow",
+            return_value=(None, None, None),  # Force simulation fallback
+        ),
+        patch(
+            "src.agents.ml_foundation.model_deployer.nodes.registry_manager._transition_stage_mlflow",
+            return_value=False,  # Force simulation fallback
+        ),
+        patch(
+            "src.agents.ml_foundation.model_deployer.nodes.health_checker._perform_http_health_check",
+            new_callable=AsyncMock,
+            return_value=(True, 200, None),  # Mock successful health check
+        ),
     ):
         yield
 
