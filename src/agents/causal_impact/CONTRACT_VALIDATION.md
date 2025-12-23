@@ -3,10 +3,10 @@
 **Agent**: CausalImpact
 **Tier**: 2 (Causal Analytics)
 **Type**: Hybrid (Computation + Deep Reasoning)
-**Version**: 4.6
+**Version**: 4.7
 **Validation Date**: 2025-12-23
-**Scope**: Full contract compliance implementation + Orchestrator integration
-**Status**: PRODUCTION-READY - 94% COMPLIANT
+**Scope**: Full contract compliance implementation + Orchestrator integration + Opik tracing
+**Status**: PRODUCTION-READY - 95.5% COMPLIANT
 
 ---
 
@@ -32,10 +32,10 @@
 | RefutationResults | 4 | 0 | 0 | 0 | 4 |
 | Orchestrator Contract | 8 | 0 | 0 | 0 | 8 |
 | Workflow Gates | 4 | 0 | 0 | 0 | 4 |
-| MLOps Integration | 2 | 0 | 2 | 0 | 4 |
-| **TOTAL** | **63** | **0** | **4** | **0** | **67** |
+| MLOps Integration | 3 | 0 | 1 | 0 | 4 |
+| **TOTAL** | **64** | **0** | **3** | **0** | **67** |
 
-**Compliance Rate**: 94.0% Compliant, 0% Adapted, 6.0% Pending, 0% Non-Compliant
+**Compliance Rate**: 95.5% Compliant, 0% Adapted, 4.5% Pending, 0% Non-Compliant
 
 ### Legend
 - **Compliant**: Exact match to contract specification
@@ -263,8 +263,37 @@ workflow.add_conditional_edges("refutation", should_continue_after_refutation)
 |-------------|----------|----------------|--------|-------|
 | `dag_version_hash` | SHA256 for expert review | Present in state | COMPLIANT | In CausalGraph |
 | `dag_dot` | DOT format visualization | Present in CausalGraph | COMPLIANT | Graph visualization |
-| Opik span creation | Per-node tracing | Not implemented | PENDING | Observability |
+| Opik span creation | Per-node tracing | `traced_node` decorator | COMPLIANT | All 5 workflow nodes traced (v4.7) |
 | MLflow experiment | Model versioning | Not implemented | PENDING | Experiment tracking |
+
+**Code Evidence** (`graph.py`):
+```python
+def traced_node(node_name: str) -> Callable[[F], F]:
+    """Decorator to add Opik tracing to workflow nodes."""
+    def decorator(func: F) -> F:
+        @functools.wraps(func)
+        async def wrapper(state: CausalImpactState) -> Dict[str, Any]:
+            opik = get_opik_connector()
+            async with opik.trace_agent(
+                agent_name="causal_impact",
+                operation=node_name,
+                trace_id=state.get("query_id"),
+                parent_span_id=state.get("span_id"),
+                ...
+            ) as span:
+                result = await func(state)
+                span.set_output(output_summary)
+                return result
+        return wrapper
+    return decorator
+
+# Traced versions of all workflow nodes
+traced_build_causal_graph = traced_node("graph_builder")(build_causal_graph)
+traced_estimate_causal_effect = traced_node("estimation")(estimate_causal_effect)
+traced_refute_causal_estimate = traced_node("refutation")(refute_causal_estimate)
+traced_analyze_sensitivity = traced_node("sensitivity")(analyze_sensitivity)
+traced_interpret_results = traced_node("interpretation")(interpret_results)
+```
 
 ---
 
@@ -367,8 +396,13 @@ workflow.add_conditional_edges("refutation", should_continue_after_refutation)
 - [x] Add dispatch_id generation in dispatcher
 - [x] Add span_id creation in dispatcher
 
+### Completed (v4.7)
+- [x] Add Opik per-node tracing instrumentation via `traced_node` decorator
+- [x] Trace all 5 workflow nodes: graph_builder, estimation, refutation, sensitivity, interpretation
+- [x] Pass span_id from orchestrator for parent-child span linking
+- [x] Capture node-specific output metrics (ATE, p-value, gate_decision, e_value, etc.)
+
 ### Pending (Future Work)
-- [ ] Add Opik per-node tracing instrumentation
 - [ ] Add MLflow experiment tracking
 - [ ] Implement memory backend integration
 - [ ] Implement fallback_model error handling chain
@@ -379,6 +413,7 @@ workflow.add_conditional_edges("refutation", should_continue_after_refutation)
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 4.7 | 2025-12-23 | Opik per-node tracing - `traced_node` decorator for all 5 workflow nodes; span_id linking; node-specific metrics |
 | 4.6 | 2025-12-23 | Orchestrator integration - session_id, parsed_query, dispatch_id, span_id, priority type, execution_mode; agent_name, tools, primary_model |
 | 4.5 | 2025-12-23 | Full contract compliance implementation - zero adaptations |
 | 4.4 | 2025-12-23 | Documentation-only re-validation |
@@ -391,9 +426,16 @@ workflow.add_conditional_edges("refutation", should_continue_after_refutation)
 
 **Validated By**: Claude Code
 **Date**: 2025-12-23
-**Compliance Rate**: 94.0% Compliant, 0% Adapted, 6.0% Pending, 0% Non-Compliant
+**Compliance Rate**: 95.5% Compliant, 0% Adapted, 4.5% Pending, 0% Non-Compliant
 
-**Assessment**: The Causal Impact Agent implementation is **PRODUCTION-READY** with 94% contract compliance. All orchestrator integration fields have been implemented in v4.6. The implementation exactly matches the contract specifications in `tier2-contracts.md` and `causal-impact.md`.
+**Assessment**: The Causal Impact Agent implementation is **PRODUCTION-READY** with 95.5% contract compliance. All orchestrator integration fields and Opik per-node tracing have been implemented in v4.6/v4.7. The implementation exactly matches the contract specifications in `tier2-contracts.md` and `causal-impact.md`.
+
+**Key Achievements (v4.7)**:
+- Opik per-node tracing via `traced_node` decorator
+- All 5 workflow nodes traced: graph_builder, estimation, refutation, sensitivity, interpretation
+- Parent-child span linking via span_id from orchestrator
+- Node-specific output metrics captured (ATE, p-value, gate_decision, e_value, etc.)
+- Full observability for the causal impact workflow
 
 **Key Achievements (v4.6)**:
 - Full orchestrator dispatch integration (session_id, parsed_query, dispatch_id, span_id)
@@ -410,10 +452,9 @@ workflow.add_conditional_edges("refutation", should_continue_after_refutation)
 - Conditional routing based on gate decisions
 - 117 causal impact tests + 126 orchestrator tests passing
 
-**Pending Items** (4 items, not blocking production):
-- Opik per-node tracing instrumentation
+**Pending Items** (3 items, not blocking production):
 - MLflow experiment tracking
 - Memory backend integration
 - Fallback model error handling chain
 
-**Signature**: Contract compliance at 94%. Implementation matches contract specification. Ready for production deployment.
+**Signature**: Contract compliance at 95.5%. Implementation matches contract specification. Ready for production deployment.
