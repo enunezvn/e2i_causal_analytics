@@ -30,7 +30,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Set FALKORDB_PORT before importing memory modules
-os.environ.setdefault("FALKORDB_PORT", "6380")
+# Port 6381 is e2i_falkordb (6380 is auto-claude-falkordb)
+os.environ.setdefault("FALKORDB_PORT", "6381")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -46,7 +47,7 @@ TEST_SESSION_ID = f"e2e-test-{uuid4().hex[:8]}"
 
 # FalkorDB configuration (from docker-compose)
 FALKORDB_HOST = os.environ.get("FALKORDB_HOST", "localhost")
-FALKORDB_PORT = int(os.environ.get("FALKORDB_PORT", "6380"))
+FALKORDB_PORT = int(os.environ.get("FALKORDB_PORT", "6381"))
 
 # Test entities for semantic memory
 TEST_DATA = {

@@ -29,8 +29,8 @@ async def test_graphiti_extraction():
     else:
         print(f"\n✓ ANTHROPIC_API_KEY found: {anthropic_key[:10]}...")
 
-    # Set FalkorDB port
-    os.environ.setdefault("FALKORDB_PORT", "6380")
+    # Set FalkorDB port (6381 is e2i_falkordb, 6380 is auto-claude-falkordb)
+    os.environ.setdefault("FALKORDB_PORT", "6381")
 
     print(f"\n📊 FalkorDB: localhost:{os.environ.get('FALKORDB_PORT')}")
 
