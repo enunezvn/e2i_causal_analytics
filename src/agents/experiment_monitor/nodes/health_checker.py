@@ -18,6 +18,7 @@ from src.agents.experiment_monitor.state import (
     ErrorDetails,
     ExperimentMonitorState,
     ExperimentSummary,
+    StaleDataIssue,
 )
 
 
@@ -73,6 +74,7 @@ class HealthCheckerNode:
             # Process each experiment
             experiment_summaries: List[ExperimentSummary] = []
             enrollment_issues: List[EnrollmentIssue] = []
+            stale_data_issues: List[StaleDataIssue] = []
 
             for exp in experiments:
                 summary = await self._check_experiment_health(exp, client)
@@ -83,9 +85,15 @@ class HealthCheckerNode:
                 if issue:
                     enrollment_issues.append(issue)
 
+                # Check for stale data
+                stale_issue = await self._check_stale_data(exp, client, state)
+                if stale_issue:
+                    stale_data_issues.append(stale_issue)
+
             # Update state
             state["experiments"] = experiment_summaries
             state["enrollment_issues"] = enrollment_issues
+            state["stale_data_issues"] = stale_data_issues
             state["experiments_checked"] = len(experiment_summaries)
 
             # Calculate latency
@@ -101,6 +109,7 @@ class HealthCheckerNode:
             state["errors"] = state.get("errors", []) + [error]
             state["experiments"] = []
             state["enrollment_issues"] = []
+            state["stale_data_issues"] = []
 
         return state
 
@@ -297,5 +306,94 @@ class HealthCheckerNode:
                 days_below_threshold=days,
                 severity=severity,  # type: ignore
             )
+
+        return None
+
+    async def _check_stale_data(
+        self,
+        experiment: Dict,
+        client: Optional[Any],
+        state: ExperimentMonitorState,
+    ) -> Optional[StaleDataIssue]:
+        """Check if experiment data is stale.
+
+        Args:
+            experiment: Experiment dictionary
+            client: Optional Supabase client
+            state: Current state with thresholds
+
+        Returns:
+            StaleDataIssue if data is stale, None otherwise
+        """
+        threshold_hours = state.get("stale_data_threshold_hours", 24.0)
+        exp_id = experiment["id"]
+
+        if not client:
+            return None
+
+        try:
+            # Get the most recent assignment timestamp for this experiment
+            result = await (
+                client.table("ab_experiment_assignments")
+                .select("assigned_at")
+                .eq("experiment_id", exp_id)
+                .order("assigned_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+
+            if not result.data:
+                # No assignments yet - might be stale or just new
+                # Check experiment created_at to determine
+                created_at = experiment.get("created_at")
+                if created_at:
+                    if isinstance(created_at, str):
+                        created_time = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                    else:
+                        created_time = created_at
+
+                    hours_since_creation = (datetime.now(timezone.utc) - created_time).total_seconds() / 3600
+
+                    # If experiment is older than threshold and no data, it's stale
+                    if hours_since_creation > threshold_hours:
+                        return StaleDataIssue(
+                            experiment_id=exp_id,
+                            last_data_timestamp="N/A - No assignments",
+                            hours_since_update=hours_since_creation,
+                            threshold_hours=threshold_hours,
+                            severity="warning" if hours_since_creation < 48 else "critical",
+                        )
+                return None
+
+            # Get the last assignment timestamp
+            last_timestamp_str = result.data[0]["assigned_at"]
+            if isinstance(last_timestamp_str, str):
+                last_timestamp = datetime.fromisoformat(last_timestamp_str.replace("Z", "+00:00"))
+            else:
+                last_timestamp = last_timestamp_str
+
+            # Calculate hours since last update
+            hours_since_update = (datetime.now(timezone.utc) - last_timestamp).total_seconds() / 3600
+
+            if hours_since_update > threshold_hours:
+                # Determine severity based on staleness
+                if hours_since_update > 72:  # 3 days
+                    severity = "critical"
+                elif hours_since_update > 48:  # 2 days
+                    severity = "warning"
+                else:
+                    severity = "info"
+
+                return StaleDataIssue(
+                    experiment_id=exp_id,
+                    last_data_timestamp=last_timestamp.isoformat(),
+                    hours_since_update=round(hours_since_update, 2),
+                    threshold_hours=threshold_hours,
+                    severity=severity,  # type: ignore
+                )
+
+        except Exception:
+            # Don't fail the whole check if stale data detection fails
+            pass
 
         return None

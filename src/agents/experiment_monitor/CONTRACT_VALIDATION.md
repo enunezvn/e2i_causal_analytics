@@ -28,22 +28,23 @@ The Experiment Monitor agent is a Tier 3 Monitoring agent that monitors active A
 | No LLM calls required | COMPLIANT | Deterministic detection logic |
 | Database integration | COMPLIANT | Supabase client with lazy loading |
 
-### 1.2 Four-Node Pipeline
+### 1.2 Five-Node Pipeline
 
 | Phase | Node | Status | Location |
 |-------|------|--------|----------|
-| Health Check | `HealthCheckerNode` | COMPLIANT | `nodes/health_checker.py:24-301` |
+| Health Check | `HealthCheckerNode` | COMPLIANT | `nodes/health_checker.py:24-400` |
 | SRM Detection | `SRMDetectorNode` | COMPLIANT | `nodes/srm_detector.py:27-224` |
 | Interim Analysis | `InterimAnalyzerNode` | COMPLIANT | `nodes/interim_analyzer.py` |
-| Alert Generation | `AlertGeneratorNode` | COMPLIANT | `nodes/alert_generator.py:21-396` |
+| Fidelity Check | `FidelityCheckerNode` | COMPLIANT | `nodes/fidelity_checker.py` |
+| Alert Generation | `AlertGeneratorNode` | COMPLIANT | `nodes/alert_generator.py:21-460` |
 
 ### 1.3 Graph Flow
 
 ```
-health_checker → srm_detector → interim_analyzer → alert_generator → END
+health_checker → srm_detector → interim_analyzer → fidelity_checker → alert_generator → END
 ```
 
-**Verified in**: `graph.py:22-61`
+**Verified in**: `graph.py:22-62`
 
 ---
 
@@ -175,7 +176,7 @@ status: Literal["pending", "checking", "analyzing", "alerting", "completed", "fa
 |------|-------------|-----------------|--------|
 | `srm` | Sample Ratio Mismatch | critical, warning, info | COMPLIANT |
 | `enrollment` | Low enrollment rate | critical, warning, info | COMPLIANT |
-| `stale_data` | Data freshness issues | warning | PLANNED |
+| `stale_data` | Data freshness issues | critical, warning, info | COMPLIANT |
 | `fidelity` | Twin prediction error | warning, info | COMPLIANT |
 | `interim_trigger` | Analysis milestone | info | COMPLIANT |
 
@@ -247,28 +248,45 @@ status: Literal["pending", "checking", "analyzing", "alerting", "completed", "fa
 
 | Item | Specification | Implementation | Impact |
 |------|---------------|----------------|--------|
-| Stale data detection | Planned | Not implemented | LOW |
-| Digital Twin fidelity | Planned | Stub only | LOW |
+| Stale data detection | Planned | ✅ IMPLEMENTED | N/A |
+| Digital Twin fidelity | Planned | ✅ IMPLEMENTED | N/A |
 | OpenTelemetry | Span tracing | Latency tracking only | LOW |
 
 ### 11.2 Rationale
 
-The agent is fully functional for core monitoring use cases (health, SRM, enrollment). Digital Twin fidelity and stale data detection are planned enhancements.
+The agent is fully functional for all monitoring use cases including health, SRM, enrollment, stale data detection, and Digital Twin fidelity checks. OpenTelemetry span tracing is the only remaining enhancement.
+
+### 11.3 Recent Implementations (2025-12-23)
+
+**Stale Data Detection**:
+- Added `StaleDataIssue` TypedDict to state
+- Added `stale_data_threshold_hours` configuration (default: 24 hours)
+- Implemented `_check_stale_data()` in HealthCheckerNode
+- Added stale data alert generation in AlertGeneratorNode
+- Severity levels: info (>24h), warning (>48h), critical (>72h)
+
+**Digital Twin Fidelity Checks**:
+- Created `FidelityCheckerNode` (`nodes/fidelity_checker.py`)
+- Queries `twin_fidelity_tracking` table for prediction errors
+- Compares simulated_ate vs actual_ate
+- Flags experiments needing recalibration when error > threshold
+- Added to graph workflow between interim_analyzer and alert_generator
 
 ---
 
 ## 12. Recommendations
 
-### 12.1 Immediate
+### 12.1 Completed
 
 1. ~~**Create Test Suite**~~: ✅ COMPLETED (227 tests, 98% coverage)
-2. **Add Stale Data Detection**: Implement data freshness checks
+2. ~~**Add Stale Data Detection**~~: ✅ COMPLETED (2025-12-23)
+3. ~~**Digital Twin Fidelity**~~: ✅ COMPLETED (2025-12-23)
 
 ### 12.2 Future Enhancements
 
-1. **Digital Twin Fidelity**: Complete fidelity tracking integration
-2. **OpenTelemetry**: Add distributed tracing spans
-3. **Alerting Webhook**: Add external notification support
+1. **OpenTelemetry**: Add distributed tracing spans
+2. **Alerting Webhook**: Add external notification support
+3. **Test Coverage Update**: Add tests for new nodes (FidelityCheckerNode, stale data detection)
 
 ---
 
@@ -295,12 +313,13 @@ The agent is fully functional for core monitoring use cases (health, SRM, enroll
 | File | Lines | Purpose |
 |------|-------|---------|
 | `__init__.py` | 66 | Module exports |
-| `agent.py` | 171 | Main agent class, I/O contracts |
-| `graph.py` | 62 | LangGraph workflow assembly |
-| `state.py` | 149 | State TypedDicts |
-| `nodes/__init__.py` | - | Node exports |
-| `nodes/health_checker.py` | 301 | Health monitoring node |
+| `agent.py` | 175 | Main agent class, I/O contracts |
+| `graph.py` | 66 | LangGraph workflow assembly |
+| `state.py` | 161 | State TypedDicts (22 fields) |
+| `nodes/__init__.py` | 19 | Node exports |
+| `nodes/health_checker.py` | 400 | Health, enrollment, stale data detection |
 | `nodes/srm_detector.py` | 224 | SRM detection node |
 | `nodes/interim_analyzer.py` | - | Interim analysis node |
-| `nodes/alert_generator.py` | 397 | Alert generation node |
-| **Total** | **~1,370** | |
+| `nodes/fidelity_checker.py` | 180 | Digital Twin fidelity checks |
+| `nodes/alert_generator.py` | 460 | Alert generation node |
+| **Total** | **~1,750** | |
