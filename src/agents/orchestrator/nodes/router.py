@@ -17,12 +17,15 @@ class RouterNode:
     No LLM calls - pure logic.
     """
 
+    # Priority mapping: critical > high > medium > low
+    PRIORITY_ORDER = {"critical": 1, "high": 2, "medium": 3, "low": 4}
+
     # Agent capabilities mapping
     INTENT_TO_AGENTS = {
         "causal_effect": [
             AgentDispatch(
                 agent_name="causal_impact",
-                priority=1,
+                priority="critical",
                 parameters={"interpretation_depth": "standard"},
                 timeout_ms=30000,
                 fallback_agent="explainer",
@@ -31,7 +34,7 @@ class RouterNode:
         "performance_gap": [
             AgentDispatch(
                 agent_name="gap_analyzer",
-                priority=1,
+                priority="critical",
                 parameters={},
                 timeout_ms=20000,
                 fallback_agent=None,
@@ -40,7 +43,7 @@ class RouterNode:
         "segment_analysis": [
             AgentDispatch(
                 agent_name="heterogeneous_optimizer",
-                priority=1,
+                priority="critical",
                 parameters={},
                 timeout_ms=25000,
                 fallback_agent="gap_analyzer",
@@ -49,7 +52,7 @@ class RouterNode:
         "experiment_design": [
             AgentDispatch(
                 agent_name="experiment_designer",
-                priority=1,
+                priority="critical",
                 parameters={"preregistration_formality": "medium"},
                 timeout_ms=60000,
                 fallback_agent=None,
@@ -58,7 +61,7 @@ class RouterNode:
         "prediction": [
             AgentDispatch(
                 agent_name="prediction_synthesizer",
-                priority=1,
+                priority="critical",
                 parameters={},
                 timeout_ms=15000,
                 fallback_agent=None,
@@ -67,7 +70,7 @@ class RouterNode:
         "resource_allocation": [
             AgentDispatch(
                 agent_name="resource_optimizer",
-                priority=1,
+                priority="critical",
                 parameters={},
                 timeout_ms=20000,
                 fallback_agent=None,
@@ -76,7 +79,7 @@ class RouterNode:
         "explanation": [
             AgentDispatch(
                 agent_name="explainer",
-                priority=1,
+                priority="critical",
                 parameters={"depth": "standard"},
                 timeout_ms=45000,
                 fallback_agent=None,
@@ -85,7 +88,7 @@ class RouterNode:
         "system_health": [
             AgentDispatch(
                 agent_name="health_score",
-                priority=1,
+                priority="critical",
                 parameters={},
                 timeout_ms=5000,
                 fallback_agent=None,
@@ -94,7 +97,7 @@ class RouterNode:
         "drift_check": [
             AgentDispatch(
                 agent_name="drift_monitor",
-                priority=1,
+                priority="critical",
                 parameters={},
                 timeout_ms=10000,
                 fallback_agent=None,
@@ -103,7 +106,7 @@ class RouterNode:
         "feedback": [
             AgentDispatch(
                 agent_name="feedback_learner",
-                priority=1,
+                priority="critical",
                 parameters={},
                 timeout_ms=30000,
                 fallback_agent=None,
@@ -111,19 +114,19 @@ class RouterNode:
         ],
     }
 
-    # Multi-agent patterns for complex queries
+    # Multi-agent patterns for complex queries (priority: critical > high > medium > low)
     MULTI_AGENT_PATTERNS = {
         ("causal_effect", "segment_analysis"): [
-            ("causal_impact", 1),
-            ("heterogeneous_optimizer", 2),
+            ("causal_impact", "critical"),
+            ("heterogeneous_optimizer", "high"),
         ],
         ("performance_gap", "resource_allocation"): [
-            ("gap_analyzer", 1),
-            ("resource_optimizer", 2),
+            ("gap_analyzer", "critical"),
+            ("resource_optimizer", "high"),
         ],
         ("prediction", "explanation"): [
-            ("prediction_synthesizer", 1),
-            ("explainer", 2),
+            ("prediction_synthesizer", "critical"),
+            ("explainer", "high"),
         ],
     }
 
@@ -166,7 +169,7 @@ class RouterNode:
                 dispatch_plan = [
                     AgentDispatch(
                         agent_name="explainer",
-                        priority=1,
+                        priority="medium",
                         parameters={"depth": "minimal"},
                         timeout_ms=30000,
                         fallback_agent=None,
@@ -196,7 +199,7 @@ class RouterNode:
         dispatch_plan = [
             AgentDispatch(
                 agent_name="explainer",
-                priority=1,
+                priority="medium",
                 parameters={"depth": "minimal"},
                 timeout_ms=30000,
                 fallback_agent=None,
@@ -213,12 +216,12 @@ class RouterNode:
             "current_phase": "dispatching",
         }
 
-    def _get_dispatch_for_agent(self, agent_name: str, priority: int) -> AgentDispatch:
+    def _get_dispatch_for_agent(self, agent_name: str, priority: str) -> AgentDispatch:
         """Get dispatch config for a specific agent.
 
         Args:
             agent_name: Name of agent
-            priority: Priority level
+            priority: Priority level ("critical", "high", "medium", "low")
 
         Returns:
             Agent dispatch configuration
@@ -244,12 +247,13 @@ class RouterNode:
             dispatches: List of dispatch configurations
 
         Returns:
-            List of agent groups by priority
+            List of agent groups by priority (critical first, then high, medium, low)
         """
         groups = defaultdict(list)
         for d in dispatches:
             groups[d["priority"]].append(d["agent_name"])
-        return [groups[p] for p in sorted(groups.keys())]
+        # Sort by priority order: critical=1, high=2, medium=3, low=4
+        return [groups[p] for p in sorted(groups.keys(), key=lambda x: self.PRIORITY_ORDER.get(x, 99))]
 
 
 # Export for use in graph

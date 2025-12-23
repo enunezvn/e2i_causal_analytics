@@ -5,9 +5,20 @@ Parallel agent dispatch with timeout handling.
 
 import asyncio
 import time
+import uuid
 from typing import Any, Dict, Optional
 
 from ..state import AgentDispatch, AgentResult, OrchestratorState
+
+
+def _generate_dispatch_id() -> str:
+    """Generate unique dispatch identifier."""
+    return f"disp_{uuid.uuid4().hex[:16]}"
+
+
+def _generate_span_id() -> str:
+    """Generate unique span identifier for observability."""
+    return f"span_{uuid.uuid4().hex[:16]}"
 
 
 class DispatcherNode:
@@ -268,12 +279,25 @@ class DispatcherNode:
             dispatch: Dispatch configuration
 
         Returns:
-            Agent input data
+            Agent input data with contract-required pass-through fields
         """
+        # Generate dispatch_id if not already set
+        dispatch_id = dispatch.get("dispatch_id") or _generate_dispatch_id()
+
+        # Generate span_id for observability
+        span_id = _generate_span_id()
+
         return {
             "query": state.get("query"),
             "user_context": state.get("user_context", {}),
             "parameters": dispatch.get("parameters", {}),
+            # Contract: BaseAgentState pass-through fields
+            "session_id": state.get("session_id"),
+            "parsed_query": state.get("parsed_query"),
+            # Contract: Orchestrator dispatch fields
+            "dispatch_id": dispatch_id,
+            "span_id": span_id,
+            "execution_mode": dispatch.get("execution_mode", "sequential"),
         }
 
     async def _dispatch_fallback(self, agent_name: str, state: OrchestratorState) -> AgentResult:
@@ -288,7 +312,7 @@ class DispatcherNode:
         """
         fallback_dispatch = AgentDispatch(
             agent_name=agent_name,
-            priority=99,
+            priority="low",  # Contract: Literal priority type
             parameters={},
             timeout_ms=30000,
             fallback_agent=None,

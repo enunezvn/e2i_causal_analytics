@@ -403,7 +403,11 @@ agents:
     enabled: true
     description: "Traces causal chains and estimates effects with validation"
     agent_type: "hybrid"  # Computation + LLM interpretation
-    
+    tools:  # Contract: AgentConfig.tools
+      - "dowhy"
+      - "econml"
+      - "networkx"
+
     workflow:
       # V4.1: 5-node workflow with validation
       nodes:
