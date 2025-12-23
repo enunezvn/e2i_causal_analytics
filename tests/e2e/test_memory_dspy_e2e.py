@@ -267,19 +267,17 @@ class TestDSPySignatureInvocation:
                     assert "primary_intent" in result
                     assert result["primary_intent"] == "CAUSAL_ANALYSIS"
 
-    def test_investigator_signatures_invoked(self, mock_lm, mock_memory_backends):
+    async def test_investigator_signatures_invoked(self, mock_lm, mock_memory_backends):
         """Test Phase 2 signatures: InvestigationPlan, HopDecision, EvidenceRelevance."""
         with patch.object(dspy, "ChainOfThought", return_value=mock_lm):
             with patch.object(dspy, "Predict", return_value=mock_lm):
                 module = InvestigatorModule(mock_memory_backends)
 
                 # Run async forward
-                result = asyncio.get_event_loop().run_until_complete(
-                    module.forward(
-                        rewritten_query="Kisqali adoption drivers in Northeast",
-                        intent="CAUSAL_ANALYSIS",
-                        entities='{"brands": ["Kisqali"]}',
-                    )
+                result = await module.forward(
+                    rewritten_query="Kisqali adoption drivers in Northeast",
+                    intent="CAUSAL_ANALYSIS",
+                    entities='{"brands": ["Kisqali"]}',
                 )
 
                 # Verify outputs from investigation
@@ -288,7 +286,7 @@ class TestDSPySignatureInvocation:
                 assert "hop_count" in result
                 assert result["hop_count"] >= 1
 
-    def test_agent_signatures_invoked(self, mock_lm, cognitive_state):
+    async def test_agent_signatures_invoked(self, mock_lm, cognitive_state):
         """Test Phase 3 signatures: EvidenceSynthesis, AgentRouting, VisualizationConfig."""
         # Prepare state with evidence
         cognitive_state.detected_intent = "CAUSAL_ANALYSIS"
@@ -306,15 +304,13 @@ class TestDSPySignatureInvocation:
             with patch.object(dspy, "Predict", return_value=mock_lm):
                 module = AgentModule(agent_registry={})
 
-                result = asyncio.get_event_loop().run_until_complete(
-                    module.forward(cognitive_state)
-                )
+                result = await module.forward(cognitive_state)
 
                 # Verify agent phase outputs
                 assert result.response is not None or result.visualization_config is not None
                 assert result.routed_agents is not None
 
-    def test_reflector_signatures_invoked(self, mock_lm, mock_signal_collector, cognitive_state):
+    async def test_reflector_signatures_invoked(self, mock_lm, mock_signal_collector, cognitive_state):
         """Test Phase 4 signatures: MemoryWorthiness, ProcedureLearning."""
         # Prepare state with response
         cognitive_state.response = "Kisqali adoption increased due to HCP engagement"
@@ -338,9 +334,7 @@ class TestDSPySignatureInvocation:
         with patch.object(dspy, "Predict", return_value=mock_lm):
             module = ReflectorModule(mock_writers, mock_signal_collector)
 
-            result = asyncio.get_event_loop().run_until_complete(
-                module.forward(cognitive_state, user_feedback="positive feedback")
-            )
+            result = await module.forward(cognitive_state, user_feedback="positive feedback")
 
             # Verify reflector phase outputs
             assert result.worth_remembering is True
@@ -356,7 +350,7 @@ class TestDSPySignatureInvocation:
 class TestTrainingSignalCollection:
     """Verify training signals are collected and persisted correctly."""
 
-    def test_signals_collected_in_phase4(self, mock_lm, mock_signal_collector, cognitive_state):
+    async def test_signals_collected_in_phase4(self, mock_lm, mock_signal_collector, cognitive_state):
         """Run cognitive cycle and verify signals appear in state.dspy_signals."""
         cognitive_state.response = "Analysis complete"
         cognitive_state.detected_intent = "CAUSAL_ANALYSIS"
@@ -382,7 +376,7 @@ class TestTrainingSignalCollection:
         with patch.object(dspy, "Predict", return_value=mock_lm):
             module = ReflectorModule(mock_writers, mock_signal_collector)
 
-            result = asyncio.get_event_loop().run_until_complete(module.forward(cognitive_state))
+            result = await module.forward(cognitive_state)
 
             # Verify signals collected
             assert len(result.dspy_signals) >= 3  # summarizer, investigator, agent signals
@@ -675,7 +669,7 @@ class TestOptimizedPromptLoading:
 class TestFullCognitiveWithDSPy:
     """End-to-end tests for complete cognitive cycles with DSPy."""
 
-    def test_full_cycle_kisqali_query(
+    async def test_full_cycle_kisqali_query(
         self, mock_lm, mock_memory_backends, mock_signal_collector, domain_vocabulary
     ):
         """Test complete E2E cognitive cycle with a Kisqali query."""
@@ -702,9 +696,7 @@ class TestFullCognitiveWithDSPy:
 
                 # Run workflow with required LangGraph config
                 config = {"configurable": {"thread_id": "test-full-cycle-thread"}}
-                result = asyncio.get_event_loop().run_until_complete(
-                    workflow.ainvoke(initial_state, config=config)
-                )
+                result = await workflow.ainvoke(initial_state, config=config)
 
                 # Verify all phases completed (result may be dict or CognitiveState)
                 if isinstance(result, dict):
@@ -716,7 +708,7 @@ class TestFullCognitiveWithDSPy:
                     assert len(result.evidence_board) >= 0
                     assert len(result.dspy_signals) > 0
 
-    def test_full_cycle_with_positive_feedback(
+    async def test_full_cycle_with_positive_feedback(
         self, mock_lm, mock_memory_backends, mock_signal_collector, domain_vocabulary
     ):
         """Test cycle with positive feedback triggers learning."""
@@ -749,9 +741,7 @@ class TestFullCognitiveWithDSPy:
                 ]
 
                 # Run with positive feedback
-                result = asyncio.get_event_loop().run_until_complete(
-                    reflector.forward(state, user_feedback="positive, very helpful!")
-                )
+                result = await reflector.forward(state, user_feedback="positive, very helpful!")
 
                 # Verify learning triggered
                 assert result.worth_remembering is True
@@ -767,7 +757,7 @@ class TestFullCognitiveWithDSPy:
 class TestDSPyPerformance:
     """Performance benchmark tests for DSPy integration."""
 
-    def test_signal_collection_under_100ms(self, mock_lm, mock_signal_collector, cognitive_state):
+    async def test_signal_collection_under_100ms(self, mock_lm, mock_signal_collector, cognitive_state):
         """Benchmark Phase 4 signal collection latency."""
         cognitive_state.response = "Test response"
         cognitive_state.detected_intent = "CAUSAL_ANALYSIS"
@@ -795,7 +785,7 @@ class TestDSPyPerformance:
 
             # Measure signal collection time
             start = time.time()
-            asyncio.get_event_loop().run_until_complete(module.forward(cognitive_state))
+            await module.forward(cognitive_state)
             elapsed_ms = (time.time() - start) * 1000
 
             # With mocks, should be well under 100ms
@@ -840,7 +830,7 @@ class TestMemoryAdaptersIntegration:
     """Test memory adapter integration with DSPy workflow."""
 
     @pytest.mark.skipif(SKIP_SUPABASE, reason=SKIP_REASON_SUPABASE)
-    def test_signal_collector_adapter_flush(self, supabase_client, clean_dspy_tables):
+    async def test_signal_collector_adapter_flush(self, supabase_client, clean_dspy_tables):
         """Test SignalCollectorAdapter buffer flush to database."""
 
         adapter = SignalCollectorAdapter(supabase_client, buffer_size=5)
@@ -851,13 +841,13 @@ class TestMemoryAdaptersIntegration:
             for i in range(3)
         ]
 
-        asyncio.get_event_loop().run_until_complete(adapter.collect(signals))
+        await adapter.collect(signals)
 
         # Buffer should have 3 signals
         assert len(adapter._signal_buffer) == 3
 
         # Flush manually
-        asyncio.get_event_loop().run_until_complete(adapter.flush())
+        await adapter.flush()
 
         # Buffer should be empty after flush
         assert len(adapter._signal_buffer) == 0
