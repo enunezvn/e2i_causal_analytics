@@ -1285,3 +1285,203 @@ async def test_tier2_orchestration_flow():
 - `.claude/specialists/Agent_Specialists_Tiers 1-5/causal-impact.md` - Causal Impact specialist
 - `.claude/specialists/Agent_Specialists_Tiers 1-5/gap-analyzer.md` - Gap Analyzer specialist
 - `.claude/specialists/Agent_Specialists_Tiers 1-5/heterogeneous-optimizer.md` - Heterogeneous Optimizer specialist
+
+---
+
+## 12. DSPy Signal Contracts
+
+All Tier 2 agents are **Sender** types in the DSPy architecture (from E2I DSPy Feedback Learner Architecture V2). They generate training signals during execution that are collected by the Hub (orchestrator) for optimization.
+
+### 12.1 DSPy Sender Mixin
+
+```python
+from abc import ABC, abstractmethod
+from typing import Dict, Any, List, Optional
+from datetime import datetime
+from pydantic import BaseModel, Field
+import uuid
+
+class DSPySenderMixin(ABC):
+    """
+    Mixin for Tier 2 agents that generate training signals.
+
+    All Tier 2 agents (causal_impact, gap_analyzer, heterogeneous_optimizer)
+    implement this mixin to participate in DSPy optimization.
+    """
+
+    def __init__(self):
+        self._signals_buffer: List["TrainingSignal"] = []
+        self._signal_collection_enabled: bool = True
+
+    def collect_training_signal(
+        self,
+        input_data: Dict[str, Any],
+        output_data: Dict[str, Any],
+        quality_score: float,
+        signature_name: str,
+        confidence: float = 0.8,
+        latency_ms: int = 0,
+        session_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> "TrainingSignal":
+        """
+        Collect training signal from agent execution.
+
+        Args:
+            input_data: Input to the DSPy signature
+            output_data: Output from the signature
+            quality_score: Quality of this signal (0.0-1.0)
+            signature_name: Which DSPy signature this is for
+            confidence: Prediction confidence (0.0-1.0)
+            latency_ms: Execution latency
+            session_id: Session identifier
+            metadata: Additional metadata
+
+        Returns:
+            TrainingSignal object
+        """
+        signal = TrainingSignal(
+            signal_id=f"sig_{uuid.uuid4().hex[:16]}",
+            timestamp=datetime.utcnow(),
+            source_agent=self.agent_name,
+            source_type="sender",
+            signature_name=signature_name,
+            input_data=input_data,
+            output_data=output_data,
+            ground_truth=None,  # Set later with user feedback
+            quality_score=quality_score,
+            confidence=confidence,
+            latency_ms=latency_ms,
+            user_feedback=None,
+            session_id=session_id or "",
+            metadata=metadata or {}
+        )
+
+        if self._signal_collection_enabled:
+            self._signals_buffer.append(signal)
+
+        return signal
+
+    def get_collected_signals(self) -> List["TrainingSignal"]:
+        """Get all collected signals from this execution."""
+        return self._signals_buffer.copy()
+
+    def clear_signals_buffer(self) -> None:
+        """Clear the signals buffer after flushing to Hub."""
+        self._signals_buffer.clear()
+
+    async def flush_signals_to_hub(self, hub: "DSPyHubInterface") -> int:
+        """
+        Flush all collected signals to the Hub (orchestrator).
+
+        Args:
+            hub: DSPy Hub interface (from orchestrator)
+
+        Returns:
+            Number of signals flushed
+        """
+        count = len(self._signals_buffer)
+        for signal in self._signals_buffer:
+            await hub.collect_training_signal(signal)
+        self.clear_signals_buffer()
+        return count
+
+    @property
+    @abstractmethod
+    def agent_name(self) -> str:
+        """Return the agent name for signal attribution."""
+        pass
+
+    @property
+    @abstractmethod
+    def primary_signature(self) -> str:
+        """Return the primary DSPy signature this agent uses."""
+        pass
+```
+
+### 12.2 Agent-Specific Signatures
+
+| Agent | Primary Signature | Signal Content |
+|-------|------------------|----------------|
+| **Causal Impact** | `EvidenceSynthesisSignature` | Causal chain + interpretation |
+| **Gap Analyzer** | `EvidenceRelevanceSignature` | Gap detection + prioritization |
+| **Heterogeneous Optimizer** | `EvidenceSynthesisSignature` | CATE estimates + segment insights |
+
+### 12.3 Signal Collection Points
+
+```python
+# Causal Impact: Collect signal after evidence synthesis
+class CausalImpactAgent(DSPySenderMixin):
+    @property
+    def agent_name(self) -> str:
+        return "causal_impact"
+
+    @property
+    def primary_signature(self) -> str:
+        return "EvidenceSynthesisSignature"
+
+    async def _synthesize_evidence(self, state: CausalImpactState) -> Dict:
+        # ... synthesis logic ...
+        result = await self._call_llm(evidence, query)
+
+        # Collect training signal
+        self.collect_training_signal(
+            input_data={"evidence": evidence, "query": state["query"]},
+            output_data={"narrative": result["narrative"]},
+            quality_score=result.get("quality", 0.8),
+            signature_name="EvidenceSynthesisSignature",
+            confidence=result.get("confidence", 0.8),
+            session_id=state.get("session_id")
+        )
+
+        return result
+
+
+# Gap Analyzer: Collect signal after relevance scoring
+class GapAnalyzerAgent(DSPySenderMixin):
+    @property
+    def agent_name(self) -> str:
+        return "gap_analyzer"
+
+    @property
+    def primary_signature(self) -> str:
+        return "EvidenceRelevanceSignature"
+
+
+# Heterogeneous Optimizer: Collect signal after segment synthesis
+class HeterogeneousOptimizerAgent(DSPySenderMixin):
+    @property
+    def agent_name(self) -> str:
+        return "heterogeneous_optimizer"
+
+    @property
+    def primary_signature(self) -> str:
+        return "EvidenceSynthesisSignature"
+```
+
+### 12.4 Signal Quality Criteria
+
+Signals are accepted by the Hub if they meet these quality thresholds:
+
+```python
+TIER2_SIGNAL_QUALITY_THRESHOLDS = {
+    "causal_impact": {
+        "min_quality": 0.6,
+        "min_confidence": 0.5,
+        "max_latency_ms": 30000,
+        "required_fields": ["causal_chain", "effect_estimate"]
+    },
+    "gap_analyzer": {
+        "min_quality": 0.6,
+        "min_confidence": 0.5,
+        "max_latency_ms": 60000,
+        "required_fields": ["gaps_detected", "roi_estimates"]
+    },
+    "heterogeneous_optimizer": {
+        "min_quality": 0.6,
+        "min_confidence": 0.5,
+        "max_latency_ms": 150000,
+        "required_fields": ["cate_by_segment", "heterogeneity_score"]
+    }
+}
+```

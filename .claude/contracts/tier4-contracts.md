@@ -939,3 +939,87 @@ async def test_tier4_orchestration_flow():
 - `agent-handoff.yaml` - Standard handoff format examples
 - `.claude/specialists/Agent_Specialists_Tiers 1-5/prediction-synthesizer.md` - Prediction Synthesizer specialist
 - `.claude/specialists/Agent_Specialists_Tiers 1-5/resource-optimizer.md` - Resource Optimizer specialist
+
+---
+
+## 11. DSPy Signal Contracts
+
+Tier 4 agents have mixed DSPy roles (from E2I DSPy Feedback Learner Architecture V2):
+
+| Agent | DSPy Role | Primary Signature | Behavior |
+|-------|-----------|-------------------|----------|
+| **Prediction Synthesizer** | Sender | `EvidenceSynthesisSignature` | Generates signals |
+| **Resource Optimizer** | Recipient | N/A | Consumes optimized prompts |
+
+### 11.1 Sender Agent (Prediction Synthesizer)
+
+```python
+class PredictionSynthesizerAgent(DSPySenderMixin):
+    """
+    Prediction Synthesizer is a Sender that generates training signals
+    when synthesizing multi-model predictions.
+    """
+
+    @property
+    def agent_name(self) -> str:
+        return "prediction_synthesizer"
+
+    @property
+    def primary_signature(self) -> str:
+        return "EvidenceSynthesisSignature"
+
+    async def _synthesize_predictions(self, state: PredictionSynthesizerState) -> Dict:
+        # ... multi-model synthesis logic ...
+        result = await self._call_synthesis(model_outputs)
+
+        # Collect training signal
+        self.collect_training_signal(
+            input_data={
+                "model_predictions": model_outputs,
+                "query": state["query"]
+            },
+            output_data={
+                "synthesized_prediction": result["prediction"],
+                "model_weights": result["weights"]
+            },
+            quality_score=result.get("quality", 0.8),
+            signature_name="EvidenceSynthesisSignature",
+            confidence=result.get("confidence", 0.8),
+            session_id=state.get("session_id")
+        )
+
+        return result
+```
+
+### 11.2 Recipient Agent (Resource Optimizer)
+
+```python
+class ResourceOptimizerAgent(DSPyRecipientMixin):
+    """
+    Resource Optimizer is a Recipient that consumes optimized prompts
+    for allocation recommendations.
+    """
+
+    async def _generate_allocation(self, state: ResourceOptimizerState) -> Dict:
+        # Use optimized prompt if available
+        prompt = self.get_optimized_prompt(
+            "AllocationRecommendation",
+            default=self._default_allocation_prompt
+        )
+
+        result = await self._call_llm(prompt, state)
+        return result
+```
+
+### 11.3 Signal Quality Thresholds
+
+```python
+TIER4_SIGNAL_QUALITY_THRESHOLDS = {
+    "prediction_synthesizer": {
+        "min_quality": 0.6,
+        "min_confidence": 0.5,
+        "max_latency_ms": 45000,
+        "required_fields": ["synthesized_prediction", "model_weights"]
+    }
+}
+```

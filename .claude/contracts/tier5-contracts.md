@@ -977,7 +977,143 @@ async def test_tier5_agent_integration(agent_name: str):
 
 ---
 
-## 10. DSPy Integration Contracts
+## 10. DSPy Signal Contracts
+
+### 10.0 DSPy Role Assignments
+
+| Agent | DSPy Role | Primary Signature | Behavior |
+|-------|-----------|-------------------|----------|
+| **Explainer** | Recipient | N/A (consumes optimized prompts) | Uses QueryRewriteSignature for query clarification |
+| **Feedback Learner** | Hybrid | All 11 Cognitive RAG signatures | Collects training signals AND consumes/distributes prompts |
+
+### 10.0.1 DSPy Recipient Mixin (Explainer)
+
+```python
+from abc import ABC, abstractmethod
+from typing import Dict, Optional
+
+class DSPyRecipientMixin(ABC):
+    """Mixin for agents that consume DSPy-optimized prompts (Recipients)."""
+
+    _optimized_prompts: Dict[str, str] = {}
+    _last_update_timestamp: Optional[str] = None
+
+    async def load_optimized_prompts(self, prompts: Dict[str, str]) -> None:
+        """Load optimized prompts from Feedback Learner via Hub."""
+        from datetime import datetime
+        self._optimized_prompts = prompts
+        self._last_update_timestamp = datetime.utcnow().isoformat()
+
+    def get_optimized_prompt(self, signature_name: str, default: str = "") -> str:
+        """Get optimized prompt for a signature, falling back to default."""
+        return self._optimized_prompts.get(signature_name, default)
+
+    def has_optimized_prompts(self) -> bool:
+        """Check if agent has loaded optimized prompts."""
+        return len(self._optimized_prompts) > 0
+```
+
+### 10.0.2 DSPy Hybrid Mixin (Feedback Learner)
+
+```python
+from abc import ABC, abstractmethod
+from typing import Dict, List, Any, Optional, Literal
+from datetime import datetime
+
+class DSPyHybridMixin(ABC):
+    """Mixin for agents that both generate AND consume DSPy signals (Hybrids).
+
+    Feedback Learner is the primary Hybrid agent - it:
+    1. Collects training signals from all Sender agents
+    2. Coordinates MIPROv2 optimization cycles
+    3. Distributes optimized prompts to Recipient agents
+    4. Itself uses optimized prompts for pattern analysis
+    """
+
+    _signals_buffer: List["TrainingSignal"] = []
+    _optimized_prompts: Dict[str, str] = {}
+
+    def collect_training_signal(
+        self,
+        input_data: Dict[str, Any],
+        output_data: Dict[str, Any],
+        quality_score: float,
+        signature_name: str,
+        source_agent: str,
+        confidence: float = 0.8,
+        latency_ms: int = 0,
+        session_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> "TrainingSignal":
+        """Collect training signal from any agent execution."""
+        import uuid
+        signal = TrainingSignal(
+            signal_id=f"{source_agent}_{uuid.uuid4().hex[:8]}",
+            timestamp=datetime.utcnow(),
+            source_agent=source_agent,
+            source_type="sender",  # Collected from Sender agents
+            signature_name=signature_name,
+            input_data=input_data,
+            output_data=output_data,
+            ground_truth=None,
+            quality_score=quality_score,
+            confidence=confidence,
+            latency_ms=latency_ms,
+            user_feedback=None,
+            session_id=session_id or f"session_{uuid.uuid4().hex[:8]}",
+            metadata=metadata or {},
+        )
+        self._signals_buffer.append(signal)
+        return signal
+
+    def get_collected_signals(self) -> List["TrainingSignal"]:
+        """Get all collected training signals."""
+        return self._signals_buffer.copy()
+
+    async def trigger_optimization_cycle(
+        self,
+        target_signatures: Optional[List[str]] = None,
+        optimizer: Literal["miprov2", "bootstrap_fewshot", "copro"] = "miprov2",
+    ) -> "OptimizationResult":
+        """Trigger MIPROv2 optimization cycle for specified signatures."""
+        # Implemented by FeedbackLearner
+        raise NotImplementedError("Subclass must implement optimization cycle")
+
+    async def distribute_optimized_prompts(
+        self,
+        prompts: Dict[str, str],
+        recipient_agents: List[str],
+    ) -> Dict[str, bool]:
+        """Distribute optimized prompts to Recipient agents."""
+        # Implemented by FeedbackLearner
+        raise NotImplementedError("Subclass must implement prompt distribution")
+
+    def get_optimized_prompt(self, signature_name: str, default: str = "") -> str:
+        """Get optimized prompt for own use."""
+        return self._optimized_prompts.get(signature_name, default)
+```
+
+### 10.0.3 Implementation Requirements
+
+**Explainer Agent** (Recipient):
+- MUST inherit from `DSPyRecipientMixin`
+- MUST load optimized prompts at initialization
+- SHOULD use `QueryRewriteSignature` optimized prompt for query clarification
+- Prompt update frequency: Daily (via Feedback Learner distribution)
+
+**Feedback Learner Agent** (Hybrid):
+- MUST inherit from `DSPyHybridMixin`
+- MUST implement `trigger_optimization_cycle()` using MIPROv2
+- MUST implement `distribute_optimized_prompts()` to all Recipients
+- MUST maintain signal buffer with configurable size (default: 10,000 signals)
+- Optimization trigger conditions:
+  - Signal count >= 100 (min_signals_for_optimization)
+  - Time since last optimization >= 24h (optimization_interval_hours)
+  - Any signature quality_score < 0.6 (min_signal_quality threshold)
+
+---
+
+## 10.1 DSPy Integration Contracts
 
 The Feedback Learner agent serves as the central hub for DSPy optimization across the E2I system.
 
