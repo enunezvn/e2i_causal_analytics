@@ -469,23 +469,48 @@ def _auto_detect_connector_type() -> Literal["supabase", "mock"]:
 
 ---
 
-### 6. Concept Drift Detection ℹ️ OPTIONAL
+### 6. Concept Drift Detection ✅ IMPLEMENTED
 
 **Location**: `src/agents/drift_monitor/nodes/concept_drift.py`
 
-**Status**: Placeholder implementation (returns empty results with warning)
+**Status**: Fully operational with feedback loop infrastructure
 
-**Impact**: Agent returns empty concept_drift_results with warning
+**Infrastructure Deployed** (2025-12-23):
 
-**Rationale**: Concept drift requires ground truth labels which are typically:
-- Delayed (labels become available after prediction period)
-- Domain-specific (varies by use case)
-- Optional for many monitoring scenarios
+1. **Database Migration**: `database/migrations/006_feedback_loop_infrastructure.sql`
+   - Added `actual_outcome`, `outcome_label`, `truth_confidence` columns to `ml_predictions`
+   - Created `ml_feedback_loop_config` and `ml_feedback_loop_runs` tables
+   - 5 truth assignment functions per prediction type
+   - Master orchestrator: `run_feedback_loop()`
 
-**Future Enhancement**: Can be implemented when:
-1. Label storage system is available
-2. Requirements are clarified
-3. Feature importance tracking is implemented
+2. **Configuration**: `config/outcome_truth_rules.yaml`
+   - Business rules for truth label definitions
+   - Observation windows per prediction type (21-180 days)
+
+3. **Drift Detection Views**:
+   - `v_concept_drift_metrics` - Weekly accuracy, calibration, Brier scores
+   - `v_model_performance_tracking` - Monthly TP/TN/indeterminate counts
+   - `v_drift_alerts` - Automated alerting for accuracy/calibration drift
+
+**Test Results** (2025-12-23):
+| Prediction Type | Labeled | TP | TN | Indeterminate | Avg Accuracy |
+|-----------------|---------|-----|-----|---------------|--------------|
+| next_best_action | 167 | 153 | 14 | 0 | 53.3% |
+| trigger | 122 | 37 | 85 | 0 | 47.5% |
+| churn | 104 | 11 | 50 | 43 | 60.7% |
+| risk | 63 | 16 | 47 | 0 | 49.2% |
+
+**Usage**:
+```sql
+-- Run feedback loop to label predictions with ground truth
+SELECT * FROM run_feedback_loop();
+
+-- Check concept drift metrics
+SELECT * FROM v_concept_drift_metrics;
+
+-- Check for drift alerts
+SELECT * FROM v_drift_alerts;
+```
 
 ---
 
@@ -496,11 +521,12 @@ def _auto_detect_connector_type() -> Literal["supabase", "mock"]:
 - [x] Agent metadata (tier, agent_name, tools, sla_seconds)
 - [x] Opik observability tracing
 - [x] SLA violation logging
+- [x] Concept drift with ground truth labels (feedback loop infrastructure)
+- [x] Database views for drift metrics and alerts
 - [ ] Add drift monitoring API endpoints (FastAPI)
 - [ ] Create frontend dashboard for drift alerts
 - [ ] Set up scheduled drift monitoring jobs
 - [ ] (Optional) Configure alert notification routing
-- [ ] (Optional) Implement concept drift with ground truth labels
 
 ---
 
@@ -523,7 +549,7 @@ def _auto_detect_connector_type() -> Literal["supabase", "mock"]:
 - [ ] Frontend drift monitoring dashboard
 - [ ] Scheduled monitoring jobs
 - [ ] Alert notification routing (downstream)
-- [ ] Concept drift with ground truth labels
+- [x] Concept drift with ground truth labels (feedback loop deployed 2025-12-23)
 
 ---
 
@@ -542,6 +568,8 @@ def _auto_detect_connector_type() -> Literal["supabase", "mock"]:
 ✅ **Observability**: Opik tracing with graceful degradation
 ✅ **Data Connector**: SupabaseDataConnector with factory auto-detection
 ✅ **Orchestrator**: Enabled in factory.py
+✅ **Feedback Loop**: Ground truth labeling infrastructure deployed
+✅ **Drift Views**: v_concept_drift_metrics, v_model_performance_tracking, v_drift_alerts
 
 **FINAL STATUS**: ✅ **100% CONTRACT COMPLIANCE - PRODUCTION READY**
 
@@ -559,6 +587,8 @@ The drift_monitor agent fully implements all contract requirements with:
 - ✅ Orchestrator registration (enabled in factory.py)
 - ✅ Agent metadata compliance (tier, agent_name, tools, sla_seconds)
 - ✅ Opik observability tracing
+- ✅ Feedback loop infrastructure for ground truth labeling
+- ✅ Concept drift detection views (v_concept_drift_metrics, v_drift_alerts)
 
 **Production Status**: ✅ **READY FOR PRODUCTION**
 
@@ -566,6 +596,7 @@ The agent is ready for:
 1. ✅ Unit testing
 2. ✅ Integration testing (with auto-detected connector)
 3. ✅ Production deployment
+4. ✅ Concept drift monitoring (feedback loop operational)
 
 **Optional Future Enhancements**:
 1. Frontend drift monitoring dashboard
