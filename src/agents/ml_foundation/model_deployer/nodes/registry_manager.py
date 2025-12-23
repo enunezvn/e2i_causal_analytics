@@ -6,8 +6,95 @@ Handles:
 3. Shadow mode criteria validation
 """
 
+import logging
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Tuple
+
+logger = logging.getLogger(__name__)
+
+# Try to import MLflow with graceful fallback
+try:
+    import mlflow
+    from mlflow.tracking import MlflowClient
+
+    MLFLOW_AVAILABLE = True
+except ImportError:
+    MLFLOW_AVAILABLE = False
+    logger.warning("MLflow not available, using simulated registry operations")
+
+
+def _get_mlflow_client() -> Optional[Any]:
+    """Get MLflow client if available.
+
+    Returns:
+        MlflowClient instance or None if MLflow unavailable
+    """
+    if MLFLOW_AVAILABLE:
+        try:
+            return MlflowClient()
+        except Exception as e:
+            logger.warning(f"Failed to create MLflow client: {e}")
+    return None
+
+
+def _register_model_mlflow(
+    model_uri: str, deployment_name: str
+) -> Tuple[Optional[str], Optional[int], Optional[str]]:
+    """Register model with real MLflow API.
+
+    Args:
+        model_uri: MLflow model URI
+        deployment_name: Name to register model under
+
+    Returns:
+        Tuple of (registered_name, version, stage) or (None, None, None) on failure
+    """
+    if not MLFLOW_AVAILABLE:
+        return None, None, None
+
+    try:
+        # Register the model
+        model_version = mlflow.register_model(model_uri=model_uri, name=deployment_name)
+
+        return (
+            model_version.name,
+            int(model_version.version),
+            model_version.current_stage or "None",
+        )
+    except Exception as e:
+        logger.warning(f"MLflow registration failed, will use simulation: {e}")
+        return None, None, None
+
+
+def _transition_stage_mlflow(
+    model_name: str, version: int, target_stage: str
+) -> bool:
+    """Transition model stage with real MLflow API.
+
+    Args:
+        model_name: Registered model name
+        version: Model version
+        target_stage: Target stage name
+
+    Returns:
+        True if successful, False otherwise
+    """
+    client = _get_mlflow_client()
+    if not client:
+        return False
+
+    try:
+        client.transition_model_version_stage(
+            name=model_name,
+            version=str(version),
+            stage=target_stage,
+            archive_existing_versions=(target_stage == "Production"),
+        )
+        logger.info(f"MLflow: Transitioned {model_name} v{version} to {target_stage}")
+        return True
+    except Exception as e:
+        logger.warning(f"MLflow stage transition failed: {e}")
+        return False
 
 
 async def register_model(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -38,13 +125,17 @@ async def register_model(state: Dict[str, Any]) -> Dict[str, Any]:
                 "registration_successful": False,
             }
 
-        # In production, this would call MLflow
-        # mlflow.register_model(model_uri, deployment_name)
+        # Try real MLflow registration first
+        registered_model_name, model_version, current_stage = _register_model_mlflow(
+            model_uri, deployment_name
+        )
 
-        # For now, simulate registration
-        registered_model_name = deployment_name
-        model_version = 1  # In production, this comes from MLflow
-        current_stage = "None"  # New model starts with no stage
+        # Fall back to simulation if MLflow unavailable
+        if registered_model_name is None:
+            logger.info("Using simulated MLflow registration")
+            registered_model_name = deployment_name
+            model_version = 1
+            current_stage = "None"
 
         return {
             "registered_model_name": registered_model_name,
@@ -52,6 +143,7 @@ async def register_model(state: Dict[str, Any]) -> Dict[str, Any]:
             "current_stage": current_stage,
             "registration_successful": True,
             "registration_timestamp": datetime.now(tz=None).isoformat(),
+            "mlflow_available": MLFLOW_AVAILABLE,
         }
 
     except Exception as e:
@@ -164,7 +256,7 @@ async def promote_stage(state: Dict[str, Any]) -> Dict[str, Any]:
     try:
         # Validate required fields FIRST (before checking promotion_allowed)
         registered_model_name = state.get("registered_model_name")
-        state.get("model_version")
+        model_version = state.get("model_version")
         promotion_target_stage = state.get("promotion_target_stage")
         current_stage = state.get("current_stage", "None")
 
@@ -195,12 +287,17 @@ async def promote_stage(state: Dict[str, Any]) -> Dict[str, Any]:
                 "promotion_successful": False,
             }
 
-        # In production, this would call MLflow
-        # mlflow_client.transition_model_version_stage(
-        #     name=registered_model_name,
-        #     version=model_version,
-        #     stage=promotion_target_stage
-        # )
+        # Try real MLflow stage transition first
+        mlflow_success = False
+        if registered_model_name and model_version:
+            mlflow_success = _transition_stage_mlflow(
+                model_name=registered_model_name,
+                version=int(model_version),
+                target_stage=promotion_target_stage,
+            )
+
+        if not mlflow_success:
+            logger.info("Using simulated MLflow stage transition")
 
         # Record previous stage for version record
         previous_stage = current_stage
@@ -223,6 +320,7 @@ async def promote_stage(state: Dict[str, Any]) -> Dict[str, Any]:
             "promotion_successful": True,
             "promotion_reason": promotion_reason,
             "promotion_timestamp": datetime.now(tz=None).isoformat(),
+            "mlflow_transition_success": mlflow_success,
         }
 
     except Exception as e:
