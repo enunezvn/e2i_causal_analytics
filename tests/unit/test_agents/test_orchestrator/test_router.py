@@ -27,7 +27,7 @@ class TestRouterNode:
         assert "dispatch_plan" in result
         assert len(result["dispatch_plan"]) == 1
         assert result["dispatch_plan"][0]["agent_name"] == "causal_impact"
-        assert result["dispatch_plan"][0]["priority"] == 1
+        assert result["dispatch_plan"][0]["priority"] == "critical"
         assert result["dispatch_plan"][0]["timeout_ms"] == 30000
         assert result["dispatch_plan"][0]["fallback_agent"] == "explainer"
         assert result["current_phase"] == "dispatching"
@@ -50,7 +50,7 @@ class TestRouterNode:
         result = await router.execute(state)
 
         assert result["dispatch_plan"][0]["agent_name"] == "gap_analyzer"
-        assert result["dispatch_plan"][0]["priority"] == 1
+        assert result["dispatch_plan"][0]["priority"] == "critical"
         assert result["dispatch_plan"][0]["timeout_ms"] == 20000
         assert result["dispatch_plan"][0]["fallback_agent"] is None
 
@@ -226,9 +226,9 @@ class TestRouterNode:
 
         assert len(result["dispatch_plan"]) == 2
         assert result["dispatch_plan"][0]["agent_name"] == "causal_impact"
-        assert result["dispatch_plan"][0]["priority"] == 1
+        assert result["dispatch_plan"][0]["priority"] == "critical"
         assert result["dispatch_plan"][1]["agent_name"] == "heterogeneous_optimizer"
-        assert result["dispatch_plan"][1]["priority"] == 2
+        assert result["dispatch_plan"][1]["priority"] == "high"
 
         # Check parallel groups
         assert len(result["parallel_groups"]) == 2
@@ -253,9 +253,9 @@ class TestRouterNode:
 
         assert len(result["dispatch_plan"]) == 2
         assert result["dispatch_plan"][0]["agent_name"] == "gap_analyzer"
-        assert result["dispatch_plan"][0]["priority"] == 1
+        assert result["dispatch_plan"][0]["priority"] == "critical"
         assert result["dispatch_plan"][1]["agent_name"] == "resource_optimizer"
-        assert result["dispatch_plan"][1]["priority"] == 2
+        assert result["dispatch_plan"][1]["priority"] == "high"
 
     @pytest.mark.asyncio
     async def test_route_multi_agent_prediction_explanation(self):
@@ -275,9 +275,9 @@ class TestRouterNode:
 
         assert len(result["dispatch_plan"]) == 2
         assert result["dispatch_plan"][0]["agent_name"] == "prediction_synthesizer"
-        assert result["dispatch_plan"][0]["priority"] == 1
+        assert result["dispatch_plan"][0]["priority"] == "critical"
         assert result["dispatch_plan"][1]["agent_name"] == "explainer"
-        assert result["dispatch_plan"][1]["priority"] == 2
+        assert result["dispatch_plan"][1]["priority"] == "high"
 
     @pytest.mark.asyncio
     async def test_route_no_intent(self):
@@ -399,9 +399,9 @@ class TestRouterHelperMethods:
         router = RouterNode()
 
         dispatches = [
-            {"agent_name": "agent1", "priority": 1},
-            {"agent_name": "agent2", "priority": 1},
-            {"agent_name": "agent3", "priority": 1},
+            {"agent_name": "agent1", "priority": "critical"},
+            {"agent_name": "agent2", "priority": "critical"},
+            {"agent_name": "agent3", "priority": "critical"},
         ]
 
         groups = router._group_by_priority(dispatches)
@@ -414,18 +414,18 @@ class TestRouterHelperMethods:
         router = RouterNode()
 
         dispatches = [
-            {"agent_name": "agent1", "priority": 1},
-            {"agent_name": "agent2", "priority": 2},
-            {"agent_name": "agent3", "priority": 1},
-            {"agent_name": "agent4", "priority": 3},
+            {"agent_name": "agent1", "priority": "critical"},
+            {"agent_name": "agent2", "priority": "high"},
+            {"agent_name": "agent3", "priority": "critical"},
+            {"agent_name": "agent4", "priority": "medium"},
         ]
 
         groups = router._group_by_priority(dispatches)
 
         assert len(groups) == 3
-        assert set(groups[0]) == {"agent1", "agent3"}  # Priority 1
-        assert set(groups[1]) == {"agent2"}  # Priority 2
-        assert set(groups[2]) == {"agent4"}  # Priority 3
+        assert set(groups[0]) == {"agent1", "agent3"}  # Priority critical
+        assert set(groups[1]) == {"agent2"}  # Priority high
+        assert set(groups[2]) == {"agent4"}  # Priority medium
 
     def test_group_by_priority_empty(self):
         """Test grouping with empty dispatch list."""
@@ -439,10 +439,10 @@ class TestRouterHelperMethods:
         """Test getting dispatch config for existing agent."""
         router = RouterNode()
 
-        dispatch = router._get_dispatch_for_agent("causal_impact", priority=2)
+        dispatch = router._get_dispatch_for_agent("causal_impact", priority="high")
 
         assert dispatch["agent_name"] == "causal_impact"
-        assert dispatch["priority"] == 2  # Override priority
+        assert dispatch["priority"] == "high"  # Override priority
         assert dispatch["timeout_ms"] == 30000
         assert dispatch["fallback_agent"] == "explainer"
         assert dispatch["parameters"] == {"interpretation_depth": "standard"}
@@ -451,10 +451,10 @@ class TestRouterHelperMethods:
         """Test getting dispatch config for unknown agent."""
         router = RouterNode()
 
-        dispatch = router._get_dispatch_for_agent("unknown_agent", priority=3)
+        dispatch = router._get_dispatch_for_agent("unknown_agent", priority="medium")
 
         assert dispatch["agent_name"] == "unknown_agent"
-        assert dispatch["priority"] == 3
+        assert dispatch["priority"] == "medium"
         assert dispatch["timeout_ms"] == 30000
         assert dispatch["fallback_agent"] is None
         assert dispatch["parameters"] == {}
@@ -526,10 +526,13 @@ class TestIntentToAgentMapping:
     def test_multi_agent_patterns_have_priorities(self):
         """Test that multi-agent patterns define priorities."""
         router = RouterNode()
+        valid_priorities = {"critical", "high", "medium", "low"}
 
         for pattern, agents in router.MULTI_AGENT_PATTERNS.items():
             priorities = [priority for _, priority in agents]
             assert (
                 len(priorities) == len(set(priorities)) or len(priorities) <= 1
             ), f"Duplicate priorities in pattern {pattern}"
-            assert all(p > 0 for p in priorities), f"Invalid priority in pattern {pattern}"
+            assert all(
+                p in valid_priorities for p in priorities
+            ), f"Invalid priority in pattern {pattern}"

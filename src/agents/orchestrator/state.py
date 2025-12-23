@@ -65,10 +65,12 @@ class AgentDispatch(TypedDict, total=False):
     """Agent dispatch specification."""
 
     agent_name: str
-    priority: int  # 1 = highest
+    priority: Literal["low", "medium", "high", "critical"]  # Contract: priority levels
     parameters: Dict[str, Any]
     timeout_ms: int
     fallback_agent: Optional[str]
+    dispatch_id: Optional[str]  # Contract: unique dispatch identifier
+    execution_mode: Optional[Literal["sequential", "parallel"]]  # Contract: execution mode
 
 
 class AgentResult(TypedDict, total=False):
