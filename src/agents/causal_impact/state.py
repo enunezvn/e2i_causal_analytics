@@ -1,9 +1,11 @@
 """State definition for Causal Impact Agent.
 
 This module defines the TypedDict state used throughout the causal impact workflow.
+Contract: .claude/contracts/tier2-contracts.md
 """
 
-from typing import Any, Dict, List, Literal, TypedDict
+import operator
+from typing import Annotated, Any, Dict, List, Literal, TypedDict
 
 from typing_extensions import NotRequired
 
@@ -33,6 +35,7 @@ class EstimationResult(TypedDict, total=False):
     ate: float  # Average Treatment Effect
     ate_ci_lower: float  # 95% confidence interval lower bound
     ate_ci_upper: float  # 95% confidence interval upper bound
+    standard_error: float  # Standard error of the ATE estimate
     cate_segments: NotRequired[List[Dict[str, Any]]]  # Conditional ATE by segment
     effect_size: str  # "small", "medium", "large"
     statistical_significance: bool
@@ -52,6 +55,7 @@ class RefutationTest(TypedDict, total=False):
         "data_subset",  # Alias for data_subset_validation
         "bootstrap",
         "sensitivity_e_value",  # E-value sensitivity analysis
+        "unobserved_common_cause",  # Contract key for sensitivity test
     ]
     passed: bool  # Whether effect survived refutation
     new_effect: float  # Effect after refutation
@@ -61,13 +65,21 @@ class RefutationTest(TypedDict, total=False):
 
 
 class RefutationResults(TypedDict, total=False):
-    """Complete refutation analysis."""
+    """Complete refutation analysis.
+
+    Contract: individual_tests must be Dict with test names as keys:
+    - placebo_treatment
+    - random_common_cause
+    - data_subset
+    - unobserved_common_cause
+    """
 
     tests_passed: int
     tests_failed: int
     total_tests: int
     overall_robust: bool  # True if majority of tests passed
-    individual_tests: List[RefutationTest]
+    # Contract: Dict by test name, NOT List
+    individual_tests: Dict[str, RefutationTest]
     confidence_adjustment: float  # Multiplier for final confidence (0-1)
     gate_decision: NotRequired[Literal["proceed", "review", "block"]]  # Validation gate
 
@@ -107,12 +119,15 @@ class CausalImpactState(TypedDict):
     5. interpretation: Natural language output
     """
 
-    # Input fields (from orchestrator) - Contract-aligned field names
+    # Input fields (from orchestrator) - Contract REQUIRED fields
     query: str
     query_id: str
-    treatment_var: NotRequired[str]  # e.g., "hcp_engagement_level" (contract field name)
-    outcome_var: NotRequired[str]  # e.g., "patient_conversion_rate" (contract field name)
-    confounders: NotRequired[List[str]]  # Adjustment variables (contract field name)
+    treatment_var: str  # REQUIRED per contract - e.g., "hcp_engagement_level"
+    outcome_var: str  # REQUIRED per contract - e.g., "patient_conversion_rate"
+    confounders: List[str]  # REQUIRED per contract - adjustment variables
+    data_source: str  # REQUIRED per contract - data source identifier
+
+    # Input fields - Optional
     mediators: NotRequired[List[str]]  # Optional mediator variables
     effect_modifiers: NotRequired[List[str]]  # Optional effect modifiers
     instruments: NotRequired[List[str]]  # Optional instrumental variables
@@ -120,7 +135,6 @@ class CausalImpactState(TypedDict):
     interpretation_depth: NotRequired[Literal["none", "minimal", "standard", "deep"]]
     user_context: NotRequired[Dict[str, Any]]  # expertise level, preferences
     parameters: NotRequired[Dict[str, Any]]  # Agent-specific parameters
-    data_source: NotRequired[str]  # Data source identifier
     time_period: NotRequired[Dict[str, str]]  # {"start": "YYYY-MM-DD", "end": "YYYY-MM-DD"}
     brand: NotRequired[str]  # Brand context
 
@@ -162,7 +176,8 @@ class CausalImpactState(TypedDict):
             "failed",
         ]
     ]
-    status: NotRequired[Literal["pending", "in_progress", "completed", "failed"]]
+    # Contract: status progression is pending → computing → interpreting → completed/failed
+    status: NotRequired[Literal["pending", "computing", "interpreting", "completed", "failed"]]
     total_latency_ms: NotRequired[float]
     timestamp: NotRequired[str]  # ISO 8601
     error_message: NotRequired[str]
@@ -177,17 +192,28 @@ class CausalImpactState(TypedDict):
     requires_followup: NotRequired[bool]
     followup_suggestions: NotRequired[List[str]]
 
+    # Error handling (contract: operator.add accumulators for LangGraph)
+    errors: Annotated[List[Dict[str, Any]], operator.add]
+    warnings: Annotated[List[str], operator.add]
+    fallback_used: NotRequired[bool]
+    retry_count: NotRequired[int]
+    refutation_passed: NotRequired[bool]
+
 
 class CausalImpactInput(TypedDict):
     """Input contract for CausalImpact agent (from orchestrator).
 
-    Contract: .claude/contracts/tier2-contracts.md lines 1-200
+    Contract: .claude/contracts/tier2-contracts.md
     """
 
+    # REQUIRED fields per contract
     query: str
-    treatment_var: NotRequired[str]  # Contract field name (was treatment_variable)
-    outcome_var: NotRequired[str]  # Contract field name (was outcome_variable)
-    confounders: NotRequired[List[str]]  # Contract field name (was covariates)
+    treatment_var: str  # REQUIRED - treatment variable name
+    outcome_var: str  # REQUIRED - outcome variable name
+    confounders: List[str]  # REQUIRED - adjustment variables
+    data_source: str  # REQUIRED - data source identifier
+
+    # Optional fields
     mediators: NotRequired[List[str]]  # Optional mediator variables
     effect_modifiers: NotRequired[List[str]]  # Optional effect modifiers
     instruments: NotRequired[List[str]]  # Optional instrumental variables
@@ -195,7 +221,6 @@ class CausalImpactInput(TypedDict):
     interpretation_depth: NotRequired[Literal["none", "minimal", "standard", "deep"]]
     user_context: NotRequired[Dict[str, Any]]
     parameters: NotRequired[Dict[str, Any]]
-    data_source: NotRequired[str]  # Data source identifier
     time_period: NotRequired[Dict[str, str]]  # {"start": "YYYY-MM-DD", "end": "YYYY-MM-DD"}
     brand: NotRequired[str]  # Brand context
 
@@ -203,50 +228,56 @@ class CausalImpactInput(TypedDict):
 class CausalImpactOutput(TypedDict):
     """Output contract for CausalImpact agent (to orchestrator).
 
-    Contract: .claude/contracts/tier2-contracts.md lines 1-200
+    Contract: .claude/contracts/tier2-contracts.md
     """
 
     # Required fields
     query_id: str
     status: Literal["completed", "failed"]
 
-    # Core results - Contract-aligned field names
-    causal_narrative: str  # Contract field name (was narrative)
-    ate_estimate: NotRequired[float]  # Contract field name (was causal_effect)
-    confidence_interval: NotRequired[
-        tuple[float, float]
-    ]  # Contract field name (was effect_confidence_interval)
-    standard_error: NotRequired[float]  # Added per contract
+    # Core results - Contract field names
+    causal_narrative: str
+    ate_estimate: NotRequired[float]
+    confidence_interval: NotRequired[tuple[float, float]]
+    standard_error: NotRequired[float]
     statistical_significance: bool
-    p_value: NotRequired[float]  # Float type per contract
-    effect_type: NotRequired[str]  # Added per contract: "ate", "cate", "itt", etc.
-    estimation_method: NotRequired[str]  # Method used for estimation
+    p_value: NotRequired[float]
+    effect_type: NotRequired[str]  # "ate", "cate", "itt", etc.
+    estimation_method: NotRequired[str]
+
+    # Contract REQUIRED fields (renamed/added per contract)
+    confidence: float  # Contract field name (was overall_confidence)
+    model_used: str  # Contract REQUIRED - estimation method name
+    key_insights: List[str]  # Contract REQUIRED - bullet points
+    assumption_warnings: List[str]  # Contract REQUIRED - assumption violations
+    actionable_recommendations: List[str]  # Contract field name (was recommendations)
+    requires_further_analysis: bool  # Contract REQUIRED
+    refutation_passed: bool  # Contract REQUIRED - overall refutation status
+    executive_summary: str  # Contract REQUIRED - 2-3 sentence summary
 
     # Rich metadata
-    mechanism_explanation: NotRequired[str]  # Added per contract
-    causal_graph_summary: NotRequired[str]  # Description of causal structure
+    mechanism_explanation: NotRequired[str]
+    causal_graph_summary: NotRequired[str]
     key_assumptions: List[str]
     limitations: List[str]
-    recommendations: List[str]
 
     # Performance metrics
-    computation_latency_ms: float  # graph + estimation + refutation + sensitivity
-    interpretation_latency_ms: float  # interpretation node
+    computation_latency_ms: float
+    interpretation_latency_ms: float
     total_latency_ms: float
 
     # Robustness indicators
     refutation_tests_passed: NotRequired[int]
     refutation_tests_total: NotRequired[int]
     sensitivity_e_value: NotRequired[float]
-    overall_confidence: float  # 0-1, adjusted by refutation results
 
     # Visualizations (optional)
     visualizations: NotRequired[List[Dict[str, Any]]]
 
     # Follow-up support
     follow_up_suggestions: List[str]
-    citations: List[str]  # Data sources used
+    citations: List[str]
 
     # Error handling
     error_message: NotRequired[str]
-    partial_results: NotRequired[bool]  # True if some nodes failed
+    partial_results: NotRequired[bool]

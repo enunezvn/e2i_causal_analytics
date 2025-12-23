@@ -192,23 +192,41 @@ class RefutationSuite:
         """Convert to legacy RefutationResults format for backward compatibility.
 
         Maps to the existing state.RefutationResults TypedDict.
+
+        Contract: individual_tests MUST be Dict with test names as keys:
+        - placebo_treatment
+        - random_common_cause
+        - data_subset
+        - unobserved_common_cause (maps from sensitivity_e_value)
         """
+        # Build Dict with test names as keys (contract requirement)
+        individual_tests: Dict[str, Dict[str, Any]] = {}
+        for t in self.tests:
+            # Map test name to contract key
+            # Note: sensitivity_e_value maps to unobserved_common_cause per contract
+            key = t.test_name.value
+            if key == "sensitivity_e_value":
+                key = "unobserved_common_cause"
+            elif key == "bootstrap":
+                # Bootstrap is additional, not in original contract
+                # Keep as-is for backward compatibility
+                key = "bootstrap"
+
+            individual_tests[key] = {
+                "test_name": t.test_name.value,
+                "passed": t.status == RefutationStatus.PASSED,
+                "new_effect": t.refuted_effect,
+                "original_effect": t.original_effect,
+                "p_value": t.p_value or 0.0,
+                "details": t.details.get("message", ""),
+            }
+
         return {
             "tests_passed": self.tests_passed,
             "tests_failed": self.tests_failed,
             "total_tests": self.total_tests,
             "overall_robust": self.passed,
-            "individual_tests": [
-                {
-                    "test_name": t.test_name.value,
-                    "passed": t.status == RefutationStatus.PASSED,
-                    "new_effect": t.refuted_effect,
-                    "original_effect": t.original_effect,
-                    "p_value": t.p_value or 0.0,
-                    "details": t.details.get("message", ""),
-                }
-                for t in self.tests
-            ],
+            "individual_tests": individual_tests,
             "confidence_adjustment": self.confidence_score,
             "gate_decision": self.gate_decision.value,
         }

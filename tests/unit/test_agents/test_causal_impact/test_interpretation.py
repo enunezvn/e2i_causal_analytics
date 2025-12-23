@@ -35,6 +35,7 @@ class TestInterpretationNode:
             "ate": 0.5,
             "ate_ci_lower": 0.4,
             "ate_ci_upper": 0.6,
+            "standard_error": 0.05,
             "effect_size": "medium",
             "statistical_significance": True,
             "p_value": 0.01,
@@ -43,12 +44,46 @@ class TestInterpretationNode:
             "heterogeneity_detected": True,
         }
 
+        # Contract: individual_tests is Dict with test names as keys
         refutation_results: RefutationResults = {
             "tests_passed": 3,
             "tests_failed": 1,
             "total_tests": 4,
             "overall_robust": True,
-            "individual_tests": [],
+            "individual_tests": {
+                "placebo_treatment": {
+                    "test_name": "placebo_treatment",
+                    "passed": True,
+                    "new_effect": 0.02,
+                    "original_effect": 0.5,
+                    "p_value": 0.85,
+                    "details": "Placebo effect near zero",
+                },
+                "random_common_cause": {
+                    "test_name": "random_common_cause",
+                    "passed": True,
+                    "new_effect": 0.48,
+                    "original_effect": 0.5,
+                    "p_value": 0.02,
+                    "details": "Effect stable with random cause",
+                },
+                "data_subset": {
+                    "test_name": "data_subset",
+                    "passed": True,
+                    "new_effect": 0.52,
+                    "original_effect": 0.5,
+                    "p_value": 0.03,
+                    "details": "Effect stable across subsets",
+                },
+                "unobserved_common_cause": {
+                    "test_name": "unobserved_common_cause",
+                    "passed": False,
+                    "new_effect": 0.3,
+                    "original_effect": 0.5,
+                    "p_value": 0.08,
+                    "details": "E-value indicates moderate sensitivity",
+                },
+            },
             "confidence_adjustment": 0.75,
         }
 
@@ -63,6 +98,10 @@ class TestInterpretationNode:
         state: CausalImpactState = {
             "query": "what is the impact of hcp engagement on conversions?",
             "query_id": "test-1",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
             "causal_graph": causal_graph,
             "estimation_result": estimation_result,
             "refutation_results": refutation_results,
@@ -70,6 +109,8 @@ class TestInterpretationNode:
             "interpretation_depth": "standard",
             "user_context": {"expertise": "analyst"},
             "status": "pending",
+            "errors": [],
+            "warnings": [],
         }
 
         return state
@@ -402,12 +443,13 @@ class TestInterpretationNarrativeQuality:
             "heterogeneity_detected": True,
         }
 
+        # Contract: individual_tests is Dict with test names as keys
         refutation_results: RefutationResults = {
             "tests_passed": 3,
             "tests_failed": 1,
             "total_tests": 4,
             "overall_robust": True,
-            "individual_tests": [],
+            "individual_tests": {},
             "confidence_adjustment": 0.75,
         }
 
@@ -422,6 +464,10 @@ class TestInterpretationNarrativeQuality:
         return {
             "query": "test query",
             "query_id": "test-1",
+            "treatment_var": "T",
+            "outcome_var": "O",
+            "confounders": ["C"],
+            "data_source": "synthetic",
             "causal_graph": causal_graph,
             "estimation_result": estimation_result,
             "refutation_results": refutation_results,
@@ -429,6 +475,8 @@ class TestInterpretationNarrativeQuality:
             "interpretation_depth": "standard",
             "user_context": {"expertise": "analyst"},
             "status": "pending",
+            "errors": [],
+            "warnings": [],
         }
 
 
@@ -468,6 +516,10 @@ class TestKeyFindingsGeneration:
         return {
             "query": "test",
             "query_id": "test-1",
+            "treatment_var": "T",
+            "outcome_var": "O",
+            "confounders": [],
+            "data_source": "synthetic",
             "causal_graph": {
                 "nodes": ["T", "O"],
                 "edges": [("T", "O")],
@@ -482,6 +534,7 @@ class TestKeyFindingsGeneration:
                 "ate": 0.5,
                 "ate_ci_lower": 0.4,
                 "ate_ci_upper": 0.6,
+                "standard_error": 0.05,
                 "effect_size": "medium",
                 "statistical_significance": True,
                 "p_value": 0.01,
@@ -489,12 +542,13 @@ class TestKeyFindingsGeneration:
                 "covariates_adjusted": [],
                 "heterogeneity_detected": False,
             },
+            # Contract: individual_tests is Dict
             "refutation_results": {
                 "tests_passed": 3,
                 "tests_failed": 1,
                 "total_tests": 4,
                 "overall_robust": True,
-                "individual_tests": [],
+                "individual_tests": {},
                 "confidence_adjustment": 0.75,
             },
             "sensitivity_analysis": {
@@ -507,4 +561,6 @@ class TestKeyFindingsGeneration:
             "interpretation_depth": "standard",
             "user_context": {"expertise": "analyst"},
             "status": "pending",
+            "errors": [],
+            "warnings": [],
         }

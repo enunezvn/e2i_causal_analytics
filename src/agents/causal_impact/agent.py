@@ -5,7 +5,7 @@ Estimates causal effects using DoWhy/EconML with natural language interpretation
 
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from src.agents.causal_impact.graph import create_causal_impact_graph
 from src.agents.causal_impact.state import (
@@ -65,9 +65,11 @@ class CausalImpactAgent:
         """
         start_time = time.time()
 
-        # Validate input
-        if "query" not in input_data:
-            raise ValueError("Missing required field: query")
+        # Validate required input fields per contract
+        required_fields = ["query", "treatment_var", "outcome_var", "confounders", "data_source"]
+        missing_fields = [f for f in required_fields if f not in input_data]
+        if missing_fields:
+            raise ValueError(f"Missing required field(s): {', '.join(missing_fields)}")
 
         # Initialize state
         initial_state = self._initialize_state(input_data)
@@ -91,18 +93,20 @@ class CausalImpactAgent:
         """Initialize workflow state from input.
 
         Args:
-            input_data: Input data
+            input_data: Input data (must have required fields validated)
 
         Returns:
-            Initial state
+            Initial state conforming to contract
         """
         state: CausalImpactState = {
+            # Required input fields (contract)
             "query": input_data["query"],
             "query_id": input_data.get("query_id", self._generate_query_id()),
-            # Contract-aligned field names
-            "treatment_var": input_data.get("treatment_var"),
-            "outcome_var": input_data.get("outcome_var"),
-            "confounders": input_data.get("confounders", []),
+            "treatment_var": input_data["treatment_var"],  # REQUIRED
+            "outcome_var": input_data["outcome_var"],  # REQUIRED
+            "confounders": input_data["confounders"],  # REQUIRED
+            "data_source": input_data["data_source"],  # REQUIRED
+            # Optional input fields
             "mediators": input_data.get("mediators", []),
             "effect_modifiers": input_data.get("effect_modifiers", []),
             "instruments": input_data.get("instruments", []),
@@ -110,12 +114,17 @@ class CausalImpactAgent:
             "interpretation_depth": input_data.get("interpretation_depth", "standard"),
             "user_context": input_data.get("user_context", {}),
             "parameters": input_data.get("parameters", {}),
-            "data_source": input_data.get("data_source"),
             "time_period": input_data.get("time_period"),
             "brand": input_data.get("brand"),
+            # Workflow state
             "current_phase": "graph_building",
             "status": "pending",
             "timestamp": datetime.now(timezone.utc).isoformat(),
+            # Error accumulators (contract: operator.add)
+            "errors": [],
+            "warnings": [],
+            "fallback_used": False,
+            "retry_count": 0,
         }
 
         return state
@@ -162,11 +171,14 @@ class CausalImpactAgent:
 
         overall_confidence = base_confidence * refutation_confidence
 
-        # Build output with contract-aligned field names
+        # Determine refutation status
+        refutation_passed = refutation_results.get("overall_robust", False)
+
+        # Build output with contract field names
         output: CausalImpactOutput = {
             "query_id": state.get("query_id", "unknown"),
             "status": "completed",
-            # Contract-aligned output field names
+            # Core results
             "causal_narrative": interpretation.get("narrative", "Analysis completed successfully."),
             "ate_estimate": estimation_result.get("ate"),
             "confidence_interval": (
@@ -182,21 +194,38 @@ class CausalImpactAgent:
             "p_value": estimation_result.get("p_value"),
             "effect_type": estimation_result.get("effect_type", "ate"),
             "estimation_method": estimation_result.get("method"),
+            # Contract REQUIRED fields
+            "confidence": overall_confidence,  # Contract field (was overall_confidence)
+            "model_used": estimation_result.get("method", "unknown"),  # Contract REQUIRED
+            "key_insights": interpretation.get("key_findings", []),  # Contract REQUIRED
+            "assumption_warnings": self._extract_assumption_warnings(
+                interpretation, estimation_result, refutation_results
+            ),  # Contract REQUIRED
+            "actionable_recommendations": interpretation.get(
+                "recommendations", []
+            ),  # Contract field (was recommendations)
+            "requires_further_analysis": overall_confidence < 0.7,  # Contract REQUIRED
+            "refutation_passed": refutation_passed,  # Contract REQUIRED
+            "executive_summary": self._generate_executive_summary(
+                interpretation, estimation_result, overall_confidence
+            ),  # Contract REQUIRED
+            # Rich metadata
             "mechanism_explanation": interpretation.get("mechanism_explanation"),
             "causal_graph_summary": self._summarize_causal_graph(causal_graph),
             "key_assumptions": interpretation.get("assumptions_made", []),
             "limitations": interpretation.get("limitations", []),
-            "recommendations": interpretation.get("recommendations", []),
+            # Performance metrics
             "computation_latency_ms": computation_latency_ms,
             "interpretation_latency_ms": interpretation_latency_ms,
             "total_latency_ms": total_latency_ms,
+            # Robustness indicators
             "refutation_tests_passed": refutation_results.get("tests_passed"),
             "refutation_tests_total": refutation_results.get("total_tests"),
             "sensitivity_e_value": sensitivity_analysis.get("e_value"),
-            "overall_confidence": overall_confidence,
-            "visualizations": [],  # Would add visualizations in production
+            # Follow-up
+            "visualizations": [],
             "follow_up_suggestions": interpretation.get("recommendations", []),
-            "citations": ["E2I Causal Analytics System v4.1"],
+            "citations": ["E2I Causal Analytics System v4.2"],
         }
 
         return output
@@ -217,16 +246,25 @@ class CausalImpactAgent:
         output: CausalImpactOutput = {
             "query_id": input_data.get("query_id", "unknown"),
             "status": "failed",
-            # Contract-aligned field name
             "causal_narrative": f"Analysis failed: {error_message}",
             "statistical_significance": False,
+            # Contract REQUIRED fields
+            "confidence": 0.0,  # Contract field (was overall_confidence)
+            "model_used": "none",  # Contract REQUIRED
+            "key_insights": [],  # Contract REQUIRED
+            "assumption_warnings": ["Analysis failed - unable to verify assumptions"],
+            "actionable_recommendations": [
+                "Review error and retry with valid input"
+            ],  # Contract field (was recommendations)
+            "requires_further_analysis": True,  # Contract REQUIRED
+            "refutation_passed": False,  # Contract REQUIRED
+            "executive_summary": f"Analysis failed: {error_message}",  # Contract REQUIRED
+            # Metadata
             "key_assumptions": [],
             "limitations": ["Analysis failed before completion"],
-            "recommendations": ["Review error and retry with valid input"],
             "computation_latency_ms": latency_ms,
             "interpretation_latency_ms": 0.0,
             "total_latency_ms": latency_ms,
-            "overall_confidence": 0.0,
             "follow_up_suggestions": [],
             "citations": [],
             "error_message": error_message,
@@ -259,6 +297,89 @@ class CausalImpactAgent:
             f"Outcome: {', '.join(outcome_nodes)}. "
             f"{len(adjustment_sets)} valid adjustment sets identified."
         )
+
+        return summary
+
+    def _extract_assumption_warnings(
+        self, interpretation: Dict, estimation_result: Dict, refutation_results: Dict
+    ) -> List[str]:
+        """Extract assumption warnings from analysis results.
+
+        Contract REQUIRED field: assumption_warnings
+
+        Args:
+            interpretation: Interpretation node output
+            estimation_result: Estimation node output
+            refutation_results: Refutation node output
+
+        Returns:
+            List of assumption warning strings
+        """
+        warnings = []
+
+        # Check for low sample size
+        sample_size = estimation_result.get("sample_size", 0)
+        if sample_size < 100:
+            warnings.append(f"Low sample size ({sample_size}) may limit reliability")
+
+        # Check for failed refutation tests
+        tests_failed = refutation_results.get("tests_failed", 0)
+        if tests_failed > 0:
+            warnings.append(f"{tests_failed} refutation test(s) failed - causal claim may be weak")
+
+        # Check for weak effect size
+        effect_size = estimation_result.get("effect_size", "")
+        if effect_size == "small":
+            warnings.append("Small effect size detected - practical significance may be limited")
+
+        # Check assumptions from interpretation
+        assumptions = interpretation.get("assumptions_made", [])
+        for assumption in assumptions:
+            if "unverified" in assumption.lower() or "assumed" in assumption.lower():
+                warnings.append(f"Unverified assumption: {assumption}")
+
+        # If no warnings, indicate clean status
+        if not warnings:
+            warnings.append("No critical assumption violations detected")
+
+        return warnings
+
+    def _generate_executive_summary(
+        self, interpretation: Dict, estimation_result: Dict, confidence: float
+    ) -> str:
+        """Generate executive summary for causal impact analysis.
+
+        Contract REQUIRED field: executive_summary (2-3 sentences)
+
+        Args:
+            interpretation: Interpretation node output
+            estimation_result: Estimation node output
+            confidence: Overall confidence score (0-1)
+
+        Returns:
+            Executive summary string
+        """
+        ate = estimation_result.get("ate")
+        significance = estimation_result.get("statistical_significance", False)
+        method = estimation_result.get("method", "causal inference")
+
+        # Build summary based on results
+        if ate is not None and significance:
+            effect_direction = "positive" if ate > 0 else "negative"
+            summary = (
+                f"Analysis identified a statistically significant {effect_direction} "
+                f"causal effect (ATE: {ate:.4f}) using {method}. "
+                f"Overall confidence in this finding is {confidence:.0%}."
+            )
+        elif ate is not None:
+            summary = (
+                f"Analysis estimated a causal effect (ATE: {ate:.4f}) using {method}, "
+                f"but the result is not statistically significant. "
+                f"Confidence in this finding is {confidence:.0%}."
+            )
+        else:
+            narrative = interpretation.get("narrative", "Analysis completed")
+            summary = f"{narrative[:200]}... " if len(narrative) > 200 else narrative
 
         return summary
 
@@ -298,13 +419,10 @@ class CausalImpactAgent:
         """
         output = await self.run(input_data)
 
-        # Return simplified format for orchestrator (contract-aligned)
+        # Return simplified format for orchestrator (contract field names)
         return {
             "narrative": output["causal_narrative"],
-            "recommendations": output.get("recommendations", []),
-            "confidence": output.get("overall_confidence", 0.0),
-            "key_findings": [
-                f"Causal effect: {output.get('ate_estimate', 'N/A')}",
-                f"Significance: {output.get('statistical_significance', False)}",
-            ],
+            "recommendations": output.get("actionable_recommendations", []),  # Contract field
+            "confidence": output.get("confidence", 0.0),  # Contract field
+            "key_findings": output.get("key_insights", []),  # Contract field
         }
