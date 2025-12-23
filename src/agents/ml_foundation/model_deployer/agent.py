@@ -18,9 +18,12 @@ Integration:
 - Upstream: model_trainer, feature_analyzer
 - Downstream: Tier 1-5 agents (via prediction endpoints)
 - Database: ml_deployments, ml_model_registry
+- Memory: Procedural memory (successful deployment patterns)
+- Observability: Opik tracing
 """
 
 import logging
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 from uuid import UUID
 
@@ -30,16 +33,39 @@ from .state import ModelDeployerState
 logger = logging.getLogger(__name__)
 
 
+def _get_opik_connector():
+    """Get OpikConnector (lazy import to avoid circular deps)."""
+    try:
+        from src.mlops.opik_connector import get_opik_connector
+        return get_opik_connector()
+    except Exception as e:
+        logger.warning(f"Could not get Opik connector: {e}")
+        return None
+
+
+def _get_procedural_memory():
+    """Get procedural memory client (lazy import with graceful degradation)."""
+    try:
+        from src.memory.procedural_memory import get_procedural_memory_client
+        return get_procedural_memory_client()
+    except Exception as e:
+        logger.debug(f"Procedural memory not available: {e}")
+        return None
+
+
 class ModelDeployerAgent:
     """Model Deployer: Manage model lifecycle and deployments.
 
     Handles stage promotions, deployments, and rollbacks.
     """
 
+    # Agent metadata
     tier = 0
     tier_name = "ml_foundation"
+    agent_name = "model_deployer"
     agent_type = "standard"
     sla_seconds = 30
+    tools = ["mlflow", "bentoml"]  # MLflow for registry, BentoML for deployment
 
     def __init__(self):
         """Initialize model_deployer agent."""
@@ -101,8 +127,52 @@ class ModelDeployerAgent:
             "shadow_mode_latency_p99_ms": input_data.get("shadow_mode_latency_p99_ms", 999),
         }
 
-        # Execute LangGraph workflow
-        final_state = await self.graph.ainvoke(initial_state)
+        # Execute LangGraph workflow with optional Opik tracing
+        start_time = datetime.now(timezone.utc)
+        experiment_id = input_data["experiment_id"]
+        deployment_name = input_data["deployment_name"]
+        target_environment = input_data.get("target_environment", "staging")
+        deployment_action = input_data.get("deployment_action", "deploy")
+
+        logger.info(
+            f"Starting model deployment for experiment {experiment_id}, "
+            f"deployment={deployment_name}, target={target_environment}, action={deployment_action}"
+        )
+
+        opik = _get_opik_connector()
+        try:
+            if opik and opik.is_enabled:
+                async with opik.trace_agent(
+                    agent_name=self.agent_name,
+                    operation="deploy_model",
+                    metadata={
+                        "tier": self.tier,
+                        "experiment_id": experiment_id,
+                        "deployment_name": deployment_name,
+                        "target_environment": target_environment,
+                        "deployment_action": deployment_action,
+                    },
+                    tags=[self.agent_name, "tier_0", "model_deployment"],
+                    input_data={
+                        "experiment_id": experiment_id,
+                        "deployment_name": deployment_name,
+                        "target_environment": target_environment,
+                    },
+                ) as span:
+                    final_state = await self.graph.ainvoke(initial_state)
+                    # Set output on span
+                    if span and not final_state.get("error"):
+                        span.set_output({
+                            "deployment_id": final_state.get("deployment_id"),
+                            "deployment_successful": final_state.get("deployment_successful"),
+                            "health_check_passed": final_state.get("health_check_passed"),
+                            "current_stage": final_state.get("current_stage"),
+                        })
+            else:
+                final_state = await self.graph.ainvoke(initial_state)
+        except Exception as e:
+            logger.exception(f"Model deployment failed: {e}")
+            raise RuntimeError(f"Model deployment workflow failed: {str(e)}") from e
 
         # Check for errors
         if final_state.get("error"):
@@ -146,6 +216,24 @@ class ModelDeployerAgent:
 
         # Store to database (ml_deployments and ml_model_registry)
         await self._store_to_database(output, final_state)
+
+        # Update procedural memory with successful deployment pattern
+        if output.get("deployment_successful"):
+            await self._update_procedural_memory(output, final_state)
+
+        # Log execution time and SLA check
+        duration = (datetime.now(timezone.utc) - start_time).total_seconds()
+        logger.info(
+            f"Model deployment complete for {experiment_id}: "
+            f"status={overall_status}, environment={target_environment} "
+            f"in {duration:.2f}s"
+        )
+
+        if duration > self.sla_seconds:
+            logger.warning(
+                f"SLA violation: {duration:.2f}s > {self.sla_seconds}s "
+                f"for deployment {deployment_name}"
+            )
 
         return output
 
@@ -274,3 +362,47 @@ class ModelDeployerAgent:
         except Exception as e:
             # Log error but don't fail the deployment
             logger.error(f"Database storage failed: {e}")
+
+    async def _update_procedural_memory(
+        self, output: Dict[str, Any], state: Dict[str, Any]
+    ) -> None:
+        """Update procedural memory with successful deployment pattern.
+
+        Graceful degradation: If memory is unavailable,
+        logs a debug message and continues without error.
+
+        Args:
+            output: Agent output containing deployment result
+            state: Final agent state
+        """
+        try:
+            memory = _get_procedural_memory()
+            if memory is None:
+                logger.debug("Procedural memory not available, skipping update")
+                return
+
+            # Store successful deployment pattern for future reference
+            await memory.store_pattern(
+                agent_name=self.agent_name,
+                pattern_type="model_deployment",
+                pattern_data={
+                    "deployment_name": state.get("deployment_name"),
+                    "target_environment": state.get("target_environment"),
+                    "deployment_action": state.get("deployment_action"),
+                    "deployment_successful": output.get("deployment_successful"),
+                    "health_check_passed": output.get("health_check_passed"),
+                    "rollback_available": output.get("rollback_available"),
+                    "experiment_id": state.get("experiment_id"),
+                    "model_version": state.get("model_version"),
+                    "current_stage": state.get("current_stage"),
+                    "resources": state.get("resources"),
+                },
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            )
+
+            logger.info(
+                f"Updated procedural memory for deployment: {state.get('deployment_name')}"
+            )
+
+        except Exception as e:
+            logger.debug(f"Failed to update procedural memory: {e}")
