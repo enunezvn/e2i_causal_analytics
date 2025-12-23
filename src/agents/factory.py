@@ -60,7 +60,7 @@ AGENT_REGISTRY_CONFIG = {
         "tier": 0,
         "module": "src.agents.ml_foundation.model_deployer",
         "class_name": "ModelDeployerAgent",
-        "enabled": False,  # Not yet implemented
+        "enabled": True,
     },
     "observability_connector": {
         "tier": 0,
