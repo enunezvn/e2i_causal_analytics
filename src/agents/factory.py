@@ -42,7 +42,7 @@ AGENT_REGISTRY_CONFIG = {
         "tier": 0,
         "module": "src.agents.ml_foundation.feature_analyzer",
         "class_name": "FeatureAnalyzerAgent",
-        "enabled": False,  # Not yet implemented
+        "enabled": True,
     },
     "model_selector": {
         "tier": 0,
