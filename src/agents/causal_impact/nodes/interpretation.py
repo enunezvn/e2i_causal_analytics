@@ -81,17 +81,20 @@ class InterpretationNode:
                 "interpretation": interpretation,
                 "interpretation_latency_ms": latency_ms,
                 "current_phase": "completed",
-                "status": "completed",
+                "status": "completed",  # Contract: final status after interpreting phase
             }
 
         except Exception as e:
             latency_ms = (time.time() - start_time) * 1000
+            # Contract: accumulate errors using operator.add
+            errors = [{"phase": "interpretation", "message": str(e)}]
             return {
                 **state,
                 "interpretation_error": str(e),
                 "interpretation_latency_ms": latency_ms,
                 "status": "failed",
                 "error_message": f"Interpretation failed: {e}",
+                "errors": errors,  # Contract error accumulator
             }
 
     async def _generate_minimal_interpretation(
@@ -317,11 +320,12 @@ class InterpretationNode:
         )
 
         # Add refutation test details
-        individual_tests = refutation_results.get("individual_tests", [])
+        # Contract: individual_tests is Dict with test names as keys
+        individual_tests = refutation_results.get("individual_tests", {})
         if individual_tests:
             enhanced_narrative += "\n\nREFUTATION TESTS: "
-            for test in individual_tests:
-                test_name = test.get("test_name", "unknown")
+            for test_key, test in individual_tests.items():
+                test_name = test.get("test_name", test_key)
                 passed = test.get("passed", False)
                 details = test.get("details", "")
                 enhanced_narrative += (
