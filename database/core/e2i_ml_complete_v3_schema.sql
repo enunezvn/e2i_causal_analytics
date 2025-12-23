@@ -516,7 +516,13 @@ CREATE TABLE ml_predictions (
     segment_assignment VARCHAR(30),
     causal_confidence DECIMAL(4,3),
     counterfactual_outcome DECIMAL(4,3),
-    
+
+    -- Ground truth for concept drift detection
+    actual_outcome DECIMAL(5,4),              -- The actual observed outcome (nullable until known)
+    outcome_recorded_at TIMESTAMPTZ,          -- When the outcome was recorded
+    outcome_source VARCHAR(50),               -- Source of outcome: 'manual', 'automated', 'feedback_loop'
+    outcome_observation_window_days INTEGER,  -- Days between prediction and outcome observation
+
     -- CRITICAL: Track what features were available at prediction time
     features_available_at_prediction JSONB DEFAULT '{}',
     
