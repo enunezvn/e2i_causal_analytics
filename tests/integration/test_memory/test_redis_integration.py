@@ -24,7 +24,12 @@ except ImportError:
     REDIS_AVAILABLE = False
 
 
-pytestmark = pytest.mark.skipif(not REDIS_AVAILABLE, reason="redis package not installed")
+# Use both the package check and the marker for auto-skip via global conftest
+pytestmark = [
+    pytest.mark.skipif(not REDIS_AVAILABLE, reason="redis package not installed"),
+    pytest.mark.requires_redis,
+    pytest.mark.integration,
+]
 
 
 # ============================================================================
