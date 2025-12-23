@@ -102,6 +102,7 @@ dev = [
     "pytest-cov>=5.0.0",
     "pytest-mock>=3.14.0",
     "pytest-xdist>=3.5.0",
+    "pytest-timeout>=2.3.0",
     "black>=24.8.0",
     "ruff>=0.6.0",
     "mypy>=1.11.0",
@@ -154,3 +155,24 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+# Global timeout: 30 seconds per test (safety net against hanging)
+timeout = 30
+timeout_method = "thread"
+# Custom markers for test categorization
+markers = [
+    "unit: Unit tests (no external dependencies)",
+    "integration: Integration tests (requires external services)",
+    "e2e: End-to-end tests (full stack)",
+    "slow: Tests that take longer than 10 seconds",
+    "requires_redis: Test requires Redis connection",
+    "requires_falkordb: Test requires FalkorDB connection",
+    "requires_supabase: Test requires Supabase connection",
+]
+# Filter warnings
+filterwarnings = [
+    "ignore::DeprecationWarning:asyncio",
+    "ignore::pytest.PytestUnraisableExceptionWarning",
+]
+# Add custom options
+addopts = "-v --tb=short"
