@@ -66,7 +66,7 @@ AGENT_REGISTRY_CONFIG = {
         "tier": 0,
         "module": "src.agents.ml_foundation.observability_connector",
         "class_name": "ObservabilityConnectorAgent",
-        "enabled": False,  # Not yet implemented
+        "enabled": True,
     },
     # Tier 1: Coordination
     "orchestrator": {
