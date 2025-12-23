@@ -2,15 +2,22 @@
 E2I Explainer Agent - Narrative Generator Node
 Version: 4.2
 Purpose: Generate final narrative explanations
+
+Memory Integration:
+- Working Memory (Redis): Cache generated explanations with 24h TTL
+- Episodic Memory (Supabase): Store explanations for future retrieval
 """
 
 from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from ..state import ExplainerState, Insight, NarrativeSection
+
+if TYPE_CHECKING:
+    from ..memory_hooks import ExplanationMemoryHooks
 
 logger = logging.getLogger(__name__)
 
@@ -19,18 +26,42 @@ class NarrativeGeneratorNode:
     """
     Generate final narrative explanations.
     Uses structured insights from reasoning phase.
+
+    Memory Integration:
+    - Caches generated explanations in working memory (24h TTL)
+    - Stores explanations in episodic memory for future retrieval
     """
 
-    def __init__(self, use_llm: bool = False, llm: Optional[Any] = None):
+    def __init__(
+        self,
+        use_llm: bool = False,
+        llm: Optional[Any] = None,
+        memory_hooks: Optional["ExplanationMemoryHooks"] = None,
+    ):
         """
         Initialize narrative generator.
 
         Args:
             use_llm: Whether to use LLM for generation
             llm: Optional LLM instance to use
+            memory_hooks: Memory hooks for tri-memory integration
         """
         self.use_llm = use_llm
         self.llm = llm
+        self._memory_hooks = memory_hooks
+
+    @property
+    def memory_hooks(self) -> Optional["ExplanationMemoryHooks"]:
+        """Lazy-load memory hooks if not provided."""
+        if self._memory_hooks is None:
+            try:
+                from ..memory_hooks import get_explanation_memory_hooks
+
+                self._memory_hooks = get_explanation_memory_hooks()
+            except Exception as e:
+                logger.warning(f"Failed to initialize memory hooks: {e}")
+                return None
+        return self._memory_hooks
 
     async def execute(self, state: ExplainerState) -> ExplainerState:
         """Execute narrative generation."""
@@ -67,6 +98,15 @@ class NarrativeGeneratorNode:
                 f"Narrative generated: format={output_format}, "
                 f"sections={len(result.get('narrative_sections', []))}"
             )
+
+            # === MEMORY STORAGE ===
+            session_id = state.get("session_id")
+            if session_id and self.memory_hooks:
+                await self._store_explanation_in_memory(
+                    session_id=session_id,
+                    state=state,
+                    result=result,
+                )
 
             return {
                 **state,
@@ -457,3 +497,66 @@ class NarrativeGeneratorNode:
             ]
 
         return follow_ups[:5]
+
+    # =========================================================================
+    # MEMORY STORAGE
+    # =========================================================================
+
+    async def _store_explanation_in_memory(
+        self,
+        session_id: str,
+        state: ExplainerState,
+        result: Dict[str, Any],
+    ) -> None:
+        """Store generated explanation in memory systems.
+
+        Args:
+            session_id: Session identifier for memory correlation
+            state: Current explainer state
+            result: Generated narrative result
+
+        Memory Storage:
+        - Working Memory (Redis): 24-hour cache for quick retrieval
+        - Episodic Memory (Supabase): Permanent storage with embeddings
+        """
+        if not self.memory_hooks:
+            return
+
+        try:
+            # Build explanation data
+            explanation_data = {
+                "query": state.get("query", ""),
+                "executive_summary": result.get("executive_summary", ""),
+                "detailed_explanation": result.get("detailed_explanation", ""),
+                "insights": state.get("extracted_insights", []),
+                "audience": state.get("user_expertise", "analyst"),
+                "output_format": state.get("output_format", "narrative"),
+                "themes": state.get("key_themes", []),
+                "visual_suggestions": result.get("visual_suggestions", []),
+            }
+
+            # Cache in working memory (24h TTL)
+            cache_success = await self.memory_hooks.cache_explanation(
+                session_id=session_id,
+                explanation=explanation_data,
+            )
+
+            # Store in episodic memory for future retrieval
+            brand = state.get("memory_config", {}).get("brand")
+            region = state.get("memory_config", {}).get("region")
+
+            memory_id = await self.memory_hooks.store_explanation(
+                session_id=session_id,
+                explanation=explanation_data,
+                brand=brand,
+                region=region,
+            )
+
+            logger.debug(
+                f"Explanation stored: cache={cache_success}, "
+                f"episodic_id={memory_id}"
+            )
+
+        except Exception as e:
+            # Non-fatal: log warning but don't fail the generation
+            logger.warning(f"Memory storage failed (non-fatal): {e}")

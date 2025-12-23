@@ -2,18 +2,27 @@
 E2I Explainer Agent - Main Agent Class
 Version: 4.2
 Purpose: Natural language explanations for complex analyses
+
+Memory Integration:
+- Working Memory (Redis): Session caching, conversation context
+- Episodic Memory (Supabase): Historical explanations with embeddings
+- Semantic Memory (FalkorDB): Entity relationships and knowledge graph
 """
 
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
 from .graph import build_explainer_graph
 from .state import ExplainerState, Insight, NarrativeSection
+
+if TYPE_CHECKING:
+    from .memory_hooks import ExplanationMemoryHooks
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +40,10 @@ class ExplainerInput(BaseModel):
     user_expertise: Literal["executive", "analyst", "data_scientist"] = "analyst"
     output_format: Literal["narrative", "structured", "presentation", "brief"] = "narrative"
     focus_areas: Optional[List[str]] = None
+
+    # Memory integration fields
+    session_id: Optional[str] = None  # For memory correlation
+    memory_config: Optional[Dict[str, Any]] = None  # Memory configuration (brand, region)
 
 
 class ExplainerOutput(BaseModel):
@@ -65,6 +78,11 @@ class ExplainerAgent:
     - Adapt explanations to user expertise level
     - Generate actionable insights
     - Suggest visualizations and follow-up questions
+
+    Memory Integration:
+    - Working Memory (Redis): Session caching with 24h TTL
+    - Episodic Memory (Supabase): Historical explanations
+    - Semantic Memory (FalkorDB): Entity relationships
     """
 
     def __init__(
@@ -85,6 +103,7 @@ class ExplainerAgent:
         self._use_llm = use_llm
         self._llm = llm
         self._graph = None
+        self._memory_hooks = None
 
     @property
     def graph(self):
@@ -97,6 +116,24 @@ class ExplainerAgent:
             )
         return self._graph
 
+    @property
+    def memory_hooks(self) -> Optional["ExplanationMemoryHooks"]:
+        """Lazy-load memory hooks for tri-memory integration."""
+        if self._memory_hooks is None:
+            try:
+                from .memory_hooks import get_explanation_memory_hooks
+
+                self._memory_hooks = get_explanation_memory_hooks()
+                logger.debug("Memory hooks initialized for Explainer agent")
+            except Exception as e:
+                logger.warning(f"Failed to initialize memory hooks: {e}")
+                return None
+        return self._memory_hooks
+
+    def _generate_session_id(self) -> str:
+        """Generate a unique session ID for memory correlation."""
+        return f"explainer_{uuid.uuid4().hex[:12]}"
+
     async def explain(
         self,
         analysis_results: List[Dict[str, Any]],
@@ -104,6 +141,8 @@ class ExplainerAgent:
         user_expertise: str = "analyst",
         output_format: str = "narrative",
         focus_areas: Optional[List[str]] = None,
+        session_id: Optional[str] = None,
+        memory_config: Optional[Dict[str, Any]] = None,
     ) -> ExplainerOutput:
         """
         Generate natural language explanation for analysis results.
@@ -114,16 +153,28 @@ class ExplainerAgent:
             user_expertise: Target audience expertise level
             output_format: Desired output format
             focus_areas: Specific areas to focus on
+            session_id: Session ID for memory correlation
+            memory_config: Memory configuration (brand, region)
 
         Returns:
             ExplainerOutput with narrative explanation
         """
+        # Generate session ID if not provided
+        effective_session_id = session_id or self._generate_session_id()
+
         initial_state: ExplainerState = {
             "query": query,
             "analysis_results": analysis_results,
             "user_expertise": user_expertise,
             "output_format": output_format,
             "focus_areas": focus_areas,
+            # Memory integration fields
+            "session_id": effective_session_id,
+            "memory_config": memory_config or {},
+            "episodic_context": None,
+            "semantic_context": None,
+            "working_memory_messages": None,
+            # Context fields
             "analysis_context": None,
             "user_context": None,
             "conversation_history": None,
@@ -148,10 +199,13 @@ class ExplainerAgent:
 
         logger.info(
             f"Starting explanation: {len(analysis_results)} results, "
-            f"expertise={user_expertise}, format={output_format}"
+            f"expertise={user_expertise}, format={output_format}, "
+            f"session={effective_session_id}"
         )
 
-        result = await self.graph.ainvoke(initial_state)
+        # Provide config with thread_id for checkpointer (if enabled)
+        config = {"configurable": {"thread_id": effective_session_id}}
+        result = await self.graph.ainvoke(initial_state, config=config)
 
         return ExplainerOutput(
             executive_summary=result.get("executive_summary", ""),

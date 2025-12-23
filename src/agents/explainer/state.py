@@ -57,6 +57,13 @@ class ExplainerState(TypedDict):
     user_context: Optional[Dict[str, Any]]
     conversation_history: Optional[List[Dict[str, Any]]]
 
+    # === MEMORY INTEGRATION ===
+    session_id: Optional[str]  # For memory correlation
+    memory_config: Optional[Dict[str, Any]]  # Memory configuration
+    episodic_context: Optional[List[Dict[str, Any]]]  # Retrieved past explanations
+    semantic_context: Optional[Dict[str, Any]]  # Knowledge graph entities
+    working_memory_messages: Optional[List[Dict[str, Any]]]  # Cached conversation
+
     # === REASONING OUTPUTS ===
     extracted_insights: Optional[List[Insight]]
     narrative_structure: Optional[List[str]]
