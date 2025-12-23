@@ -33,17 +33,20 @@ import pytest_asyncio
 # =============================================================================
 
 # Service URLs from environment with defaults
-# Redis requires password (default: devpassword from docker-compose)
-REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", "devpassword")
+# Port mapping (per docker/docker-compose.yml):
+#   - e2i_redis (Working Memory): 6382
+#   - e2i_falkordb (Semantic Memory): 6381
+#   - opik-redis (Opik, separate): 6390
+#   - auto-claude-falkordb (external): 6380
+REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", "")  # No password in docker/docker-compose.yml
 _redis_url_env = os.getenv("REDIS_URL")
 if _redis_url_env:
     REDIS_URL = _redis_url_env
+elif REDIS_PASSWORD:
+    REDIS_URL = f"redis://:{REDIS_PASSWORD}@localhost:6382"
 else:
-    REDIS_URL = f"redis://:{REDIS_PASSWORD}@localhost:6379"
-# Debug: verify URL construction
-import sys as _sys
-print(f"  DEBUG conftest REDIS_URL = {REDIS_URL}", file=_sys.stderr)
-FALKORDB_URL = os.getenv("FALKORDB_URL", "redis://localhost:6380")
+    REDIS_URL = "redis://localhost:6382"
+FALKORDB_URL = os.getenv("FALKORDB_URL", "redis://localhost:6381")
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY", "") or os.getenv("SUPABASE_SERVICE_KEY", "")
 
