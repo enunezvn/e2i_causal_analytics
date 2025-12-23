@@ -29,6 +29,7 @@ class ExperimentMonitorInput:
         srm_threshold: P-value threshold for SRM detection (default: 0.001)
         enrollment_threshold: Minimum daily enrollment rate (default: 5.0)
         fidelity_threshold: Maximum acceptable prediction error (default: 0.2)
+        stale_data_threshold_hours: Hours after which data is stale (default: 24.0)
         check_interim: Whether to check for interim analysis triggers
     """
 
@@ -38,6 +39,7 @@ class ExperimentMonitorInput:
     srm_threshold: float = 0.001
     enrollment_threshold: float = 5.0
     fidelity_threshold: float = 0.2
+    stale_data_threshold_hours: float = 24.0
     check_interim: bool = True
 
 
@@ -113,10 +115,12 @@ class ExperimentMonitorAgent:
             "srm_threshold": input_data.srm_threshold,
             "enrollment_threshold": input_data.enrollment_threshold,
             "fidelity_threshold": input_data.fidelity_threshold,
+            "stale_data_threshold_hours": input_data.stale_data_threshold_hours,
             "check_interim": input_data.check_interim,
             "experiments": [],
             "srm_issues": [],
             "enrollment_issues": [],
+            "stale_data_issues": [],
             "fidelity_issues": [],
             "interim_triggers": [],
             "alerts": [],

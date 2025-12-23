@@ -58,6 +58,10 @@ class AlertGeneratorNode:
             enrollment_alerts = self._generate_enrollment_alerts(state)
             alerts.extend(enrollment_alerts)
 
+            # Generate stale data alerts
+            stale_data_alerts = self._generate_stale_data_alerts(state)
+            alerts.extend(stale_data_alerts)
+
             # Generate interim trigger alerts
             interim_alerts = self._generate_interim_alerts(state)
             alerts.extend(interim_alerts)
@@ -177,6 +181,54 @@ class AlertGeneratorNode:
                 },
                 recommended_action="Review experiment eligibility criteria and targeting. "
                 "Consider expanding the target population or adjusting experiment timeline.",
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            )
+            alerts.append(alert)
+
+        return alerts
+
+    def _generate_stale_data_alerts(
+        self, state: ExperimentMonitorState
+    ) -> List[MonitorAlert]:
+        """Generate alerts for stale data issues.
+
+        Args:
+            state: Current agent state
+
+        Returns:
+            List of stale data alerts
+        """
+        alerts: List[MonitorAlert] = []
+        stale_data_issues = state.get("stale_data_issues", [])
+
+        # Get experiment names
+        experiments = {e["experiment_id"]: e["name"] for e in state.get("experiments", [])}
+
+        for issue in stale_data_issues:
+            exp_id = issue["experiment_id"]
+            exp_name = experiments.get(exp_id, "Unknown Experiment")
+
+            hours_since = issue["hours_since_update"]
+            if hours_since >= 72:
+                time_desc = f"{hours_since / 24:.1f} days"
+            else:
+                time_desc = f"{hours_since:.1f} hours"
+
+            alert = MonitorAlert(
+                alert_id=str(uuid.uuid4()),
+                alert_type="stale_data",
+                severity=issue.get("severity", "warning"),
+                experiment_id=exp_id,
+                experiment_name=exp_name,
+                message=f"Data staleness detected in '{exp_name}': "
+                f"no new data for {time_desc} (threshold: {issue['threshold_hours']}h)",
+                details={
+                    "last_data_timestamp": issue["last_data_timestamp"],
+                    "hours_since_update": issue["hours_since_update"],
+                    "threshold_hours": issue["threshold_hours"],
+                },
+                recommended_action="Check data pipeline and enrollment sources. "
+                "Verify experiment is still receiving traffic.",
                 timestamp=datetime.now(timezone.utc).isoformat(),
             )
             alerts.append(alert)
@@ -331,6 +383,11 @@ class AlertGeneratorNode:
         if enrollment_issues:
             parts.append(f"Enrollment issues: {len(enrollment_issues)}")
 
+        # Add stale data summary
+        stale_data_issues = state.get("stale_data_issues", [])
+        if stale_data_issues:
+            parts.append(f"Stale data issues: {len(stale_data_issues)}")
+
         # Add interim triggers
         interim_triggers = state.get("interim_triggers", [])
         if interim_triggers:
@@ -368,6 +425,20 @@ class AlertGeneratorNode:
             recommendations.append(
                 f"{len(critical_enrollment)} experiments have critically low enrollment - "
                 "review experiment design and targeting"
+            )
+
+        # Stale data issues
+        stale_data_alerts = [a for a in alerts if a["alert_type"] == "stale_data"]
+        critical_stale = [a for a in stale_data_alerts if a["severity"] == "critical"]
+        if critical_stale:
+            recommendations.append(
+                f"URGENT: {len(critical_stale)} experiments have critically stale data - "
+                "check data pipelines immediately"
+            )
+        elif stale_data_alerts:
+            recommendations.append(
+                f"{len(stale_data_alerts)} experiments have stale data - "
+                "verify data pipelines are operational"
             )
 
         # Interim analyses to review
