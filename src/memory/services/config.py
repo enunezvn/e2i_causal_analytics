@@ -174,7 +174,7 @@ def _parse_working_config(raw: Dict[str, Any], env: str) -> WorkingMemoryConfig:
     backend_config = raw.get("memory_backends", {}).get("working", {}).get(env, {})
     return WorkingMemoryConfig(
         backend=backend_config.get("backend", "redis"),
-        connection=backend_config.get("connection", "redis://localhost:6379"),
+        connection=backend_config.get("connection", "redis://localhost:6382"),
         checkpoint_prefix=backend_config.get("checkpoint_prefix", "e2i:checkpoint:"),
         session_prefix=backend_config.get("session_prefix", "e2i:session:"),
         evidence_prefix=backend_config.get("evidence_prefix", "e2i:evidence:"),
