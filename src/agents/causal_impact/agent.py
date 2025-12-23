@@ -32,6 +32,9 @@ class CausalImpactAgent:
     tier = 2
     tier_name = "causal_analytics"
     agent_type = "hybrid"  # Computation + Deep Reasoning
+    agent_name = "causal_impact"  # Contract REQUIRED: BaseAgentState.agent_name
+    tools = ["dowhy", "econml", "networkx"]  # Contract: AgentConfig.tools
+    primary_model = "claude-sonnet-4-20250514"  # Contract: AgentConfig.primary_model
     sla_seconds = 120
 
     def __init__(
@@ -120,6 +123,8 @@ class CausalImpactAgent:
             "current_phase": "graph_building",
             "status": "pending",
             "timestamp": datetime.now(timezone.utc).isoformat(),
+            # Agent identity (Contract REQUIRED: BaseAgentState.agent_name)
+            "agent_name": self.agent_name,
             # Error accumulators (contract: operator.add)
             "errors": [],
             "warnings": [],

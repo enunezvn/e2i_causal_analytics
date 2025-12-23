@@ -138,6 +138,13 @@ class CausalImpactState(TypedDict):
     time_period: NotRequired[Dict[str, str]]  # {"start": "YYYY-MM-DD", "end": "YYYY-MM-DD"}
     brand: NotRequired[str]  # Brand context
 
+    # Contract: Orchestrator pass-through fields (BaseAgentState)
+    session_id: NotRequired[str]  # Contract: Session identifier from working memory
+    parsed_query: NotRequired[Dict[str, Any]]  # Contract: NLP layer output
+    dispatch_id: NotRequired[str]  # Contract: Unique dispatch identifier
+    span_id: NotRequired[str]  # Contract: Opik observability span ID
+    execution_mode: NotRequired[Literal["sequential", "parallel"]]  # Contract: Execution mode
+
     # Graph builder outputs
     causal_graph: NotRequired[CausalGraph]
     dag_version_hash: NotRequired[str]  # SHA256 hash for expert review tracking
@@ -187,6 +194,7 @@ class CausalImpactState(TypedDict):
     historical_analyses: NotRequired[List[Dict[str, Any]]]  # Similar past analyses
 
     # Agent coordination
+    agent_name: NotRequired[str]  # Contract REQUIRED: BaseAgentState.agent_name
     handoff_to: NotRequired[str]  # Next agent in multi-agent flow
     confidence_score: NotRequired[float]  # Overall confidence (0-1)
     requires_followup: NotRequired[bool]
