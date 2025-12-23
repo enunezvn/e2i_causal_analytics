@@ -1,0 +1,46 @@
+# Feast Feature Store Configuration for E2I Causal Analytics
+# Documentation: https://docs.feast.dev/reference/feature-store-yaml
+
+project: e2i_causal_analytics
+provider: local
+registry: data/registry.db
+
+# Offline store: Supabase (PostgreSQL)
+# Used for historical feature retrieval and training data generation
+offline_store:
+  type: postgres
+  host: ${SUPABASE_DB_HOST:-localhost}
+  port: ${SUPABASE_DB_PORT:-5432}
+  database: ${SUPABASE_DB_NAME:-postgres}
+  user: ${SUPABASE_DB_USER:-postgres}
+  password: ${SUPABASE_DB_PASSWORD:-}
+  sslmode: ${SUPABASE_DB_SSLMODE:-prefer}
+  # Use public schema for feature tables
+  db_schema: public
+
+# Online store: Redis
+# Used for low-latency feature serving during inference
+online_store:
+  type: redis
+  connection_string: ${REDIS_URL:-redis://localhost:6379}
+  # Redis key prefix for all feature values
+  key_prefix: e2i_feast_
+
+# Entity key serialization
+entity_key_serialization_version: 3
+
+# Feature transformation settings
+transformation_server:
+  enabled: false  # Enable when using on-demand transformations
+
+# Batch engine settings
+batch_engine:
+  type: local  # Use 'spark' for large-scale processing
+
+# Feature freshness monitoring
+feature_validation:
+  enabled: true
+
+# Logging configuration
+logging:
+  level: INFO

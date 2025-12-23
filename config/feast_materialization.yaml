@@ -1,0 +1,128 @@
+# Feast Feature Materialization Configuration
+# This configuration controls scheduled feature materialization jobs.
+
+# Global materialization settings
+materialization:
+  # Default materialization mode: "full" or "incremental"
+  default_mode: incremental
+
+  # Maximum staleness threshold (hours) for alerting
+  max_staleness_hours: 24.0
+
+  # Timeout for materialization operations (seconds)
+  timeout_seconds: 300
+
+  # Retry configuration
+  max_retries: 3
+  retry_delay_seconds: 30
+
+# Scheduling configuration
+schedule:
+  # Enable scheduled materialization
+  enabled: true
+
+  # Cron expression for scheduled runs (default: every 6 hours)
+  # Format: minute hour day-of-month month day-of-week
+  cron: "0 */6 * * *"
+
+  # Alternative: interval-based scheduling (in hours)
+  interval_hours: 6
+
+  # Time zone for scheduling
+  timezone: "UTC"
+
+# Feature view configurations
+feature_views:
+  hcp_conversion_features:
+    enabled: true
+    priority: high
+    # Override max staleness for this view
+    max_staleness_hours: 12.0
+    # Specific schedule (overrides global)
+    interval_hours: 4
+
+  patient_journey_features:
+    enabled: true
+    priority: high
+    max_staleness_hours: 24.0
+
+  trigger_effectiveness_features:
+    enabled: true
+    priority: medium
+    max_staleness_hours: 48.0
+
+  market_dynamics_features:
+    enabled: true
+    priority: low
+    max_staleness_hours: 168.0  # Weekly
+
+# Alerting configuration
+alerting:
+  # Enable stale feature alerting
+  enabled: true
+
+  # Alert channels (configure as needed)
+  channels:
+    - type: log
+      level: warning
+    # - type: slack
+    #   webhook_url: "${FEAST_SLACK_WEBHOOK_URL}"
+    # - type: pagerduty
+    #   integration_key: "${FEAST_PAGERDUTY_KEY}"
+
+  # Alert thresholds
+  thresholds:
+    # Alert when feature freshness drops below this percentage
+    min_freshness_percent: 80.0
+    # Alert when materialization takes longer than expected
+    max_duration_seconds: 600
+
+# Monitoring configuration
+monitoring:
+  # Enable metrics collection
+  enabled: true
+
+  # Metrics to collect
+  metrics:
+    - name: materialization_duration_seconds
+      type: histogram
+      description: "Time taken for materialization in seconds"
+      buckets: [1, 5, 10, 30, 60, 120, 300, 600]
+
+    - name: features_materialized_total
+      type: counter
+      description: "Total number of features materialized"
+
+    - name: materialization_errors_total
+      type: counter
+      description: "Total number of materialization errors"
+
+    - name: feature_freshness_age_hours
+      type: gauge
+      description: "Age of features in hours since last update"
+
+    - name: stale_features_count
+      type: gauge
+      description: "Number of stale features detected"
+
+# Full materialization settings (for initial load or recovery)
+full_materialization:
+  # Days back for full materialization
+  default_days_back: 7
+
+  # Maximum days to materialize in one job
+  max_days_per_job: 30
+
+  # Batch size for full materialization
+  batch_days: 1
+
+# Recovery settings
+recovery:
+  # Automatically trigger full materialization if incremental fails
+  auto_recover: true
+
+  # Maximum recovery attempts
+  max_recovery_attempts: 2
+
+  # Days back for recovery materialization
+  recovery_days_back: 3
