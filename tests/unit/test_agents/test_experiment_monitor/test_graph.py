@@ -51,6 +51,7 @@ class TestGraphCreation:
         assert "health_checker" in node_ids
         assert "srm_detector" in node_ids
         assert "interim_analyzer" in node_ids
+        assert "fidelity_checker" in node_ids
         assert "alert_generator" in node_ids
 
     def test_graph_has_correct_entry_point(self):
@@ -74,7 +75,8 @@ class TestGraphCreation:
         # Verify sequential flow
         assert edges.get("health_checker") == "srm_detector"
         assert edges.get("srm_detector") == "interim_analyzer"
-        assert edges.get("interim_analyzer") == "alert_generator"
+        assert edges.get("interim_analyzer") == "fidelity_checker"
+        assert edges.get("fidelity_checker") == "alert_generator"
         assert edges.get("alert_generator") == "__end__"
 
 
@@ -206,8 +208,8 @@ class TestGraphExecution:
 class TestNodeCount:
     """Tests for node count in the graph."""
 
-    def test_graph_has_four_nodes(self):
-        """Test that graph has exactly 4 processing nodes."""
+    def test_graph_has_five_nodes(self):
+        """Test that graph has exactly 5 processing nodes."""
         graph = create_experiment_monitor_graph()
         structure = graph.get_graph()
 
@@ -221,15 +223,15 @@ class TestNodeCount:
 
         # Filter out __start__ and __end__
         processing_nodes = [n for n in node_names if n not in ["__start__", "__end__"]]
-        assert len(processing_nodes) == 4
+        assert len(processing_nodes) == 5
 
-    def test_graph_has_five_edges(self):
-        """Test that graph has exactly 5 edges (including start/end)."""
+    def test_graph_has_six_edges(self):
+        """Test that graph has exactly 6 edges (including start/end)."""
         graph = create_experiment_monitor_graph()
         structure = graph.get_graph()
 
-        # __start__ -> health_checker -> srm_detector -> interim_analyzer -> alert_generator -> __end__
-        assert len(structure.edges) == 5
+        # __start__ -> health_checker -> srm_detector -> interim_analyzer -> fidelity_checker -> alert_generator -> __end__
+        assert len(structure.edges) == 6
 
 
 class TestGraphWithRealNodes:
