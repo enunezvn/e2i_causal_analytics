@@ -234,9 +234,10 @@ status: Literal["pending", "checking", "analyzing", "alerting", "completed", "fa
 | `test_health_checker_node.py` | 40 tests | ✅ PASS |
 | `test_srm_detector_node.py` | 30 tests | ✅ PASS |
 | `test_interim_analyzer_node.py` | 30 tests | ✅ PASS |
+| `test_fidelity_checker_node.py` | 35 tests | ✅ PASS |
 | `test_alert_generator_node.py` | 37 tests | ✅ PASS |
 | `test_integration.py` | 28 tests | ✅ PASS |
-| **Total** | **227 tests** | **✅ 98% coverage** |
+| **Total** | **262 tests** | **✅ 98% coverage** |
 
 **Test Location**: `tests/unit/test_agents/test_experiment_monitor/`
 
@@ -278,15 +279,16 @@ The agent is fully functional for all monitoring use cases including health, SRM
 
 ### 12.1 Completed
 
-1. ~~**Create Test Suite**~~: ✅ COMPLETED (227 tests, 98% coverage)
+1. ~~**Create Test Suite**~~: ✅ COMPLETED (262 tests, 98% coverage)
 2. ~~**Add Stale Data Detection**~~: ✅ COMPLETED (2025-12-23)
 3. ~~**Digital Twin Fidelity**~~: ✅ COMPLETED (2025-12-23)
+4. ~~**FidelityCheckerNode Tests**~~: ✅ COMPLETED (35 tests, 2025-12-23)
 
 ### 12.2 Future Enhancements
 
 1. **OpenTelemetry**: Add distributed tracing spans
 2. **Alerting Webhook**: Add external notification support
-3. **Test Coverage Update**: Add tests for new nodes (FidelityCheckerNode, stale data detection)
+3. **Stale Data Detection Tests**: Add comprehensive tests for stale data detection
 
 ---
 
