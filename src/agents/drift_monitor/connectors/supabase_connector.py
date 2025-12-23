@@ -5,7 +5,7 @@ that queries real data from Supabase for drift detection.
 
 The connector queries:
 - Feature values from the feature store tables
-- Predictions from the ml_predictions or deployment logs
+- Predictions from the ml_predictions table (with optional actual_outcome for concept drift)
 - Model registry for available models
 
 Example:
@@ -186,9 +186,9 @@ class SupabaseDataConnector(BaseDataConnector):
         await self._ensure_initialized()
 
         try:
-            # Query predictions table
+            # Query ml_predictions table
             query = (
-                self._client.table("predictions")
+                self._client.table("ml_predictions")
                 .select("confidence_score, prediction_value, created_at, entity_id")
                 .eq("model_version", model_id)
                 .gte("created_at", time_window.start.isoformat())
@@ -258,10 +258,9 @@ class SupabaseDataConnector(BaseDataConnector):
         await self._ensure_initialized()
 
         try:
-            # Query predictions joined with outcomes
-            # Assumes there's an outcomes or feedback table
+            # Query ml_predictions with ground truth outcomes
             query = (
-                self._client.table("predictions")
+                self._client.table("ml_predictions")
                 .select("confidence_score, prediction_value, created_at, entity_id, actual_outcome")
                 .eq("model_version", model_id)
                 .gte("created_at", time_window.start.isoformat())
@@ -397,8 +396,8 @@ class SupabaseDataConnector(BaseDataConnector):
             health["database"] = True
             health["models_table"] = len(response.data) >= 0
 
-            # Check predictions table
-            response = self._client.table("predictions").select("id").limit(1).execute()
+            # Check ml_predictions table
+            response = self._client.table("ml_predictions").select("id").limit(1).execute()
             health["predictions_table"] = len(response.data) >= 0
 
             # Check features table
