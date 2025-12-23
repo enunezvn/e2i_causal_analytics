@@ -48,7 +48,7 @@ AGENT_REGISTRY_CONFIG = {
         "tier": 0,
         "module": "src.agents.ml_foundation.model_selector",
         "class_name": "ModelSelectorAgent",
-        "enabled": False,  # Not yet implemented
+        "enabled": True,
     },
     "model_trainer": {
         "tier": 0,
