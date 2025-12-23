@@ -54,7 +54,7 @@ AGENT_REGISTRY_CONFIG = {
         "tier": 0,
         "module": "src.agents.ml_foundation.model_trainer",
         "class_name": "ModelTrainerAgent",
-        "enabled": False,  # Not yet implemented
+        "enabled": True,
     },
     "model_deployer": {
         "tier": 0,
