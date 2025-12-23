@@ -17,6 +17,8 @@ class TestCausalImpactAgent:
             "query": "what is the impact of hcp engagement on patient conversions?",
             "treatment_var": "hcp_engagement_level",
             "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
             "interpretation_depth": "standard",
         }
 
@@ -28,7 +30,7 @@ class TestCausalImpactAgent:
         assert result["causal_narrative"] != ""
         assert "ate_estimate" in result
         assert result["statistical_significance"] is not None
-        assert result["overall_confidence"] > 0
+        assert result["confidence"] > 0  # Contract field name
         assert result["total_latency_ms"] > 0
 
     @pytest.mark.asyncio
@@ -41,6 +43,7 @@ class TestCausalImpactAgent:
             "treatment_var": "hcp_engagement_level",
             "outcome_var": "patient_conversion_rate",
             "confounders": ["geographic_region", "hcp_specialty"],
+            "data_source": "synthetic",
         }
 
         result = await agent.run(input_data)
@@ -59,6 +62,10 @@ class TestCausalImpactAgent:
 
         input_data = {
             "query": "does marketing spend affect prescription volume?",
+            "treatment_var": "marketing_spend",
+            "outcome_var": "prescription_volume",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
         }
 
         result = await agent.run(input_data)
@@ -74,6 +81,10 @@ class TestCausalImpactAgent:
 
         input_data = {
             "query": "test query",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
             "interpretation_depth": "minimal",
         }
 
@@ -90,6 +101,10 @@ class TestCausalImpactAgent:
 
         input_data = {
             "query": "test query",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
             "interpretation_depth": "deep",
         }
 
@@ -98,7 +113,7 @@ class TestCausalImpactAgent:
         assert result["status"] == "completed"
         # Deep interpretation should be comprehensive
         assert len(result["causal_narrative"]) > 300
-        assert len(result["recommendations"]) >= 3
+        assert len(result["actionable_recommendations"]) >= 3  # Contract field name
 
     @pytest.mark.asyncio
     async def test_no_interpretation(self):
@@ -107,6 +122,10 @@ class TestCausalImpactAgent:
 
         input_data = {
             "query": "test query",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
             "interpretation_depth": "none",
         }
 
@@ -120,9 +139,15 @@ class TestCausalImpactAgent:
         """Test that missing query raises ValueError."""
         agent = CausalImpactAgent()
 
-        input_data = {"treatment_var": "hcp_engagement_level"}
+        # Provide all required fields except query
+        input_data = {
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
+        }
 
-        with pytest.raises(ValueError, match="Missing required field: query"):
+        with pytest.raises(ValueError, match="query"):
             await agent.run(input_data)
 
     @pytest.mark.asyncio
@@ -132,6 +157,10 @@ class TestCausalImpactAgent:
 
         input_data = {
             "query": "test query",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
             "user_context": {"expertise": "executive"},
         }
 
@@ -149,6 +178,10 @@ class TestCausalImpactAgent:
 
         input_data = {
             "query": "test query",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
             "user_context": {"expertise": "analyst"},
         }
 
@@ -163,6 +196,10 @@ class TestCausalImpactAgent:
 
         input_data = {
             "query": "test query",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
             "user_context": {"expertise": "data_scientist"},
         }
 
@@ -179,7 +216,13 @@ class TestCausalImpactOutputContract:
         """Test that output has all required contract fields."""
         agent = CausalImpactAgent()
 
-        input_data = {"query": "test query"}
+        input_data = {
+            "query": "test query",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
+        }
 
         result = await agent.run(input_data)
 
@@ -191,13 +234,20 @@ class TestCausalImpactOutputContract:
             "statistical_significance",
             "key_assumptions",
             "limitations",
-            "recommendations",
+            "actionable_recommendations",  # Contract field name (was recommendations)
             "computation_latency_ms",
             "interpretation_latency_ms",
             "total_latency_ms",
-            "overall_confidence",
+            "confidence",  # Contract field name (was overall_confidence)
             "follow_up_suggestions",
             "citations",
+            # Contract REQUIRED fields
+            "model_used",
+            "key_insights",
+            "assumption_warnings",
+            "requires_further_analysis",
+            "refutation_passed",
+            "executive_summary",
         ]
 
         for field in required_fields:
@@ -208,7 +258,13 @@ class TestCausalImpactOutputContract:
         """Test that output field types are correct."""
         agent = CausalImpactAgent()
 
-        input_data = {"query": "test query"}
+        input_data = {
+            "query": "test query",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
+        }
 
         result = await agent.run(input_data)
 
@@ -220,20 +276,33 @@ class TestCausalImpactOutputContract:
         assert isinstance(result["statistical_significance"], bool)
         assert isinstance(result["key_assumptions"], list)
         assert isinstance(result["limitations"], list)
-        assert isinstance(result["recommendations"], list)
+        assert isinstance(result["actionable_recommendations"], list)  # Contract field
         assert isinstance(result["computation_latency_ms"], (int, float))
         assert isinstance(result["interpretation_latency_ms"], (int, float))
         assert isinstance(result["total_latency_ms"], (int, float))
-        assert isinstance(result["overall_confidence"], (int, float))
+        assert isinstance(result["confidence"], (int, float))  # Contract field
         assert isinstance(result["follow_up_suggestions"], list)
         assert isinstance(result["citations"], list)
+        # Contract REQUIRED field types
+        assert isinstance(result["model_used"], str)
+        assert isinstance(result["key_insights"], list)
+        assert isinstance(result["assumption_warnings"], list)
+        assert isinstance(result["requires_further_analysis"], bool)
+        assert isinstance(result["refutation_passed"], bool)
+        assert isinstance(result["executive_summary"], str)
 
     @pytest.mark.asyncio
     async def test_latency_breakdown(self):
         """Test that all latency components are measured."""
         agent = CausalImpactAgent()
 
-        input_data = {"query": "test query"}
+        input_data = {
+            "query": "test query",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
+        }
 
         result = await agent.run(input_data)
 
@@ -252,7 +321,13 @@ class TestCausalImpactOutputContract:
         """Test confidence interval structure."""
         agent = CausalImpactAgent()
 
-        input_data = {"query": "test query"}
+        input_data = {
+            "query": "test query",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
+        }
 
         result = await agent.run(input_data)
 
@@ -271,6 +346,8 @@ class TestCausalImpactOutputContract:
             "query": "test query",
             "treatment_var": "hcp_engagement_level",
             "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
         }
 
         result = await agent.run(input_data)
@@ -289,7 +366,13 @@ class TestCausalImpactPerformance:
         """Test that total latency meets <120s target."""
         agent = CausalImpactAgent()
 
-        input_data = {"query": "test query"}
+        input_data = {
+            "query": "test query",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
+        }
 
         result = await agent.run(input_data)
 
@@ -301,7 +384,13 @@ class TestCausalImpactPerformance:
         """Test that computation meets <60s target."""
         agent = CausalImpactAgent()
 
-        input_data = {"query": "test query"}
+        input_data = {
+            "query": "test query",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
+        }
 
         result = await agent.run(input_data)
 
@@ -313,7 +402,13 @@ class TestCausalImpactPerformance:
         """Test that interpretation meets <30s target."""
         agent = CausalImpactAgent()
 
-        input_data = {"query": "test query"}
+        input_data = {
+            "query": "test query",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
+        }
 
         result = await agent.run(input_data)
 
@@ -339,7 +434,13 @@ class TestCausalImpactHelperMethods:
         """Test simplified analyze interface for orchestrator."""
         agent = CausalImpactAgent()
 
-        input_data = {"query": "test query"}
+        input_data = {
+            "query": "test query",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
+        }
 
         result = await agent.analyze(input_data)
 
@@ -357,7 +458,13 @@ class TestCausalImpactEdgeCases:
         """Test agent with empty query."""
         agent = CausalImpactAgent()
 
-        input_data = {"query": ""}
+        input_data = {
+            "query": "",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
+        }
 
         result = await agent.run(input_data)
 
@@ -371,7 +478,13 @@ class TestCausalImpactEdgeCases:
 
         long_query = "what is the impact " * 100
 
-        input_data = {"query": long_query}
+        input_data = {
+            "query": long_query,
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
+        }
 
         result = await agent.run(input_data)
 
@@ -384,6 +497,10 @@ class TestCausalImpactEdgeCases:
 
         input_data = {
             "query": "what's the impact? (HCP engagement -> conversions)",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
         }
 
         result = await agent.run(input_data)
@@ -399,7 +516,13 @@ class TestCausalImpactRobustness:
         """Test that refutation test counts are included."""
         agent = CausalImpactAgent()
 
-        input_data = {"query": "test query"}
+        input_data = {
+            "query": "test query",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
+        }
 
         result = await agent.run(input_data)
 
@@ -416,7 +539,13 @@ class TestCausalImpactRobustness:
         """Test that E-value is included."""
         agent = CausalImpactAgent()
 
-        input_data = {"query": "test query"}
+        input_data = {
+            "query": "test query",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
+        }
 
         result = await agent.run(input_data)
 
@@ -430,18 +559,30 @@ class TestCausalImpactRobustness:
         """Test overall confidence calculation."""
         agent = CausalImpactAgent()
 
-        input_data = {"query": "test query"}
+        input_data = {
+            "query": "test query",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
+        }
 
         result = await agent.run(input_data)
 
-        assert 0.0 <= result["overall_confidence"] <= 1.0
+        assert 0.0 <= result["confidence"] <= 1.0  # Contract field name
 
     @pytest.mark.asyncio
     async def test_high_confidence_criteria(self):
         """Test that high confidence requires all positive signals."""
         agent = CausalImpactAgent()
 
-        input_data = {"query": "test query"}
+        input_data = {
+            "query": "test query",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
+        }
 
         result = await agent.run(input_data)
 
@@ -449,7 +590,7 @@ class TestCausalImpactRobustness:
         # - Statistical significance
         # - Robust refutation results
         # - High E-value
-        if result["overall_confidence"] >= 0.8:
+        if result["confidence"] >= 0.8:  # Contract field name
             assert result["statistical_significance"] is True
 
 

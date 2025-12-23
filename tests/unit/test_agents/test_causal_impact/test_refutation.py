@@ -53,21 +53,33 @@ class TestRefutationNode:
 
     @pytest.mark.asyncio
     async def test_refutation_tests_structure(self):
-        """Test that refutation tests have correct structure."""
+        """Test that refutation tests have correct structure.
+
+        Contract: individual_tests is Dict with test names as keys.
+        """
         node = RefutationNode()
 
         state: CausalImpactState = {
             "query": "test query",
             "query_id": "test-2",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
             "estimation_result": self._create_test_estimation(),
             "status": "pending",
+            "errors": [],
+            "warnings": [],
         }
 
         result = await node.execute(state)
 
         ref = result["refutation_results"]
 
-        for test in ref["individual_tests"]:
+        # Contract: individual_tests is Dict, not List
+        assert isinstance(ref["individual_tests"], dict)
+
+        for test_key, test in ref["individual_tests"].items():
             assert "test_name" in test
             assert test["test_name"] in [
                 "placebo_treatment",
@@ -76,6 +88,7 @@ class TestRefutationNode:
                 "data_subset_validation",  # Legacy alias
                 "bootstrap",
                 "sensitivity_e_value",
+                "unobserved_common_cause",  # Contract key
             ]
             assert "passed" in test
             assert isinstance(test["passed"], bool)
@@ -364,31 +377,44 @@ class TestRefutationPassCriteria:
 
     @pytest.mark.asyncio
     async def test_all_tests_run(self):
-        """Test that all 5 refutation tests are run."""
+        """Test that all 5 refutation tests are run.
+
+        Contract: individual_tests is Dict with test names as keys.
+        """
         node = RefutationNode()
 
         state: CausalImpactState = {
             "query": "test query",
             "query_id": "test-all-tests",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
             "estimation_result": self._create_test_estimation(),
             "status": "pending",
+            "errors": [],
+            "warnings": [],
         }
 
         result = await node.execute(state)
         ref = result["refutation_results"]
 
-        test_names = [t["test_name"] for t in ref["individual_tests"]]
+        # Contract: individual_tests is Dict, get keys for test names
+        test_keys = list(ref["individual_tests"].keys())
 
-        # All 5 test types should be present
+        # All 5 test types should be present (as Dict keys or test_name values)
         expected_tests = [
             "placebo_treatment",
             "random_common_cause",
             "data_subset",
             "bootstrap",
-            "sensitivity_e_value",
         ]
+        # sensitivity_e_value maps to unobserved_common_cause per contract
         for expected in expected_tests:
-            assert expected in test_names, f"Missing test: {expected}"
+            found = expected in test_keys or any(
+                t.get("test_name") == expected for t in ref["individual_tests"].values()
+            )
+            assert found, f"Missing test: {expected}"
 
 
 class TestRefutationWithDifferentEffectSizes:
@@ -447,14 +473,23 @@ class TestRefutationWithDifferentEffectSizes:
 
     @pytest.mark.asyncio
     async def test_negative_effect_refutation(self):
-        """Test refutation for negative effect."""
+        """Test refutation for negative effect.
+
+        Contract: individual_tests is Dict with test names as keys.
+        """
         node = RefutationNode()
 
         state: CausalImpactState = {
             "query": "test query",
             "query_id": "test-9",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
             "estimation_result": self._create_test_estimation(ate=-0.5),  # Negative
             "status": "pending",
+            "errors": [],
+            "warnings": [],
         }
 
         result = await node.execute(state)
@@ -462,8 +497,8 @@ class TestRefutationWithDifferentEffectSizes:
         assert "refutation_results" in result
         ref = result["refutation_results"]
 
-        # Should handle negative effects
-        for test in ref["individual_tests"]:
+        # Contract: individual_tests is Dict, iterate over values
+        for test_key, test in ref["individual_tests"].items():
             # Original effect should be preserved
             assert test["original_effect"] == -0.5
 

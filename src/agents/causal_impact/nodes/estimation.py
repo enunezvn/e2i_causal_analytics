@@ -73,16 +73,20 @@ class EstimationNode:
                 "estimation_result": result,
                 "estimation_latency_ms": latency_ms,
                 "current_phase": "refuting",
+                "status": "computing",  # Contract status progression
             }
 
         except Exception as e:
             latency_ms = (time.time() - start_time) * 1000
+            # Contract: accumulate errors using operator.add
+            errors = [{"phase": "estimation", "message": str(e)}]
             return {
                 **state,
                 "estimation_error": str(e),
                 "estimation_latency_ms": latency_ms,
                 "status": "failed",
                 "error_message": f"Estimation failed: {e}",
+                "errors": errors,  # Contract error accumulator
             }
 
     def _get_data(self, state: CausalImpactState) -> pd.DataFrame:
@@ -178,6 +182,7 @@ class EstimationNode:
             "ate": float(ate),
             "ate_ci_lower": float(ate - 1.96 * ate_se),
             "ate_ci_upper": float(ate + 1.96 * ate_se),
+            "standard_error": float(ate_se),
             "cate_segments": cate_segments,
             "effect_size": self._classify_effect_size(ate),
             "statistical_significance": bool(abs(ate) > 1.96 * ate_se),
@@ -211,6 +216,7 @@ class EstimationNode:
             "ate": float(ate),
             "ate_ci_lower": float(ate - 1.96 * ate_se),
             "ate_ci_upper": float(ate + 1.96 * ate_se),
+            "standard_error": float(ate_se),
             "effect_size": self._classify_effect_size(ate),
             "statistical_significance": bool(abs(ate) > 1.96 * ate_se),
             "p_value": 0.002 if abs(ate) > 1.96 * ate_se else 0.20,
@@ -243,6 +249,7 @@ class EstimationNode:
             "ate": float(ate),
             "ate_ci_lower": float(ate - 1.96 * ate_se),
             "ate_ci_upper": float(ate + 1.96 * ate_se),
+            "standard_error": float(ate_se),
             "effect_size": self._classify_effect_size(ate),
             "statistical_significance": bool(abs(ate) > 1.96 * ate_se),
             "p_value": 0.005 if abs(ate) > 1.96 * ate_se else 0.25,
@@ -275,6 +282,7 @@ class EstimationNode:
             "ate": float(ate),
             "ate_ci_lower": float(ate - 1.96 * ate_se),
             "ate_ci_upper": float(ate + 1.96 * ate_se),
+            "standard_error": float(ate_se),
             "effect_size": self._classify_effect_size(ate),
             "statistical_significance": bool(abs(ate) > 1.96 * ate_se),
             "p_value": 0.01 if abs(ate) > 1.96 * ate_se else 0.30,

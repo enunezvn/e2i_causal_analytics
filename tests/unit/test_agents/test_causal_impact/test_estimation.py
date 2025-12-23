@@ -33,9 +33,15 @@ class TestEstimationNode:
         state: CausalImpactState = {
             "query": "test query",
             "query_id": "test-1",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
             "causal_graph": self._create_test_graph(),
             "parameters": {"method": "CausalForestDML"},
             "status": "pending",
+            "errors": [],
+            "warnings": [],
         }
 
         result = await node.execute(state)
@@ -59,9 +65,15 @@ class TestEstimationNode:
         state: CausalImpactState = {
             "query": "test query",
             "query_id": "test-2",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
             "causal_graph": self._create_test_graph(),
             "parameters": {"method": "LinearDML"},
             "status": "pending",
+            "errors": [],
+            "warnings": [],
         }
 
         result = await node.execute(state)
@@ -78,9 +90,15 @@ class TestEstimationNode:
         state: CausalImpactState = {
             "query": "test query",
             "query_id": "test-3",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
             "causal_graph": self._create_test_graph(),
             "parameters": {"method": "linear_regression"},
             "status": "pending",
+            "errors": [],
+            "warnings": [],
         }
 
         result = await node.execute(state)
@@ -96,9 +114,15 @@ class TestEstimationNode:
         state: CausalImpactState = {
             "query": "test query",
             "query_id": "test-4",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
             "causal_graph": self._create_test_graph(),
             "parameters": {"method": "propensity_score_weighting"},
             "status": "pending",
+            "errors": [],
+            "warnings": [],
         }
 
         result = await node.execute(state)
@@ -114,8 +138,14 @@ class TestEstimationNode:
         state: CausalImpactState = {
             "query": "test query",
             "query_id": "test-5",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
             "causal_graph": self._create_test_graph(),
             "status": "pending",
+            "errors": [],
+            "warnings": [],
         }
 
         result = await node.execute(state)
@@ -154,9 +184,15 @@ class TestEstimationNode:
         state: CausalImpactState = {
             "query": "test query",
             "query_id": "test-6",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
             "causal_graph": self._create_test_graph(),
             "parameters": {"method": "CausalForestDML"},
             "status": "pending",
+            "errors": [],
+            "warnings": [],
         }
 
         result = await node.execute(state)
@@ -180,8 +216,14 @@ class TestEstimationNode:
         state: CausalImpactState = {
             "query": "test query",
             "query_id": "test-7",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region", "hcp_specialty"],
+            "data_source": "synthetic",
             "causal_graph": graph,
             "status": "pending",
+            "errors": [],
+            "warnings": [],
         }
 
         result = await node.execute(state)
@@ -198,8 +240,14 @@ class TestEstimationNode:
         state: CausalImpactState = {
             "query": "test query",
             "query_id": "test-8",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
             "causal_graph": self._create_test_graph(),
             "status": "pending",
+            "errors": [],
+            "warnings": [],
         }
 
         result = await node.execute(state)
@@ -216,8 +264,14 @@ class TestEstimationNode:
         state: CausalImpactState = {
             "query": "test query",
             "query_id": "test-9",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
             "causal_graph": self._create_test_graph(),
             "status": "pending",
+            "errors": [],
+            "warnings": [],
         }
 
         result = await node.execute(state)
@@ -234,7 +288,13 @@ class TestEstimationNode:
         state: CausalImpactState = {
             "query": "test query",
             "query_id": "test-10",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
             "status": "pending",
+            "errors": [],
+            "warnings": [],
         }
 
         result = await node.execute(state)
@@ -250,9 +310,15 @@ class TestEstimationNode:
         state: CausalImpactState = {
             "query": "test query",
             "query_id": "test-11",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
             "causal_graph": self._create_test_graph(),
             "parameters": {"method": "unknown_method"},
             "status": "pending",
+            "errors": [],
+            "warnings": [],
         }
 
         result = await node.execute(state)
@@ -272,6 +338,10 @@ class TestCATESegments:
         state: CausalImpactState = {
             "query": "test query",
             "query_id": "test-12",
+            "treatment_var": "T",
+            "outcome_var": "O",
+            "confounders": [],
+            "data_source": "synthetic",
             "causal_graph": {
                 "nodes": ["T", "O"],
                 "edges": [("T", "O")],
@@ -283,6 +353,8 @@ class TestCATESegments:
             },
             "parameters": {"method": "CausalForestDML"},
             "status": "pending",
+            "errors": [],
+            "warnings": [],
         }
 
         result = await node.execute(state)
@@ -308,6 +380,10 @@ class TestStatisticalSignificance:
         state: CausalImpactState = {
             "query": "test query",
             "query_id": "test-13",
+            "treatment_var": "T",
+            "outcome_var": "O",
+            "confounders": [],
+            "data_source": "synthetic",
             "causal_graph": {
                 "nodes": ["T", "O"],
                 "edges": [("T", "O")],
@@ -318,6 +394,8 @@ class TestStatisticalSignificance:
                 "confidence": 0.8,
             },
             "status": "pending",
+            "errors": [],
+            "warnings": [],
         }
 
         result = await node.execute(state)
@@ -340,6 +418,10 @@ class TestStatisticalSignificance:
         state: CausalImpactState = {
             "query": "test query",
             "query_id": "test-14",
+            "treatment_var": "T",
+            "outcome_var": "O",
+            "confounders": [],
+            "data_source": "synthetic",
             "causal_graph": {
                 "nodes": ["T", "O"],
                 "edges": [("T", "O")],
@@ -350,6 +432,8 @@ class TestStatisticalSignificance:
                 "confidence": 0.8,
             },
             "status": "pending",
+            "errors": [],
+            "warnings": [],
         }
 
         result = await node.execute(state)
