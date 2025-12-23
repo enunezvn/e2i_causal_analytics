@@ -13,16 +13,36 @@ Key Features:
 - Alert generation with severity levels
 - Composite drift score calculation
 
+Integration:
+- Memory: None (stateless statistical computation)
+- Observability: Opik tracing with graceful degradation
+- Data: SupabaseDataConnector (auto-detects based on env)
+
 Algorithm: .claude/specialists/Agent_Specialists_Tiers 1-5/drift-monitor.md
 Contract: .claude/contracts/tier3-contracts.md lines 349-562
 """
 
-from typing import Optional
+import logging
+import time
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
 from src.agents.drift_monitor.graph import drift_monitor_graph
 from src.agents.drift_monitor.state import DriftMonitorState
+
+logger = logging.getLogger(__name__)
+
+
+def _get_opik_connector():
+    """Get OpikConnector (lazy import to avoid circular deps)."""
+    try:
+        from src.mlops.opik_connector import get_opik_connector
+        return get_opik_connector()
+    except Exception as e:
+        logger.warning(f"Could not get Opik connector: {e}")
+        return None
 
 # ===== INPUT/OUTPUT MODELS =====
 
@@ -122,6 +142,14 @@ class DriftMonitorAgent:
         - No LLM usage (pure statistical computation)
     """
 
+    # Agent metadata
+    tier = 3
+    tier_name = "monitoring"
+    agent_name = "drift_monitor"
+    agent_type = "standard"
+    sla_seconds = 10  # <10s for 50 features
+    tools = ["scipy", "numpy"]  # Statistical libraries for drift detection
+
     def __init__(self):
         """Initialize drift monitor agent."""
         self.graph = drift_monitor_graph
@@ -139,11 +167,55 @@ class DriftMonitorAgent:
             ValueError: If input validation fails
             RuntimeError: If drift detection fails
         """
+        start_time = datetime.now(timezone.utc)
+        feature_count = len(input_data.features_to_monitor)
+
+        logger.info(
+            f"Starting drift detection: {feature_count} features, "
+            f"time_window={input_data.time_window}, "
+            f"model_id={input_data.model_id}"
+        )
+
         # Create initial state from input
         initial_state = self._create_initial_state(input_data)
 
-        # Execute graph (async)
-        final_state = await self.graph.ainvoke(initial_state)
+        # Execute LangGraph workflow with optional Opik tracing
+        opik = _get_opik_connector()
+        try:
+            if opik and opik.is_enabled:
+                async with opik.trace_agent(
+                    agent_name=self.agent_name,
+                    operation="detect_drift",
+                    metadata={
+                        "tier": self.tier,
+                        "feature_count": feature_count,
+                        "time_window": input_data.time_window,
+                        "model_id": input_data.model_id,
+                        "check_data_drift": input_data.check_data_drift,
+                        "check_model_drift": input_data.check_model_drift,
+                        "check_concept_drift": input_data.check_concept_drift,
+                    },
+                    tags=[self.agent_name, "tier_3", "drift_detection"],
+                    input_data={
+                        "feature_count": feature_count,
+                        "time_window": input_data.time_window,
+                        "model_id": input_data.model_id,
+                    },
+                ) as span:
+                    final_state = await self.graph.ainvoke(initial_state)
+                    # Set output on span
+                    if span and final_state.get("status") != "failed":
+                        span.set_output({
+                            "overall_drift_score": final_state.get("overall_drift_score", 0.0),
+                            "features_with_drift": final_state.get("features_with_drift", []),
+                            "alert_count": len(final_state.get("alerts", [])),
+                            "detection_latency_ms": final_state.get("detection_latency_ms", 0),
+                        })
+            else:
+                final_state = await self.graph.ainvoke(initial_state)
+        except Exception as e:
+            logger.exception(f"Drift detection failed: {e}")
+            raise RuntimeError(f"Drift detection workflow failed: {str(e)}") from e
 
         # Convert to output model
         output = self._create_output(final_state)
@@ -152,6 +224,20 @@ class DriftMonitorAgent:
         if final_state["status"] == "failed":
             error_messages = [e["error"] for e in final_state.get("errors", [])]
             raise RuntimeError(f"Drift detection failed: {'; '.join(error_messages)}")
+
+        # Log execution time and SLA check
+        duration = (datetime.now(timezone.utc) - start_time).total_seconds()
+        logger.info(
+            f"Drift detection complete: {feature_count} features, "
+            f"drift_score={output.overall_drift_score:.2f}, "
+            f"alerts={len(output.alerts)} in {duration:.2f}s"
+        )
+
+        if duration > self.sla_seconds:
+            logger.warning(
+                f"SLA violation: {duration:.2f}s > {self.sla_seconds}s "
+                f"for {feature_count} features"
+            )
 
         return output
 
