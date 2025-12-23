@@ -3,10 +3,10 @@
 **Agent**: CausalImpact
 **Tier**: 2 (Causal Analytics)
 **Type**: Hybrid (Computation + Deep Reasoning)
-**Version**: 4.7
+**Version**: 4.8
 **Validation Date**: 2025-12-23
-**Scope**: Full contract compliance implementation + Orchestrator integration + Opik tracing
-**Status**: PRODUCTION-READY - 95.5% COMPLIANT
+**Scope**: Full contract compliance + Orchestrator integration + Opik tracing + MLflow tracking
+**Status**: PRODUCTION-READY - 97.0% COMPLIANT
 
 ---
 
@@ -32,10 +32,10 @@
 | RefutationResults | 4 | 0 | 0 | 0 | 4 |
 | Orchestrator Contract | 8 | 0 | 0 | 0 | 8 |
 | Workflow Gates | 4 | 0 | 0 | 0 | 4 |
-| MLOps Integration | 3 | 0 | 1 | 0 | 4 |
-| **TOTAL** | **64** | **0** | **3** | **0** | **67** |
+| MLOps Integration | 4 | 0 | 0 | 0 | 4 |
+| **TOTAL** | **65** | **0** | **2** | **0** | **67** |
 
-**Compliance Rate**: 95.5% Compliant, 0% Adapted, 4.5% Pending, 0% Non-Compliant
+**Compliance Rate**: 97.0% Compliant, 0% Adapted, 3.0% Pending, 0% Non-Compliant
 
 ### Legend
 - **Compliant**: Exact match to contract specification
@@ -264,9 +264,9 @@ workflow.add_conditional_edges("refutation", should_continue_after_refutation)
 | `dag_version_hash` | SHA256 for expert review | Present in state | COMPLIANT | In CausalGraph |
 | `dag_dot` | DOT format visualization | Present in CausalGraph | COMPLIANT | Graph visualization |
 | Opik span creation | Per-node tracing | `traced_node` decorator | COMPLIANT | All 5 workflow nodes traced (v4.7) |
-| MLflow experiment | Model versioning | Not implemented | PENDING | Experiment tracking |
+| MLflow experiment | Model versioning | `run_workflow_with_mlflow` | COMPLIANT | Experiment tracking (v4.8) |
 
-**Code Evidence** (`graph.py`):
+**Opik Code Evidence** (`graph.py`):
 ```python
 def traced_node(node_name: str) -> Callable[[F], F]:
     """Decorator to add Opik tracing to workflow nodes."""
@@ -293,6 +293,28 @@ traced_estimate_causal_effect = traced_node("estimation")(estimate_causal_effect
 traced_refute_causal_estimate = traced_node("refutation")(refute_causal_estimate)
 traced_analyze_sensitivity = traced_node("sensitivity")(analyze_sensitivity)
 traced_interpret_results = traced_node("interpretation")(interpret_results)
+```
+
+**MLflow Code Evidence** (`graph.py`):
+```python
+MLFLOW_EXPERIMENT_NAME = "e2i_causal_impact"
+MLFLOW_EXPERIMENT_TAGS = {"agent": "causal_impact", "tier": "2", "domain": "causal_analytics"}
+
+async def run_workflow_with_mlflow(workflow, initial_state, run_name=None) -> Dict[str, Any]:
+    """Execute workflow with MLflow tracking."""
+    mlflow = get_mlflow_connector()
+    experiment_id = await mlflow.get_or_create_experiment(name=MLFLOW_EXPERIMENT_NAME, tags=MLFLOW_EXPERIMENT_TAGS)
+
+    async with mlflow.start_run(experiment_id=experiment_id, run_name=run_name, tags=run_tags) as run:
+        await run.log_params(params)  # treatment_var, outcome_var, confounders
+        final_state = await workflow.ainvoke(initial_state)
+        metrics = _extract_mlflow_metrics(final_state, total_latency_ms)  # ATE, p-value, e_value
+        await run.log_metrics(metrics)
+        await run.set_tags(result_tags)  # status, estimation_method, effect_size
+        # Log DAG artifact if available
+        if dag_dot:
+            await run.log_artifact(temp_path, "causal_dag.dot")
+    return final_state
 ```
 
 ---
@@ -402,8 +424,15 @@ traced_interpret_results = traced_node("interpretation")(interpret_results)
 - [x] Pass span_id from orchestrator for parent-child span linking
 - [x] Capture node-specific output metrics (ATE, p-value, gate_decision, e_value, etc.)
 
+### Completed (v4.8)
+- [x] Add MLflow experiment tracking via `run_workflow_with_mlflow`
+- [x] Create `e2i_causal_impact` experiment with standard tags
+- [x] Log parameters: treatment_var, outcome_var, confounders, data_source
+- [x] Log metrics: ATE, p-value, standard_error, e_value, latencies
+- [x] Log result tags: status, estimation_method, effect_size, refutation_gate
+- [x] Log DAG DOT artifact for visualization
+
 ### Pending (Future Work)
-- [ ] Add MLflow experiment tracking
 - [ ] Implement memory backend integration
 - [ ] Implement fallback_model error handling chain
 
@@ -413,6 +442,7 @@ traced_interpret_results = traced_node("interpretation")(interpret_results)
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 4.8 | 2025-12-23 | MLflow experiment tracking - `run_workflow_with_mlflow` wrapper; parameters, metrics, tags, artifact logging |
 | 4.7 | 2025-12-23 | Opik per-node tracing - `traced_node` decorator for all 5 workflow nodes; span_id linking; node-specific metrics |
 | 4.6 | 2025-12-23 | Orchestrator integration - session_id, parsed_query, dispatch_id, span_id, priority type, execution_mode; agent_name, tools, primary_model |
 | 4.5 | 2025-12-23 | Full contract compliance implementation - zero adaptations |
