@@ -25,6 +25,49 @@ logger = logging.getLogger(__name__)
 
 # Agent metadata for lazy instantiation
 AGENT_REGISTRY_CONFIG = {
+    # Tier 0: ML Foundation
+    "scope_definer": {
+        "tier": 0,
+        "module": "src.agents.ml_foundation.scope_definer",
+        "class_name": "ScopeDefinerAgent",
+        "enabled": False,  # Not yet implemented
+    },
+    "data_preparer": {
+        "tier": 0,
+        "module": "src.agents.ml_foundation.data_preparer",
+        "class_name": "DataPreparerAgent",
+        "enabled": True,
+    },
+    "feature_analyzer": {
+        "tier": 0,
+        "module": "src.agents.ml_foundation.feature_analyzer",
+        "class_name": "FeatureAnalyzerAgent",
+        "enabled": False,  # Not yet implemented
+    },
+    "model_selector": {
+        "tier": 0,
+        "module": "src.agents.ml_foundation.model_selector",
+        "class_name": "ModelSelectorAgent",
+        "enabled": False,  # Not yet implemented
+    },
+    "model_trainer": {
+        "tier": 0,
+        "module": "src.agents.ml_foundation.model_trainer",
+        "class_name": "ModelTrainerAgent",
+        "enabled": False,  # Not yet implemented
+    },
+    "model_deployer": {
+        "tier": 0,
+        "module": "src.agents.ml_foundation.model_deployer",
+        "class_name": "ModelDeployerAgent",
+        "enabled": False,  # Not yet implemented
+    },
+    "observability_connector": {
+        "tier": 0,
+        "module": "src.agents.ml_foundation.observability_connector",
+        "class_name": "ObservabilityConnectorAgent",
+        "enabled": False,  # Not yet implemented
+    },
     # Tier 1: Coordination
     "orchestrator": {
         "tier": 1,
@@ -117,7 +160,7 @@ def create_agent_registry(
     suitable for passing to OrchestratorAgent.
 
     Args:
-        include_tiers: Only include agents from these tiers (1-5).
+        include_tiers: Only include agents from these tiers (0-5).
                        If None, includes all tiers.
         include_agents: Explicit list of agent names to include.
                         If provided, overrides include_tiers.
@@ -223,7 +266,7 @@ def list_available_agents(tier: Optional[int] = None) -> List[str]:
     """List all available agent names.
 
     Args:
-        tier: Filter by tier (1-5)
+        tier: Filter by tier (0-5)
 
     Returns:
         List of agent names
@@ -234,6 +277,15 @@ def list_available_agents(tier: Optional[int] = None) -> List[str]:
             if tier is None or config["tier"] == tier:
                 agents.append(name)
     return agents
+
+
+def get_tier0_agents() -> Dict[str, Any]:
+    """Convenience function for Tier 0 (ML Foundation) agents.
+
+    Returns:
+        Dict with enabled ML foundation agents (data_preparer, etc.)
+    """
+    return create_agent_registry(include_tiers=[0])
 
 
 def get_tier2_agents() -> Dict[str, Any]:

@@ -7,9 +7,11 @@ This node detects three types of data leakage:
 """
 
 import logging
-from typing import Any, Dict, List
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 import numpy as np
+import pandas as pd
 
 from ..state import DataPreparerState
 
@@ -104,7 +106,13 @@ async def detect_leakage(state: DataPreparerState) -> Dict[str, Any]:
 def check_temporal_leakage(df: Any, scope_spec: Dict[str, Any]) -> List[str]:
     """Check for temporal leakage.
 
-    Temporal leakage occurs when event timestamps are after target timestamps.
+    Temporal leakage occurs when event timestamps are after target timestamps,
+    or when features contain information from the future relative to prediction time.
+
+    Detection strategies:
+    1. Explicit: event_date_column vs target_date_column comparison
+    2. Split-based: feature dates vs split_date (prediction boundary)
+    3. Generic: auto-detect date columns and check for future data
 
     Args:
         df: DataFrame to check
@@ -115,14 +123,171 @@ def check_temporal_leakage(df: Any, scope_spec: Dict[str, Any]) -> List[str]:
     """
     issues = []
 
-    # TODO: Implement temporal leakage detection
-    # This requires:
-    # 1. Identify event_date and target_date columns from scope_spec
-    # 2. Check if any event_date > target_date
-    # 3. Report percentage of rows with temporal leakage
+    if df is None or len(df) == 0:
+        return issues
 
-    # Placeholder: No temporal leakage detected
+    try:
+        # Strategy 1: Explicit event_date vs target_date comparison
+        event_date_col = scope_spec.get("event_date_column")
+        target_date_col = scope_spec.get("target_date_column")
+
+        if event_date_col and target_date_col:
+            if event_date_col in df.columns and target_date_col in df.columns:
+                leakage_count, leakage_pct = _check_date_ordering(
+                    df, event_date_col, target_date_col
+                )
+                if leakage_count > 0:
+                    issues.append(
+                        f"Temporal leakage: {leakage_count} rows ({leakage_pct:.2f}%) "
+                        f"have {event_date_col} > {target_date_col}"
+                    )
+
+        # Strategy 2: Check feature date columns against split_date
+        split_date_str = scope_spec.get("split_date")
+        feature_date_columns = scope_spec.get("feature_date_columns", [])
+
+        if split_date_str and feature_date_columns:
+            split_date = _parse_date(split_date_str)
+            if split_date:
+                for col in feature_date_columns:
+                    if col in df.columns:
+                        future_count, future_pct = _check_future_dates(
+                            df, col, split_date
+                        )
+                        if future_count > 0:
+                            issues.append(
+                                f"Temporal leakage: {future_count} rows ({future_pct:.2f}%) "
+                                f"in '{col}' have dates after split_date ({split_date_str})"
+                            )
+
+        # Strategy 3: Generic auto-detection of date columns
+        date_column = scope_spec.get("date_column")
+        if split_date_str and date_column:
+            split_date = _parse_date(split_date_str)
+            if split_date:
+                # Find all date-like columns (excluding the main date column)
+                date_cols = _detect_date_columns(df, exclude=[date_column])
+                for col in date_cols:
+                    future_count, future_pct = _check_future_dates(df, col, split_date)
+                    if future_count > 0:
+                        issues.append(
+                            f"Potential temporal leakage: {future_count} rows ({future_pct:.2f}%) "
+                            f"in auto-detected date column '{col}' have dates after split_date"
+                        )
+
+    except Exception as e:
+        logger.warning(f"Temporal leakage check failed: {e}")
+        issues.append(f"Temporal leakage check incomplete: {str(e)}")
+
     return issues
+
+
+def _check_date_ordering(df: Any, event_col: str, target_col: str) -> tuple:
+    """Check if event dates occur after target dates.
+
+    Args:
+        df: DataFrame
+        event_col: Column with event dates
+        target_col: Column with target dates
+
+    Returns:
+        Tuple of (leakage_count, leakage_percentage)
+    """
+    try:
+        event_dates = pd.to_datetime(df[event_col], errors="coerce")
+        target_dates = pd.to_datetime(df[target_col], errors="coerce")
+
+        # Count rows where event > target (future leakage)
+        valid_mask = event_dates.notna() & target_dates.notna()
+        leakage_mask = valid_mask & (event_dates > target_dates)
+
+        leakage_count = leakage_mask.sum()
+        leakage_pct = (leakage_count / len(df)) * 100 if len(df) > 0 else 0
+
+        return leakage_count, leakage_pct
+    except Exception:
+        return 0, 0.0
+
+
+def _check_future_dates(df: Any, col: str, reference_date: datetime) -> tuple:
+    """Check for dates after a reference date.
+
+    Args:
+        df: DataFrame
+        col: Date column to check
+        reference_date: Reference date (typically split_date)
+
+    Returns:
+        Tuple of (future_count, future_percentage)
+    """
+    try:
+        dates = pd.to_datetime(df[col], errors="coerce")
+        valid_mask = dates.notna()
+
+        # Make reference_date timezone-naive for comparison
+        ref_date = pd.Timestamp(reference_date).tz_localize(None)
+        dates_naive = dates.dt.tz_localize(None) if dates.dt.tz is not None else dates
+
+        future_mask = valid_mask & (dates_naive > ref_date)
+        future_count = future_mask.sum()
+        future_pct = (future_count / len(df)) * 100 if len(df) > 0 else 0
+
+        return future_count, future_pct
+    except Exception:
+        return 0, 0.0
+
+
+def _parse_date(date_str: str) -> Optional[datetime]:
+    """Parse date string to datetime.
+
+    Args:
+        date_str: Date string in various formats
+
+    Returns:
+        datetime object or None if parsing fails
+    """
+    try:
+        return pd.to_datetime(date_str).to_pydatetime()
+    except Exception:
+        return None
+
+
+def _detect_date_columns(df: Any, exclude: List[str] = None) -> List[str]:
+    """Auto-detect date columns in DataFrame.
+
+    Args:
+        df: DataFrame
+        exclude: Columns to exclude from detection
+
+    Returns:
+        List of detected date column names
+    """
+    exclude = exclude or []
+    date_cols = []
+
+    for col in df.columns:
+        if col in exclude:
+            continue
+
+        # Check if column is already datetime
+        if pd.api.types.is_datetime64_any_dtype(df[col]):
+            date_cols.append(col)
+            continue
+
+        # Check column name patterns
+        date_patterns = ["_date", "_time", "_at", "_timestamp", "date_", "time_"]
+        if any(pattern in col.lower() for pattern in date_patterns):
+            # Try to parse as date
+            try:
+                sample = df[col].dropna().head(100)
+                if len(sample) > 0:
+                    parsed = pd.to_datetime(sample, errors="coerce")
+                    if parsed.notna().sum() > len(sample) * 0.5:
+                        date_cols.append(col)
+            except Exception:
+                pass
+
+    return date_cols
 
 
 def check_target_leakage(df: Any, target_variable: str, features: List[str]) -> List[str]:
