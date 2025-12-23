@@ -3,15 +3,61 @@
 Estimates causal effects using DoWhy/EconML with natural language interpretation.
 """
 
+import logging
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from src.agents.causal_impact.graph import create_causal_impact_graph
 from src.agents.causal_impact.state import (
     CausalImpactOutput,
     CausalImpactState,
 )
+
+logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# FALLBACK CHAIN (Contract: AgentConfig.fallback_models)
+# ============================================================================
+
+
+class FallbackChain:
+    """Manages fallback model progression for error handling.
+
+    Contract: AgentConfig.fallback_models pattern from base-contract.md.
+    Provides graceful degradation through alternative models.
+    """
+
+    def __init__(self, options: List[str]):
+        """Initialize with list of fallback model options.
+
+        Args:
+            options: List of model names in priority order
+        """
+        self.options = options
+        self.current_index = 0
+
+    def get_next(self) -> Optional[str]:
+        """Get next fallback option.
+
+        Returns:
+            Next model name or None if exhausted
+        """
+        if self.current_index < len(self.options):
+            option = self.options[self.current_index]
+            self.current_index += 1
+            return option
+        return None
+
+    def reset(self) -> None:
+        """Reset to first option."""
+        self.current_index = 0
+
+    @property
+    def exhausted(self) -> bool:
+        """Check if all fallbacks have been tried."""
+        return self.current_index >= len(self.options)
 
 
 class CausalImpactAgent:
@@ -35,6 +81,11 @@ class CausalImpactAgent:
     agent_name = "causal_impact"  # Contract REQUIRED: BaseAgentState.agent_name
     tools = ["dowhy", "econml", "networkx"]  # Contract: AgentConfig.tools
     primary_model = "claude-sonnet-4-20250514"  # Contract: AgentConfig.primary_model
+    fallback_models = ["claude-haiku-4-20250414"]  # Contract: AgentConfig.fallback_models
+    memory_types: List[Literal["semantic", "episodic"]] = [
+        "semantic",
+        "episodic",
+    ]  # Contract: AgentConfig.memory_types
     sla_seconds = 120
 
     def __init__(
@@ -50,6 +101,13 @@ class CausalImpactAgent:
         """
         self.enable_checkpointing = enable_checkpointing
         self.config = config or {}
+
+        # Initialize fallback chain (Contract: AgentConfig.fallback_models)
+        self._fallback_chain = FallbackChain(self.fallback_models)
+
+        # Memory instances (lazy initialization)
+        self._semantic_memory = None
+        self._episodic_memory_initialized = False
 
         # Create workflow graph
         self.graph = create_causal_impact_graph(enable_checkpointing)
@@ -87,10 +145,38 @@ class CausalImpactAgent:
             return output
 
         except Exception as e:
-            # Error handling
+            # Error handling with FallbackChain (Contract: AgentConfig.fallback_models)
             latency_ms = (time.time() - start_time) * 1000
-            error_output = self._build_error_output(str(e), latency_ms, input_data)
-            return error_output
+            fallback_model = self._fallback_chain.get_next()
+
+            if fallback_model:
+                logger.warning(
+                    f"Primary workflow failed, attempting fallback with {fallback_model}: {e}"
+                )
+                try:
+                    # Update state to indicate fallback
+                    initial_state["fallback_used"] = True
+                    initial_state["retry_count"] = initial_state.get("retry_count", 0) + 1
+
+                    # Retry with fallback model
+                    final_state = await self.graph.ainvoke(initial_state)
+                    output = self._build_output(final_state, start_time)
+                    output["fallback_model_used"] = fallback_model
+                    return output
+
+                except Exception as fallback_error:
+                    logger.error(f"Fallback with {fallback_model} also failed: {fallback_error}")
+                    error_output = self._build_error_output(
+                        f"{str(e)} (Fallback {fallback_model} also failed: {str(fallback_error)})",
+                        latency_ms,
+                        input_data,
+                    )
+                    error_output["fallback_attempted"] = True
+                    error_output["fallback_model"] = fallback_model
+                    return error_output
+            else:
+                error_output = self._build_error_output(str(e), latency_ms, input_data)
+                return error_output
 
     def _initialize_state(self, input_data: Dict[str, Any]) -> CausalImpactState:
         """Initialize workflow state from input.
@@ -431,3 +517,185 @@ class CausalImpactAgent:
             "confidence": output.get("confidence", 0.0),  # Contract field
             "key_findings": output.get("key_insights", []),  # Contract field
         }
+
+    # ========================================================================
+    # MEMORY INTEGRATION (Contract: AgentConfig.memory_types)
+    # ========================================================================
+
+    def _get_semantic_memory(self):
+        """Lazy initialize semantic memory.
+
+        Contract: memory_types includes "semantic" for graph-based entity relationships.
+
+        Returns:
+            FalkorDBSemanticMemory instance
+        """
+        if self._semantic_memory is None:
+            from src.memory.semantic_memory import get_semantic_memory
+
+            self._semantic_memory = get_semantic_memory()
+        return self._semantic_memory
+
+    async def query_semantic_memory(
+        self, query: str, relationship_type: Optional[str] = None, max_depth: int = 2
+    ) -> List[Dict[str, Any]]:
+        """Query semantic memory for causal relationships.
+
+        Contract: MemoryIntegration.query_semantic_memory
+
+        Args:
+            query: Entity ID or pattern to search
+            relationship_type: Filter by relationship type (e.g., "CAUSES", "IMPACTS")
+            max_depth: Maximum traversal depth
+
+        Returns:
+            List of related entities and relationships
+        """
+        semantic = self._get_semantic_memory()
+
+        try:
+            # Query causal chains from the entity
+            chains = semantic.traverse_causal_chain(query, max_depth)
+
+            # Filter by relationship type if specified
+            if relationship_type and chains:
+                chains = [
+                    c
+                    for c in chains
+                    if any(r.get("type") == relationship_type for r in c.get("relationships", []))
+                ]
+
+            logger.debug(f"Semantic memory query for '{query}': found {len(chains)} chains")
+            return chains
+
+        except Exception as e:
+            logger.warning(f"Semantic memory query failed: {e}")
+            return []
+
+    async def update_semantic_memory(self, relationships: List[Dict[str, Any]]) -> bool:
+        """Update semantic memory with discovered causal relationships.
+
+        Contract: MemoryIntegration.update_semantic_memory
+
+        Args:
+            relationships: List of relationship dicts with:
+                - source_type: E2I entity type
+                - source_id: Source entity ID
+                - target_type: E2I entity type
+                - target_id: Target entity ID
+                - rel_type: Relationship type (e.g., "CAUSES")
+                - properties: Optional relationship properties
+
+        Returns:
+            True if successful
+        """
+        from src.memory.episodic_memory import E2IEntityType
+
+        semantic = self._get_semantic_memory()
+
+        try:
+            for rel in relationships:
+                source_type = E2IEntityType(rel["source_type"])
+                target_type = E2IEntityType(rel["target_type"])
+
+                semantic.add_e2i_relationship(
+                    source_type=source_type,
+                    source_id=rel["source_id"],
+                    target_type=target_type,
+                    target_id=rel["target_id"],
+                    rel_type=rel["rel_type"],
+                    properties=rel.get("properties", {}),
+                )
+
+            logger.info(f"Updated semantic memory with {len(relationships)} relationships")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to update semantic memory: {e}")
+            return False
+
+    async def load_episodic_memory(
+        self, query: str, top_k: int = 5, min_similarity: float = 0.7
+    ) -> List[Dict[str, Any]]:
+        """Load relevant episodic memories for context.
+
+        Contract: MemoryIntegration.load_episodic_memory
+
+        Args:
+            query: Natural language query to search
+            top_k: Number of memories to retrieve
+            min_similarity: Minimum similarity threshold
+
+        Returns:
+            List of relevant episodic memories
+        """
+        from src.memory.episodic_memory import search_episodic_by_text
+
+        try:
+            memories = await search_episodic_by_text(
+                query_text=query,
+                filters=None,
+                limit=top_k,
+                min_similarity=min_similarity,
+            )
+
+            logger.debug(f"Episodic memory query for '{query[:50]}...': found {len(memories)} memories")
+            return memories
+
+        except Exception as e:
+            logger.warning(f"Episodic memory query failed: {e}")
+            return []
+
+    async def save_episodic_memory(
+        self,
+        event: Dict[str, Any],
+        session_id: Optional[str] = None,
+        cycle_id: Optional[str] = None,
+    ) -> Optional[str]:
+        """Save a significant analysis event to episodic memory.
+
+        Contract: MemoryIntegration.save_episodic_memory
+
+        Args:
+            event: Event dict with:
+                - event_type: Type of event (e.g., "causal_analysis")
+                - description: Human-readable description
+                - importance: Importance score (0-1)
+                - metadata: Additional context
+
+        Returns:
+            Memory ID if successful, None otherwise
+        """
+        from src.memory.episodic_memory import EpisodicMemoryInput, insert_episodic_memory
+
+        try:
+            memory = EpisodicMemoryInput(
+                event_type=event.get("event_type", "causal_analysis"),
+                description=event.get("description", ""),
+                importance=event.get("importance", 0.5),
+                context_summary=event.get("context_summary"),
+                action_taken=event.get("action_taken"),
+                outcome=event.get("outcome"),
+                emotional_valence=event.get("emotional_valence", 0.0),
+            )
+
+            memory_id = await insert_episodic_memory(
+                memory=memory,
+                embedding=None,  # Will be generated
+                session_id=session_id,
+                cycle_id=cycle_id,
+            )
+
+            logger.info(f"Saved episodic memory: {memory_id}")
+            return memory_id
+
+        except Exception as e:
+            logger.error(f"Failed to save episodic memory: {e}")
+            return None
+
+    def reset_fallback_chain(self) -> None:
+        """Reset fallback chain for new request.
+
+        Call this at the start of a new analysis if reusing agent instance.
+        """
+        self._fallback_chain.reset()
