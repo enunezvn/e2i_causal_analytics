@@ -34,6 +34,7 @@ def create_gap_analyzer_graph(
     roi_service: Optional[ROICalculationService] = None,
     use_bootstrap: bool = True,
     n_simulations: int = 1000,
+    use_mock: bool = True,
 ) -> StateGraph:
     """Create the Gap Analyzer LangGraph workflow.
 
@@ -47,12 +48,14 @@ def create_gap_analyzer_graph(
         roi_service: Optional injected ROICalculationService (for testing/customization)
         use_bootstrap: Whether to compute bootstrap confidence intervals
         n_simulations: Number of Monte Carlo simulations for bootstrap
+        use_mock: If True, use mock data connectors (default for testing).
+                 Set to False for production with real Supabase data.
 
     Returns:
         Compiled StateGraph ready for execution
     """
     # Initialize nodes
-    gap_detector = GapDetectorNode()
+    gap_detector = GapDetectorNode(use_mock=use_mock)
     roi_calculator = ROICalculatorNode(
         roi_service=roi_service,
         use_bootstrap=use_bootstrap,

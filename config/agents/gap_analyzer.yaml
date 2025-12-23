@@ -1,0 +1,73 @@
+# Gap Analyzer Agent Configuration
+# Economic assumptions and thresholds for ROI analysis
+#
+# This configuration file is loaded by the GapDetectorNode to externalize
+# economic assumptions that were previously hard-coded.
+
+gap_analyzer:
+  # Economic assumptions for ROI calculations
+  economic_assumptions:
+    discount_rate: 0.10            # 10% discount rate for NPV calculations
+    planning_horizon_years: 3      # 3-year planning window for ROI projections
+    implementation_cost_factor: 0.15  # 15% of opportunity value as implementation cost
+    confidence_adjustment: 0.85    # Risk adjustment factor (multiply by confidence)
+
+  # Gap severity thresholds (as percentages)
+  gap_thresholds:
+    critical: 0.20   # >20% gap from target = critical severity
+    major: 0.10      # >10% gap from target = major severity
+    minor: 0.05      # >5% gap from target = minor severity
+    # Below 5% is considered negligible
+
+  # ROI classification thresholds
+  roi_thresholds:
+    minimum_viable: 1.5    # Minimum ROI to consider an opportunity viable
+    target: 2.0            # Target ROI for recommended actions
+    exceptional: 3.0       # Exceptional ROI for high-priority actions
+
+  # Pharmaceutical KPI value drivers
+  # Used for estimating monetary impact of gap closure
+  value_drivers:
+    trx_conversion_rate: 0.12       # 12% of TRx converts to revenue impact
+    nrx_conversion_rate: 0.08       # 8% of NRx converts to revenue impact
+    market_share_multiplier: 1.5    # Market share impact factor
+    hcp_engagement_multiplier: 0.5  # HCP engagement score impact factor
+    conversion_rate_multiplier: 2.0 # Conversion rate improvement multiplier
+
+  # Segment priorities for gap analysis
+  segment_priorities:
+    region:
+      - Northeast
+      - Southeast
+      - Midwest
+      - West
+    specialty:
+      - Oncology
+      - Cardiology
+      - Rheumatology
+      - Neurology
+    hcp_tier:
+      - Tier 1
+      - Tier 2
+      - Tier 3
+
+  # Default KPIs to analyze if not specified
+  default_metrics:
+    - trx
+    - nrx
+    - market_share
+    - conversion_rate
+    - hcp_engagement_score
+
+  # Connector configuration
+  connectors:
+    use_mock: false  # Set to true for testing with mock data
+    health_check_timeout_seconds: 5
+    cache_ttl_seconds: 300  # 5 minute cache for benchmark data
+
+  # Output configuration
+  output:
+    max_gaps_per_report: 50
+    max_recommendations_per_gap: 5
+    include_trend_analysis: true
+    include_peer_comparison: true

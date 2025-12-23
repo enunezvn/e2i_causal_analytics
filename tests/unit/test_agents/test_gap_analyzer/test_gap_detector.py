@@ -45,7 +45,7 @@ class TestGapDetectorNode:
     @pytest.mark.asyncio
     async def test_detect_gaps_vs_potential(self):
         """Test gap detection with vs_potential comparison."""
-        node = GapDetectorNode()
+        node = GapDetectorNode(use_mock=True)
         state = self._create_test_state(gap_type="vs_potential")
 
         result = await node.execute(state)
@@ -70,7 +70,7 @@ class TestGapDetectorNode:
     @pytest.mark.asyncio
     async def test_detect_gaps_vs_target(self):
         """Test gap detection with vs_target comparison."""
-        node = GapDetectorNode()
+        node = GapDetectorNode(use_mock=True)
         state = self._create_test_state(gap_type="vs_target")
 
         result = await node.execute(state)
@@ -81,7 +81,7 @@ class TestGapDetectorNode:
     @pytest.mark.asyncio
     async def test_detect_gaps_vs_benchmark(self):
         """Test gap detection with vs_benchmark comparison."""
-        node = GapDetectorNode()
+        node = GapDetectorNode(use_mock=True)
         state = self._create_test_state(gap_type="vs_benchmark")
 
         result = await node.execute(state)
@@ -92,7 +92,7 @@ class TestGapDetectorNode:
     @pytest.mark.asyncio
     async def test_detect_gaps_temporal(self):
         """Test gap detection with temporal comparison."""
-        node = GapDetectorNode()
+        node = GapDetectorNode(use_mock=True)
         state = self._create_test_state(gap_type="temporal")
 
         result = await node.execute(state)
@@ -103,7 +103,7 @@ class TestGapDetectorNode:
     @pytest.mark.asyncio
     async def test_detect_gaps_all_types(self):
         """Test gap detection with all comparison types."""
-        node = GapDetectorNode()
+        node = GapDetectorNode(use_mock=True)
         state = self._create_test_state(gap_type="all")
 
         result = await node.execute(state)
@@ -115,7 +115,7 @@ class TestGapDetectorNode:
     @pytest.mark.asyncio
     async def test_gap_filtering_by_threshold(self):
         """Test that gaps below threshold are filtered."""
-        node = GapDetectorNode()
+        node = GapDetectorNode(use_mock=True)
         state = self._create_test_state(min_gap_threshold=50.0)  # Very high threshold
 
         result = await node.execute(state)
@@ -126,7 +126,7 @@ class TestGapDetectorNode:
     @pytest.mark.asyncio
     async def test_gaps_by_segment_structure(self):
         """Test gaps_by_segment grouping."""
-        node = GapDetectorNode()
+        node = GapDetectorNode(use_mock=True)
         state = self._create_test_state()
 
         result = await node.execute(state)
@@ -142,7 +142,7 @@ class TestGapDetectorNode:
     @pytest.mark.asyncio
     async def test_total_gap_value_calculation(self):
         """Test total gap value aggregation."""
-        node = GapDetectorNode()
+        node = GapDetectorNode(use_mock=True)
         state = self._create_test_state()
 
         result = await node.execute(state)
@@ -157,7 +157,7 @@ class TestGapDetectorNode:
     @pytest.mark.asyncio
     async def test_segments_analyzed_count(self):
         """Test segments_analyzed count."""
-        node = GapDetectorNode()
+        node = GapDetectorNode(use_mock=True)
         state = self._create_test_state()
 
         result = await node.execute(state)
@@ -168,7 +168,7 @@ class TestGapDetectorNode:
     @pytest.mark.asyncio
     async def test_detection_latency_measurement(self):
         """Test that detection latency is measured."""
-        node = GapDetectorNode()
+        node = GapDetectorNode(use_mock=True)
         state = self._create_test_state()
 
         result = await node.execute(state)
@@ -180,7 +180,7 @@ class TestGapDetectorNode:
     @pytest.mark.asyncio
     async def test_status_update(self):
         """Test that status is updated to calculating."""
-        node = GapDetectorNode()
+        node = GapDetectorNode(use_mock=True)
         state = self._create_test_state()
 
         result = await node.execute(state)
@@ -190,7 +190,7 @@ class TestGapDetectorNode:
     @pytest.mark.asyncio
     async def test_multiple_metrics(self):
         """Test gap detection across multiple metrics."""
-        node = GapDetectorNode()
+        node = GapDetectorNode(use_mock=True)
         state = self._create_test_state()
         state["metrics"] = ["trx", "nrx", "market_share"]
 
@@ -203,7 +203,7 @@ class TestGapDetectorNode:
     @pytest.mark.asyncio
     async def test_multiple_segments(self):
         """Test gap detection across multiple segments."""
-        node = GapDetectorNode()
+        node = GapDetectorNode(use_mock=True)
         state = self._create_test_state()
         state["segments"] = ["region", "specialty", "hcp_tier"]
 
@@ -216,7 +216,7 @@ class TestGapDetectorNode:
     @pytest.mark.asyncio
     async def test_gap_id_uniqueness(self):
         """Test that gap IDs are unique."""
-        node = GapDetectorNode()
+        node = GapDetectorNode(use_mock=True)
         state = self._create_test_state()
 
         result = await node.execute(state)
@@ -227,7 +227,7 @@ class TestGapDetectorNode:
     @pytest.mark.asyncio
     async def test_gap_id_format(self):
         """Test gap ID format."""
-        node = GapDetectorNode()
+        node = GapDetectorNode(use_mock=True)
         state = self._create_test_state()
 
         result = await node.execute(state)
@@ -244,7 +244,7 @@ class TestGapDetectorNode:
     @pytest.mark.asyncio
     async def test_gap_percentage_calculation(self):
         """Test gap percentage calculation."""
-        node = GapDetectorNode()
+        node = GapDetectorNode(use_mock=True)
         state = self._create_test_state()
 
         result = await node.execute(state)
@@ -265,7 +265,7 @@ class TestGapDetectorNode:
     @pytest.mark.asyncio
     async def test_gaps_sorted_by_percentage(self):
         """Test that gaps are sorted by gap_percentage descending."""
-        node = GapDetectorNode()
+        node = GapDetectorNode(use_mock=True)
         state = self._create_test_state()
 
         result = await node.execute(state)
@@ -316,7 +316,7 @@ class TestGapDetectorEdgeCases:
     @pytest.mark.asyncio
     async def test_very_high_threshold(self):
         """Test with threshold that filters out all gaps."""
-        node = GapDetectorNode()
+        node = GapDetectorNode(use_mock=True)
         state = self._create_test_state(min_gap_threshold=1000.0)
 
         result = await node.execute(state)
@@ -327,7 +327,7 @@ class TestGapDetectorEdgeCases:
     @pytest.mark.asyncio
     async def test_zero_threshold(self):
         """Test with zero threshold (all gaps included)."""
-        node = GapDetectorNode()
+        node = GapDetectorNode(use_mock=True)
         state = self._create_test_state(min_gap_threshold=0.0)
 
         result = await node.execute(state)
@@ -338,7 +338,7 @@ class TestGapDetectorEdgeCases:
     @pytest.mark.asyncio
     async def test_single_metric_single_segment(self):
         """Test with single metric and single segment."""
-        node = GapDetectorNode()
+        node = GapDetectorNode(use_mock=True)
         state = self._create_test_state()
         state["metrics"] = ["trx"]
         state["segments"] = ["region"]
@@ -351,7 +351,7 @@ class TestGapDetectorEdgeCases:
     @pytest.mark.asyncio
     async def test_with_filters(self):
         """Test gap detection with additional filters."""
-        node = GapDetectorNode()
+        node = GapDetectorNode(use_mock=True)
         state = self._create_test_state()
         state["filters"] = {"specialty": "Oncology"}
 
