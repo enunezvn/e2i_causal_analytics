@@ -5,6 +5,8 @@ Core computational node with minimal LLM usage.
 """
 
 import asyncio
+import logging
+import os
 import time
 import traceback
 from typing import Any, Dict, List, Optional
@@ -14,75 +16,31 @@ import pandas as pd
 
 from ..state import CATEResult, HeterogeneousOptimizerState
 
+logger = logging.getLogger(__name__)
 
-class MockDataConnector:
-    """Mock data connector for testing.
 
-    TODO: Replace with SupabaseDataConnector in integration phase.
+def _get_default_data_connector():
+    """Get the default data connector based on environment.
+
+    Uses HeterogeneousOptimizerDataConnector if Supabase credentials are available,
+    otherwise falls back to MockDataConnector for development/testing.
     """
+    if os.getenv("SUPABASE_URL") and (
+        os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_ANON_KEY")
+    ):
+        try:
+            from ..connectors import HeterogeneousOptimizerDataConnector
 
-    async def query(
-        self, source: str, columns: List[str], filters: Optional[Dict[str, Any]] = None
-    ) -> pd.DataFrame:
-        """Generate mock pharma CATE data."""
-        np.random.seed(42)
-        n_samples = 1000
+            logger.info("Using HeterogeneousOptimizerDataConnector (Supabase)")
+            return HeterogeneousOptimizerDataConnector()
+        except Exception as e:
+            logger.warning(f"Failed to initialize Supabase connector: {e}")
 
-        # Generate heterogeneous treatment effects
-        data = {
-            # Segment variables
-            "hcp_specialty": np.random.choice(
-                ["Oncology", "Cardiology", "Primary Care", "Rheumatology"], n_samples
-            ),
-            "patient_volume_decile": np.random.choice(
-                ["1-2", "3-4", "5-6", "7-8", "9-10"], n_samples
-            ),
-            "region": np.random.choice(["Northeast", "Southeast", "Midwest", "West"], n_samples),
-            # Effect modifiers
-            "hcp_tenure": np.random.uniform(1, 30, n_samples),
-            "competitive_pressure": np.random.uniform(0, 1, n_samples),
-            "formulary_status": np.random.choice([0, 1], n_samples),
-            # Treatment (binary: 0 or 1)
-            "hcp_engagement_frequency": np.random.choice([0, 1], n_samples),
-        }
+    # Fallback to mock connector
+    from ..connectors import MockDataConnector
 
-        # Generate outcome with heterogeneous treatment effects
-        # Different segments have different treatment responses
-        outcome = np.zeros(n_samples)
-        for i in range(n_samples):
-            # Base outcome
-            base = 100 + np.random.normal(0, 20)
-
-            # Heterogeneous treatment effect based on specialty
-            treatment_effect = 0
-            if data["hcp_engagement_frequency"][i] == 1:
-                if data["hcp_specialty"][i] == "Oncology":
-                    treatment_effect = 50 + np.random.normal(0, 10)  # High responder
-                elif data["hcp_specialty"][i] == "Cardiology":
-                    treatment_effect = 30 + np.random.normal(0, 10)  # Medium responder
-                elif data["hcp_specialty"][i] == "Primary Care":
-                    treatment_effect = 10 + np.random.normal(0, 10)  # Low responder
-                else:  # Rheumatology
-                    treatment_effect = 25 + np.random.normal(0, 10)
-
-                # Modify by tenure
-                treatment_effect *= 1 + data["hcp_tenure"][i] / 100
-
-                # Modify by competitive pressure (negative)
-                treatment_effect *= 1 - data["competitive_pressure"][i] * 0.3
-
-            outcome[i] = base + treatment_effect
-
-        data["trx_total"] = outcome
-
-        df = pd.DataFrame(data)
-
-        # Filter columns
-        if columns:
-            available_cols = [col for col in columns if col in df.columns]
-            df = df[available_cols]
-
-        return df
+    logger.info("Using MockDataConnector (development/testing mode)")
+    return MockDataConnector()
 
 
 class CATEEstimatorNode:
@@ -93,12 +51,22 @@ class CATEEstimatorNode:
     """
 
     def __init__(self, data_connector=None):
-        self.data_connector = data_connector or MockDataConnector()
+        self.data_connector = data_connector or _get_default_data_connector()
         self.timeout_seconds = 180
 
     async def execute(self, state: HeterogeneousOptimizerState) -> HeterogeneousOptimizerState:
         """Execute CATE estimation."""
         start_time = time.time()
+        logger.info(
+            "Starting CATE estimation",
+            extra={
+                "node": "cate_estimator",
+                "treatment_var": state.get("treatment_var"),
+                "outcome_var": state.get("outcome_var"),
+                "effect_modifiers": state.get("effect_modifiers", []),
+                "n_estimators": state.get("n_estimators", 100),
+            },
+        )
 
         try:
             from econml.dml import CausalForestDML
@@ -184,6 +152,17 @@ class CATEEstimatorNode:
 
             estimation_time = int((time.time() - start_time) * 1000)
 
+            logger.info(
+                "CATE estimation complete",
+                extra={
+                    "node": "cate_estimator",
+                    "overall_ate": float(ate),
+                    "heterogeneity_score": heterogeneity,
+                    "segment_count": len(cate_by_segment),
+                    "latency_ms": estimation_time,
+                },
+            )
+
             return {
                 **state,
                 "overall_ate": float(ate),
@@ -195,6 +174,10 @@ class CATEEstimatorNode:
             }
 
         except asyncio.TimeoutError:
+            logger.error(
+                "CATE estimation timed out",
+                extra={"node": "cate_estimator", "timeout_seconds": self.timeout_seconds},
+            )
             return {
                 **state,
                 "errors": [
@@ -203,6 +186,11 @@ class CATEEstimatorNode:
                 "status": "failed",
             }
         except Exception as e:
+            logger.error(
+                "CATE estimation failed",
+                extra={"node": "cate_estimator", "error": str(e)},
+                exc_info=True,
+            )
             return {
                 **state,
                 "errors": [

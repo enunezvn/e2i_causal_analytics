@@ -3,6 +3,7 @@
 import pytest
 
 from src.agents.heterogeneous_optimizer.agent import HeterogeneousOptimizerAgent
+from src.agents.heterogeneous_optimizer.connectors import MockDataConnector
 
 
 class TestHeterogeneousOptimizerAgent:
@@ -11,7 +12,7 @@ class TestHeterogeneousOptimizerAgent:
     @pytest.mark.asyncio
     async def test_run_complete_workflow(self):
         """Test complete heterogeneous optimizer workflow."""
-        agent = HeterogeneousOptimizerAgent()
+        agent = HeterogeneousOptimizerAgent(data_connector=MockDataConnector())
 
         input_data = {
             "query": "Which HCP segments respond best to increased engagement?",
@@ -34,7 +35,7 @@ class TestHeterogeneousOptimizerAgent:
     @pytest.mark.asyncio
     async def test_input_validation_required_fields(self):
         """Test input validation for required fields."""
-        agent = HeterogeneousOptimizerAgent()
+        agent = HeterogeneousOptimizerAgent(data_connector=MockDataConnector())
 
         # Missing query
         with pytest.raises(ValueError, match="Missing required field: query"):
@@ -51,7 +52,7 @@ class TestHeterogeneousOptimizerAgent:
     @pytest.mark.asyncio
     async def test_input_validation_missing_treatment_var(self):
         """Test missing treatment_var."""
-        agent = HeterogeneousOptimizerAgent()
+        agent = HeterogeneousOptimizerAgent(data_connector=MockDataConnector())
 
         with pytest.raises(ValueError, match="Missing required field: treatment_var"):
             await agent.run(
@@ -67,7 +68,7 @@ class TestHeterogeneousOptimizerAgent:
     @pytest.mark.asyncio
     async def test_input_validation_missing_outcome_var(self):
         """Test missing outcome_var."""
-        agent = HeterogeneousOptimizerAgent()
+        agent = HeterogeneousOptimizerAgent(data_connector=MockDataConnector())
 
         with pytest.raises(ValueError, match="Missing required field: outcome_var"):
             await agent.run(
@@ -83,7 +84,7 @@ class TestHeterogeneousOptimizerAgent:
     @pytest.mark.asyncio
     async def test_input_validation_missing_segment_vars(self):
         """Test missing segment_vars."""
-        agent = HeterogeneousOptimizerAgent()
+        agent = HeterogeneousOptimizerAgent(data_connector=MockDataConnector())
 
         with pytest.raises(ValueError, match="Missing required field: segment_vars"):
             await agent.run(
@@ -99,7 +100,7 @@ class TestHeterogeneousOptimizerAgent:
     @pytest.mark.asyncio
     async def test_input_validation_missing_effect_modifiers(self):
         """Test missing effect_modifiers."""
-        agent = HeterogeneousOptimizerAgent()
+        agent = HeterogeneousOptimizerAgent(data_connector=MockDataConnector())
 
         with pytest.raises(ValueError, match="Missing required field: effect_modifiers"):
             await agent.run(
@@ -115,7 +116,7 @@ class TestHeterogeneousOptimizerAgent:
     @pytest.mark.asyncio
     async def test_input_validation_empty_segment_vars(self):
         """Test empty segment_vars list."""
-        agent = HeterogeneousOptimizerAgent()
+        agent = HeterogeneousOptimizerAgent(data_connector=MockDataConnector())
 
         with pytest.raises(ValueError, match="segment_vars must be a non-empty list"):
             await agent.run(
@@ -132,7 +133,7 @@ class TestHeterogeneousOptimizerAgent:
     @pytest.mark.asyncio
     async def test_input_validation_empty_effect_modifiers(self):
         """Test empty effect_modifiers list."""
-        agent = HeterogeneousOptimizerAgent()
+        agent = HeterogeneousOptimizerAgent(data_connector=MockDataConnector())
 
         with pytest.raises(ValueError, match="effect_modifiers must be a non-empty list"):
             await agent.run(
@@ -149,7 +150,7 @@ class TestHeterogeneousOptimizerAgent:
     @pytest.mark.asyncio
     async def test_input_validation_n_estimators_range(self):
         """Test n_estimators range validation."""
-        agent = HeterogeneousOptimizerAgent()
+        agent = HeterogeneousOptimizerAgent(data_connector=MockDataConnector())
 
         with pytest.raises(ValueError, match="n_estimators must be an integer between 50 and 500"):
             await agent.run(
@@ -167,7 +168,7 @@ class TestHeterogeneousOptimizerAgent:
     @pytest.mark.asyncio
     async def test_input_validation_min_samples_leaf_range(self):
         """Test min_samples_leaf range validation."""
-        agent = HeterogeneousOptimizerAgent()
+        agent = HeterogeneousOptimizerAgent(data_connector=MockDataConnector())
 
         with pytest.raises(
             ValueError, match="min_samples_leaf must be an integer between 5 and 100"
@@ -187,7 +188,7 @@ class TestHeterogeneousOptimizerAgent:
     @pytest.mark.asyncio
     async def test_input_validation_significance_level_range(self):
         """Test significance_level range validation."""
-        agent = HeterogeneousOptimizerAgent()
+        agent = HeterogeneousOptimizerAgent(data_connector=MockDataConnector())
 
         with pytest.raises(
             ValueError, match="significance_level must be a number between 0.01 and 0.10"
@@ -207,7 +208,7 @@ class TestHeterogeneousOptimizerAgent:
     @pytest.mark.asyncio
     async def test_input_validation_top_segments_count_range(self):
         """Test top_segments_count range validation."""
-        agent = HeterogeneousOptimizerAgent()
+        agent = HeterogeneousOptimizerAgent(data_connector=MockDataConnector())
 
         with pytest.raises(
             ValueError, match="top_segments_count must be an integer between 5 and 50"
@@ -227,7 +228,7 @@ class TestHeterogeneousOptimizerAgent:
     @pytest.mark.asyncio
     async def test_output_has_required_fields(self):
         """Test output has all required contract fields."""
-        agent = HeterogeneousOptimizerAgent()
+        agent = HeterogeneousOptimizerAgent(data_connector=MockDataConnector())
 
         input_data = {
             "query": "test",
@@ -268,7 +269,7 @@ class TestHeterogeneousOptimizerAgent:
     @pytest.mark.asyncio
     async def test_output_field_types(self):
         """Test output field types match contract."""
-        agent = HeterogeneousOptimizerAgent()
+        agent = HeterogeneousOptimizerAgent(data_connector=MockDataConnector())
 
         input_data = {
             "query": "test",
@@ -299,7 +300,7 @@ class TestHeterogeneousOptimizerAgent:
     @pytest.mark.asyncio
     async def test_heterogeneity_score_range(self):
         """Test heterogeneity score is in valid range."""
-        agent = HeterogeneousOptimizerAgent()
+        agent = HeterogeneousOptimizerAgent(data_connector=MockDataConnector())
 
         input_data = {
             "query": "test",
@@ -317,7 +318,7 @@ class TestHeterogeneousOptimizerAgent:
     @pytest.mark.asyncio
     async def test_confidence_range(self):
         """Test confidence is in valid range."""
-        agent = HeterogeneousOptimizerAgent()
+        agent = HeterogeneousOptimizerAgent(data_connector=MockDataConnector())
 
         input_data = {
             "query": "test",
@@ -335,7 +336,7 @@ class TestHeterogeneousOptimizerAgent:
     @pytest.mark.asyncio
     async def test_classify_intent_in_scope(self):
         """Test intent classification for in-scope queries."""
-        agent = HeterogeneousOptimizerAgent()
+        agent = HeterogeneousOptimizerAgent(data_connector=MockDataConnector())
 
         in_scope_queries = [
             "Which segments respond best?",
@@ -352,7 +353,7 @@ class TestHeterogeneousOptimizerAgent:
     @pytest.mark.asyncio
     async def test_classify_intent_out_of_scope(self):
         """Test intent classification for out-of-scope queries."""
-        agent = HeterogeneousOptimizerAgent()
+        agent = HeterogeneousOptimizerAgent(data_connector=MockDataConnector())
 
         out_of_scope_queries = [
             "What is the weather?",
@@ -367,7 +368,7 @@ class TestHeterogeneousOptimizerAgent:
     @pytest.mark.asyncio
     async def test_analyze_convenience_method(self):
         """Test analyze convenience method."""
-        agent = HeterogeneousOptimizerAgent()
+        agent = HeterogeneousOptimizerAgent(data_connector=MockDataConnector())
 
         result = await agent.analyze(
             query="Test query",
@@ -384,7 +385,7 @@ class TestHeterogeneousOptimizerAgent:
     @pytest.mark.asyncio
     async def test_cate_by_segment_structure(self):
         """Test CATE by segment structure."""
-        agent = HeterogeneousOptimizerAgent()
+        agent = HeterogeneousOptimizerAgent(data_connector=MockDataConnector())
 
         input_data = {
             "query": "test",
@@ -413,7 +414,7 @@ class TestHeterogeneousOptimizerAgent:
     @pytest.mark.asyncio
     async def test_performance_target(self):
         """Test performance meets latency target (<150s)."""
-        agent = HeterogeneousOptimizerAgent()
+        agent = HeterogeneousOptimizerAgent(data_connector=MockDataConnector())
 
         input_data = {
             "query": "test",
@@ -432,7 +433,7 @@ class TestHeterogeneousOptimizerAgent:
     @pytest.mark.asyncio
     async def test_segment_profile_structure(self):
         """Test segment profile structure in output."""
-        agent = HeterogeneousOptimizerAgent()
+        agent = HeterogeneousOptimizerAgent(data_connector=MockDataConnector())
 
         input_data = {
             "query": "test",
@@ -455,7 +456,7 @@ class TestHeterogeneousOptimizerAgent:
     @pytest.mark.asyncio
     async def test_policy_recommendation_structure(self):
         """Test policy recommendation structure in output."""
-        agent = HeterogeneousOptimizerAgent()
+        agent = HeterogeneousOptimizerAgent(data_connector=MockDataConnector())
 
         input_data = {
             "query": "test",
@@ -479,7 +480,7 @@ class TestHeterogeneousOptimizerAgent:
     @pytest.mark.asyncio
     async def test_treatment_rate_bounds(self):
         """Test treatment rates are bounded between 0 and 1."""
-        agent = HeterogeneousOptimizerAgent()
+        agent = HeterogeneousOptimizerAgent(data_connector=MockDataConnector())
 
         input_data = {
             "query": "test",
@@ -499,7 +500,7 @@ class TestHeterogeneousOptimizerAgent:
     @pytest.mark.asyncio
     async def test_optional_configuration_defaults(self):
         """Test optional configuration parameters use correct defaults."""
-        agent = HeterogeneousOptimizerAgent()
+        agent = HeterogeneousOptimizerAgent(data_connector=MockDataConnector())
 
         input_data = {
             "query": "test",
@@ -523,7 +524,7 @@ class TestHeterogeneousOptimizerAgentEdgeCases:
     @pytest.mark.asyncio
     async def test_single_segment_variable(self):
         """Test with single segment variable."""
-        agent = HeterogeneousOptimizerAgent()
+        agent = HeterogeneousOptimizerAgent(data_connector=MockDataConnector())
 
         input_data = {
             "query": "test",
@@ -541,7 +542,7 @@ class TestHeterogeneousOptimizerAgentEdgeCases:
     @pytest.mark.asyncio
     async def test_single_effect_modifier(self):
         """Test with single effect modifier."""
-        agent = HeterogeneousOptimizerAgent()
+        agent = HeterogeneousOptimizerAgent(data_connector=MockDataConnector())
 
         input_data = {
             "query": "test",
@@ -559,7 +560,7 @@ class TestHeterogeneousOptimizerAgentEdgeCases:
     @pytest.mark.asyncio
     async def test_with_filters(self):
         """Test with data filters."""
-        agent = HeterogeneousOptimizerAgent()
+        agent = HeterogeneousOptimizerAgent(data_connector=MockDataConnector())
 
         input_data = {
             "query": "test",
