@@ -16,37 +16,9 @@ from typing import Any
 import numpy as np
 from scipy import stats
 
+from src.agents.drift_monitor.connectors import get_connector
+from src.agents.drift_monitor.connectors.base import BaseDataConnector, TimeWindow
 from src.agents.drift_monitor.state import DriftMonitorState, DriftResult, ErrorDetails
-
-
-# ===== MOCK DATA CONNECTOR =====
-# TODO: Replace with SupabaseDataConnector when repository layer is complete
-# Integration blocker documented in CONTRACT_VALIDATION.md
-class MockDataConnector:
-    """Mock data connector for testing.
-
-    CRITICAL: This is a temporary mock. Replace with:
-        from src.repositories.data_connector import SupabaseDataConnector
-    """
-
-    async def query(
-        self, source: str, columns: list[str], filters: dict[str, Any] | None = None
-    ) -> dict[str, np.ndarray]:
-        """Mock query that returns synthetic data."""
-        np.random.seed(42)
-        n_samples = 1000
-
-        data = {}
-        for col in columns:
-            # Generate synthetic feature data
-            if "baseline" in filters.get("period", ""):
-                # Baseline distribution (normal)
-                data[col] = np.random.normal(0, 1, n_samples)
-            else:
-                # Current distribution (slightly shifted for drift simulation)
-                data[col] = np.random.normal(0.2, 1.1, n_samples)
-
-        return data
 
 
 class DataDriftNode:
@@ -63,9 +35,13 @@ class DataDriftNode:
     Performance Target: <8s for 50 features
     """
 
-    def __init__(self):
-        """Initialize data drift node."""
-        self.data_connector = MockDataConnector()
+    def __init__(self, connector: BaseDataConnector | None = None):
+        """Initialize data drift node.
+
+        Args:
+            connector: Data connector instance. If None, uses factory.
+        """
+        self.data_connector = connector or get_connector()
         self._min_samples = 30  # Minimum samples required for drift detection
 
     async def execute(self, state: DriftMonitorState) -> DriftMonitorState:
@@ -144,24 +120,46 @@ class DataDriftNode:
             (baseline_data, current_data) tuple
         """
         # Parse time window
-        baseline_filters = {"period": "baseline", "time_window": state["time_window"]}
+        days = int(state["time_window"].replace("d", ""))
+        now = datetime.now(timezone.utc)
 
-        current_filters = {"period": "current", "time_window": state["time_window"]}
+        # Baseline period: from 2*days ago to 1*days ago
+        baseline_window = TimeWindow(
+            start=now - timedelta(days=days * 2),
+            end=now - timedelta(days=days),
+            label="baseline",
+        )
 
+        # Current period: from 1*days ago to now
+        current_window = TimeWindow(
+            start=now - timedelta(days=days),
+            end=now,
+            label="current",
+        )
+
+        # Build filters
+        filters = {}
         if state.get("brand"):
-            baseline_filters["brand"] = state["brand"]
-            current_filters["brand"] = state["brand"]
+            filters["brand"] = state["brand"]
 
-        # Fetch in parallel
-        baseline_task = self.data_connector.query(
-            "feature_data", state["features_to_monitor"], baseline_filters
+        # Fetch in parallel using new connector interface
+        baseline_task = self.data_connector.query_features(
+            feature_names=state["features_to_monitor"],
+            time_window=baseline_window,
+            filters=filters if filters else None,
         )
 
-        current_task = self.data_connector.query(
-            "feature_data", state["features_to_monitor"], current_filters
+        current_task = self.data_connector.query_features(
+            feature_names=state["features_to_monitor"],
+            time_window=current_window,
+            filters=filters if filters else None,
         )
 
-        baseline_data, current_data = await asyncio.gather(baseline_task, current_task)
+        baseline_result, current_result = await asyncio.gather(baseline_task, current_task)
+
+        # Convert FeatureData to numpy arrays for compatibility
+        baseline_data = {name: data.values for name, data in baseline_result.items()}
+        current_data = {name: data.values for name, data in current_result.items()}
 
         return baseline_data, current_data
 
