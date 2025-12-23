@@ -1,0 +1,560 @@
+# E2I Outcome Truth Business Rules v1.0
+# Purpose: Define ground truth labels for concept drift detection in ml_predictions
+# Author: E2I Causal Analytics Team
+# Last Updated: 2025-12-23
+
+# Schema Extension Required:
+# ALTER TABLE ml_predictions ADD COLUMN actual_outcome DECIMAL(5,4);
+# ALTER TABLE ml_predictions ADD COLUMN outcome_recorded_at TIMESTAMPTZ;
+# ALTER TABLE ml_predictions ADD COLUMN truth_source VARCHAR(50);
+# ALTER TABLE ml_predictions ADD COLUMN truth_confidence DECIMAL(3,2);
+
+metadata:
+  version: "1.0.0"
+  description: "Business rules defining 'truth' for each prediction model type"
+  feedback_loop_agent: "experiment_monitor"  # Future Tier 3 agent
+  drift_monitor_integration: true
+
+# =============================================================================
+# PREDICTION TYPE DEFINITIONS
+# =============================================================================
+
+prediction_types:
+
+  # ---------------------------------------------------------------------------
+  # HCP CHURN PREDICTION
+  # "Did this HCP actually stop/reduce prescribing our brand?"
+  # ---------------------------------------------------------------------------
+  hcp_churn:
+    description: "Predicts whether an HCP will significantly reduce or stop prescribing"
+    observation_window_days: 90
+    min_observation_days: 60  # Minimum wait before labeling
+    
+    truth_definition:
+      # Binary outcome: Did they churn?
+      outcome_type: binary
+      positive_label: 1.0   # Churned
+      negative_label: 0.0   # Retained
+      
+      # What constitutes "churn"?
+      churn_criteria:
+        # Option 1: Zero scripts in observation window
+        zero_scripts:
+          condition: "trx_count_window = 0"
+          lookback_comparison_days: 90  # Compare to prior 90 days
+          required_prior_activity: "trx_count_prior >= 1"
+        
+        # Option 2: Significant decline (configurable threshold)
+        decline_threshold:
+          condition: "trx_count_window / trx_count_prior < decline_pct"
+          decline_pct: 0.30  # 70%+ decline = churn
+          min_prior_scripts: 3  # Need baseline activity
+        
+        # Default rule (used by feedback loop)
+        default_rule: "zero_scripts OR decline_threshold"
+    
+    data_sources:
+      primary: "IQVIA_APLD"  # 12-day lag
+      secondary: "Komodo"    # 10-day lag
+      fallback: "Veeva"      # Real-time CRM activity
+    
+    truth_query: |
+      WITH prediction_context AS (
+        SELECT 
+          p.prediction_id,
+          p.hcp_id,
+          p.brand,
+          p.prediction_timestamp,
+          p.prediction_value as predicted_churn_prob
+        FROM ml_predictions p
+        WHERE p.prediction_type = 'churn'
+          AND p.outcome_recorded_at IS NULL
+          AND p.prediction_timestamp < NOW() - INTERVAL '${observation_window_days} days'
+      ),
+      prior_activity AS (
+        SELECT 
+          pc.prediction_id,
+          COUNT(*) as trx_count_prior
+        FROM prediction_context pc
+        JOIN treatment_events te 
+          ON te.hcp_id = pc.hcp_id 
+          AND te.brand = pc.brand
+          AND te.event_type = 'prescription'
+          AND te.event_date BETWEEN 
+              pc.prediction_timestamp - INTERVAL '90 days' 
+              AND pc.prediction_timestamp
+        GROUP BY pc.prediction_id
+      ),
+      window_activity AS (
+        SELECT 
+          pc.prediction_id,
+          COUNT(*) as trx_count_window
+        FROM prediction_context pc
+        JOIN treatment_events te 
+          ON te.hcp_id = pc.hcp_id 
+          AND te.brand = pc.brand
+          AND te.event_type = 'prescription'
+          AND te.event_date BETWEEN 
+              pc.prediction_timestamp 
+              AND pc.prediction_timestamp + INTERVAL '${observation_window_days} days'
+        GROUP BY pc.prediction_id
+      )
+      SELECT 
+        pc.prediction_id,
+        CASE 
+          WHEN COALESCE(wa.trx_count_window, 0) = 0 
+               AND COALESCE(pa.trx_count_prior, 0) >= 1 THEN 1.0
+          WHEN COALESCE(pa.trx_count_prior, 0) >= 3 
+               AND COALESCE(wa.trx_count_window, 0)::DECIMAL / pa.trx_count_prior < 0.30 THEN 1.0
+          ELSE 0.0
+        END as actual_outcome,
+        NOW() as outcome_recorded_at,
+        'treatment_events' as truth_source,
+        CASE 
+          WHEN pa.trx_count_prior >= 5 THEN 0.95
+          WHEN pa.trx_count_prior >= 3 THEN 0.85
+          ELSE 0.70
+        END as truth_confidence
+      FROM prediction_context pc
+      LEFT JOIN prior_activity pa ON pa.prediction_id = pc.prediction_id
+      LEFT JOIN window_activity wa ON wa.prediction_id = pc.prediction_id
+    
+    edge_cases:
+      - name: "new_hcp"
+        description: "HCP with <3 prior scripts - insufficient baseline"
+        handling: "Label as INDETERMINATE, exclude from drift calculation"
+        confidence_override: 0.50
+      
+      - name: "data_lag"
+        description: "Recent prediction within data source lag period"
+        handling: "Defer labeling until lag_days + observation_window elapsed"
+      
+      - name: "seasonal_effects"
+        description: "Q4 holiday dips vs. true churn"
+        handling: "Require 2 consecutive quarters for high-confidence churn label"
+
+  # ---------------------------------------------------------------------------
+  # SCRIPT CONVERSION PREDICTION
+  # "Did this HCP actually prescribe after receiving a trigger?"
+  # ---------------------------------------------------------------------------
+  script_conversion:
+    description: "Predicts whether an HCP will write a new script after trigger"
+    observation_window_days: 21
+    min_observation_days: 14
+    
+    truth_definition:
+      outcome_type: binary
+      positive_label: 1.0   # Converted
+      negative_label: 0.0   # No conversion
+      
+      conversion_criteria:
+        # Primary: Any new script within window
+        any_script:
+          condition: "nrx_count_window >= 1"
+          attribution_window_days: 21  # 14-21 day optimal per lead time KPI
+        
+        # Stricter: New patient start
+        new_patient_start:
+          condition: "new_patient_starts >= 1"
+          requires: "patient not in hcp_patient_history"
+        
+        # Default: Any script counts as conversion
+        default_rule: "any_script"
+    
+    data_sources:
+      primary: "IQVIA_APLD"
+      secondary: "HealthVerity"  # 7-day lag
+    
+    truth_query: |
+      WITH prediction_context AS (
+        SELECT 
+          p.prediction_id,
+          p.hcp_id,
+          p.brand,
+          p.prediction_timestamp,
+          t.trigger_id
+        FROM ml_predictions p
+        LEFT JOIN triggers t ON t.prediction_id = p.prediction_id
+        WHERE p.prediction_type = 'trigger'
+          AND p.outcome_recorded_at IS NULL
+          AND p.prediction_timestamp < NOW() - INTERVAL '${observation_window_days} days'
+      ),
+      conversion_activity AS (
+        SELECT 
+          pc.prediction_id,
+          COUNT(*) as nrx_count_window,
+          COUNT(DISTINCT te.patient_id) as unique_patients
+        FROM prediction_context pc
+        JOIN treatment_events te 
+          ON te.hcp_id = pc.hcp_id 
+          AND te.brand = pc.brand
+          AND te.event_type = 'prescription'
+          AND te.event_date BETWEEN 
+              pc.prediction_timestamp 
+              AND pc.prediction_timestamp + INTERVAL '${observation_window_days} days'
+        GROUP BY pc.prediction_id
+      )
+      SELECT 
+        pc.prediction_id,
+        CASE WHEN COALESCE(ca.nrx_count_window, 0) >= 1 THEN 1.0 ELSE 0.0 END as actual_outcome,
+        NOW() as outcome_recorded_at,
+        'treatment_events' as truth_source,
+        0.90 as truth_confidence  -- High confidence for prescription events
+      FROM prediction_context pc
+      LEFT JOIN conversion_activity ca ON ca.prediction_id = pc.prediction_id
+
+    edge_cases:
+      - name: "trigger_not_delivered"
+        description: "Trigger generated but not delivered/viewed"
+        handling: "Exclude from conversion metrics, flag for trigger_acceptance analysis"
+        
+      - name: "multi_trigger"
+        description: "Multiple triggers within observation window"
+        handling: "Attribute to first trigger, secondary triggers get partial_attribution flag"
+
+  # ---------------------------------------------------------------------------
+  # MARKET SHARE IMPACT PREDICTION
+  # "Did our market share actually change as predicted?"
+  # ---------------------------------------------------------------------------
+  market_share_impact:
+    description: "Predicts market share changes for brand/region combinations"
+    observation_window_days: 90  # Quarterly measurement
+    min_observation_days: 60
+    
+    truth_definition:
+      outcome_type: continuous  # Actual market share delta
+      
+      measurement_criteria:
+        metric: "market_share_pct"
+        comparison: "predicted_delta vs actual_delta"
+        
+        # Accuracy thresholds
+        accurate_threshold: 0.02   # Within 2pp = accurate
+        direction_match: true      # Did direction match? (up/down)
+    
+    data_sources:
+      primary: "IQVIA_LAAD"  # 14-day lag
+      refresh_frequency: "weekly"
+    
+    truth_query: |
+      WITH prediction_context AS (
+        SELECT 
+          p.prediction_id,
+          p.brand,
+          p.metadata->>'region' as region,
+          p.prediction_timestamp,
+          p.prediction_value as predicted_delta
+        FROM ml_predictions p
+        WHERE p.prediction_type = 'market_share_impact'
+          AND p.outcome_recorded_at IS NULL
+          AND p.prediction_timestamp < NOW() - INTERVAL '${observation_window_days} days'
+      ),
+      baseline_share AS (
+        SELECT 
+          pc.prediction_id,
+          bm.market_share as baseline_ms
+        FROM prediction_context pc
+        JOIN business_metrics bm 
+          ON bm.brand = pc.brand 
+          AND bm.region = pc.region
+          AND bm.measurement_date = DATE_TRUNC('month', pc.prediction_timestamp)
+        WHERE bm.metric_type = 'market_share'
+      ),
+      outcome_share AS (
+        SELECT 
+          pc.prediction_id,
+          bm.market_share as outcome_ms
+        FROM prediction_context pc
+        JOIN business_metrics bm 
+          ON bm.brand = pc.brand 
+          AND bm.region = pc.region
+          AND bm.measurement_date = DATE_TRUNC('month', 
+              pc.prediction_timestamp + INTERVAL '${observation_window_days} days')
+        WHERE bm.metric_type = 'market_share'
+      )
+      SELECT 
+        pc.prediction_id,
+        os.outcome_ms - bs.baseline_ms as actual_outcome,  -- Actual delta
+        NOW() as outcome_recorded_at,
+        'business_metrics' as truth_source,
+        0.95 as truth_confidence
+      FROM prediction_context pc
+      JOIN baseline_share bs ON bs.prediction_id = pc.prediction_id
+      JOIN outcome_share os ON os.prediction_id = pc.prediction_id
+
+    edge_cases:
+      - name: "market_disruption"
+        description: "Competitor launch, recall, or major market event"
+        handling: "Flag as CONFOUNDED, weight lower in drift detection"
+        
+      - name: "regional_variance"
+        description: "Small regions with high volatility"
+        handling: "Require min_trx_volume threshold for inclusion"
+
+  # ---------------------------------------------------------------------------
+  # TREATMENT RESPONSE PREDICTION
+  # "Did the patient actually respond to treatment as predicted?"
+  # ---------------------------------------------------------------------------
+  treatment_response:
+    description: "Predicts patient treatment outcomes/persistence"
+    observation_window_days: 180  # 6-month persistence window
+    min_observation_days: 90
+    
+    truth_definition:
+      outcome_type: binary
+      positive_label: 1.0   # Persisted/Responded
+      negative_label: 0.0   # Discontinued/Non-response
+      
+      persistence_criteria:
+        # PDC-based (Proportion of Days Covered)
+        pdc_threshold:
+          condition: "pdc >= 0.80"
+          measurement: "days_covered / observation_window_days"
+        
+        # Refill-based
+        refill_continuity:
+          condition: "max_gap_days <= 60"
+          measurement: "largest gap between fills"
+        
+        # Clinical outcome (when available)
+        clinical_response:
+          condition: "clinical_marker_improvement = true"
+          requires: "lab_values available"
+        
+        default_rule: "pdc_threshold OR refill_continuity"
+    
+    data_sources:
+      primary: "HealthVerity"  # Lab/EMR for clinical
+      secondary: "IQVIA_APLD"  # Claims for refills
+    
+    truth_query: |
+      WITH prediction_context AS (
+        SELECT 
+          p.prediction_id,
+          p.patient_id,
+          p.brand,
+          p.prediction_timestamp
+        FROM ml_predictions p
+        WHERE p.prediction_type = 'risk'  -- Risk of non-persistence
+          AND p.outcome_recorded_at IS NULL
+          AND p.prediction_timestamp < NOW() - INTERVAL '${observation_window_days} days'
+      ),
+      fill_pattern AS (
+        SELECT 
+          pc.prediction_id,
+          COUNT(*) as fill_count,
+          SUM(te.duration_days) as days_covered,
+          MAX(LEAD(te.event_date) OVER (
+            PARTITION BY pc.prediction_id ORDER BY te.event_date
+          ) - te.event_date) as max_gap_days
+        FROM prediction_context pc
+        JOIN treatment_events te 
+          ON te.patient_id = pc.patient_id 
+          AND te.brand = pc.brand
+          AND te.event_type = 'prescription'
+          AND te.event_date BETWEEN 
+              pc.prediction_timestamp 
+              AND pc.prediction_timestamp + INTERVAL '${observation_window_days} days'
+        GROUP BY pc.prediction_id
+      )
+      SELECT 
+        pc.prediction_id,
+        CASE 
+          WHEN fp.days_covered::DECIMAL / ${observation_window_days} >= 0.80 THEN 1.0
+          WHEN COALESCE(fp.max_gap_days, 999) <= 60 THEN 1.0
+          ELSE 0.0
+        END as actual_outcome,
+        NOW() as outcome_recorded_at,
+        'treatment_events' as truth_source,
+        CASE 
+          WHEN fp.fill_count >= 3 THEN 0.90
+          ELSE 0.75
+        END as truth_confidence
+      FROM prediction_context pc
+      LEFT JOIN fill_pattern fp ON fp.prediction_id = pc.prediction_id
+
+    edge_cases:
+      - name: "therapy_switch"
+        description: "Patient switched to different brand (not discontinuation)"
+        handling: "Label as SWITCHED, separate from true non-persistence"
+        
+      - name: "clinical_discontinuation"
+        description: "MD-directed stop (disease resolved, AE)"
+        handling: "Label as APPROPRIATE_STOP, exclude from negative outcomes"
+
+  # ---------------------------------------------------------------------------
+  # NEXT BEST ACTION (NBA) PREDICTION
+  # "Did the recommended action lead to intended outcome?"
+  # ---------------------------------------------------------------------------
+  next_best_action:
+    description: "Predicts optimal engagement action for HCP"
+    observation_window_days: 30
+    min_observation_days: 14
+    
+    truth_definition:
+      outcome_type: binary
+      positive_label: 1.0   # Action effective
+      negative_label: 0.0   # Action ineffective
+      
+      effectiveness_criteria:
+        # Action accepted and executed
+        action_accepted:
+          condition: "trigger_status = 'accepted'"
+          source: "triggers.status"
+        
+        # Downstream outcome achieved
+        downstream_outcome:
+          condition: "outcome_achieved = true"
+          outcome_definitions:
+            - action_type: "schedule_visit"
+              outcome: "visit completed within 30 days"
+            - action_type: "send_content"
+              outcome: "content opened/engaged"
+            - action_type: "priority_call"
+              outcome: "call completed AND script_within_14_days"
+        
+        default_rule: "action_accepted AND downstream_outcome"
+    
+    data_sources:
+      primary: "Veeva"  # Real-time CRM
+      secondary: "IQVIA_APLD"
+    
+    truth_query: |
+      WITH prediction_context AS (
+        SELECT 
+          p.prediction_id,
+          p.hcp_id,
+          p.brand,
+          p.prediction_timestamp,
+          p.metadata->>'action_type' as action_type,
+          t.trigger_id,
+          t.status as trigger_status
+        FROM ml_predictions p
+        JOIN triggers t ON t.prediction_id = p.prediction_id
+        WHERE p.prediction_type = 'next_best_action'
+          AND p.outcome_recorded_at IS NULL
+          AND p.prediction_timestamp < NOW() - INTERVAL '${observation_window_days} days'
+      ),
+      action_outcome AS (
+        SELECT 
+          pc.prediction_id,
+          CASE 
+            WHEN pc.trigger_status = 'accepted' THEN true
+            ELSE false
+          END as accepted,
+          EXISTS (
+            SELECT 1 FROM treatment_events te
+            WHERE te.hcp_id = pc.hcp_id 
+              AND te.brand = pc.brand
+              AND te.event_date BETWEEN pc.prediction_timestamp 
+                  AND pc.prediction_timestamp + INTERVAL '${observation_window_days} days'
+          ) as downstream_activity
+        FROM prediction_context pc
+      )
+      SELECT 
+        pc.prediction_id,
+        CASE 
+          WHEN ao.accepted AND ao.downstream_activity THEN 1.0
+          ELSE 0.0
+        END as actual_outcome,
+        NOW() as outcome_recorded_at,
+        'triggers_treatment_events' as truth_source,
+        CASE 
+          WHEN pc.trigger_status = 'accepted' THEN 0.90
+          ELSE 0.70  -- Less confident if trigger wasn't engaged
+        END as truth_confidence
+      FROM prediction_context pc
+      LEFT JOIN action_outcome ao ON ao.prediction_id = pc.prediction_id
+
+# =============================================================================
+# FEEDBACK LOOP CONFIGURATION
+# =============================================================================
+
+feedback_loop:
+  # Scheduler settings
+  schedule:
+    # Frequent check for short-window predictions
+    short_window_cron: "0 */4 * * *"  # Every 4 hours
+    short_window_types: ["script_conversion", "next_best_action"]
+    
+    # Daily check for medium-window
+    medium_window_cron: "0 2 * * *"   # 2 AM daily
+    medium_window_types: ["hcp_churn"]
+    
+    # Weekly for long-window
+    long_window_cron: "0 3 * * 0"     # 3 AM Sundays
+    long_window_types: ["market_share_impact", "treatment_response"]
+  
+  # Processing configuration
+  processing:
+    batch_size: 1000
+    max_retries: 3
+    retry_delay_minutes: 15
+    
+    # What to do when data sources disagree
+    conflict_resolution: "highest_confidence"
+    
+    # Minimum confidence to accept a label
+    min_confidence_threshold: 0.60
+  
+  # Alerting
+  alerts:
+    # Alert if label accuracy drops significantly
+    accuracy_degradation_threshold: 0.10  # 10% drop triggers alert
+    
+    # Alert if too many predictions are INDETERMINATE
+    indeterminate_rate_threshold: 0.20
+    
+    # Alert destination
+    notification_channels:
+      - type: "slack"
+        channel: "#e2i-model-ops"
+      - type: "email"
+        recipients: ["ml-ops@company.com"]
+
+# =============================================================================
+# DRIFT DETECTION INTEGRATION
+# =============================================================================
+
+drift_integration:
+  # Connect to existing drift_monitor agent
+  drift_monitor_agent:
+    # Concept drift detection (uses actual_outcome)
+    concept_drift:
+      enabled: true
+      method: "label_comparison"
+      metrics:
+        - "accuracy_over_time"
+        - "calibration_drift"
+        - "class_ratio_shift"
+      
+      # Window for drift calculation
+      comparison_windows:
+        baseline_days: 90
+        current_days: 30
+      
+      # Thresholds
+      alert_thresholds:
+        accuracy_drop: 0.05     # 5% accuracy drop
+        calibration_error: 0.10 # 10% calibration error increase
+        class_shift: 0.15       # 15% shift in positive class ratio
+    
+    # Feature drift (existing PSI/KS)
+    feature_drift:
+      enabled: true
+      methods: ["psi", "ks_test", "chi_square", "jensen_shannon"]
+      detection_methods_preserved: true
+  
+  # New metrics enabled by ground truth
+  new_metrics:
+    - name: "prediction_vs_actual_correlation"
+      description: "Correlation between predicted probability and actual outcome"
+      formula: "corr(prediction_value, actual_outcome)"
+      
+    - name: "time_to_truth"
+      description: "Average time from prediction to outcome availability"
+      formula: "avg(outcome_recorded_at - prediction_timestamp)"
+      
+    - name: "truth_confidence_distribution"
+      description: "Distribution of confidence scores for labeled outcomes"
+      formula: "histogram(truth_confidence)"
