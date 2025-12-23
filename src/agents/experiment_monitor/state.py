@@ -51,6 +51,16 @@ class EnrollmentIssue(TypedDict):
     severity: AlertSeverity
 
 
+class StaleDataIssue(TypedDict):
+    """Stale data freshness issue."""
+
+    experiment_id: str
+    last_data_timestamp: str
+    hours_since_update: float
+    threshold_hours: float
+    severity: AlertSeverity
+
+
 class FidelityIssue(TypedDict):
     """Digital Twin fidelity issue."""
 
@@ -98,12 +108,14 @@ class ErrorDetails(TypedDict):
 class ExperimentMonitorState(TypedDict):
     """Complete state for Experiment Monitor Agent.
 
-    Total Fields: 20
+    Total Fields: 22
 
     Field Groups:
     - Input (3): query, experiment_ids, check_all_active
-    - Configuration (4): srm_threshold, enrollment_threshold, fidelity_threshold, check_interim
-    - Monitoring outputs (4): experiments, srm_issues, enrollment_issues, fidelity_issues
+    - Configuration (5): srm_threshold, enrollment_threshold, fidelity_threshold,
+                        stale_data_threshold_hours, check_interim
+    - Monitoring outputs (5): experiments, srm_issues, enrollment_issues,
+                             stale_data_issues, fidelity_issues
     - Trigger outputs (1): interim_triggers
     - Alerts (1): alerts
     - Summary (2): monitor_summary, recommended_actions
@@ -116,16 +128,18 @@ class ExperimentMonitorState(TypedDict):
     experiment_ids: NotRequired[list[str]]
     check_all_active: bool
 
-    # ===== Configuration (4) =====
+    # ===== Configuration (5) =====
     srm_threshold: float  # P-value threshold for SRM detection (default: 0.001)
     enrollment_threshold: float  # Min daily enrollment rate
     fidelity_threshold: float  # Max acceptable prediction error
+    stale_data_threshold_hours: float  # Hours after which data is considered stale (default: 24)
     check_interim: bool  # Whether to check for interim analysis triggers
 
-    # ===== Monitoring Outputs (4) =====
+    # ===== Monitoring Outputs (5) =====
     experiments: NotRequired[list[ExperimentSummary]]
     srm_issues: NotRequired[list[SRMIssue]]
     enrollment_issues: NotRequired[list[EnrollmentIssue]]
+    stale_data_issues: NotRequired[list[StaleDataIssue]]
     fidelity_issues: NotRequired[list[FidelityIssue]]
 
     # ===== Trigger Outputs (1) =====
