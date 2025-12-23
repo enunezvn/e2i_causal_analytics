@@ -2,15 +2,23 @@
 E2I Explainer Agent - Context Assembler Node
 Version: 4.2
 Purpose: Gather and assemble context from multiple analysis results
+
+Memory Integration:
+- Working Memory (Redis): Recent conversation retrieval
+- Episodic Memory (Supabase): Similar past explanations
+- Semantic Memory (FalkorDB): Entity relationships and knowledge graph
 """
 
 from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Protocol, runtime_checkable
 
 from ..state import AnalysisContext, ExplainerState
+
+if TYPE_CHECKING:
+    from ..memory_hooks import ExplanationMemoryHooks
 
 logger = logging.getLogger(__name__)
 
@@ -28,14 +36,49 @@ class ContextAssemblerNode:
     """
     Assemble context from multiple analysis results.
     Prepares input for deep reasoning.
+
+    Memory Integration:
+    - Retrieves context from working, episodic, and semantic memory
+    - Uses lazy-loaded memory hooks for Redis/FalkorDB connections
+    - Gracefully degrades if memory systems are unavailable
     """
 
-    def __init__(self, conversation_store: Optional[ConversationStoreProtocol] = None):
-        """Initialize context assembler."""
+    def __init__(
+        self,
+        conversation_store: Optional[ConversationStoreProtocol] = None,
+        memory_hooks: Optional["ExplanationMemoryHooks"] = None,
+    ):
+        """Initialize context assembler.
+
+        Args:
+            conversation_store: Optional legacy conversation store
+            memory_hooks: Memory hooks for tri-memory integration
+        """
         self.conversation_store = conversation_store
+        self._memory_hooks = memory_hooks
+
+    @property
+    def memory_hooks(self) -> Optional["ExplanationMemoryHooks"]:
+        """Lazy-load memory hooks if not provided."""
+        if self._memory_hooks is None:
+            try:
+                from ..memory_hooks import get_explanation_memory_hooks
+
+                self._memory_hooks = get_explanation_memory_hooks()
+            except Exception as e:
+                logger.warning(f"Failed to initialize memory hooks: {e}")
+                return None
+        return self._memory_hooks
 
     async def execute(self, state: ExplainerState) -> ExplainerState:
-        """Execute context assembly."""
+        """Execute context assembly.
+
+        Retrieves context from:
+        1. Working Memory (Redis) - Recent conversation
+        2. Episodic Memory (Supabase) - Similar past explanations
+        3. Semantic Memory (FalkorDB) - Entity relationships
+        4. Analysis results - Current analysis outputs
+        """
         start_time = time.time()
 
         # Check if already failed
@@ -43,6 +86,39 @@ class ContextAssemblerNode:
             return state
 
         try:
+            # === MEMORY RETRIEVAL ===
+            session_id = state.get("session_id", "default")
+            query = state.get("query", "")
+
+            # Initialize memory fields with defaults
+            working_memory_messages = []
+            episodic_context = []
+            semantic_context = {}
+
+            # Retrieve from all memory systems
+            if self.memory_hooks:
+                try:
+                    memory_context = await self.memory_hooks.get_context(
+                        session_id=session_id,
+                        query=query,
+                        brand=state.get("memory_config", {}).get("brand"),
+                        region=state.get("memory_config", {}).get("region"),
+                        max_episodic_results=5,
+                    )
+                    working_memory_messages = memory_context.working_memory
+                    episodic_context = memory_context.episodic_context
+                    semantic_context = memory_context.semantic_context
+
+                    logger.debug(
+                        f"Memory retrieval: working={len(working_memory_messages)}, "
+                        f"episodic={len(episodic_context)}, "
+                        f"semantic_entities={len(semantic_context.get('entities', []))}"
+                    )
+                except Exception as e:
+                    logger.warning(f"Memory retrieval failed (non-fatal): {e}")
+                    # Continue with empty memory context - graceful degradation
+
+            # === ANALYSIS CONTEXT EXTRACTION ===
             analysis_results = state.get("analysis_results", [])
 
             if not analysis_results:
@@ -80,6 +156,8 @@ class ContextAssemblerNode:
 
             logger.info(
                 f"Context assembled: {len(contexts)} analysis contexts, "
+                f"memory=[working={len(working_memory_messages)}, "
+                f"episodic={len(episodic_context)}], "
                 f"focus_areas={state.get('focus_areas', [])}"
             )
 
@@ -88,6 +166,10 @@ class ContextAssemblerNode:
                 "analysis_context": contexts,
                 "user_context": user_context,
                 "conversation_history": history,
+                # Memory integration fields
+                "working_memory_messages": working_memory_messages,
+                "episodic_context": episodic_context,
+                "semantic_context": semantic_context,
                 "assembly_latency_ms": assembly_time,
                 "status": "reasoning",
             }

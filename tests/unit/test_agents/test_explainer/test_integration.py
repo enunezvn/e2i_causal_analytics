@@ -279,6 +279,13 @@ class TestExplainerAgentIntegration:
             "user_expertise": "analyst",
             "output_format": "narrative",
             "focus_areas": None,
+            # Memory integration fields
+            "session_id": "test_session",
+            "memory_config": {},
+            "episodic_context": None,
+            "semantic_context": None,
+            "working_memory_messages": None,
+            # Context fields
             "analysis_context": None,
             "user_context": None,
             "conversation_history": None,
@@ -301,7 +308,9 @@ class TestExplainerAgentIntegration:
             "status": "pending",
         }
 
-        result = await graph.ainvoke(initial_state)
+        # Provide config with thread_id for checkpointer
+        config = {"configurable": {"thread_id": "test_graph_direct"}}
+        result = await graph.ainvoke(initial_state, config=config)
 
         assert result["status"] == "completed"
         assert result["executive_summary"] is not None
