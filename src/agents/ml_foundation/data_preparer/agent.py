@@ -5,6 +5,7 @@ and enforces a QC gate that blocks downstream training if quality fails.
 """
 
 import logging
+import uuid
 from datetime import datetime
 from typing import Any, Dict
 
@@ -12,6 +13,26 @@ from .graph import create_data_preparer_graph
 from .state import DataPreparerState
 
 logger = logging.getLogger(__name__)
+
+
+def _get_dq_repository():
+    """Get DataQualityReportRepository (lazy import to avoid circular deps)."""
+    try:
+        from src.repositories.data_quality_report import get_data_quality_report_repository
+        return get_data_quality_report_repository()
+    except Exception as e:
+        logger.warning(f"Could not get DQ repository: {e}")
+        return None
+
+
+def _get_opik_connector():
+    """Get OpikConnector (lazy import to avoid circular deps)."""
+    try:
+        from src.mlops.opik_connector import get_opik_connector
+        return get_opik_connector()
+    except Exception as e:
+        logger.warning(f"Could not get Opik connector: {e}")
+        return None
 
 
 class DataPreparerAgent:
@@ -32,13 +53,17 @@ class DataPreparerAgent:
     6. Enforce QC gate (blocks training if quality fails)
     """
 
+    # Class attributes per contract
+    tier = 0
+    tier_name = "ml_foundation"
+    agent_name = "data_preparer"
+    agent_type = "standard"
+    sla_seconds = 60
+    tools = ["great_expectations", "pandas", "numpy", "scipy"]
+    primary_model = None  # No LLM usage
+
     def __init__(self):
         """Initialize the data_preparer agent."""
-        self.tier = 0
-        self.tier_name = "ml_foundation"
-        self.agent_type = "standard"
-        self.sla_seconds = 60
-
         # Create the LangGraph
         self.graph = create_data_preparer_graph().compile()
 
@@ -82,6 +107,7 @@ class DataPreparerAgent:
             raise ValueError("experiment_id missing from scope_spec")
 
         # Prepare initial state
+        # Note: Data loading is handled by the data_loader node in the graph
         initial_state: DataPreparerState = {
             "experiment_id": experiment_id,
             "scope_spec": scope_spec,
@@ -91,16 +117,31 @@ class DataPreparerAgent:
             "skip_leakage_check": input_data.get("skip_leakage_check", False),
         }
 
-        # TODO: Load data from data_source and split into train/val/test/holdout
-        # For now, placeholder - in production this should:
-        # 1. Query data from Supabase using data_source
-        # 2. Apply split_id if provided, or create new split
-        # 3. Load into pandas DataFrames
-        # This is a critical gap that needs to be filled
-
-        # Execute the graph
+        # Execute the graph with optional Opik tracing
+        opik = _get_opik_connector()
         try:
-            final_state = await self.graph.ainvoke(initial_state)
+            # Wrap execution in Opik trace if available
+            if opik and opik.is_enabled:
+                async with opik.trace_agent(
+                    agent_name=self.agent_name,
+                    operation="prepare_data",
+                    metadata={
+                        "experiment_id": experiment_id,
+                        "data_source": input_data["data_source"],
+                        "tier": self.tier,
+                    },
+                    tags=[self.agent_name, "tier_0", "qc_gate"],
+                    input_data={"scope_spec": scope_spec},
+                ) as span:
+                    final_state = await self.graph.ainvoke(initial_state)
+                    # Set output on span
+                    span.set_output({
+                        "gate_passed": final_state.get("gate_passed"),
+                        "qc_status": final_state.get("qc_status"),
+                        "overall_score": final_state.get("overall_score"),
+                    })
+            else:
+                final_state = await self.graph.ainvoke(initial_state)
 
             # Check for errors
             if final_state.get("error"):
@@ -167,13 +208,54 @@ class DataPreparerAgent:
             if duration > self.sla_seconds:
                 logger.warning(f"SLA violation: {duration:.2f}s > {self.sla_seconds}s")
 
-            # TODO: Persist QC report to ml_data_quality_reports table
-            # TODO: Persist baseline metrics to ml_data_quality_reports table
-            # TODO: Register features in Feast feature store
-            # TODO: Emit observability span via observability_connector
+            # Persist QC report to database
+            await self._persist_qc_report(output["qc_report"], input_data["data_source"])
 
             return output
 
         except Exception as e:
             logger.error(f"Data preparation failed: {e}", exc_info=True)
             raise RuntimeError(f"Data preparation failed: {str(e)}") from e
+
+    async def _persist_qc_report(
+        self, qc_report: Dict[str, Any], data_source: str
+    ) -> None:
+        """Persist QC report to database.
+
+        Args:
+            qc_report: QC report dictionary
+            data_source: Data source table name
+        """
+        try:
+            repo = _get_dq_repository()
+            if repo is None:
+                logger.debug("Skipping QC report persistence (no repository)")
+                return
+
+            # Map QC report to database record
+            db_record = {
+                "id": str(uuid.uuid4()),
+                "report_name": f"data_preparer_{qc_report['experiment_id']}",
+                "expectation_suite_name": f"data_preparer_{data_source}",
+                "table_name": data_source,
+                "overall_status": qc_report["status"],
+                "expectations_evaluated": len(qc_report.get("expectation_results", [])),
+                "expectations_passed": len(qc_report.get("expectation_results", []))
+                - len(qc_report.get("failed_expectations", [])),
+                "expectations_failed": len(qc_report.get("failed_expectations", [])),
+                "success_rate": qc_report["overall_score"],
+                "failed_expectations": qc_report.get("failed_expectations", []),
+                "completeness_score": qc_report.get("completeness_score"),
+                "validity_score": qc_report.get("validity_score"),
+                "uniqueness_score": qc_report.get("uniqueness_score"),
+                "consistency_score": qc_report.get("consistency_score"),
+                "timeliness_score": qc_report.get("timeliness_score"),
+                "data_split": "train",  # QC runs on train split
+                "training_run_id": None,  # Set by model_trainer if applicable
+            }
+
+            await repo.store_result(db_record)
+            logger.info(f"Persisted QC report for {qc_report['experiment_id']}")
+
+        except Exception as e:
+            logger.warning(f"Failed to persist QC report: {e}")
