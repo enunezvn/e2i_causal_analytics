@@ -95,7 +95,14 @@ Thumbs.db
 
 # Claude Code
 .claude/settings.local.json
+.claude_settings.json
 
 # Auto Claude data directory
 .auto-claude/
 .playwright-mcp/
+
+# Git worktrees
+.worktrees/
+
+# Windows NTFS alternate data streams
+*.html:*
