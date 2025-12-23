@@ -63,6 +63,12 @@ from src.repositories.data_quality_report import (
     get_data_quality_report_repository,
 )
 
+# SHAP Analysis (Tier 0 - feature_analyzer)
+from src.repositories.shap_analysis import (
+    ShapAnalysisRepository,
+    get_shap_analysis_repository,
+)
+
 # ML Experiment Tracking (Phase 5)
 from src.repositories.ml_experiment import (
     MLExperiment,
@@ -133,6 +139,9 @@ __all__ = [
     # Data Quality (Phase 3)
     "DataQualityReportRepository",
     "get_data_quality_report_repository",
+    # SHAP Analysis (Tier 0 - feature_analyzer)
+    "ShapAnalysisRepository",
+    "get_shap_analysis_repository",
     # ML Experiment Tracking (Phase 5)
     "MLExperiment",
     "MLExperimentRepository",
