@@ -7,6 +7,7 @@ Task Categories:
 - Feature Store: Feast materialization and freshness checks
 - Drift Monitoring: Drift detection, alerts, and cleanup (Phase 14)
 - Performance Tracking: Model performance metrics and alerts (Phase 14)
+- A/B Testing: Experiment execution, monitoring, and analysis (Phase 15)
 """
 
 # Import tasks for auto-discovery
@@ -29,6 +30,17 @@ from src.tasks.drift_monitoring_tasks import (
     check_retraining_for_all_models,
 )
 
+# A/B Testing Tasks (Phase 15)
+from src.tasks.ab_testing_tasks import (
+    scheduled_interim_analysis,
+    enrollment_health_check,
+    srm_detection_sweep,
+    compute_experiment_results,
+    fidelity_tracking_update,
+    check_all_active_experiments,
+    cleanup_old_ab_results,
+)
+
 __all__ = [
     # Feature Store
     "materialize_features",
@@ -46,4 +58,12 @@ __all__ = [
     "evaluate_retraining_need",
     "execute_model_retraining",
     "check_retraining_for_all_models",
+    # A/B Testing
+    "scheduled_interim_analysis",
+    "enrollment_health_check",
+    "srm_detection_sweep",
+    "compute_experiment_results",
+    "fidelity_tracking_update",
+    "check_all_active_experiments",
+    "cleanup_old_ab_results",
 ]
