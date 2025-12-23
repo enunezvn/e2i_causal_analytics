@@ -324,6 +324,79 @@ class GapAnalyzerAgent:
             "suggested_next_agent": None,
         }
 
+    # Orchestrator handoff protocol
+
+    def get_handoff(self, output: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate handoff for orchestrator agent coordination.
+
+        Follows standardized handoff protocol for multi-agent orchestration.
+        Provides key findings, output availability, and next agent suggestions.
+
+        Args:
+            output: GapAnalyzerOutput dictionary from run() method
+
+        Returns:
+            Handoff dictionary with:
+            - agent: Agent name
+            - analysis_type: Type of analysis performed
+            - key_findings: Summary metrics and counts
+            - outputs: Availability of each output type
+            - requires_further_analysis: Whether follow-up is needed
+            - suggested_next_agent: Recommended agent for follow-up
+            - suggestions: Actionable suggestions based on findings
+        """
+        opportunities = output.get("prioritized_opportunities", [])
+        quick_wins = output.get("quick_wins", [])
+        strategic_bets = output.get("strategic_bets", [])
+
+        # Count gaps by severity (if available in opportunities)
+        critical_count = len([o for o in opportunities if o.get("priority", 0) == 1])
+        high_count = len([o for o in opportunities if o.get("priority", 0) == 2])
+
+        # Build suggestions based on findings
+        suggestions = []
+        if quick_wins:
+            suggestions.append(
+                f"Implement {len(quick_wins)} quick wins with combined ROI of "
+                f"${sum(qw.get('roi_estimate', {}).get('expected_value', 0) for qw in quick_wins):,.0f}"
+            )
+        if strategic_bets:
+            suggestions.append(
+                f"Evaluate {len(strategic_bets)} strategic bets for long-term value"
+            )
+        if output.get("suggested_next_agent") == "causal_impact":
+            suggestions.append("Validate high-ROI opportunities with causal analysis")
+        if output.get("suggested_next_agent") == "heterogeneous_optimizer":
+            suggestions.append("Optimize allocation across segments with heterogeneous effects")
+
+        handoff = {
+            "agent": self.agent_name,
+            "analysis_type": "gap_analysis",
+            "key_findings": {
+                "total_opportunities": len(opportunities),
+                "quick_wins_count": len(quick_wins),
+                "strategic_bets_count": len(strategic_bets),
+                "critical_gaps": critical_count,
+                "high_priority_gaps": high_count,
+                "total_addressable_value": output.get("total_addressable_value", 0),
+                "total_gap_value": output.get("total_gap_value", 0),
+                "segments_analyzed": output.get("segments_analyzed", 0),
+                "confidence": output.get("confidence", 0),
+            },
+            "outputs": {
+                "opportunities": "available" if opportunities else "unavailable",
+                "quick_wins": len(quick_wins),
+                "strategic_bets": len(strategic_bets),
+                "executive_summary": "available" if output.get("executive_summary") else "unavailable",
+                "key_insights": len(output.get("key_insights", [])),
+            },
+            "requires_further_analysis": output.get("requires_further_analysis", False),
+            "suggested_next_agent": output.get("suggested_next_agent"),
+            "suggestions": suggestions,
+        }
+
+        return handoff
+
     # Helper methods for orchestrator
 
     async def classify_intent(self, query: str) -> Dict[str, Any]:
