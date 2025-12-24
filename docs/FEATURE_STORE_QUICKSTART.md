@@ -104,7 +104,6 @@ e2i-mlflow            mlflow     running (healthy)
 
 - **Redis**: Should be accessible at `localhost:6379`
 - **MLflow UI**: http://localhost:5000
-- **Phoenix UI** (if started): http://localhost:6006
 
 ---
 
