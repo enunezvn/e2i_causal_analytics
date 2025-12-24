@@ -77,16 +77,33 @@ This document provides the validation matrix for all 18 E2I agents across:
 ```python
 @dataclass
 class CausalAnalysisTrainingSignal:
+    # Input Context
     signal_id: str
     session_id: str
     query: str
-    treatment_identified: bool
-    outcome_identified: bool
-    confounders_found: int
-    ate_computed: bool
-    refutation_passed: bool
-    confidence_score: float
+    treatment_var: str
+    outcome_var: str
+    confounders_count: int
+    # Graph Building Phase
+    dag_nodes_count: int
+    dag_edges_count: int
+    adjustment_sets_found: int
+    graph_confidence: float
+    # Estimation Phase
+    estimation_method: str
+    ate_estimate: float
+    ate_ci_width: float
+    statistical_significance: bool
+    effect_size: str  # small, medium, large
+    sample_size: int
+    # Refutation Phase
+    refutation_tests_passed: int
+    refutation_tests_failed: int
+    overall_robust: bool
+    # Outcome Metrics
     total_latency_ms: float
+    confidence_score: float
+    user_satisfaction: Optional[float]
     def compute_reward(self) -> float: ...
 ```
 
@@ -109,14 +126,31 @@ class CausalAnalysisTrainingSignal:
 ```python
 @dataclass
 class GapAnalysisTrainingSignal:
+    # Input Context
     signal_id: str
     session_id: str
     query: str
-    gaps_identified: int
-    roi_estimates_computed: int
+    brand: str
+    metrics_analyzed: List[str]
+    segments_analyzed: int
+    # Detection Phase
+    gaps_detected_count: int
+    total_gap_value: float
+    gap_types: List[str]
+    # ROI Phase
+    roi_estimates_count: int
+    total_addressable_value: float
+    avg_expected_roi: float
+    high_roi_count: int
+    # Prioritization Phase
+    quick_wins_count: int
+    strategic_bets_count: int
+    prioritization_confidence: float
+    # Output Quality
     actionable_recommendations: int
-    evidence_quality: float
+    # Outcome Metrics
     total_latency_ms: float
+    user_satisfaction: Optional[float]
     def compute_reward(self) -> float: ...
 ```
 
@@ -139,14 +173,31 @@ class GapAnalysisTrainingSignal:
 ```python
 @dataclass
 class HeterogeneousOptimizationTrainingSignal:
+    # Input Context
     signal_id: str
     session_id: str
     query: str
-    segments_identified: int
-    cate_estimates_computed: int
-    policy_recommendations: int
-    optimization_quality: float
+    treatment_var: str
+    outcome_var: str
+    segment_vars_count: int
+    effect_modifiers_count: int
+    # CATE Estimation Phase
+    overall_ate: float
+    heterogeneity_score: float
+    cate_segments_count: int
+    significant_cate_count: int
+    # Segment Discovery Phase
+    high_responders_count: int
+    low_responders_count: int
+    responder_spread: float
+    # Policy Learning Phase
+    policy_recommendations_count: int
+    expected_total_lift: float
+    actionable_policies: int
+    # Outcome Metrics
     total_latency_ms: float
+    confidence_score: float
+    user_satisfaction: Optional[float]
     def compute_reward(self) -> float: ...
 ```
 
@@ -171,15 +222,34 @@ class HeterogeneousOptimizationTrainingSignal:
 ```python
 @dataclass
 class DriftDetectionTrainingSignal:
+    # Input Context
     signal_id: str
     session_id: str
     query: str
-    drift_detected: bool
-    drift_type: str  # "data" | "model" | "concept"
-    severity: float
-    features_affected: int
-    alert_generated: bool
+    model_id: str
+    features_monitored: int
+    time_window: str
+    # Detection Configuration
+    check_data_drift: bool
+    check_model_drift: bool
+    check_concept_drift: bool
+    psi_threshold: float
+    significance_level: float
+    # Detection Results
+    data_drift_count: int
+    model_drift_count: int
+    concept_drift_count: int
+    overall_drift_score: float
+    severity_distribution: Dict[str, int]
+    # Alert Generation
+    alerts_generated: int
+    critical_alerts: int
+    warnings: int
+    recommended_actions_count: int
+    # Outcome Metrics
     total_latency_ms: float
+    drift_correctly_identified: Optional[bool]
+    user_satisfaction: Optional[float]
     def compute_reward(self) -> float: ...
 ```
 
@@ -202,15 +272,37 @@ class DriftDetectionTrainingSignal:
 ```python
 @dataclass
 class ExperimentDesignTrainingSignal:
+    # Input Context
     signal_id: str
     session_id: str
-    query: str
-    design_complete: bool
-    sample_size_calculated: bool
-    power_analysis_done: bool
-    validity_threats_addressed: int
-    digital_twin_simulated: bool
+    business_question: str
+    preregistration_formality: str  # light, medium, heavy
+    max_redesign_iterations: int
+    # Design Reasoning Phase
+    design_type_chosen: str  # RCT, quasi_experiment, etc.
+    treatments_count: int
+    outcomes_count: int
+    randomization_unit: str
+    # Power Analysis Phase
+    required_sample_size: int
+    achieved_power: float
+    minimum_detectable_effect: float
+    duration_estimate_days: int
+    # Validity Audit Phase
+    validity_threats_identified: int
+    critical_threats: int
+    mitigations_proposed: int
+    overall_validity_score: float
+    redesign_iterations: int
+    # Template Generation
+    template_generated: bool
+    causal_graph_generated: bool
+    analysis_code_generated: bool
+    # Outcome Metrics
+    total_llm_tokens_used: int
     total_latency_ms: float
+    experiment_approved: Optional[bool]
+    user_satisfaction: Optional[float]
     def compute_reward(self) -> float: ...
 ```
 
@@ -261,15 +353,33 @@ class HealthScoreRecipient:
 ```python
 @dataclass
 class PredictionSynthesisTrainingSignal:
+    # Input Context
     signal_id: str
     session_id: str
     query: str
-    model_count: int
-    ensemble_method: str
-    predictions_generated: int
+    entity_id: str
+    entity_type: str  # hcp, territory, patient
+    prediction_target: str
+    time_horizon: str
+    # Model Orchestration
+    models_requested: int
+    models_succeeded: int
+    models_failed: int
+    ensemble_method: str  # average, weighted, stacking, voting
+    # Ensemble Results
+    point_estimate: float
+    prediction_interval_width: float
+    ensemble_confidence: float
     model_agreement: float
-    prediction_confidence: float
+    # Context Enrichment
+    similar_cases_found: int
+    feature_importance_calculated: bool
+    historical_accuracy: float
+    trend_direction: str
+    # Outcome Metrics
     total_latency_ms: float
+    prediction_accuracy: Optional[float]
+    user_satisfaction: Optional[float]
     def compute_reward(self) -> float: ...
 ```
 
@@ -555,3 +665,5 @@ Location: `tests/integration/test_signal_flow/`
 | 2025-12-23 | DSPy Integration now at 100% (13/13) including RAG |
 | 2025-12-23 | ✅ drift_monitor memory_hooks.py implemented - Memory hooks now at 11/12 (92%) |
 | 2025-12-23 | ✅ experiment_designer memory_hooks.py implemented - Memory hooks now at 12/12 (100%) COMPLETE |
+| 2025-12-23 | ✅ Added 131 signal flow integration tests (5 batches) |
+| 2025-12-23 | ✅ Updated all training signal schemas to match actual implementations |
