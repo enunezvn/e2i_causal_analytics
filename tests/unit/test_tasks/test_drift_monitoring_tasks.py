@@ -112,29 +112,46 @@ class TestRunDriftDetectionTask:
         assert hasattr(run_drift_detection, "delay")
         assert hasattr(run_drift_detection, "apply_async")
 
-    @patch("src.tasks.drift_monitoring_tasks.ConceptDriftDetector")
-    @patch("src.tasks.drift_monitoring_tasks.DriftHistoryRepository")
-    @patch("src.tasks.drift_monitoring_tasks.MonitoringRunRepository")
+    @patch("src.repositories.drift_monitoring.MonitoringRunRepository")
+    @patch("src.repositories.drift_monitoring.DriftHistoryRepository")
+    @patch("src.repositories.drift_monitoring.MonitoringAlertRepository")
+    @patch("src.agents.drift_monitor.nodes.alert_aggregator.AlertAggregatorNode")
+    @patch("src.agents.drift_monitor.nodes.concept_drift.ConceptDriftNode")
+    @patch("src.agents.drift_monitor.nodes.model_drift.ModelDriftNode")
+    @patch("src.agents.drift_monitor.nodes.data_drift.DataDriftNode")
+    @patch("src.agents.drift_monitor.connectors.get_connector")
     def test_task_execution_sync(
-        self, mock_run_repo, mock_drift_repo, mock_detector_cls
+        self,
+        mock_get_connector,
+        mock_data_drift,
+        mock_model_drift,
+        mock_concept_drift,
+        mock_alert_agg,
+        mock_alert_repo,
+        mock_drift_repo,
+        mock_run_repo,
     ):
         """Test synchronous task execution."""
         from src.tasks.drift_monitoring_tasks import run_drift_detection
 
         # Setup mocks
-        mock_detector = MagicMock()
-        mock_detector.detect_drift = MagicMock(
-            return_value={
-                "overall_drift_score": 0.4,
-                "features_checked": 10,
-                "features_with_drift": ["feature_1"],
-            }
-        )
-        mock_detector_cls.return_value = mock_detector
+        mock_connector = MagicMock()
+        mock_connector.get_available_features = AsyncMock(return_value=["f1", "f2"])
+        mock_get_connector.return_value = mock_connector
 
-        mock_drift_repo.return_value.save_drift_result = MagicMock(return_value=True)
-        mock_run_repo.return_value.create_run = MagicMock()
-        mock_run_repo.return_value.complete_run = MagicMock()
+        # Mock nodes to return updated state
+        mock_data_drift.return_value.execute = AsyncMock(return_value={})
+        mock_model_drift.return_value.execute = AsyncMock(return_value={})
+        mock_concept_drift.return_value.execute = AsyncMock(return_value={})
+        mock_alert_agg.return_value.execute = AsyncMock(return_value={})
+
+        # Mock repositories
+        mock_run_record = MagicMock()
+        mock_run_record.id = "run-123"
+        mock_run_repo.return_value.start_run = AsyncMock(return_value=mock_run_record)
+        mock_run_repo.return_value.complete_run = AsyncMock()
+        mock_drift_repo.return_value.record_drift_results = AsyncMock()
+        mock_alert_repo.return_value.create_alerts_from_drift = AsyncMock(return_value=[])
 
         # Execute task synchronously
         result = run_drift_detection(
@@ -148,16 +165,45 @@ class TestRunDriftDetectionTask:
         assert result is not None
         assert isinstance(result, dict)
 
-    @patch("src.tasks.drift_monitoring_tasks.ConceptDriftDetector")
-    def test_task_with_specific_features(self, mock_detector_cls):
+    @patch("src.repositories.drift_monitoring.MonitoringRunRepository")
+    @patch("src.repositories.drift_monitoring.DriftHistoryRepository")
+    @patch("src.repositories.drift_monitoring.MonitoringAlertRepository")
+    @patch("src.agents.drift_monitor.nodes.alert_aggregator.AlertAggregatorNode")
+    @patch("src.agents.drift_monitor.nodes.concept_drift.ConceptDriftNode")
+    @patch("src.agents.drift_monitor.nodes.model_drift.ModelDriftNode")
+    @patch("src.agents.drift_monitor.nodes.data_drift.DataDriftNode")
+    @patch("src.agents.drift_monitor.connectors.get_connector")
+    def test_task_with_specific_features(
+        self,
+        mock_get_connector,
+        mock_data_drift,
+        mock_model_drift,
+        mock_concept_drift,
+        mock_alert_agg,
+        mock_alert_repo,
+        mock_drift_repo,
+        mock_run_repo,
+    ):
         """Test task execution with specific features."""
         from src.tasks.drift_monitoring_tasks import run_drift_detection
 
-        mock_detector = MagicMock()
-        mock_detector.detect_drift = MagicMock(
-            return_value={"overall_drift_score": 0.3}
-        )
-        mock_detector_cls.return_value = mock_detector
+        # Setup mocks
+        mock_connector = MagicMock()
+        mock_get_connector.return_value = mock_connector
+
+        # Mock nodes to return updated state
+        mock_data_drift.return_value.execute = AsyncMock(return_value={})
+        mock_model_drift.return_value.execute = AsyncMock(return_value={})
+        mock_concept_drift.return_value.execute = AsyncMock(return_value={})
+        mock_alert_agg.return_value.execute = AsyncMock(return_value={})
+
+        # Mock repositories
+        mock_run_record = MagicMock()
+        mock_run_record.id = "run-123"
+        mock_run_repo.return_value.start_run = AsyncMock(return_value=mock_run_record)
+        mock_run_repo.return_value.complete_run = AsyncMock()
+        mock_drift_repo.return_value.record_drift_results = AsyncMock()
+        mock_alert_repo.return_value.create_alerts_from_drift = AsyncMock(return_value=[])
 
         result = run_drift_detection(
             model_id="test_v1.0",
@@ -189,18 +235,26 @@ class TestCheckAllProductionModelsTask:
         assert hasattr(check_all_production_models, "delay")
 
     @patch("src.tasks.drift_monitoring_tasks.run_drift_detection")
-    @patch("src.tasks.drift_monitoring_tasks.get_production_models")
-    def test_task_execution(self, mock_get_models, mock_run_drift):
+    @patch("src.agents.drift_monitor.connectors.get_connector")
+    def test_task_execution(self, mock_get_connector, mock_run_drift):
         """Test task execution."""
         from src.tasks.drift_monitoring_tasks import check_all_production_models
 
-        mock_get_models.return_value = ["model_v1.0", "model_v2.0", "model_v3.0"]
-        mock_run_drift.delay = MagicMock()
+        mock_connector = MagicMock()
+        mock_connector.get_available_models = AsyncMock(
+            return_value=[
+                {"id": "model_v1.0"},
+                {"id": "model_v2.0"},
+                {"id": "model_v3.0"},
+            ]
+        )
+        mock_get_connector.return_value = mock_connector
+        mock_run_drift.delay = MagicMock(return_value=MagicMock(id="task-123"))
 
         result = check_all_production_models(time_window="7d")
 
         assert result is not None
-        assert "models_queued" in result or isinstance(result, dict)
+        assert isinstance(result, dict)
 
 
 # =============================================================================
@@ -223,14 +277,24 @@ class TestCleanupOldDriftHistoryTask:
 
         assert hasattr(cleanup_old_drift_history, "delay")
 
-    @patch("src.tasks.drift_monitoring_tasks.DriftHistoryRepository")
-    def test_task_execution(self, mock_repo_cls):
+    @patch("src.memory.services.factories.get_supabase_client")
+    def test_task_execution(self, mock_get_client):
         """Test task execution."""
         from src.tasks.drift_monitoring_tasks import cleanup_old_drift_history
 
-        mock_repo = MagicMock()
-        mock_repo.cleanup_old_records = MagicMock(return_value=50)
-        mock_repo_cls.return_value = mock_repo
+        # Mock Supabase client with chained table operations
+        mock_result = MagicMock()
+        mock_result.data = []  # Simulate no records deleted
+
+        mock_execute = AsyncMock(return_value=mock_result)
+        mock_eq = MagicMock(return_value=MagicMock(execute=mock_execute))
+        mock_lt = MagicMock(return_value=MagicMock(eq=mock_eq, execute=mock_execute))
+        mock_delete = MagicMock(return_value=MagicMock(lt=mock_lt))
+        mock_table = MagicMock(return_value=MagicMock(delete=mock_delete))
+
+        mock_client = MagicMock()
+        mock_client.table = mock_table
+        mock_get_client.return_value = AsyncMock(return_value=mock_client)()
 
         result = cleanup_old_drift_history(retention_days=90)
 
@@ -257,22 +321,27 @@ class TestSendDriftAlertNotificationsTask:
 
         assert hasattr(send_drift_alert_notifications, "delay")
 
-    @patch("src.tasks.drift_monitoring_tasks.route_drift_alerts")
-    def test_task_execution(self, mock_route_alerts):
+    @patch("src.repositories.drift_monitoring.MonitoringAlertRepository")
+    def test_task_execution(self, mock_alert_repo_cls):
         """Test task execution."""
         from src.tasks.drift_monitoring_tasks import send_drift_alert_notifications
 
-        mock_route_alerts.return_value = {"success": True, "channels_notified": 2}
+        mock_alert = MagicMock()
+        mock_alert.id = "alert-123"
+        mock_alert.severity = "high"
+        mock_alert.message = "Drift detected"
 
-        drift_results = {
-            "model_id": "test_v1.0",
-            "overall_drift_score": 0.65,
-            "features_with_drift": ["feature_1"],
-        }
+        mock_alert_repo = MagicMock()
+        mock_alert_repo.get_by_id = AsyncMock(return_value=mock_alert)
+        mock_alert_repo_cls.return_value = mock_alert_repo
 
-        result = send_drift_alert_notifications(drift_results)
+        # Function takes alert_ids, not drift_results
+        alert_ids = ["alert-123", "alert-456"]
+
+        result = send_drift_alert_notifications(alert_ids)
 
         assert result is not None
+        assert isinstance(result, dict)
 
 
 # =============================================================================
@@ -295,16 +364,23 @@ class TestTrackModelPerformanceTask:
 
         assert hasattr(track_model_performance, "delay")
 
-    @patch("src.tasks.drift_monitoring_tasks.record_model_performance")
-    def test_task_execution(self, mock_record):
+    @patch("src.services.performance_tracking.get_performance_tracker")
+    @patch("src.services.performance_tracking.record_model_performance")
+    def test_task_execution(self, mock_record, mock_get_tracker):
         """Test task execution."""
         from src.tasks.drift_monitoring_tasks import track_model_performance
 
-        mock_record.return_value = {
-            "model_version": "test_v1.0",
-            "sample_size": 100,
-            "metrics": {"accuracy": 0.85},
-        }
+        mock_record.return_value = AsyncMock(
+            return_value={
+                "model_version": "test_v1.0",
+                "sample_size": 100,
+                "metrics": {"accuracy": 0.85},
+            }
+        )()
+
+        mock_tracker = MagicMock()
+        mock_tracker.check_performance_alerts = AsyncMock(return_value=[])
+        mock_get_tracker.return_value = mock_tracker
 
         result = track_model_performance(
             model_id="test_v1.0",
@@ -314,15 +390,22 @@ class TestTrackModelPerformanceTask:
 
         assert result is not None
 
-    @patch("src.tasks.drift_monitoring_tasks.record_model_performance")
-    def test_task_with_prediction_scores(self, mock_record):
+    @patch("src.services.performance_tracking.get_performance_tracker")
+    @patch("src.services.performance_tracking.record_model_performance")
+    def test_task_with_prediction_scores(self, mock_record, mock_get_tracker):
         """Test task with prediction probability scores."""
         from src.tasks.drift_monitoring_tasks import track_model_performance
 
-        mock_record.return_value = {
-            "model_version": "test_v1.0",
-            "metrics": {"accuracy": 0.85, "auc_roc": 0.92},
-        }
+        mock_record.return_value = AsyncMock(
+            return_value={
+                "model_version": "test_v1.0",
+                "metrics": {"accuracy": 0.85, "auc_roc": 0.92},
+            }
+        )()
+
+        mock_tracker = MagicMock()
+        mock_tracker.check_performance_alerts = AsyncMock(return_value=[])
+        mock_get_tracker.return_value = mock_tracker
 
         result = track_model_performance(
             model_id="test_v1.0",
@@ -354,27 +437,27 @@ class TestCheckModelPerformanceAlertsTask:
 
         assert hasattr(check_model_performance_alerts, "delay")
 
-    @patch("src.tasks.drift_monitoring_tasks.get_performance_tracker")
+    @patch("src.services.performance_tracking.get_performance_tracker")
     def test_task_execution_no_alerts(self, mock_get_tracker):
         """Test task execution with no alerts."""
         from src.tasks.drift_monitoring_tasks import check_model_performance_alerts
 
         mock_tracker = MagicMock()
-        mock_tracker.check_performance_alerts = MagicMock(return_value=[])
+        mock_tracker.check_performance_alerts = AsyncMock(return_value=[])
         mock_get_tracker.return_value = mock_tracker
 
         result = check_model_performance_alerts(model_id="test_v1.0")
 
         assert result is not None
 
-    @patch("src.tasks.drift_monitoring_tasks.get_performance_tracker")
-    @patch("src.tasks.drift_monitoring_tasks.route_drift_alerts")
-    def test_task_execution_with_alerts(self, mock_route, mock_get_tracker):
+    @patch("src.services.alert_routing.get_alert_router")
+    @patch("src.services.performance_tracking.get_performance_tracker")
+    def test_task_execution_with_alerts(self, mock_get_tracker, mock_get_router):
         """Test task execution with alerts."""
         from src.tasks.drift_monitoring_tasks import check_model_performance_alerts
 
         mock_tracker = MagicMock()
-        mock_tracker.check_performance_alerts = MagicMock(
+        mock_tracker.check_performance_alerts = AsyncMock(
             return_value=[
                 {
                     "metric_name": "accuracy",
@@ -388,7 +471,10 @@ class TestCheckModelPerformanceAlertsTask:
             ]
         )
         mock_get_tracker.return_value = mock_tracker
-        mock_route.return_value = {"success": True}
+
+        mock_router = MagicMock()
+        mock_router.route_alert = AsyncMock(return_value={"success": True})
+        mock_get_router.return_value = mock_router
 
         result = check_model_performance_alerts(model_id="test_v1.0")
 
@@ -415,41 +501,39 @@ class TestEvaluateRetrainingNeedTask:
 
         assert hasattr(evaluate_retraining_need, "delay")
 
-    @patch("src.tasks.drift_monitoring_tasks.get_retraining_trigger_service")
-    def test_task_execution_no_retrain(self, mock_get_service):
+    @patch("src.services.retraining_trigger.evaluate_and_trigger_retraining")
+    def test_task_execution_no_retrain(self, mock_evaluate):
         """Test task execution when no retraining needed."""
         from src.tasks.drift_monitoring_tasks import evaluate_retraining_need
 
-        mock_service = MagicMock()
-        mock_service.evaluate_retraining_need = MagicMock(
-            return_value=MagicMock(
-                should_retrain=False,
-                confidence=0.9,
-                reasons=["Model stable"],
-                recommended_action="Continue monitoring",
-            )
-        )
-        mock_get_service.return_value = mock_service
+        mock_evaluate.return_value = AsyncMock(
+            return_value={
+                "status": "evaluated",
+                "should_retrain": False,
+                "confidence": 0.9,
+                "reasons": ["Model stable"],
+                "recommended_action": "Continue monitoring",
+            }
+        )()
 
         result = evaluate_retraining_need(model_id="test_v1.0")
 
         assert result is not None
 
-    @patch("src.tasks.drift_monitoring_tasks.get_retraining_trigger_service")
-    def test_task_execution_retrain_needed(self, mock_get_service):
+    @patch("src.services.retraining_trigger.evaluate_and_trigger_retraining")
+    def test_task_execution_retrain_needed(self, mock_evaluate):
         """Test task execution when retraining needed."""
         from src.tasks.drift_monitoring_tasks import evaluate_retraining_need
 
-        mock_service = MagicMock()
-        mock_service.evaluate_retraining_need = MagicMock(
-            return_value=MagicMock(
-                should_retrain=True,
-                confidence=0.85,
-                reasons=["High data drift detected"],
-                recommended_action="Schedule retraining",
-            )
-        )
-        mock_get_service.return_value = mock_service
+        mock_evaluate.return_value = AsyncMock(
+            return_value={
+                "status": "triggered",
+                "should_retrain": True,
+                "confidence": 0.85,
+                "reasons": ["High data drift detected"],
+                "recommended_action": "Schedule retraining",
+            }
+        )()
 
         result = evaluate_retraining_need(model_id="test_v1.0")
 
@@ -476,22 +560,26 @@ class TestExecuteModelRetrainingTask:
 
         assert hasattr(execute_model_retraining, "delay")
 
-    @patch("src.tasks.drift_monitoring_tasks.get_retraining_trigger_service")
-    def test_task_execution(self, mock_get_service):
+    @patch("src.services.retraining_trigger.get_retraining_trigger_service")
+    @patch("src.repositories.drift_monitoring.RetrainingHistoryRepository")
+    def test_task_execution(self, mock_repo_cls, mock_get_service):
         """Test task execution."""
         from src.tasks.drift_monitoring_tasks import execute_model_retraining
 
+        mock_repo = MagicMock()
+        mock_repo.update = AsyncMock()
+        mock_repo_cls.return_value = mock_repo
+
         mock_service = MagicMock()
-        mock_job = MagicMock()
-        mock_job.job_id = "job-123"
-        mock_job.status = "in_progress"
-        mock_service.trigger_retraining = MagicMock(return_value=mock_job)
+        mock_service.complete_retraining = AsyncMock()
         mock_get_service.return_value = mock_service
 
+        # Correct function signature: (retraining_id, model_version, new_version, training_config)
         result = execute_model_retraining(
-            model_id="test_v1.0",
-            reason="data_drift",
-            triggered_by="system",
+            retraining_id="retrain-123",
+            model_version="test_v1.0",
+            new_version="test_v1.1",
+            training_config={"epochs": 100, "learning_rate": 0.001},
         )
 
         assert result is not None
@@ -518,13 +606,20 @@ class TestCheckRetrainingForAllModelsTask:
         assert hasattr(check_retraining_for_all_models, "delay")
 
     @patch("src.tasks.drift_monitoring_tasks.evaluate_retraining_need")
-    @patch("src.tasks.drift_monitoring_tasks.get_production_models")
-    def test_task_execution(self, mock_get_models, mock_evaluate):
+    @patch("src.agents.drift_monitor.connectors.get_connector")
+    def test_task_execution(self, mock_get_connector, mock_evaluate):
         """Test task execution."""
         from src.tasks.drift_monitoring_tasks import check_retraining_for_all_models
 
-        mock_get_models.return_value = ["model_v1.0", "model_v2.0"]
-        mock_evaluate.delay = MagicMock()
+        mock_connector = MagicMock()
+        mock_connector.get_available_models = AsyncMock(
+            return_value=[
+                {"id": "model_v1.0"},
+                {"id": "model_v2.0"},
+            ]
+        )
+        mock_get_connector.return_value = mock_connector
+        mock_evaluate.delay = MagicMock(return_value=MagicMock(id="task-123"))
 
         result = check_retraining_for_all_models()
 
@@ -586,12 +681,12 @@ class TestTaskConfiguration:
 class TestTaskErrorHandling:
     """Tests for task error handling."""
 
-    @patch("src.tasks.drift_monitoring_tasks.ConceptDriftDetector")
-    def test_drift_detection_handles_detector_error(self, mock_detector_cls):
+    @patch("src.agents.drift_monitor.connectors.get_connector")
+    def test_drift_detection_handles_detector_error(self, mock_get_connector):
         """Test drift detection handles detector errors."""
         from src.tasks.drift_monitoring_tasks import run_drift_detection
 
-        mock_detector_cls.side_effect = Exception("Detector initialization failed")
+        mock_get_connector.side_effect = Exception("Connector initialization failed")
 
         # Should handle gracefully
         try:
@@ -600,9 +695,9 @@ class TestTaskErrorHandling:
             assert "error" in result or result is not None
         except Exception as e:
             # Expected behavior
-            assert "Detector" in str(e) or "failed" in str(e).lower()
+            assert "Connector" in str(e) or "failed" in str(e).lower()
 
-    @patch("src.tasks.drift_monitoring_tasks.record_model_performance")
+    @patch("src.services.performance_tracking.record_model_performance")
     def test_performance_tracking_handles_error(self, mock_record):
         """Test performance tracking handles recording errors."""
         from src.tasks.drift_monitoring_tasks import track_model_performance
@@ -628,21 +723,52 @@ class TestTaskErrorHandling:
 class TestTaskWorkflows:
     """Tests for task workflows and chains."""
 
-    @patch("src.tasks.drift_monitoring_tasks.ConceptDriftDetector")
-    @patch("src.tasks.drift_monitoring_tasks.send_drift_alert_notifications")
-    def test_drift_detection_triggers_alerts(self, mock_send_alerts, mock_detector_cls):
+    @patch("src.repositories.drift_monitoring.MonitoringAlertRepository")
+    @patch("src.repositories.drift_monitoring.DriftHistoryRepository")
+    @patch("src.repositories.drift_monitoring.MonitoringRunRepository")
+    @patch("src.agents.drift_monitor.nodes.alert_aggregator.AlertAggregatorNode")
+    @patch("src.agents.drift_monitor.nodes.concept_drift.ConceptDriftNode")
+    @patch("src.agents.drift_monitor.nodes.model_drift.ModelDriftNode")
+    @patch("src.agents.drift_monitor.nodes.data_drift.DataDriftNode")
+    @patch("src.agents.drift_monitor.connectors.get_connector")
+    def test_drift_detection_triggers_alerts(
+        self,
+        mock_get_connector,
+        mock_data_drift,
+        mock_model_drift,
+        mock_concept_drift,
+        mock_alert_agg,
+        mock_run_repo,
+        mock_drift_repo,
+        mock_alert_repo,
+    ):
         """Test that drift detection triggers alerts when needed."""
         from src.tasks.drift_monitoring_tasks import run_drift_detection
 
-        mock_detector = MagicMock()
-        mock_detector.detect_drift = MagicMock(
-            return_value={
-                "overall_drift_score": 0.75,
-                "features_with_drift": ["feature_1", "feature_2"],
-            }
+        # Setup mocks
+        mock_connector = MagicMock()
+        mock_connector.get_available_features = AsyncMock(return_value=["f1", "f2"])
+        mock_get_connector.return_value = mock_connector
+
+        # Mock nodes to return updated state with high drift
+        mock_data_drift.return_value.execute = AsyncMock(return_value={
+            "data_drift_results": [{"feature": "f1", "drift_score": 0.75}],
+        })
+        mock_model_drift.return_value.execute = AsyncMock(return_value={})
+        mock_concept_drift.return_value.execute = AsyncMock(return_value={})
+        mock_alert_agg.return_value.execute = AsyncMock(return_value={
+            "alerts": [{"id": "alert-1", "severity": "high"}],
+        })
+
+        # Mock repositories
+        mock_run_record = MagicMock()
+        mock_run_record.id = "run-123"
+        mock_run_repo.return_value.start_run = AsyncMock(return_value=mock_run_record)
+        mock_run_repo.return_value.complete_run = AsyncMock()
+        mock_drift_repo.return_value.record_drift_results = AsyncMock()
+        mock_alert_repo.return_value.create_alerts_from_drift = AsyncMock(
+            return_value=[MagicMock(id="alert-123")]
         )
-        mock_detector_cls.return_value = mock_detector
-        mock_send_alerts.delay = MagicMock()
 
         result = run_drift_detection(
             model_id="test_v1.0",
@@ -652,26 +778,23 @@ class TestTaskWorkflows:
         # High drift should trigger alert sending
         assert result is not None
 
-    @patch("src.tasks.drift_monitoring_tasks.get_retraining_trigger_service")
-    @patch("src.tasks.drift_monitoring_tasks.execute_model_retraining")
-    def test_evaluation_triggers_retraining(self, mock_execute, mock_get_service):
+    @patch("src.services.retraining_trigger.evaluate_and_trigger_retraining")
+    def test_evaluation_triggers_retraining(self, mock_evaluate):
         """Test that evaluation can trigger retraining."""
         from src.tasks.drift_monitoring_tasks import evaluate_retraining_need
 
-        mock_service = MagicMock()
-        mock_service.evaluate_retraining_need = MagicMock(
-            return_value=MagicMock(
-                should_retrain=True,
-                confidence=0.9,
-                reasons=["Critical drift detected"],
-            )
-        )
-        mock_get_service.return_value = mock_service
-        mock_execute.delay = MagicMock()
+        mock_evaluate.return_value = AsyncMock(
+            return_value={
+                "status": "triggered",
+                "should_retrain": True,
+                "confidence": 0.9,
+                "reasons": ["Critical drift detected"],
+            }
+        )()
 
         result = evaluate_retraining_need(
             model_id="test_v1.0",
-            auto_trigger=True,
+            auto_approve=True,
         )
 
         assert result is not None
