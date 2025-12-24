@@ -3,15 +3,15 @@
 **Agent**: Health Score
 **Tier**: 3 (Monitoring)
 **Type**: Standard (Fast Path)
-**Version**: 4.2
-**Last Validated**: 2025-12-22
-**Status**: ✅ COMPLIANT
+**Version**: 4.3
+**Last Validated**: 2025-12-23
+**Status**: ✅ 95% COMPLIANT - Memory Hooks Pending
 
 ---
 
 ## Executive Summary
 
-The Health Score Agent is **100% compliant** with all contract specifications defined in:
+The Health Score Agent is **95% compliant** with all contract specifications defined in:
 - `.claude/contracts/tier3-contracts.md` (lines 566-787)
 - `.claude/specialists/Agent_Specialists_Tiers 1-5/health-score.md`
 
@@ -24,6 +24,7 @@ The Health Score Agent is **100% compliant** with all contract specifications de
 | Graph Assembly | ✅ Correct | Sequential flow with quick variant |
 | Test Coverage | ✅ Comprehensive | 76 tests passing |
 | Performance | ✅ Met | <5s full, <1s quick |
+| **4-Memory Architecture** | **PENDING** | Memory hooks not yet implemented |
 
 ---
 
@@ -469,5 +470,40 @@ The Health Score Agent implementation is **fully compliant** with all contract s
 ---
 
 **Validated By**: Claude Code Audit
-**Audit Date**: 2025-12-22
+**Audit Date**: 2025-12-23
 **Next Review**: On contract update or major implementation change
+
+---
+
+## 13. 4-Memory Architecture Contract (PENDING)
+
+**Reference**: `base-contract.md` Section 6, `E2I_Agentic_Memory_Documentation.html`
+
+**Required Memory Types**: Working, Episodic
+
+| Requirement | Contract | Implementation | Status | Notes |
+|-------------|----------|----------------|--------|-------|
+| `memory_hooks.py` | Required file | Not created | PENDING | Phase 3 implementation |
+| Working Memory | Redis (24h TTL) | Not implemented | PENDING | Cache health results |
+| Episodic Memory | Supabase + pgvector | Not implemented | PENDING | Historical health patterns |
+| MemoryHooksInterface | ABC implementation | Not implemented | PENDING | See below |
+
+**MemoryHooksInterface Contract**:
+```python
+class HealthScoreMemoryHooks:
+    """Memory integration hooks for health_score agent."""
+
+    async def get_context(self, session_id: str, query: str, **kwargs) -> MemoryContext:
+        """Retrieve previous health check context."""
+        ...
+
+    async def contribute_to_memory(self, result: Dict, state: State, **kwargs) -> None:
+        """Store health check results for trend analysis."""
+        ...
+```
+
+**Memory Usage Patterns**:
+1. **Working Memory**: Cache component health statuses (24h TTL)
+2. **Episodic Memory**: Store health trends for anomaly detection
+
+**DSPy Role**: Recipient (consumes optimized prompts, no signal generation)

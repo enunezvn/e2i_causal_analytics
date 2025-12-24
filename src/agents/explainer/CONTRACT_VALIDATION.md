@@ -2,9 +2,9 @@
 
 **Agent**: Explainer
 **Tier**: 5 (Self-Improvement)
-**Version**: 4.2
-**Validation Date**: 2025-12-23
-**Status**: FULLY COMPLIANT ✅
+**Version**: 4.3
+**Validation Date**: 2025-12-23 (Updated)
+**Status**: 95% COMPLIANT - DSPy Integration Pending
 
 ---
 
@@ -14,6 +14,12 @@ The Explainer agent is a Tier 5 Self-Improvement agent that synthesizes complex 
 
 **Test Results**: 85/85 passing (100%)
 **Test Duration**: 0.83s
+
+| Category | Status | Notes |
+|----------|--------|-------|
+| Core Contract Compliance | ✅ 100% | All I/O, state, nodes implemented |
+| Tri-Memory Architecture | ✅ COMPLIANT | Working, Episodic, Semantic integrated |
+| DSPy Integration | PENDING | Recipient role not yet implemented |
 
 ---
 
@@ -324,6 +330,45 @@ The agent is fully compliant with all core contracts including tri-memory archit
 
 1. **OpenTelemetry**: Add span tracing for distributed observability
 2. **DSPy Optimization**: Implement signature optimization for LLM mode
+
+---
+
+## 17. DSPy Integration Contract (PENDING)
+
+**Reference**: `integration-contracts.md`, `E2I_DSPy_Feedback_Learner_Architecture_V2.html`
+
+**DSPy Role**: Recipient (consumes optimized prompts from feedback_learner)
+
+| Requirement | Contract | Implementation | Status | Notes |
+|-------------|----------|----------------|--------|-------|
+| DSPy Type | Recipient | Not implemented | PENDING | Consumes optimized prompts |
+| Signal Type | QueryRewriteSignature | Not implemented | PENDING | For explanation optimization |
+| `dspy_integration.py` | Required file | Not created | PENDING | Phase 4 implementation |
+| Optimized Prompt Retrieval | Required | Not implemented | PENDING | See below |
+
+**DSPy Recipient Interface**:
+```python
+class ExplainerDSPyIntegration:
+    """DSPy integration for explainer agent (Recipient)."""
+
+    def __init__(self, dspy_type: Literal["recipient"] = "recipient"):
+        self.dspy_type = dspy_type
+
+    async def get_optimized_prompts(self) -> Dict[str, str]:
+        """Retrieve DSPy-optimized prompts for explanation generation."""
+        # Returns prompts optimized by feedback_learner
+        ...
+
+    def apply_optimized_prompt(self, prompt_key: str, context: Dict) -> str:
+        """Apply an optimized prompt template to context."""
+        ...
+```
+
+**Optimized Prompt Categories**:
+1. **Executive Summary Generation**: Prompts for C-suite audience summaries
+2. **Technical Explanation**: Prompts for data scientist detail level
+3. **Insight Extraction**: Prompts for finding/recommendation classification
+4. **Visual Suggestion**: Prompts for visualization recommendations
 
 ---
 

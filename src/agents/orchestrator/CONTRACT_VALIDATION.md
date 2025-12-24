@@ -264,7 +264,122 @@ Contract requirement: Sequential execution with dependencies
 
 ---
 
-## 10. TODOs for Production Readiness
+## 10. Memory Integration Contract
+
+**Contract Reference**: `.claude/contracts/base-contract.md` (MemoryHooksInterface)
+
+### 10.1 Required Memory Types
+
+| Memory Type | Technology | Status | Implementation |
+|-------------|------------|--------|----------------|
+| **Working** | Redis + LangGraph MemorySaver | ❌ **BLOCKING** | `memory_hooks.py` (NOT IMPLEMENTED) |
+| **Episodic** | Supabase + pgvector | ❌ **BLOCKING** | `memory_hooks.py` (NOT IMPLEMENTED) |
+| **Semantic** | FalkorDB + Graphity | ❌ **BLOCKING** | `memory_hooks.py` (NOT IMPLEMENTED) |
+
+### 10.2 Memory Hooks Interface
+
+**Required File**: `src/agents/orchestrator/memory_hooks.py` ❌ NOT IMPLEMENTED
+
+```python
+class OrchestratorMemoryHooks(MemoryHooksInterface):
+    """Memory integration hooks for orchestrator agent."""
+
+    async def get_context(self, session_id: str, query: str, **kwargs) -> MemoryContext:
+        """Retrieve relevant memory context for query routing."""
+        ...
+
+    async def contribute_to_memory(self, result: Dict, state: Dict, session_id: str, **kwargs) -> None:
+        """Store routing decisions and agent results in memory."""
+        ...
+
+    def get_required_memory_types(self) -> List[MemoryType]:
+        return [MemoryType.WORKING, MemoryType.EPISODIC, MemoryType.SEMANTIC]
+```
+
+### 10.3 Memory Integration Status
+
+| Requirement | Status | Notes |
+|-------------|--------|-------|
+| `memory_hooks.py` file | ❌ **BLOCKING** | Required for memory integration |
+| Working memory integration | ❌ **BLOCKING** | Session context for routing |
+| Episodic memory integration | ❌ **BLOCKING** | Historical query patterns |
+| Semantic memory integration | ❌ **BLOCKING** | Entity/causal graph for routing |
+
+---
+
+## 11. DSPy Hub Integration Contract
+
+**Contract Reference**: `.claude/contracts/orchestrator-contracts.md` (DSPy Hub Role)
+
+### 11.1 DSPy Role
+
+| Role | Description | Status |
+|------|-------------|--------|
+| **Hub** | Coordinates DSPy optimization across all agents | ❌ **BLOCKING** |
+
+### 11.2 Required Interface
+
+**Required File**: `src/agents/orchestrator/dspy_integration.py` ❌ NOT IMPLEMENTED
+
+```python
+class OrchestratorDSPyHub(DSPyHubInterface):
+    """DSPy Hub coordination for orchestrator."""
+
+    async def collect_training_signal(self, signal: TrainingSignal) -> None:
+        """Collect training signal from any Sender/Hybrid agent."""
+        ...
+
+    async def check_optimization_trigger(self) -> bool:
+        """Check if optimization cycle should trigger."""
+        ...
+
+    async def coordinate_optimization_cycle(
+        self,
+        signals: List[TrainingSignal],
+        target_signatures: List[str]
+    ) -> OptimizationResult:
+        """Coordinate MIPROv2 optimization via Feedback Learner."""
+        ...
+
+    async def distribute_optimized_prompts(
+        self,
+        prompts: Dict[str, str],
+        recipient_agents: List[str]
+    ) -> DistributionResult:
+        """Distribute optimized prompts to Recipients."""
+        ...
+```
+
+### 11.3 DSPy Hub Status
+
+| Requirement | Status | Notes |
+|-------------|--------|-------|
+| `dspy_integration.py` file | ❌ **BLOCKING** | Required for DSPy coordination |
+| Signal collection from Senders | ❌ **BLOCKING** | Buffer signals from Tier 2-4 Senders |
+| Optimization trigger logic | ❌ **BLOCKING** | min_signals=100, interval=24h |
+| Coordination with Feedback Learner | ❌ **BLOCKING** | Route to feedback_learner for MIPROv2 |
+| Prompt distribution to Recipients | ❌ **BLOCKING** | Push to health_score, resource_optimizer, explainer |
+
+---
+
+## 12. TODOs for Production Readiness
+
+### Critical Priority (BLOCKING - Required for 4-Memory & DSPy)
+
+0. **Memory Hooks Implementation** ❌ BLOCKING
+   - [ ] Create `memory_hooks.py` with `OrchestratorMemoryHooks` class
+   - [ ] Implement Working memory integration (Redis + MemorySaver)
+   - [ ] Implement Episodic memory integration (Supabase + pgvector)
+   - [ ] Implement Semantic memory integration (FalkorDB + Graphity)
+   - **Files**: `src/agents/orchestrator/memory_hooks.py` (TO BE CREATED)
+
+0. **DSPy Hub Integration** ❌ BLOCKING
+   - [ ] Create `dspy_integration.py` with `OrchestratorDSPyHub` class
+   - [ ] Implement signal collection buffer
+   - [ ] Implement optimization trigger logic
+   - [ ] Integrate with Feedback Learner for MIPROv2
+   - [ ] Implement prompt distribution to Recipients
+   - **Files**: `src/agents/orchestrator/dspy_integration.py` (TO BE CREATED)
 
 ### High Priority (Required before production)
 

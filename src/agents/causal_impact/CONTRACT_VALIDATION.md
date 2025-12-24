@@ -3,10 +3,10 @@
 **Agent**: CausalImpact
 **Tier**: 2 (Causal Analytics)
 **Type**: Hybrid (Computation + Deep Reasoning)
-**Version**: 4.9
+**Version**: 4.10
 **Validation Date**: 2025-12-23
-**Scope**: Full contract compliance + Orchestrator integration + Opik tracing + MLflow tracking + Memory integration + Fallback chain
-**Status**: PRODUCTION-READY - 100% COMPLIANT
+**Scope**: Full contract compliance + Orchestrator integration + Opik tracing + MLflow tracking + Memory integration + Fallback chain + DSPy Sender contract
+**Status**: PRODUCTION-READY - 92% COMPLIANT (DSPy pending)
 
 ---
 
@@ -33,9 +33,10 @@
 | Orchestrator Contract | 8 | 0 | 0 | 0 | 8 |
 | Workflow Gates | 4 | 0 | 0 | 0 | 4 |
 | MLOps Integration | 4 | 0 | 0 | 0 | 4 |
-| **TOTAL** | **67** | **0** | **0** | **0** | **67** |
+| DSPy Integration | 0 | 0 | 6 | 0 | 6 |
+| **TOTAL** | **67** | **0** | **6** | **0** | **73** |
 
-**Compliance Rate**: 100% Compliant, 0% Adapted, 0% Pending, 0% Non-Compliant
+**Compliance Rate**: 92% Compliant, 0% Adapted, 8% Pending, 0% Non-Compliant
 
 ### Legend
 - **Compliant**: Exact match to contract specification
@@ -317,6 +318,38 @@ async def run_workflow_with_mlflow(workflow, initial_state, run_name=None) -> Di
     return final_state
 ```
 
+### 3.9 DSPy Integration Contract
+
+**Reference**: `integration-contracts.md`, `E2I_DSPy_Feedback_Learner_Architecture_V2.html`
+
+**DSPy Role**: Sender (generates training signals for feedback_learner)
+
+| Requirement | Contract | Implementation | Status | Notes |
+|-------------|----------|----------------|--------|-------|
+| DSPy Type | Sender | Not implemented | PENDING | Generates training signals |
+| Signal Type | EvidenceSynthesisSignature | Not implemented | PENDING | For evidence synthesis optimization |
+| `dspy_integration.py` | Required file | Not created | PENDING | Phase 4 implementation |
+| `collect_training_signal()` | TrainingSignal generation | Not implemented | PENDING | Captures input/output pairs |
+| Signal buffer | Local collection before batch | Not implemented | PENDING | Buffered signal collection |
+| Quality scoring | Signal quality metrics | Not implemented | PENDING | Confidence-based quality |
+
+**Required TrainingSignal Structure** (from integration-contracts.md):
+```python
+class TrainingSignal(TypedDict):
+    agent_name: str  # "causal_impact"
+    signature_type: str  # "EvidenceSynthesisSignature"
+    input_data: Dict[str, Any]  # Query, treatment_var, confounders
+    output_data: Dict[str, Any]  # ATE, confidence, narrative
+    quality_score: float  # 0.0-1.0 based on confidence + refutation
+    timestamp: str  # ISO format
+    metadata: Dict[str, Any]  # Estimation method, e_value
+```
+
+**Signal Collection Points**:
+1. After successful estimation (input: treatment/outcome/confounders → output: ATE, CI)
+2. After interpretation (input: estimation results → output: narrative, insights)
+3. Quality score = (confidence * 0.6) + (refutation_passed * 0.4)
+
 ---
 
 ## 4. Contract Compliance Changes (v4.4 → v4.5)
@@ -447,8 +480,13 @@ async def run_workflow_with_mlflow(workflow, initial_state, run_name=None) -> Di
 - [x] Integrate FallbackChain into `run()` error handling
 - [x] Add `reset_fallback_chain()` for agent instance reuse
 
-### Pending (Future Work)
-- None - 100% contract compliance achieved
+### Pending (Phase 4 - DSPy Integration)
+- [ ] Create `dspy_integration.py` with Sender role
+- [ ] Implement `collect_training_signal()` method
+- [ ] Define signal collection points (after estimation, after interpretation)
+- [ ] Implement quality scoring: (confidence * 0.6) + (refutation_passed * 0.4)
+- [ ] Add signal buffer for batch submission to feedback_learner
+- [ ] Integrate EvidenceSynthesisSignature type
 
 ---
 
@@ -456,6 +494,7 @@ async def run_workflow_with_mlflow(workflow, initial_state, run_name=None) -> Di
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 4.10 | 2025-12-23 | DSPy Sender contract added - EvidenceSynthesisSignature, signal collection points, quality scoring formula defined; 6 pending items for Phase 4 |
 | 4.9 | 2025-12-23 | 100% compliance - memory_types (semantic + episodic) with MemoryIntegration methods; fallback_models with FallbackChain error handling |
 | 4.8 | 2025-12-23 | MLflow experiment tracking - `run_workflow_with_mlflow` wrapper; parameters, metrics, tags, artifact logging |
 | 4.7 | 2025-12-23 | Opik per-node tracing - `traced_node` decorator for all 5 workflow nodes; span_id linking; node-specific metrics |
@@ -471,9 +510,15 @@ async def run_workflow_with_mlflow(workflow, initial_state, run_name=None) -> Di
 
 **Validated By**: Claude Code
 **Date**: 2025-12-23
-**Compliance Rate**: 100% Compliant, 0% Adapted, 0% Pending, 0% Non-Compliant
+**Compliance Rate**: 92% Compliant, 0% Adapted, 8% Pending, 0% Non-Compliant
 
-**Assessment**: The Causal Impact Agent implementation is **PRODUCTION-READY** with **100% contract compliance**. All contract requirements have been fully implemented including orchestrator integration, Opik tracing, MLflow tracking, memory backends, and fallback error handling. The implementation exactly matches the contract specifications in `tier2-contracts.md`, `base-contract.md`, and `causal-impact.md`.
+**Assessment**: The Causal Impact Agent implementation is **PRODUCTION-READY** with **92% contract compliance**. Core contract requirements have been fully implemented including orchestrator integration, Opik tracing, MLflow tracking, memory backends, and fallback error handling. **DSPy Sender integration is pending (Phase 4)** - requires `dspy_integration.py` with EvidenceSynthesisSignature signal collection.
+
+**Key Achievements (v4.10)**:
+- DSPy Sender contract documented with EvidenceSynthesisSignature
+- Signal collection points defined (after estimation, after interpretation)
+- Quality scoring formula: (confidence * 0.6) + (refutation_passed * 0.4)
+- TrainingSignal structure specified per integration-contracts.md
 
 **Key Achievements (v4.9)**:
 - `memory_types = ["semantic", "episodic"]` class attribute
