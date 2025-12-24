@@ -364,10 +364,433 @@ monitoring_response:
     agents:
       - health_score  # Every 5 minutes
       - drift_monitor  # Every hour
-      
+
   on_critical_alert:
     actions:
       - notify: team
       - trigger: experiment_designer  # If retraining needed
       - trigger: feedback_learner  # Log for learning
 ```
+
+---
+
+## DSPy Role Specifications
+
+### Overview
+
+Tier 3 agents have mixed DSPy roles:
+- **Sender**: drift_monitor, experiment_designer (generate training signals)
+- **Recipient**: health_score (receives optimized prompts)
+
+---
+
+## Drift Monitor - DSPy Sender Role
+
+### Training Signal Contract
+
+```python
+@dataclass
+class DriftDetectionTrainingSignal:
+    """Training signal for drift detection optimization."""
+
+    # Identity
+    signal_id: str = ""
+    session_id: str = ""
+    query: str = ""
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+    # Configuration
+    model_id: str = ""
+    features_monitored: int = 0
+    time_window: str = ""
+    check_data_drift: bool = True
+    check_model_drift: bool = False
+    check_concept_drift: bool = False
+    psi_threshold: float = 0.1
+    significance_level: float = 0.05
+
+    # Detection Results
+    data_drift_count: int = 0
+    model_drift_count: int = 0
+    concept_drift_count: int = 0
+    overall_drift_score: float = 0.0
+    severity_distribution: Dict[str, int] = field(default_factory=dict)
+    features_checked: int = 0
+
+    # Alerting
+    alerts_generated: int = 0
+    critical_alerts: int = 0
+    warnings: int = 0
+    recommended_actions_count: int = 0
+
+    # Outcome
+    total_latency_ms: float = 0.0
+    drift_correctly_identified: Optional[bool] = None
+    user_satisfaction: Optional[float] = None
+
+    def compute_reward(self) -> float:
+        """
+        Compute reward for MIPROv2 optimization.
+
+        Weighting:
+        - drift_detection_rate: 0.25 (ideal: 5-20% of features)
+        - alerting_quality: 0.25 (critical alert ratio)
+        - efficiency: 0.20 (latency per feature)
+        - actionability: 0.15 (recommendations per alert)
+        - validation: 0.15 (correct identification)
+        """
+        ...
+```
+
+### DSPy Signatures
+
+```python
+class DriftDetectionSignature(dspy.Signature):
+    """Analyze feature distributions for drift."""
+
+    feature_name: str = dspy.InputField(desc="Feature being analyzed")
+    reference_stats: str = dspy.InputField(desc="Reference distribution statistics")
+    current_stats: str = dspy.InputField(desc="Current distribution statistics")
+    threshold: float = dspy.InputField(desc="Drift detection threshold")
+
+    has_drift: bool = dspy.OutputField(desc="Whether significant drift detected")
+    drift_score: float = dspy.OutputField(desc="Drift magnitude score (0-1)")
+    severity: str = dspy.OutputField(desc="Severity: low, medium, high, critical")
+    interpretation: str = dspy.OutputField(desc="Human-readable interpretation")
+
+class HopDecisionSignature(dspy.Signature):
+    """Decide whether to perform detailed analysis hop."""
+
+    initial_results: str = dspy.InputField(desc="Initial drift scan results")
+    drift_count: int = dspy.InputField(desc="Number of features with detected drift")
+    severity_max: str = dspy.InputField(desc="Maximum severity detected")
+
+    needs_hop: bool = dspy.OutputField(desc="Whether to perform deeper analysis")
+    hop_reason: str = dspy.OutputField(desc="Reason for hop decision")
+    priority_features: list = dspy.OutputField(desc="Features to analyze in depth")
+
+class DriftInterpretationSignature(dspy.Signature):
+    """Generate actionable drift interpretation."""
+
+    drift_results: str = dspy.InputField(desc="Complete drift analysis results")
+    model_context: str = dspy.InputField(desc="Model information and history")
+    business_context: str = dspy.InputField(desc="Business impact context")
+
+    summary: str = dspy.OutputField(desc="Executive summary of drift status")
+    root_causes: list = dspy.OutputField(desc="Likely root causes of drift")
+    recommendations: list = dspy.OutputField(desc="Prioritized action recommendations")
+    urgency: str = dspy.OutputField(desc="Action urgency: immediate, soon, monitor")
+```
+
+### Signal Collector Contract
+
+```python
+class DriftMonitorSignalCollector:
+    """Signal collector for Drift Monitor agent."""
+
+    dspy_type: Literal["sender"] = "sender"
+
+    def collect_detection_signal(
+        self,
+        session_id: str,
+        query: str,
+        model_id: str,
+        features_monitored: int,
+        time_window: str,
+        check_data_drift: bool,
+        check_model_drift: bool,
+        check_concept_drift: bool,
+    ) -> DriftDetectionTrainingSignal: ...
+
+    def update_detection_results(
+        self,
+        signal: DriftDetectionTrainingSignal,
+        data_drift_count: int,
+        model_drift_count: int,
+        concept_drift_count: int,
+        overall_drift_score: float,
+        severity_distribution: Dict[str, int],
+        features_checked: int,
+    ) -> DriftDetectionTrainingSignal: ...
+
+    def update_alerting(
+        self,
+        signal: DriftDetectionTrainingSignal,
+        alerts_generated: int,
+        critical_alerts: int,
+        warnings: int,
+        recommended_actions_count: int,
+        total_latency_ms: float,
+    ) -> DriftDetectionTrainingSignal: ...
+
+    def update_with_validation(
+        self,
+        signal: DriftDetectionTrainingSignal,
+        drift_correctly_identified: bool,
+        user_satisfaction: Optional[float] = None,
+    ) -> DriftDetectionTrainingSignal: ...
+
+    def get_signals_for_training(self, min_reward: float = 0.0, limit: int = 50) -> List[Dict]: ...
+    def get_validated_examples(self, limit: int = 10) -> List[Dict]: ...
+    def clear_buffer(self) -> None: ...
+```
+
+---
+
+## Experiment Designer - DSPy Sender Role
+
+### Training Signal Contract
+
+```python
+@dataclass
+class ExperimentDesignTrainingSignal:
+    """Training signal for experiment design optimization."""
+
+    # Identity
+    signal_id: str = ""
+    session_id: str = ""
+    query: str = ""
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+    # Input Context
+    hypothesis: str = ""
+    treatment_type: str = ""
+    outcome_metric: str = ""
+    constraints_count: int = 0
+
+    # Design Output
+    design_type: str = ""
+    sample_size: int = 0
+    duration_weeks: int = 0
+    power_achieved: float = 0.0
+    effect_size_target: float = 0.0
+
+    # Investigation Quality
+    past_experiments_found: int = 0
+    confounders_identified: int = 0
+    validity_threats_count: int = 0
+
+    # Digital Twin Integration
+    used_digital_twin: bool = False
+    simulation_iterations: int = 0
+    predicted_success_rate: float = 0.0
+
+    # Outcome
+    total_latency_ms: float = 0.0
+    design_implemented: Optional[bool] = None
+    experiment_success: Optional[bool] = None
+    user_satisfaction: Optional[float] = None
+
+    def compute_reward(self) -> float:
+        """
+        Compute reward for MIPROv2 optimization.
+
+        Weighting:
+        - power_achievement: 0.25 (power >= 0.8)
+        - validity_coverage: 0.20 (threats identified)
+        - investigation_depth: 0.20 (past experiments, confounders)
+        - efficiency: 0.15 (latency)
+        - outcome_success: 0.20 (if available)
+        """
+        ...
+```
+
+### DSPy Signatures
+
+```python
+class DesignReasoningSignature(dspy.Signature):
+    """Reason about optimal experiment design."""
+
+    hypothesis: str = dspy.InputField(desc="Hypothesis to test")
+    treatment: str = dspy.InputField(desc="Treatment description")
+    outcome: str = dspy.InputField(desc="Primary outcome metric")
+    constraints: str = dspy.InputField(desc="Design constraints")
+
+    design_type: str = dspy.OutputField(desc="Recommended design type")
+    sample_size: int = dspy.OutputField(desc="Required sample size")
+    duration: str = dspy.OutputField(desc="Recommended duration")
+    rationale: str = dspy.OutputField(desc="Design rationale")
+
+class InvestigationPlanSignature(dspy.Signature):
+    """Plan investigation for experiment design."""
+
+    hypothesis: str = dspy.InputField(desc="Hypothesis being tested")
+    domain: str = dspy.InputField(desc="Domain context")
+
+    investigation_steps: list = dspy.OutputField(desc="Ordered investigation steps")
+    queries_needed: list = dspy.OutputField(desc="Database/memory queries")
+    hop_recommendation: bool = dspy.OutputField(desc="Whether deeper analysis needed")
+
+class ValidityAssessmentSignature(dspy.Signature):
+    """Assess validity threats for experiment."""
+
+    design_spec: str = dspy.InputField(desc="Proposed experiment design")
+    context: str = dspy.InputField(desc="Domain and operational context")
+
+    internal_threats: list = dspy.OutputField(desc="Internal validity threats")
+    external_threats: list = dspy.OutputField(desc="External validity threats")
+    mitigations: list = dspy.OutputField(desc="Recommended mitigations")
+    overall_validity: float = dspy.OutputField(desc="Validity score (0-1)")
+```
+
+### Signal Collector Contract
+
+```python
+class ExperimentDesignerSignalCollector:
+    """Signal collector for Experiment Designer agent."""
+
+    dspy_type: Literal["sender"] = "sender"
+
+    def collect_design_signal(
+        self,
+        session_id: str,
+        query: str,
+        hypothesis: str,
+        treatment_type: str,
+        outcome_metric: str,
+        constraints_count: int,
+    ) -> ExperimentDesignTrainingSignal: ...
+
+    def update_design_output(
+        self,
+        signal: ExperimentDesignTrainingSignal,
+        design_type: str,
+        sample_size: int,
+        duration_weeks: int,
+        power_achieved: float,
+        effect_size_target: float,
+    ) -> ExperimentDesignTrainingSignal: ...
+
+    def update_investigation(
+        self,
+        signal: ExperimentDesignTrainingSignal,
+        past_experiments_found: int,
+        confounders_identified: int,
+        validity_threats_count: int,
+        used_digital_twin: bool,
+        simulation_iterations: int,
+        predicted_success_rate: float,
+    ) -> ExperimentDesignTrainingSignal: ...
+
+    def finalize_signal(
+        self,
+        signal: ExperimentDesignTrainingSignal,
+        total_latency_ms: float,
+    ) -> ExperimentDesignTrainingSignal: ...
+
+    def update_with_outcome(
+        self,
+        signal: ExperimentDesignTrainingSignal,
+        design_implemented: bool,
+        experiment_success: Optional[bool],
+        user_satisfaction: Optional[float],
+    ) -> ExperimentDesignTrainingSignal: ...
+
+    def get_signals_for_training(self, min_reward: float = 0.0, limit: int = 50) -> List[Dict]: ...
+    def clear_buffer(self) -> None: ...
+```
+
+---
+
+## Health Score - DSPy Recipient Role
+
+### Overview
+
+Health Score is a **Recipient** agent that receives optimized prompts from feedback_learner
+but does not generate training signals for optimization.
+
+### DSPy Signatures
+
+```python
+class HealthSummarySignature(dspy.Signature):
+    """Generate health summary from metrics."""
+
+    system_metrics: str = dspy.InputField(desc="Current system metrics")
+    historical_baseline: str = dspy.InputField(desc="Historical baseline values")
+    thresholds: str = dspy.InputField(desc="Alert thresholds")
+
+    overall_health: float = dspy.OutputField(desc="Overall health score (0-100)")
+    status: str = dspy.OutputField(desc="Status: healthy, degraded, critical")
+    summary: str = dspy.OutputField(desc="Executive health summary")
+    concerns: list = dspy.OutputField(desc="Areas of concern")
+
+class HealthRecommendationSignature(dspy.Signature):
+    """Generate health recommendations."""
+
+    health_status: str = dspy.InputField(desc="Current health status")
+    degraded_components: str = dspy.InputField(desc="Components showing issues")
+    resource_availability: str = dspy.InputField(desc="Available resources")
+
+    recommendations: list = dspy.OutputField(desc="Prioritized recommendations")
+    immediate_actions: list = dspy.OutputField(desc="Actions needed immediately")
+    monitoring_focus: list = dspy.OutputField(desc="Areas to monitor closely")
+```
+
+### Recipient Configuration
+
+```python
+class HealthScoreRecipient:
+    """DSPy Recipient for Health Score agent."""
+
+    dspy_type: Literal["recipient"] = "recipient"
+
+    # Prompt optimization settings
+    prompt_refresh_interval_hours: int = 24
+
+    # Signatures that can receive optimized prompts
+    optimizable_signatures: List[str] = [
+        "HealthSummarySignature",
+        "HealthRecommendationSignature",
+    ]
+
+    def apply_optimized_prompt(
+        self,
+        signature_name: str,
+        optimized_prompt: str,
+        version: str,
+    ) -> bool: ...
+
+    def get_current_prompt_version(self, signature_name: str) -> str: ...
+
+    def report_prompt_performance(
+        self,
+        signature_name: str,
+        success_rate: float,
+        latency_ms: float,
+    ) -> None: ...
+```
+
+---
+
+## Signal Flow
+
+### Tier 3 → Feedback Learner Flow
+
+```
+drift_monitor         ──┐
+                       ├──► feedback_learner
+experiment_designer   ──┘         │
+                                  ▼
+                            Optimization
+                                  │
+                                  ▼
+                            health_score (receives optimized prompts)
+```
+
+### Signal Lifecycle
+
+1. **Collection**: Sender agents collect signals at decision time
+2. **Update**: Signals updated with execution outcomes
+3. **Buffer**: Signals buffered (max 100 per agent)
+4. **Transfer**: High-quality signals sent to feedback_learner
+5. **Optimization**: feedback_learner runs MIPROv2 optimization
+6. **Distribution**: Optimized prompts distributed to recipient agents
+
+---
+
+## Change Log
+
+| Date | Change |
+|------|--------|
+| 2025-12-23 | V2: Added DSPy Role specifications for all Tier 3 agents |
+| 2025-12-08 | V1: Initial creation |
