@@ -673,7 +673,7 @@ async def execute_cypher_query(request: CypherQueryRequest) -> CypherQueryRespon
     - Parameterized queries
     - Read-only enforcement (default)
 
-    Use FalkorDB Browser at http://localhost:3003 for interactive queries.
+    Use FalkorDB Browser at http://localhost:3030 for interactive queries.
     """
     start_time = time.time()
 
