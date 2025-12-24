@@ -33,6 +33,12 @@ class DataPreparerState(TypedDict, total=False):
     test_df: Any  # pandas DataFrame (test split)
     holdout_df: Any  # pandas DataFrame (holdout split)
 
+    # Schema validation (Pandera)
+    schema_validation_status: Literal["passed", "failed", "skipped", "error"]
+    schema_validation_errors: List[Dict[str, Any]]
+    schema_splits_validated: int
+    schema_validation_time_ms: int
+
     # Quality checks
     expectation_results: List[Dict[str, Any]]  # Great Expectations results
     failed_expectations: List[str]
