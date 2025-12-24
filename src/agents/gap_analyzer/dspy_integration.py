@@ -265,6 +265,7 @@ class GapAnalyzerSignalCollector:
     """
 
     def __init__(self):
+        self.dspy_type: Literal["sender"] = "sender"
         self._signals_buffer: List[GapAnalysisTrainingSignal] = []
         self._buffer_limit = 100
 
