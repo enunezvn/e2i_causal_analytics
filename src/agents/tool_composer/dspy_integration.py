@@ -407,6 +407,7 @@ class ToolComposerDSPyIntegration:
     """
 
     def __init__(self):
+        self.dspy_type: Literal["hybrid"] = "hybrid"
         self._optimized_prompts: Dict[str, str] = {}
         self._optimization_requests: List[Dict[str, Any]] = []
 

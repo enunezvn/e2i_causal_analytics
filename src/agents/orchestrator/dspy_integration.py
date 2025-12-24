@@ -299,6 +299,7 @@ class OrchestratorDSPyHub:
     """
 
     def __init__(self):
+        self.dspy_type: Literal["hub"] = "hub"
         self._pending_optimization_requests: List[Dict[str, Any]] = []
 
     async def request_optimization(
