@@ -410,3 +410,409 @@ chain_3:
       input:
         analysis_results: [causal_impact, gap_analyzer, heterogeneous_optimizer]
 ```
+
+---
+
+## DSPy Sender Role
+
+### Overview
+
+All Tier 2 agents are **DSPy Sender** agents that:
+1. Generate training signals from analysis executions
+2. Provide signature-specific training examples
+3. Route high-quality signals to feedback_learner for optimization
+
+```python
+# dspy_type identification
+dspy_type: Literal["sender"] = "sender"
+```
+
+### Training Signal Contract
+
+All Tier 2 agents implement a TrainingSignal dataclass with:
+
+```python
+@dataclass
+class Tier2TrainingSignal:
+    """Base structure for Tier 2 training signals."""
+
+    # === Input Context ===
+    signal_id: str = ""
+    session_id: str = ""
+    query: str = ""
+
+    # === Agent-Specific Fields ===
+    # (Defined per agent)
+
+    # === Outcome Metrics ===
+    total_latency_ms: float = 0.0
+    confidence_score: float = 0.0
+    user_satisfaction: Optional[float] = None  # 1-5 rating
+
+    # === Timestamp ===
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+    def compute_reward(self) -> float:
+        """Compute reward for MIPROv2 optimization."""
+        ...
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for storage."""
+        ...
+```
+
+### Causal Impact Training Signal
+
+```python
+@dataclass
+class CausalAnalysisTrainingSignal:
+    """Training signal for Causal Impact DSPy optimization."""
+
+    # === Input Context ===
+    signal_id: str = ""
+    session_id: str = ""
+    query: str = ""
+    treatment_var: str = ""
+    outcome_var: str = ""
+    confounders_count: int = 0
+
+    # === Graph Building Phase ===
+    dag_nodes_count: int = 0
+    dag_edges_count: int = 0
+    adjustment_sets_found: int = 0
+    graph_confidence: float = 0.0
+
+    # === Estimation Phase ===
+    estimation_method: str = ""
+    ate_estimate: float = 0.0
+    ate_ci_width: float = 0.0
+    statistical_significance: bool = False
+    effect_size: str = ""  # small, medium, large
+    sample_size: int = 0
+
+    # === Refutation Phase ===
+    refutation_tests_passed: int = 0
+    refutation_tests_failed: int = 0
+    overall_robust: bool = False
+
+    # === Sensitivity Phase ===
+    e_value: float = 0.0
+    robust_to_confounding: bool = False
+
+    # === Interpretation Phase ===
+    interpretation_depth: str = ""  # none, minimal, standard, deep
+    narrative_length: int = 0
+    key_findings_count: int = 0
+    recommendations_count: int = 0
+
+    # === Outcome Metrics ===
+    total_latency_ms: float = 0.0
+    confidence_score: float = 0.0
+    user_satisfaction: Optional[float] = None
+
+    def compute_reward(self) -> float:
+        """
+        Compute reward for MIPROv2 optimization.
+
+        Weighting:
+        - refutation_robustness: 0.30 (passed / total)
+        - estimation_quality: 0.25 (significance + CI width)
+        - interpretation_quality: 0.20 (depth + findings)
+        - efficiency: 0.15 (latency)
+        - user_satisfaction: 0.10 (if available)
+        """
+        ...
+```
+
+### Gap Analyzer Training Signal
+
+```python
+@dataclass
+class GapAnalysisTrainingSignal:
+    """Training signal for Gap Analyzer DSPy optimization."""
+
+    # === Input Context ===
+    signal_id: str = ""
+    session_id: str = ""
+    query: str = ""
+    brand: str = ""
+    region: str = ""
+    time_period: str = ""
+
+    # === Gap Detection Phase ===
+    gaps_identified: int = 0
+    gap_categories: List[str] = field(default_factory=list)
+    total_opportunity_value: float = 0.0
+    prioritized_gaps: int = 0
+
+    # === ROI Analysis Phase ===
+    roi_calculations_performed: int = 0
+    average_roi_estimate: float = 0.0
+    high_confidence_gaps: int = 0
+
+    # === Recommendation Phase ===
+    recommendations_generated: int = 0
+    actionable_recommendations: int = 0
+    implementation_complexity: str = ""  # low, medium, high
+
+    # === Outcome Metrics ===
+    total_latency_ms: float = 0.0
+    confidence_score: float = 0.0
+    user_satisfaction: Optional[float] = None
+
+    def compute_reward(self) -> float:
+        """
+        Compute reward for MIPROv2 optimization.
+
+        Weighting:
+        - gap_detection_quality: 0.30 (gaps + prioritization)
+        - roi_accuracy: 0.25 (confidence + consistency)
+        - actionability: 0.20 (actionable / total recommendations)
+        - efficiency: 0.15 (latency)
+        - user_satisfaction: 0.10 (if available)
+        """
+        ...
+```
+
+### Heterogeneous Optimizer Training Signal
+
+```python
+@dataclass
+class HeterogeneousOptimizationTrainingSignal:
+    """Training signal for Heterogeneous Optimizer DSPy optimization."""
+
+    # === Input Context ===
+    signal_id: str = ""
+    session_id: str = ""
+    query: str = ""
+    treatment_var: str = ""
+    outcome_var: str = ""
+    effect_modifiers: List[str] = field(default_factory=list)
+
+    # === Segmentation Phase ===
+    segments_analyzed: int = 0
+    significant_segments: int = 0
+    segment_method: str = ""  # causal_forest, meta_learner, etc.
+
+    # === CATE Estimation Phase ===
+    cate_estimates_count: int = 0
+    effect_heterogeneity: float = 0.0
+    best_responder_segment: str = ""
+    worst_responder_segment: str = ""
+
+    # === Policy Learning Phase ===
+    policy_rules_generated: int = 0
+    expected_policy_value: float = 0.0
+    policy_confidence: float = 0.0
+
+    # === Outcome Metrics ===
+    total_latency_ms: float = 0.0
+    confidence_score: float = 0.0
+    user_satisfaction: Optional[float] = None
+
+    def compute_reward(self) -> float:
+        """
+        Compute reward for MIPROv2 optimization.
+
+        Weighting:
+        - segmentation_quality: 0.30 (significant / total segments)
+        - cate_precision: 0.25 (heterogeneity + confidence)
+        - policy_value: 0.20 (expected value + rules)
+        - efficiency: 0.15 (latency)
+        - user_satisfaction: 0.10 (if available)
+        """
+        ...
+```
+
+### Signal Collector Contract
+
+All Tier 2 agents implement a SignalCollector:
+
+```python
+class Tier2SignalCollector:
+    """Signal collector for Tier 2 Sender agents."""
+
+    def __init__(self):
+        self.dspy_type: Literal["sender"] = "sender"
+        self._signals_buffer: List[TrainingSignal] = []
+        self._buffer_limit = 100
+
+    def collect_signal(self, **kwargs) -> TrainingSignal:
+        """Initialize training signal at analysis start."""
+        ...
+
+    def update_phase(self, signal: TrainingSignal, **kwargs) -> TrainingSignal:
+        """Update signal with phase-specific results."""
+        ...
+
+    def finalize_signal(
+        self,
+        signal: TrainingSignal,
+        total_latency_ms: float,
+        confidence_score: float,
+    ) -> TrainingSignal:
+        """Finalize signal and add to buffer."""
+        self._signals_buffer.append(signal)
+        if len(self._signals_buffer) > self._buffer_limit:
+            self._signals_buffer.pop(0)
+        return signal
+
+    def update_with_feedback(
+        self,
+        signal: TrainingSignal,
+        user_satisfaction: Optional[float] = None,
+    ) -> TrainingSignal:
+        """Update signal with user feedback (delayed)."""
+        signal.user_satisfaction = user_satisfaction
+        return signal
+
+    def get_signals_for_training(
+        self,
+        min_reward: float = 0.0,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """Get signals suitable for DSPy training."""
+        signals = [
+            s.to_dict()
+            for s in self._signals_buffer
+            if s.compute_reward() >= min_reward
+        ]
+        return signals[-limit:]
+
+    def get_high_quality_examples(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """Get highest-quality examples for few-shot learning."""
+        sorted_signals = sorted(
+            self._signals_buffer,
+            key=lambda s: s.compute_reward(),
+            reverse=True,
+        )
+        return [s.to_dict() for s in sorted_signals[:limit]]
+
+    def clear_buffer(self):
+        """Clear the signals buffer."""
+        self._signals_buffer.clear()
+```
+
+### DSPy Signatures
+
+#### Causal Impact Signatures
+
+```python
+class CausalGraphSignature(dspy.Signature):
+    """Construct a causal DAG from domain knowledge and data."""
+
+    treatment_var: str = dspy.InputField(desc="Treatment variable name")
+    outcome_var: str = dspy.InputField(desc="Outcome variable name")
+    available_vars: str = dspy.InputField(desc="All available variables in data")
+    domain_context: str = dspy.InputField(desc="Domain knowledge context")
+
+    confounders: list = dspy.OutputField(desc="Variables that confound treatment-outcome")
+    mediators: list = dspy.OutputField(desc="Variables that mediate the effect")
+    adjustment_set: list = dspy.OutputField(desc="Recommended adjustment set")
+    graph_rationale: str = dspy.OutputField(desc="Explanation of graph structure")
+
+class EvidenceSynthesisSignature(dspy.Signature):
+    """Synthesize causal evidence into an interpretation."""
+
+    estimation_result: str = dspy.InputField(desc="ATE estimate with CI and significance")
+    refutation_summary: str = dspy.InputField(desc="Summary of refutation test results")
+    sensitivity_summary: str = dspy.InputField(desc="E-value and sensitivity interpretation")
+    user_expertise: str = dspy.InputField(desc="User expertise level")
+
+    narrative: str = dspy.OutputField(desc="Natural language interpretation")
+    key_findings: list = dspy.OutputField(desc="3-5 key findings as bullet points")
+    confidence_level: str = dspy.OutputField(desc="low, medium, or high")
+    recommendations: list = dspy.OutputField(desc="Actionable recommendations")
+    limitations: list = dspy.OutputField(desc="Important caveats and limitations")
+```
+
+#### Gap Analyzer Signatures
+
+```python
+class GapDetectionSignature(dspy.Signature):
+    """Detect gaps and opportunities in commercial operations."""
+
+    brand: str = dspy.InputField(desc="Brand name")
+    region: str = dspy.InputField(desc="Geographic region")
+    metrics_data: str = dspy.InputField(desc="Current performance metrics")
+    benchmark_data: str = dspy.InputField(desc="Benchmark or target metrics")
+
+    gaps_identified: list = dspy.OutputField(desc="List of identified gaps")
+    gap_priorities: list = dspy.OutputField(desc="Priority ranking of gaps")
+    opportunity_value: float = dspy.OutputField(desc="Total opportunity value")
+    gap_rationale: str = dspy.OutputField(desc="Explanation of gap detection")
+
+class ROIEstimationSignature(dspy.Signature):
+    """Estimate ROI for addressing identified gaps."""
+
+    gap_description: str = dspy.InputField(desc="Description of the gap")
+    historical_data: str = dspy.InputField(desc="Historical intervention data")
+    resource_constraints: str = dspy.InputField(desc="Available resources")
+
+    roi_estimate: float = dspy.OutputField(desc="Expected ROI")
+    confidence_interval: str = dspy.OutputField(desc="CI for ROI estimate")
+    implementation_steps: list = dspy.OutputField(desc="Steps to capture ROI")
+    assumptions: list = dspy.OutputField(desc="Key assumptions in estimate")
+```
+
+#### Heterogeneous Optimizer Signatures
+
+```python
+class SegmentIdentificationSignature(dspy.Signature):
+    """Identify segments with heterogeneous treatment effects."""
+
+    treatment_var: str = dspy.InputField(desc="Treatment variable")
+    outcome_var: str = dspy.InputField(desc="Outcome variable")
+    effect_modifiers: str = dspy.InputField(desc="Potential effect modifiers")
+    data_summary: str = dspy.InputField(desc="Summary of available data")
+
+    segments: list = dspy.OutputField(desc="Identified segments")
+    segment_rationale: str = dspy.OutputField(desc="Why these segments matter")
+    expected_heterogeneity: str = dspy.OutputField(desc="Expected effect variation")
+
+class PolicyRecommendationSignature(dspy.Signature):
+    """Generate treatment allocation policy recommendations."""
+
+    cate_estimates: str = dspy.InputField(desc="CATE estimates by segment")
+    resource_constraints: str = dspy.InputField(desc="Resource limitations")
+    business_objectives: str = dspy.InputField(desc="Business goals")
+
+    policy_rules: list = dspy.OutputField(desc="Treatment allocation rules")
+    expected_value: float = dspy.OutputField(desc="Expected policy value")
+    implementation_guidance: str = dspy.OutputField(desc="How to implement policy")
+```
+
+### Signal Flow to Feedback Learner
+
+Tier 2 agents send signals to feedback_learner for optimization:
+
+```yaml
+signal_flow:
+  sender: tier_2_agent
+  receiver: feedback_learner
+  protocol:
+    - Agent collects signal during execution
+    - Signal finalized with outcome metrics
+    - High-quality signals (reward > 0.5) queued for optimization
+    - Feedback learner batches signals for MIPROv2 training
+
+  trigger_conditions:
+    - batch_size >= 50
+    - time_elapsed >= 24h
+    - explicit_optimization_request
+
+  optimization_targets:
+    - Improve signature prompts
+    - Refine few-shot examples
+    - Adjust reward weights
+```
+
+---
+
+## Change Log
+
+| Date | Change |
+|------|--------|
+| 2025-12-23 | V5: Added DSPy Sender role specification |
+| 2025-12-08 | V4: Added ROI calculation outputs |
+| 2025-12-04 | Initial creation for V3 |

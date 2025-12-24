@@ -328,6 +328,254 @@ resource_optimizer:
 
 ---
 
+---
+
+## DSPy Role Specifications
+
+### Overview
+
+Tier 4 agents have mixed DSPy roles:
+- **Sender**: prediction_synthesizer (generates training signals)
+- **Recipient**: resource_optimizer (receives optimized prompts)
+
+---
+
+## Prediction Synthesizer - DSPy Sender Role
+
+### Training Signal Contract
+
+```python
+@dataclass
+class PredictionSynthesisTrainingSignal:
+    """Training signal for prediction synthesis optimization."""
+
+    # Identity
+    signal_id: str = ""
+    session_id: str = ""
+    query: str = ""
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+    # Input Context
+    model_count: int = 0
+    prediction_type: str = ""
+    target_entity: str = ""
+    time_horizon: str = ""
+
+    # Synthesis Output
+    ensemble_method: str = ""
+    predictions_generated: int = 0
+    confidence_intervals_computed: bool = False
+    uncertainty_quantified: bool = False
+
+    # Quality Metrics
+    model_agreement: float = 0.0
+    prediction_confidence: float = 0.0
+    interpretation_quality: float = 0.0
+
+    # Outcome
+    total_latency_ms: float = 0.0
+    prediction_accurate: Optional[bool] = None
+    user_satisfaction: Optional[float] = None
+
+    def compute_reward(self) -> float:
+        """
+        Compute reward for MIPROv2 optimization.
+
+        Weighting:
+        - synthesis_completeness: 0.25 (all models, CI, uncertainty)
+        - model_agreement: 0.20 (ensemble consensus)
+        - confidence_calibration: 0.20 (confidence vs accuracy)
+        - efficiency: 0.15 (latency)
+        - accuracy: 0.20 (if available)
+        """
+        ...
+```
+
+### DSPy Signatures
+
+```python
+class PredictionSynthesisSignature(dspy.Signature):
+    """Synthesize predictions from multiple models."""
+
+    model_outputs: str = dspy.InputField(desc="Individual model predictions")
+    model_weights: str = dspy.InputField(desc="Model weight/importance scores")
+    ensemble_method: str = dspy.InputField(desc="Ensemble method to use")
+
+    synthesized_prediction: float = dspy.OutputField(desc="Combined prediction value")
+    confidence_interval: tuple = dspy.OutputField(desc="95% confidence interval")
+    model_contributions: dict = dspy.OutputField(desc="Each model's contribution")
+
+class PredictionInterpretationSignature(dspy.Signature):
+    """Generate interpretation of synthesized prediction."""
+
+    prediction: str = dspy.InputField(desc="Synthesized prediction result")
+    model_details: str = dspy.InputField(desc="Model information and features")
+    business_context: str = dspy.InputField(desc="Business context for interpretation")
+
+    interpretation: str = dspy.OutputField(desc="Human-readable interpretation")
+    key_drivers: list = dspy.OutputField(desc="Key factors driving prediction")
+    caveats: list = dspy.OutputField(desc="Important caveats and limitations")
+
+class UncertaintyQuantificationSignature(dspy.Signature):
+    """Quantify prediction uncertainty."""
+
+    predictions: str = dspy.InputField(desc="Model predictions")
+    model_variances: str = dspy.InputField(desc="Individual model uncertainties")
+    data_quality: str = dspy.InputField(desc="Data quality indicators")
+
+    total_uncertainty: float = dspy.OutputField(desc="Total uncertainty score")
+    epistemic_uncertainty: float = dspy.OutputField(desc="Model uncertainty")
+    aleatoric_uncertainty: float = dspy.OutputField(desc="Data uncertainty")
+    uncertainty_sources: list = dspy.OutputField(desc="Main uncertainty sources")
+```
+
+### Signal Collector Contract
+
+```python
+class PredictionSynthesizerSignalCollector:
+    """Signal collector for Prediction Synthesizer agent."""
+
+    dspy_type: Literal["sender"] = "sender"
+
+    def collect_synthesis_signal(
+        self,
+        session_id: str,
+        query: str,
+        model_count: int,
+        prediction_type: str,
+        target_entity: str,
+        time_horizon: str,
+    ) -> PredictionSynthesisTrainingSignal: ...
+
+    def update_synthesis_output(
+        self,
+        signal: PredictionSynthesisTrainingSignal,
+        ensemble_method: str,
+        predictions_generated: int,
+        confidence_intervals_computed: bool,
+        uncertainty_quantified: bool,
+    ) -> PredictionSynthesisTrainingSignal: ...
+
+    def update_quality_metrics(
+        self,
+        signal: PredictionSynthesisTrainingSignal,
+        model_agreement: float,
+        prediction_confidence: float,
+        interpretation_quality: float,
+        total_latency_ms: float,
+    ) -> PredictionSynthesisTrainingSignal: ...
+
+    def update_with_outcome(
+        self,
+        signal: PredictionSynthesisTrainingSignal,
+        prediction_accurate: bool,
+        user_satisfaction: Optional[float],
+    ) -> PredictionSynthesisTrainingSignal: ...
+
+    def get_signals_for_training(self, min_reward: float = 0.0, limit: int = 50) -> List[Dict]: ...
+    def clear_buffer(self) -> None: ...
+```
+
+---
+
+## Resource Optimizer - DSPy Recipient Role
+
+### Overview
+
+Resource Optimizer is a **Recipient** agent that receives optimized prompts from feedback_learner
+but does not generate training signals for optimization.
+
+### DSPy Signatures
+
+```python
+class OptimizationSummarySignature(dspy.Signature):
+    """Generate optimization summary."""
+
+    optimization_results: str = dspy.InputField(desc="Optimization output")
+    constraints: str = dspy.InputField(desc="Applied constraints")
+    objectives: str = dspy.InputField(desc="Optimization objectives")
+
+    summary: str = dspy.OutputField(desc="Executive summary")
+    key_recommendations: list = dspy.OutputField(desc="Top recommendations")
+    trade_offs: list = dspy.OutputField(desc="Key trade-offs made")
+
+class AllocationRecommendationSignature(dspy.Signature):
+    """Generate resource allocation recommendations."""
+
+    current_allocation: str = dspy.InputField(desc="Current resource distribution")
+    optimization_output: str = dspy.InputField(desc="Optimization results")
+    business_priorities: str = dspy.InputField(desc="Business priority context")
+
+    recommendations: list = dspy.OutputField(desc="Ordered allocation recommendations")
+    expected_impact: dict = dspy.OutputField(desc="Expected impact per change")
+    implementation_steps: list = dspy.OutputField(desc="Implementation guidance")
+
+class ScenarioNarrativeSignature(dspy.Signature):
+    """Generate narrative for optimization scenario."""
+
+    scenario_name: str = dspy.InputField(desc="Scenario identifier")
+    scenario_results: str = dspy.InputField(desc="Scenario optimization results")
+    comparison_baseline: str = dspy.InputField(desc="Baseline for comparison")
+
+    narrative: str = dspy.OutputField(desc="Scenario narrative explanation")
+    pros: list = dspy.OutputField(desc="Scenario advantages")
+    cons: list = dspy.OutputField(desc="Scenario disadvantages")
+    recommendation: str = dspy.OutputField(desc="Scenario recommendation")
+```
+
+### Recipient Configuration
+
+```python
+class ResourceOptimizerRecipient:
+    """DSPy Recipient for Resource Optimizer agent."""
+
+    dspy_type: Literal["recipient"] = "recipient"
+
+    # Prompt optimization settings
+    prompt_refresh_interval_hours: int = 24
+
+    # Signatures that can receive optimized prompts
+    optimizable_signatures: List[str] = [
+        "OptimizationSummarySignature",
+        "AllocationRecommendationSignature",
+        "ScenarioNarrativeSignature",
+    ]
+
+    def apply_optimized_prompt(
+        self,
+        signature_name: str,
+        optimized_prompt: str,
+        version: str,
+    ) -> bool: ...
+
+    def get_current_prompt_version(self, signature_name: str) -> str: ...
+
+    def report_prompt_performance(
+        self,
+        signature_name: str,
+        success_rate: float,
+        latency_ms: float,
+    ) -> None: ...
+```
+
+---
+
+## Signal Flow
+
+### Tier 4 → Feedback Learner Flow
+
+```
+prediction_synthesizer ──► feedback_learner
+                                  │
+                                  ▼
+                            Optimization
+                                  │
+                                  ▼
+                        resource_optimizer (receives optimized prompts)
+```
+
+---
+
 ## Validation Tests
 
 ```bash
@@ -349,4 +597,5 @@ pytest tests/integration/test_tier4_contracts.py::test_tier4_handoff
 
 | Date | Change |
 |------|--------|
+| 2025-12-23 | V2: Added DSPy Role specifications for Tier 4 agents |
 | 2025-12-08 | Initial creation |

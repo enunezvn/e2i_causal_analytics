@@ -464,10 +464,152 @@ class OrchestratorError(Enum):
 
 ---
 
+---
+
+## DSPy Hub Role
+
+### Overview
+
+The Orchestrator is a **DSPy Hub** agent that coordinates DSPy optimization across all agents.
+
+```python
+# dspy_type identification
+dspy_type: Literal["hub"] = "hub"
+```
+
+### DSPy Signatures
+
+#### AgentRoutingSignature
+
+Routes queries to appropriate E2I agents.
+
+```python
+class AgentRoutingSignature(dspy.Signature):
+    """Route queries to appropriate E2I agents."""
+
+    query: str = dspy.InputField(desc="User query to route")
+    query_pattern: str = dspy.InputField(desc="Classified query type")
+    entities: str = dspy.InputField(desc="Extracted entities from query")
+    available_agents: str = dspy.InputField(desc="List of available agents")
+
+    primary_agent: str = dspy.OutputField(desc="Primary agent to handle query")
+    secondary_agents: list = dspy.OutputField(desc="Secondary agents for context")
+    routing_confidence: float = dspy.OutputField(desc="Confidence in routing (0-1)")
+    routing_rationale: str = dspy.OutputField(desc="Explanation of routing decision")
+```
+
+#### IntentClassificationSignature
+
+Classifies query intent for routing.
+
+```python
+class IntentClassificationSignature(dspy.Signature):
+    """Classify query intent for routing."""
+
+    query: str = dspy.InputField(desc="User query")
+    conversation_context: str = dspy.InputField(desc="Recent conversation history")
+
+    intent: str = dspy.OutputField(desc="Intent classification")
+    sub_intent: str = dspy.OutputField(desc="More specific intent")
+    confidence: float = dspy.OutputField(desc="Confidence in classification (0-1)")
+```
+
+### Training Signal Contract
+
+```python
+@dataclass
+class RoutingTrainingSignal:
+    """Training signal for AgentRoutingSignature optimization."""
+
+    # Input Context
+    signal_id: str
+    session_id: str
+    query: str
+    query_pattern: str
+    intent: str
+    entities_extracted: List[str]
+
+    # Routing Decision
+    agents_selected: List[str]
+    routing_confidence: float
+    routing_rationale: str
+
+    # Execution Outcome
+    agents_succeeded: int
+    agents_failed: int
+    total_latency_ms: float
+
+    # Quality Metrics (Delayed)
+    user_satisfaction: Optional[float]  # 1-5 rating
+    answer_quality: Optional[float]  # 0-1 score
+    was_rerouted: bool
+
+    def compute_reward(self) -> float:
+        """
+        Compute reward for MIPROv2 optimization.
+
+        Weighting:
+        - routing_accuracy: 0.35 (agents succeeded / selected)
+        - efficiency: 0.25 (latency penalty)
+        - no_rerouting: 0.20 (got it right first time)
+        - user_satisfaction: 0.20 (if available)
+        """
+        ...
+```
+
+### Hub Coordination
+
+```python
+class OrchestratorDSPyHub:
+    """DSPy Hub coordination for the Orchestrator."""
+
+    dspy_type: Literal["hub"] = "hub"
+
+    async def request_optimization(
+        self,
+        agent_name: str,
+        signature_name: str,
+        training_signals: List[Dict[str, Any]],
+        priority: Literal["low", "medium", "high"] = "medium",
+    ) -> str:
+        """Request optimization for an agent's DSPy signature."""
+        ...
+
+    def get_pending_requests(self) -> List[Dict[str, Any]]:
+        """Get pending optimization requests."""
+        ...
+```
+
+### Signal Collection
+
+```python
+class OrchestratorSignalCollector:
+    """Collects training signals from orchestrator routing decisions."""
+
+    def collect_routing_signal(...) -> RoutingTrainingSignal:
+        """Collect training signal at routing decision time."""
+        ...
+
+    def update_with_outcome(...) -> RoutingTrainingSignal:
+        """Update signal with execution outcome."""
+        ...
+
+    def update_with_feedback(...) -> RoutingTrainingSignal:
+        """Update signal with user feedback (delayed)."""
+        ...
+
+    def get_signals_for_training(...) -> List[Dict[str, Any]]:
+        """Get signals suitable for DSPy training."""
+        ...
+```
+
+---
+
 ## Change Log
 
 | Date | Change |
 |------|--------|
+| 2025-12-23 | V5: Added DSPy Hub role specification |
 | 2025-12-08 | V4: Added Tier 0 dispatch patterns |
 | 2025-12-08 | V4: Added QC gate blocking status |
 | 2025-12-08 | V4: Added ML training sequential dispatch |
