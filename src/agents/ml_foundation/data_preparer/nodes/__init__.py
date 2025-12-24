@@ -6,9 +6,11 @@ from .data_transformer import transform_data
 from .ge_validator import run_ge_validation
 from .leakage_detector import detect_leakage
 from .quality_checker import run_quality_checks
+from .schema_validator import run_schema_validation
 
 __all__ = [
     "load_data",
+    "run_schema_validation",
     "run_quality_checks",
     "run_ge_validation",
     "detect_leakage",
