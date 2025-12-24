@@ -3,7 +3,9 @@
 **Agent**: Experiment Designer (Tier 3: Monitoring & Experimentation)
 **Contract Reference**: `.claude/contracts/tier3-contracts.md` lines 82-220
 **Specialist Reference**: `.claude/specialists/Agent_Specialists_Tiers 1-5/experiment-designer.md`
-**Validation Date**: 2025-12-19
+**Version**: 2.1
+**Validation Date**: 2025-12-23 (Updated)
+**Status**: 95% COMPLIANT - DSPy Integration Pending
 **Test Results**: 209/209 tests passing
 
 ---
@@ -386,4 +388,38 @@ All nodes record latency in `node_latencies_ms` dictionary.
 
 ---
 
-*Validation completed by Claude Code on 2025-12-19*
+## 12. DSPy Integration Contract (PENDING)
+
+**Reference**: `integration-contracts.md`, `E2I_DSPy_Feedback_Learner_Architecture_V2.html`
+
+**DSPy Role**: Sender (generates training signals for feedback_learner)
+
+| Requirement | Contract | Implementation | Status | Notes |
+|-------------|----------|----------------|--------|-------|
+| DSPy Type | Sender | Not implemented | PENDING | Generates training signals |
+| Signal Type | InvestigationPlanSignature | Not implemented | PENDING | For experiment planning optimization |
+| `dspy_integration.py` | Required file | Not created | PENDING | Phase 4 implementation |
+| TrainingSignal Structure | Required | Not implemented | PENDING | See below |
+
+**TrainingSignal Structure**:
+```python
+class TrainingSignal(TypedDict):
+    signal_id: str
+    agent_id: str          # "experiment_designer"
+    signature_type: str    # "InvestigationPlanSignature"
+    input_data: Dict[str, Any]
+    output_data: Dict[str, Any]
+    quality_score: float   # 0.0-1.0
+    timestamp: str
+    metadata: Dict[str, Any]
+```
+
+**Signal Collection Points**:
+1. After design reasoning (input: business_question, constraints → output: design_type, treatments)
+2. After power analysis (input: design → output: sample_size, achieved_power, MDE)
+3. After validity audit (input: design → output: threats, mitigations, redesign_needed)
+4. Quality score = (validity_score * 0.4) + (power_achieved * 0.4) + (design_efficiency * 0.2)
+
+---
+
+*Validation completed by Claude Code on 2025-12-23*

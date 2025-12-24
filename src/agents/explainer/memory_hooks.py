@@ -431,6 +431,93 @@ class ExplanationMemoryHooks:
 
 
 # =============================================================================
+# MEMORY CONTRIBUTION FUNCTION (Per Specialist Document)
+# =============================================================================
+
+
+async def contribute_to_memory(
+    result: Dict[str, Any],
+    state: Dict[str, Any],
+    memory_hooks: Optional[ExplanationMemoryHooks] = None,
+    session_id: Optional[str] = None,
+    brand: Optional[str] = None,
+    region: Optional[str] = None,
+) -> Dict[str, int]:
+    """
+    Contribute explanation results to CognitiveRAG's memory systems.
+
+    This is the primary interface for storing explainer
+    results in the memory architecture.
+
+    Args:
+        result: ExplainerOutput dictionary
+        state: ExplainerState dictionary
+        memory_hooks: Optional memory hooks instance (creates new if not provided)
+        session_id: Session identifier (generates UUID if not provided)
+        brand: Optional brand context
+        region: Optional region context
+
+    Returns:
+        Dictionary with counts of stored memories:
+        - episodic_stored: 1 if explanation stored, 0 otherwise
+        - working_cached: 1 if cached, 0 otherwise
+    """
+    import uuid
+
+    if memory_hooks is None:
+        memory_hooks = get_explanation_memory_hooks()
+
+    if session_id is None:
+        session_id = state.get("session_id") or str(uuid.uuid4())
+
+    counts = {
+        "episodic_stored": 0,
+        "working_cached": 0,
+    }
+
+    # Skip storage if explanation failed
+    if state.get("status") == "failed":
+        logger.info("Skipping memory storage for failed explanation")
+        return counts
+
+    # Build explanation data for storage
+    explanation_data = {
+        "query": state.get("query", ""),
+        "executive_summary": result.get("executive_summary", ""),
+        "detailed_explanation": result.get("detailed_explanation", ""),
+        "insights": result.get("extracted_insights", []),
+        "audience": state.get("user_expertise", "analyst"),
+        "output_format": state.get("output_format", "narrative"),
+        "narrative_sections": result.get("narrative_sections", []),
+        "visual_suggestions": result.get("visual_suggestions", []),
+        "follow_up_questions": result.get("follow_up_questions", []),
+    }
+
+    # 1. Cache in working memory
+    cached = await memory_hooks.cache_explanation(session_id, explanation_data)
+    if cached:
+        counts["working_cached"] = 1
+
+    # 2. Store in episodic memory
+    memory_id = await memory_hooks.store_explanation(
+        session_id=session_id,
+        explanation=explanation_data,
+        brand=brand,
+        region=region,
+    )
+    if memory_id:
+        counts["episodic_stored"] = 1
+
+    logger.info(
+        f"Memory contribution complete: "
+        f"episodic={counts['episodic_stored']}, "
+        f"working_cached={counts['working_cached']}"
+    )
+
+    return counts
+
+
+# =============================================================================
 # SINGLETON ACCESS
 # =============================================================================
 

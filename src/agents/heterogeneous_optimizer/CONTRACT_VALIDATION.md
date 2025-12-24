@@ -3,22 +3,25 @@
 **Agent**: Heterogeneous Optimizer
 **Tier**: 2 (Causal Analytics)
 **Type**: Standard (Computational)
-**Date**: 2025-12-18
-**Status**: ✅ CONTRACTS 100% COMPLIANT
+**Version**: 2.1
+**Date**: 2025-12-23
+**Status**: ✅ 95% COMPLIANT (DSPy pending)
 
 ---
 
 ## Executive Summary
 
-The Heterogeneous Optimizer agent implementation is **100% compliant** with all contract specifications defined in `.claude/contracts/tier2-contracts.md` and `.claude/specialists/Agent_Specialists_Tiers 1-5/heterogeneous-optimizer.md`.
+The Heterogeneous Optimizer agent implementation is **95% compliant** with all contract specifications. Core contracts are 100% compliant. **DSPy Sender integration is pending** (Phase 4).
 
 ### Verification Results:
-- ✅ **6/6 contracts fully compliant**: HeterogeneousOptimizerInput, HeterogeneousOptimizerOutput, HeterogeneousOptimizerState, CATEResult, SegmentProfile, PolicyRecommendation
+- ✅ **6/6 core contracts fully compliant**: HeterogeneousOptimizerInput, HeterogeneousOptimizerOutput, HeterogeneousOptimizerState, CATEResult, SegmentProfile, PolicyRecommendation
 - ✅ **18/18 output fields implemented** with correct types
 - ✅ **34/34 state fields implemented** with correct types
 - ✅ **100+ tests** covering all contracts and edge cases
 - ✅ **<150s performance target** validated
 - ✅ **4-node workflow** matches specification exactly
+- ✅ **Tri-Memory Integration** complete (Working/Episodic/Semantic)
+- ⏳ **DSPy Sender Integration** pending (Phase 4)
 
 ---
 
@@ -825,6 +828,45 @@ episodic_context: Optional[List[Dict[str, Any]]]  # Similar past analyses
 - Graceful degradation if memory systems unavailable
 
 **Status**: ✅ RESOLVED
+
+---
+
+### 6.6 DSPy Integration Contract (PENDING)
+
+**Reference**: `integration-contracts.md`, `E2I_DSPy_Feedback_Learner_Architecture_V2.html`
+
+**DSPy Role**: Sender (generates training signals for feedback_learner)
+
+| Requirement | Contract | Implementation | Status | Notes |
+|-------------|----------|----------------|--------|-------|
+| DSPy Type | Sender | Not implemented | PENDING | Generates training signals |
+| Signal Type | EvidenceSynthesisSignature | Not implemented | PENDING | For CATE synthesis optimization |
+| `dspy_integration.py` | Required file | Not created | PENDING | Phase 4 implementation |
+| `collect_training_signal()` | TrainingSignal generation | Not implemented | PENDING | Captures input/output pairs |
+| Signal buffer | Local collection before batch | Not implemented | PENDING | Buffered signal collection |
+| Quality scoring | Signal quality metrics | Not implemented | PENDING | Heterogeneity-based quality |
+
+**Required TrainingSignal Structure** (from integration-contracts.md):
+```python
+class TrainingSignal(TypedDict):
+    agent_name: str  # "heterogeneous_optimizer"
+    signature_type: str  # "EvidenceSynthesisSignature"
+    input_data: Dict[str, Any]  # treatment_var, outcome_var, segment_vars
+    output_data: Dict[str, Any]  # CATE results, high/low responders, policy
+    quality_score: float  # 0.0-1.0 based on heterogeneity + sample size
+    timestamp: str  # ISO format
+    metadata: Dict[str, Any]  # heterogeneity_score, feature_importance
+```
+
+**Signal Collection Points**:
+1. After CATE estimation (input: treatment/outcome → output: ATE, heterogeneity)
+2. After segment analysis (input: CATE results → output: high/low responders)
+3. After policy learning (input: segments → output: recommendations, expected_lift)
+4. Quality score = confidence * (1 + heterogeneity_score) / 2
+
+**Priority**: HIGH - Required for DSPy optimization loop
+
+**Status**: ⏳ PENDING (Phase 4)
 
 ---
 

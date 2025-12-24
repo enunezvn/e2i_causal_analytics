@@ -7,7 +7,8 @@
 **Specialist**: `.claude/specialists/Agent_Specialists_Tiers 1-5/drift-monitor.md`
 
 **Date**: 2025-12-23 (Updated)
-**Status**: ✅ 100% CONTRACT COMPLIANCE - PRODUCTION READY
+**Version**: 2.1
+**Status**: ✅ 95% COMPLIANT - DSPy Integration Pending
 
 ---
 
@@ -571,7 +572,41 @@ SELECT * FROM v_drift_alerts;
 ✅ **Feedback Loop**: Ground truth labeling infrastructure deployed
 ✅ **Drift Views**: v_concept_drift_metrics, v_model_performance_tracking, v_drift_alerts
 
-**FINAL STATUS**: ✅ **100% CONTRACT COMPLIANCE - PRODUCTION READY**
+**FINAL STATUS**: ✅ **95% COMPLIANT - DSPy Integration Pending**
+
+---
+
+## DSPy Integration Contract (PENDING)
+
+**Reference**: `integration-contracts.md`, `E2I_DSPy_Feedback_Learner_Architecture_V2.html`
+
+**DSPy Role**: Sender (generates training signals for feedback_learner)
+
+| Requirement | Contract | Implementation | Status | Notes |
+|-------------|----------|----------------|--------|-------|
+| DSPy Type | Sender | Not implemented | PENDING | Generates training signals |
+| Signal Type | HopDecisionSignature | Not implemented | PENDING | For multi-hop investigation optimization |
+| `dspy_integration.py` | Required file | Not created | PENDING | Phase 4 implementation |
+| TrainingSignal Structure | Required | Not implemented | PENDING | See below |
+
+**TrainingSignal Structure**:
+```python
+class TrainingSignal(TypedDict):
+    signal_id: str
+    agent_id: str          # "drift_monitor"
+    signature_type: str    # "HopDecisionSignature"
+    input_data: Dict[str, Any]
+    output_data: Dict[str, Any]
+    quality_score: float   # 0.0-1.0
+    timestamp: str
+    metadata: Dict[str, Any]
+```
+
+**Signal Collection Points**:
+1. After PSI calculation (input: feature_distributions → output: psi_score, drift_detected)
+2. After KS test (input: baseline/current samples → output: ks_stat, p_value)
+3. After severity determination (input: stats → output: severity, alert)
+4. Quality score = (detection_accuracy * 0.5) + (false_positive_rate_inverse * 0.3) + (latency_score * 0.2)
 
 ---
 

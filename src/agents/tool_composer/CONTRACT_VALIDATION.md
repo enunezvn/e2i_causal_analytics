@@ -255,9 +255,101 @@ Query → DECOMPOSE (sub-questions) → PLAN (tool mapping) → EXECUTE (run too
 
 ---
 
-## 12. Deviations from Specification
+## 12. Memory Integration Contract
 
-### 12.1 Minor Deviations
+**Contract Reference**: `.claude/contracts/base-contract.md` (MemoryHooksInterface)
+
+### 12.1 Required Memory Types
+
+| Memory Type | Technology | Status | Implementation |
+|-------------|------------|--------|----------------|
+| **Working** | Redis + LangGraph MemorySaver | ❌ **BLOCKING** | `memory_hooks.py` (NOT IMPLEMENTED) |
+| **Procedural** | Supabase + pgvector | ❌ **BLOCKING** | `memory_hooks.py` (NOT IMPLEMENTED) |
+
+### 12.2 Memory Hooks Interface
+
+**Required File**: `src/agents/tool_composer/memory_hooks.py` ❌ NOT IMPLEMENTED
+
+```python
+class ToolComposerMemoryHooks(MemoryHooksInterface):
+    """Memory integration hooks for tool composer."""
+
+    async def get_context(self, session_id: str, query: str, **kwargs) -> MemoryContext:
+        """Retrieve relevant memory context for tool composition."""
+        ...
+
+    async def contribute_to_memory(self, result: Dict, state: Dict, session_id: str, **kwargs) -> None:
+        """Store successful composition patterns in procedural memory."""
+        ...
+
+    def get_required_memory_types(self) -> List[MemoryType]:
+        return [MemoryType.WORKING, MemoryType.PROCEDURAL]
+```
+
+### 12.3 Memory Integration Status
+
+| Requirement | Status | Notes |
+|-------------|--------|-------|
+| `memory_hooks.py` file | ❌ **BLOCKING** | Required for memory integration |
+| Working memory integration | ❌ **BLOCKING** | Execution context during composition |
+| Procedural memory integration | ❌ **BLOCKING** | Cache successful composition patterns |
+
+---
+
+## 13. DSPy Hybrid Integration Contract
+
+**Contract Reference**: `.claude/contracts/tier1-contracts.md` (DSPy Hybrid Role)
+
+### 13.1 DSPy Role
+
+| Role | Description | Status |
+|------|-------------|--------|
+| **Hybrid** | Both generates AND consumes DSPy signals | ❌ **BLOCKING** |
+
+### 13.2 Required Interface
+
+**Required File**: `src/agents/tool_composer/dspy_integration.py` ❌ NOT IMPLEMENTED
+
+```python
+class ToolComposerDSPyHybrid(DSPyHybridMixin):
+    """DSPy Hybrid integration for tool composer."""
+
+    @property
+    def agent_name(self) -> str:
+        return "tool_composer"
+
+    @property
+    def primary_signature(self) -> str:
+        return "VisualizationConfigSignature"
+
+    def collect_composition_signal(
+        self,
+        input_data: Dict[str, Any],
+        output_data: Dict[str, Any],
+        quality_score: float,
+    ) -> TrainingSignal:
+        """Collect training signal from tool composition execution."""
+        ...
+
+    async def get_optimized_prompts(self) -> Dict[str, str]:
+        """Retrieve DSPy-optimized prompts for composition phases."""
+        ...
+```
+
+### 13.3 DSPy Hybrid Status
+
+| Requirement | Status | Notes |
+|-------------|--------|-------|
+| `dspy_integration.py` file | ❌ **BLOCKING** | Required for DSPy integration |
+| Signal collection from composition | ❌ **BLOCKING** | Send signals to Hub |
+| Optimized prompt consumption | ❌ **BLOCKING** | Use optimized prompts for decomposition |
+| VisualizationConfigSignature | ❌ **BLOCKING** | Primary signature for tool composition |
+
+---
+
+## 14. Deviations from Specification
+
+### 14.1 Minor Deviations
 
 | Item | Specification | Implementation | Impact |
 |------|---------------|----------------|--------|
@@ -265,25 +357,39 @@ Query → DECOMPOSE (sub-questions) → PLAN (tool mapping) → EXECUTE (run too
 | OpenTelemetry | Span tracing | Duration tracking only | LOW |
 | Tool caching | Execution plan caching | Not implemented | LOW |
 
-### 12.2 Rationale
+### 14.2 Rationale
 
 The component is fully functional for core tool composition. Memory access and caching are optimization features that can be added incrementally.
 
 ---
 
-## 13. Recommendations
+## 15. Recommendations
 
-### 13.1 Immediate
+### 15.1 Critical Priority (BLOCKING - Required for 4-Memory & DSPy)
+
+0. **Memory Hooks Implementation** ❌ BLOCKING
+   - [ ] Create `memory_hooks.py` with `ToolComposerMemoryHooks` class
+   - [ ] Implement Working memory integration (Redis + MemorySaver)
+   - [ ] Implement Procedural memory integration (Supabase + pgvector)
+   - **Files**: `src/agents/tool_composer/memory_hooks.py` (TO BE CREATED)
+
+0. **DSPy Hybrid Integration** ❌ BLOCKING
+   - [ ] Create `dspy_integration.py` with `ToolComposerDSPyHybrid` class
+   - [ ] Implement signal collection for composition phases
+   - [ ] Implement optimized prompt consumption
+   - [ ] Integrate VisualizationConfigSignature
+   - **Files**: `src/agents/tool_composer/dspy_integration.py` (TO BE CREATED)
+
+### 15.2 Immediate
 
 1. ~~**Create Test Suite**~~: ✅ COMPLETED (187 tests, 67% overall / 95%+ core modules)
 2. **Add Tool Validation**: Validate tool schemas at registration time
 
-### 13.2 Future Enhancements
+### 15.3 Future Enhancements
 
-1. **Episodic Memory**: Cache successful composition patterns
-2. **OpenTelemetry**: Add distributed tracing spans
-3. **Plan Caching**: Cache execution plans for similar queries
-4. **Parallel Execution**: Optimize parallel tool execution
+1. **OpenTelemetry**: Add distributed tracing spans
+2. **Plan Caching**: Cache execution plans for similar queries
+3. **Parallel Execution**: Optimize parallel tool execution
 
 ---
 
