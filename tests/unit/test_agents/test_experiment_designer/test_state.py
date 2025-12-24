@@ -106,6 +106,7 @@ class TestValidityThreat:
             "threat_name": "selection_bias",
             "description": "Non-random assignment to treatment groups",
             "severity": "high",
+            "affected_outcomes": ["engagement_score", "conversion_rate"],
             "mitigation_possible": True,
             "mitigation_strategy": "Use stratified randomization on baseline characteristics",
         }
@@ -121,6 +122,7 @@ class TestValidityThreat:
             "threat_name": "generalizability",
             "description": "Results may not generalize to other regions",
             "severity": "medium",
+            "affected_outcomes": ["engagement_score"],
             "mitigation_possible": True,
             "mitigation_strategy": "Include diverse geographic regions in sample",
         }
@@ -130,15 +132,16 @@ class TestValidityThreat:
     def test_create_statistical_threat(self):
         """Test creating statistical validity threat."""
         threat: ValidityThreat = {
-            "threat_type": "statistical",
+            "threat_type": "statistical_conclusion",
             "threat_name": "low_power",
             "description": "Insufficient sample size to detect expected effect",
             "severity": "critical",
+            "affected_outcomes": ["primary_outcome"],
             "mitigation_possible": True,
             "mitigation_strategy": "Increase sample size or extend duration",
         }
 
-        assert threat["threat_type"] == "statistical"
+        assert threat["threat_type"] == "statistical_conclusion"
         assert threat["severity"] == "critical"
 
     def test_severity_levels(self):
@@ -149,6 +152,7 @@ class TestValidityThreat:
                 "threat_name": "test",
                 "description": "Test threat",
                 "severity": severity,
+                "affected_outcomes": ["test_outcome"],
                 "mitigation_possible": True,
             }
             assert threat["severity"] == severity
@@ -161,9 +165,9 @@ class TestMitigationRecommendation:
         """Test creating mitigation recommendation."""
         mitigation: MitigationRecommendation = {
             "threat_addressed": "selection_bias",
-            "recommendation": "Use stratified randomization",
+            "strategy": "Use stratified randomization",
             "effectiveness_rating": "high",
-            "implementation_cost": "low",
+            "trade_offs": ["Increased complexity", "Requires baseline data"],
             "implementation_steps": [
                 "Identify key stratification variables",
                 "Create balanced strata",
@@ -180,9 +184,9 @@ class TestMitigationRecommendation:
         for rating in ["low", "medium", "high"]:
             mitigation: MitigationRecommendation = {
                 "threat_addressed": "test",
-                "recommendation": "Test mitigation",
+                "strategy": "Test mitigation",
                 "effectiveness_rating": rating,
-                "implementation_cost": "medium",
+                "trade_offs": [],
                 "implementation_steps": [],
             }
             assert mitigation["effectiveness_rating"] == rating
@@ -217,7 +221,7 @@ class TestPowerAnalysisResult:
 
     def test_effect_size_types(self):
         """Test different effect size types."""
-        for es_type in ["cohens_d", "odds_ratio", "hazard_ratio", "relative_risk"]:
+        for es_type in ["cohens_d", "odds_ratio", "rate_ratio", "percentage_change"]:
             power: PowerAnalysisResult = {
                 "required_sample_size": 100,
                 "required_sample_size_per_arm": 50,
@@ -238,25 +242,25 @@ class TestDoWhySpec:
         spec: DoWhySpec = {
             "treatment_variable": "visit_frequency",
             "outcome_variable": "engagement_score",
-            "confounders": ["territory_size", "baseline_engagement", "hcp_specialty"],
+            "common_causes": ["territory_size", "baseline_engagement", "hcp_specialty"],
             "instruments": ["random_assignment"],
             "effect_modifiers": ["hcp_experience", "region"],
-            "causal_graph_dot": "digraph { visit_frequency -> engagement_score; territory_size -> engagement_score; }",
+            "graph_dot": "digraph { visit_frequency -> engagement_score; territory_size -> engagement_score; }",
+            "identification_strategy": "backdoor",
         }
 
         assert spec["treatment_variable"] == "visit_frequency"
-        assert len(spec["confounders"]) == 3
-        assert "digraph" in spec["causal_graph_dot"]
+        assert len(spec["common_causes"]) == 3
+        assert "digraph" in spec["graph_dot"]
 
     def test_minimal_spec(self):
         """Test creating minimal DoWhy specification."""
         spec: DoWhySpec = {
             "treatment_variable": "treatment",
             "outcome_variable": "outcome",
-            "confounders": [],
-            "instruments": [],
-            "effect_modifiers": [],
-            "causal_graph_dot": "",
+            "common_causes": [],
+            "graph_dot": "",
+            "identification_strategy": "backdoor",
         }
 
         assert spec["treatment_variable"] == "treatment"
@@ -268,28 +272,57 @@ class TestExperimentTemplate:
     def test_create_template(self):
         """Test creating experiment template."""
         template: ExperimentTemplate = {
-            "analysis_code": "from dowhy import CausalModel\n# Analysis code...",
+            "template_id": "exp-001",
+            "template_version": "1.0.0",
+            "design_summary": "RCT to measure impact of visit frequency on engagement",
+            "treatments": [
+                {
+                    "name": "Treatment A",
+                    "description": "Increased visit frequency",
+                    "implementation_details": "Weekly visits",
+                    "target_population": "High-value HCPs",
+                }
+            ],
+            "outcomes": [
+                {
+                    "name": "Engagement Score",
+                    "metric_type": "continuous",
+                    "measurement_method": "CRM index",
+                    "measurement_frequency": "weekly",
+                    "is_primary": True,
+                }
+            ],
+            "sample_size": 500,
+            "duration_days": 90,
+            "randomization_unit": "individual",
+            "randomization_method": "stratified",
+            "monitoring_checkpoints": [
+                {"day": 30, "metric": "enrollment_rate"},
+                {"day": 60, "metric": "dropout_rate"},
+            ],
+            "analysis_code_template": "from dowhy import CausalModel\n# Analysis code...",
             "pre_registration_document": "# Pre-registration\n## Hypothesis...",
-            "monitoring_dashboard_spec": {
-                "metrics": ["enrollment_rate", "dropout_rate"],
-                "alerts": ["low_enrollment", "high_dropout"],
-            },
-            "randomization_script": "import random\n# Randomization code...",
         }
 
-        assert "CausalModel" in template["analysis_code"]
-        assert len(template["monitoring_dashboard_spec"]["metrics"]) == 2
+        assert template["template_id"] == "exp-001"
+        assert len(template["monitoring_checkpoints"]) == 2
 
-    def test_template_with_empty_monitoring(self):
-        """Test template with empty monitoring spec."""
+    def test_template_minimal(self):
+        """Test template with minimal required fields."""
         template: ExperimentTemplate = {
-            "analysis_code": "# Code",
-            "pre_registration_document": "# Doc",
-            "monitoring_dashboard_spec": {},
-            "randomization_script": "",
+            "template_id": "exp-002",
+            "template_version": "1.0.0",
+            "design_summary": "Simple A/B test",
+            "treatments": [],
+            "outcomes": [],
+            "sample_size": 100,
+            "duration_days": 30,
+            "randomization_unit": "individual",
+            "randomization_method": "simple",
+            "monitoring_checkpoints": [],
         }
 
-        assert template["monitoring_dashboard_spec"] == {}
+        assert template["sample_size"] == 100
 
 
 class TestDesignIteration:

@@ -36,14 +36,15 @@ class TestExperimentDesignerAgent:
         assert agent is not None
         assert agent.max_redesign_iterations == 3
 
-    def test_run_basic(self):
+    @pytest.mark.asyncio
+    async def test_run_basic(self):
         """Test basic agent execution."""
         agent = ExperimentDesignerAgent()
         input_data = ExperimentDesignerInput(
             business_question="Does increasing rep visit frequency improve HCP engagement?"
         )
 
-        result = agent.run(input_data)
+        result = await agent.arun(input_data)
 
         assert isinstance(result, ExperimentDesignerOutput)
         # Design type comparison is case-insensitive
@@ -56,7 +57,8 @@ class TestExperimentDesignerAgent:
         ]
         assert len(result.design_rationale) > 0
 
-    def test_run_with_constraints(self):
+    @pytest.mark.asyncio
+    async def test_run_with_constraints(self):
         """Test execution with constraints."""
         agent = ExperimentDesignerAgent()
         input_data = ExperimentDesignerInput(
@@ -64,12 +66,13 @@ class TestExperimentDesignerAgent:
             constraints={"expected_effect_size": 0.25, "power": 0.80, "weekly_accrual": 50},
         )
 
-        result = agent.run(input_data)
+        result = await agent.arun(input_data)
 
         assert isinstance(result, ExperimentDesignerOutput)
         assert result.power_analysis is not None
 
-    def test_run_with_available_data(self):
+    @pytest.mark.asyncio
+    async def test_run_with_available_data(self):
         """Test execution with available data specification."""
         agent = ExperimentDesignerAgent()
         input_data = ExperimentDesignerInput(
@@ -81,11 +84,12 @@ class TestExperimentDesignerAgent:
             },
         )
 
-        result = agent.run(input_data)
+        result = await agent.arun(input_data)
 
         assert isinstance(result, ExperimentDesignerOutput)
 
-    def test_run_with_brand(self):
+    @pytest.mark.asyncio
+    async def test_run_with_brand(self):
         """Test execution with brand filter."""
         agent = ExperimentDesignerAgent()
         input_data = ExperimentDesignerInput(
@@ -94,11 +98,12 @@ class TestExperimentDesignerAgent:
             brand="Remibrutinib",
         )
 
-        result = agent.run(input_data)
+        result = await agent.arun(input_data)
 
         assert isinstance(result, ExperimentDesignerOutput)
 
-    def test_run_heavy_preregistration(self):
+    @pytest.mark.asyncio
+    async def test_run_heavy_preregistration(self):
         """Test with heavy preregistration formality."""
         agent = ExperimentDesignerAgent()
         input_data = ExperimentDesignerInput(
@@ -106,41 +111,44 @@ class TestExperimentDesignerAgent:
             preregistration_formality="heavy",
         )
 
-        result = agent.run(input_data)
+        result = await agent.arun(input_data)
 
         assert isinstance(result, ExperimentDesignerOutput)
         assert len(result.preregistration_document) > 0
 
-    def test_run_light_preregistration(self):
+    @pytest.mark.asyncio
+    async def test_run_light_preregistration(self):
         """Test with light preregistration formality."""
         agent = ExperimentDesignerAgent()
         input_data = ExperimentDesignerInput(
             business_question="Quick pilot test", preregistration_formality="light"
         )
 
-        result = agent.run(input_data)
+        result = await agent.arun(input_data)
 
         assert isinstance(result, ExperimentDesignerOutput)
 
-    def test_run_without_validity_audit(self):
+    @pytest.mark.asyncio
+    async def test_run_without_validity_audit(self):
         """Test execution without validity audit."""
         agent = ExperimentDesignerAgent()
         input_data = ExperimentDesignerInput(
             business_question="Quick design without audit", enable_validity_audit=False
         )
 
-        result = agent.run(input_data)
+        result = await agent.arun(input_data)
 
         assert isinstance(result, ExperimentDesignerOutput)
 
-    def test_run_multiple_redesign_iterations(self):
+    @pytest.mark.asyncio
+    async def test_run_multiple_redesign_iterations(self):
         """Test with max redesign iterations set."""
         agent = ExperimentDesignerAgent(max_redesign_iterations=3)
         input_data = ExperimentDesignerInput(
             business_question="Complex experiment needing refinement", max_redesign_iterations=3
         )
 
-        result = agent.run(input_data)
+        result = await agent.arun(input_data)
 
         assert isinstance(result, ExperimentDesignerOutput)
         assert result.redesign_iterations <= 3
@@ -243,12 +251,13 @@ class TestExperimentDesignerInput:
 class TestExperimentDesignerOutput:
     """Test ExperimentDesignerOutput structure."""
 
-    def test_output_structure(self):
+    @pytest.mark.asyncio
+    async def test_output_structure(self):
         """Test output structure has all required fields."""
         agent = ExperimentDesignerAgent()
         input_data = ExperimentDesignerInput(business_question="Does X impact Y in meaningful way?")
 
-        result = agent.run(input_data)
+        result = await agent.arun(input_data)
 
         # Check all required fields exist
         assert hasattr(result, "design_type")
@@ -272,21 +281,23 @@ class TestExperimentDesignerOutput:
         assert hasattr(result, "redesign_iterations")
         assert hasattr(result, "warnings")
 
-    def test_output_validity_score_range(self):
+    @pytest.mark.asyncio
+    async def test_output_validity_score_range(self):
         """Test validity score is in valid range."""
         agent = ExperimentDesignerAgent()
         input_data = ExperimentDesignerInput(business_question="Test validity score range")
 
-        result = agent.run(input_data)
+        result = await agent.arun(input_data)
 
         assert 0.0 <= result.overall_validity_score <= 1.0
 
-    def test_output_treatments_structure(self):
+    @pytest.mark.asyncio
+    async def test_output_treatments_structure(self):
         """Test treatments structure."""
         agent = ExperimentDesignerAgent()
         input_data = ExperimentDesignerInput(business_question="Does treatment A improve outcome?")
 
-        result = agent.run(input_data)
+        result = await agent.arun(input_data)
 
         assert isinstance(result.treatments, list)
         if result.treatments:
@@ -297,12 +308,13 @@ class TestExperimentDesignerOutput:
             assert hasattr(treatment, "implementation_details")
             assert hasattr(treatment, "target_population")
 
-    def test_output_outcomes_structure(self):
+    @pytest.mark.asyncio
+    async def test_output_outcomes_structure(self):
         """Test outcomes structure."""
         agent = ExperimentDesignerAgent()
         input_data = ExperimentDesignerInput(business_question="Measure impact on key outcome")
 
-        result = agent.run(input_data)
+        result = await agent.arun(input_data)
 
         assert isinstance(result.outcomes, list)
         if result.outcomes:
@@ -313,12 +325,13 @@ class TestExperimentDesignerOutput:
             assert hasattr(outcome, "measurement_method")
             assert hasattr(outcome, "is_primary")
 
-    def test_output_validity_threats_structure(self):
+    @pytest.mark.asyncio
+    async def test_output_validity_threats_structure(self):
         """Test validity threats structure."""
         agent = ExperimentDesignerAgent()
         input_data = ExperimentDesignerInput(business_question="Check for validity threats")
 
-        result = agent.run(input_data)
+        result = await agent.arun(input_data)
 
         assert isinstance(result.validity_threats, list)
         if result.validity_threats:
@@ -329,7 +342,8 @@ class TestExperimentDesignerOutput:
             assert hasattr(threat, "severity")
             assert hasattr(threat, "mitigation_possible")
 
-    def test_output_power_analysis_structure(self):
+    @pytest.mark.asyncio
+    async def test_output_power_analysis_structure(self):
         """Test power analysis structure."""
         agent = ExperimentDesignerAgent()
         input_data = ExperimentDesignerInput(
@@ -337,7 +351,7 @@ class TestExperimentDesignerOutput:
             constraints={"expected_effect_size": 0.3, "power": 0.8},
         )
 
-        result = agent.run(input_data)
+        result = await agent.arun(input_data)
 
         if result.power_analysis:
             pa = result.power_analysis
@@ -351,25 +365,27 @@ class TestExperimentDesignerOutput:
             assert pa.required_sample_size > 0
             assert 0.0 < pa.achieved_power <= 1.0
 
-    def test_output_analysis_code_generated(self):
+    @pytest.mark.asyncio
+    async def test_output_analysis_code_generated(self):
         """Test analysis code is generated."""
         agent = ExperimentDesignerAgent()
         input_data = ExperimentDesignerInput(business_question="Generate analysis template")
 
-        result = agent.run(input_data)
+        result = await agent.arun(input_data)
 
         assert len(result.analysis_code) > 0
         # Should contain DoWhy imports
         assert "dowhy" in result.analysis_code.lower() or "CausalModel" in result.analysis_code
 
-    def test_output_preregistration_generated(self):
+    @pytest.mark.asyncio
+    async def test_output_preregistration_generated(self):
         """Test preregistration document is generated."""
         agent = ExperimentDesignerAgent()
         input_data = ExperimentDesignerInput(
             business_question="Generate preregistration for experiment"
         )
 
-        result = agent.run(input_data)
+        result = await agent.arun(input_data)
 
         assert len(result.preregistration_document) > 0
 
@@ -377,7 +393,8 @@ class TestExperimentDesignerOutput:
 class TestEndToEndWorkflows:
     """Test complete end-to-end workflows."""
 
-    def test_rct_design_workflow(self):
+    @pytest.mark.asyncio
+    async def test_rct_design_workflow(self):
         """Test RCT design workflow."""
         agent = ExperimentDesignerAgent()
         input_data = ExperimentDesignerInput(
@@ -394,7 +411,7 @@ class TestEndToEndWorkflows:
             },
         )
 
-        result = agent.run(input_data)
+        result = await agent.arun(input_data)
 
         # Design type comparison is case-insensitive
         design_type_normalized = result.design_type.lower().replace("-", "_")
@@ -402,7 +419,8 @@ class TestEndToEndWorkflows:
         assert result.power_analysis is not None
         assert len(result.treatments) > 0
 
-    def test_cluster_rct_workflow(self):
+    @pytest.mark.asyncio
+    async def test_cluster_rct_workflow(self):
         """Test cluster RCT design workflow."""
         agent = ExperimentDesignerAgent()
         input_data = ExperimentDesignerInput(
@@ -416,11 +434,12 @@ class TestEndToEndWorkflows:
             available_data={"variables": ["territory_id", "rep_id", "sales_volume"]},
         )
 
-        result = agent.run(input_data)
+        result = await agent.arun(input_data)
 
         assert isinstance(result, ExperimentDesignerOutput)
 
-    def test_binary_outcome_workflow(self):
+    @pytest.mark.asyncio
+    async def test_binary_outcome_workflow(self):
         """Test workflow with binary outcome."""
         agent = ExperimentDesignerAgent()
         input_data = ExperimentDesignerInput(
@@ -428,11 +447,12 @@ class TestEndToEndWorkflows:
             constraints={"expected_effect_size": 0.10, "baseline_rate": 0.15, "power": 0.80},
         )
 
-        result = agent.run(input_data)
+        result = await agent.arun(input_data)
 
         assert isinstance(result, ExperimentDesignerOutput)
 
-    def test_multiple_brands_workflow(self):
+    @pytest.mark.asyncio
+    async def test_multiple_brands_workflow(self):
         """Test with different brands."""
         agent = ExperimentDesignerAgent()
 
@@ -441,11 +461,12 @@ class TestEndToEndWorkflows:
                 business_question=f"Optimize {brand} marketing effectiveness", brand=brand
             )
 
-            result = agent.run(input_data)
+            result = await agent.arun(input_data)
 
             assert isinstance(result, ExperimentDesignerOutput)
 
-    def test_different_formality_levels(self):
+    @pytest.mark.asyncio
+    async def test_different_formality_levels(self):
         """Test with different preregistration formality levels."""
         agent = ExperimentDesignerAgent()
 
@@ -454,12 +475,13 @@ class TestEndToEndWorkflows:
                 business_question="Test experiment design", preregistration_formality=formality
             )
 
-            result = agent.run(input_data)
+            result = await agent.arun(input_data)
 
             assert isinstance(result, ExperimentDesignerOutput)
             assert len(result.preregistration_document) > 0
 
-    def test_redesign_loop_executes(self):
+    @pytest.mark.asyncio
+    async def test_redesign_loop_executes(self):
         """Test that redesign loop can execute when needed."""
         agent = ExperimentDesignerAgent(max_redesign_iterations=2)
         input_data = ExperimentDesignerInput(
@@ -468,14 +490,15 @@ class TestEndToEndWorkflows:
             enable_validity_audit=True,
         )
 
-        result = agent.run(input_data)
+        result = await agent.arun(input_data)
 
         assert isinstance(result, ExperimentDesignerOutput)
         # Redesign iterations should be tracked
         assert result.redesign_iterations >= 0
         assert result.redesign_iterations <= 2
 
-    def test_latency_under_target(self):
+    @pytest.mark.asyncio
+    async def test_latency_under_target(self):
         """Test latency is under 60s target."""
         agent = ExperimentDesignerAgent()
         input_data = ExperimentDesignerInput(
@@ -483,19 +506,20 @@ class TestEndToEndWorkflows:
             constraints={"expected_effect_size": 0.25, "power": 0.80},
         )
 
-        result = agent.run(input_data)
+        result = await agent.arun(input_data)
 
         # Should be under 60,000ms (60s) per contract
         assert result.total_latency_ms < 60_000
 
-    def test_causal_graph_dot_generated(self):
+    @pytest.mark.asyncio
+    async def test_causal_graph_dot_generated(self):
         """Test causal graph DOT format is generated."""
         agent = ExperimentDesignerAgent()
         input_data = ExperimentDesignerInput(
             business_question="Generate causal graph for experiment"
         )
 
-        result = agent.run(input_data)
+        result = await agent.arun(input_data)
 
         assert len(result.causal_graph_dot) > 0
         # Should contain DOT format elements
@@ -505,16 +529,18 @@ class TestEndToEndWorkflows:
 class TestEdgeCases:
     """Test edge cases and boundary conditions."""
 
-    def test_minimal_constraints(self):
+    @pytest.mark.asyncio
+    async def test_minimal_constraints(self):
         """Test with minimal constraints."""
         agent = ExperimentDesignerAgent()
         input_data = ExperimentDesignerInput(business_question="Minimal constraint experiment")
 
-        result = agent.run(input_data)
+        result = await agent.arun(input_data)
 
         assert isinstance(result, ExperimentDesignerOutput)
 
-    def test_maximum_constraints(self):
+    @pytest.mark.asyncio
+    async def test_maximum_constraints(self):
         """Test with maximum constraints."""
         agent = ExperimentDesignerAgent()
         input_data = ExperimentDesignerInput(
@@ -532,23 +558,25 @@ class TestEdgeCases:
             },
         )
 
-        result = agent.run(input_data)
+        result = await agent.arun(input_data)
 
         assert isinstance(result, ExperimentDesignerOutput)
 
-    def test_zero_redesign_iterations(self):
+    @pytest.mark.asyncio
+    async def test_zero_redesign_iterations(self):
         """Test with zero redesign iterations."""
         agent = ExperimentDesignerAgent(max_redesign_iterations=0)
         input_data = ExperimentDesignerInput(
             business_question="Single pass experiment design", max_redesign_iterations=0
         )
 
-        result = agent.run(input_data)
+        result = await agent.arun(input_data)
 
         assert isinstance(result, ExperimentDesignerOutput)
         assert result.redesign_iterations == 0
 
-    def test_very_small_effect_size(self):
+    @pytest.mark.asyncio
+    async def test_very_small_effect_size(self):
         """Test with very small effect size."""
         agent = ExperimentDesignerAgent()
         input_data = ExperimentDesignerInput(
@@ -556,14 +584,15 @@ class TestEdgeCases:
             constraints={"expected_effect_size": 0.05, "power": 0.80},  # Very small
         )
 
-        result = agent.run(input_data)
+        result = await agent.arun(input_data)
 
         assert isinstance(result, ExperimentDesignerOutput)
         if result.power_analysis:
             # Very small effect should require large sample
             assert result.power_analysis.required_sample_size > 500
 
-    def test_large_effect_size(self):
+    @pytest.mark.asyncio
+    async def test_large_effect_size(self):
         """Test with large effect size."""
         agent = ExperimentDesignerAgent()
         input_data = ExperimentDesignerInput(
@@ -571,7 +600,7 @@ class TestEdgeCases:
             constraints={"expected_effect_size": 0.8, "power": 0.80},  # Large
         )
 
-        result = agent.run(input_data)
+        result = await agent.arun(input_data)
 
         assert isinstance(result, ExperimentDesignerOutput)
         if result.power_analysis:
@@ -580,18 +609,20 @@ class TestEdgeCases:
             assert result.power_analysis.required_sample_size > 0
             assert result.power_analysis.required_sample_size < 2000
 
-    def test_empty_available_data(self):
+    @pytest.mark.asyncio
+    async def test_empty_available_data(self):
         """Test with empty available data."""
         agent = ExperimentDesignerAgent()
         input_data = ExperimentDesignerInput(
             business_question="Design with no available data specified", available_data={}
         )
 
-        result = agent.run(input_data)
+        result = await agent.arun(input_data)
 
         assert isinstance(result, ExperimentDesignerOutput)
 
-    def test_complex_available_data(self):
+    @pytest.mark.asyncio
+    async def test_complex_available_data(self):
         """Test with complex available data structure."""
         agent = ExperimentDesignerAgent()
         input_data = ExperimentDesignerInput(
@@ -618,7 +649,7 @@ class TestEdgeCases:
             },
         )
 
-        result = agent.run(input_data)
+        result = await agent.arun(input_data)
 
         assert isinstance(result, ExperimentDesignerOutput)
 

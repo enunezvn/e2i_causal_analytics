@@ -54,20 +54,21 @@ class TestConceptDriftNode:
 
     @pytest.mark.asyncio
     async def test_adds_warning(self):
-        """Test adds warning about not implemented."""
+        """Test adds warning when model_id is not provided."""
         node = ConceptDriftNode()
         state = self._create_test_state()
 
         result = await node.execute(state)
 
-        # Should add warning about not implemented
-        assert any("not yet implemented" in w.lower() for w in result["warnings"])
+        # Should add warning about skipping concept drift (no model_id)
+        assert any("skipped" in w.lower() or "no model_id" in w.lower() for w in result["warnings"])
 
     @pytest.mark.asyncio
     async def test_latency_measurement(self):
         """Test latency measurement."""
         node = ConceptDriftNode()
-        state = self._create_test_state()
+        # Must provide model_id so node runs full path and measures latency
+        state = self._create_test_state(model_id="test_model_v1")
 
         result = await node.execute(state)
 
