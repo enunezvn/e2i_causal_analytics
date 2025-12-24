@@ -512,7 +512,34 @@ Tier 0 agents operate within the ML pipeline and do not require 4-Memory Archite
 - [x] Memory hooks unit tests per agent
 - [x] Signal collector tests per Sender agent
 - [x] Recipient configuration tests per Recipient agent
-- [ ] Integration tests for signal flow end-to-end
+- [x] Integration tests for signal flow end-to-end (**131 tests**)
+
+#### Signal Flow Integration Tests
+
+Location: `tests/integration/test_signal_flow/`
+
+| Batch | File | Tests | Status |
+|-------|------|-------|--------|
+| 1 | test_sender_signals.py | 34 | ✅ PASSED |
+| 2 | test_signal_collection.py | 15 | ✅ PASSED |
+| 3 | test_hub_coordination.py | 25 | ✅ PASSED |
+| 4 | test_recipient_prompts.py | 37 | ✅ PASSED |
+| 5 | test_e2e_signal_flow.py | 20 | ✅ PASSED |
+| **Total** | | **131** | ✅ ALL PASSED |
+
+**Test Coverage by Role**:
+- Sender agents (6): causal_impact, gap_analyzer, heterogeneous_optimizer, drift_monitor, experiment_designer, prediction_synthesizer
+- Hub agents (2): orchestrator, feedback_learner
+- Recipient agents (3): health_score, resource_optimizer, explainer
+- Hybrid agents (2): tool_composer, feedback_learner
+
+**Signal Flow Contract Compliance Tests**:
+- Minimum signals threshold (100) validation
+- Minimum quality threshold (0.6) validation
+- Optimization interval (24 hours) validation
+- Signal JSON roundtrip serialization
+- Multi-agent coordination
+- Memory contribution integration
 
 ---
 
