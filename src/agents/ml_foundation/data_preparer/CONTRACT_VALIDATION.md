@@ -3,8 +3,8 @@
 **Purpose**: Validate that the data_preparer implementation complies with tier0-contracts.md
 
 **Date**: 2025-12-23
-**Version**: 4.6
-**Status**: ✅ 100% COMPLIANT
+**Version**: 4.7
+**Status**: ✅ 100% COMPLIANT (Pandera Integration)
 
 ---
 
@@ -97,6 +97,77 @@
 
 ---
 
+## Schema Validation Contract (Pandera)
+
+### Validation Pipeline Order
+
+| Step | Tool | Purpose | SLA |
+|------|------|---------|-----|
+| 1 | **Pandera** | Fast schema validation | ~10ms |
+| 2 | Quality Checker | 5 dimension scoring | ~100ms |
+| 3 | Great Expectations | Business rules | ~500ms |
+
+**Status**: ✅ **COMPLIANT** - Pandera runs FIRST for fast-fail on schema issues
+
+### Schema State Fields
+
+| Field | Type | Implemented | Location |
+|-------|------|-------------|----------|
+| `schema_validation_status` | Literal["passed", "failed", "skipped", "error"] | ✅ | state.py:78 |
+| `schema_validation_errors` | List[Dict[str, Any]] | ✅ | state.py:79 |
+| `schema_splits_validated` | int | ✅ | state.py:80 |
+| `schema_validation_time_ms` | int | ✅ | state.py:81 |
+
+**Status**: ✅ **COMPLIANT** - All schema validation state fields implemented
+
+### Schema Registry Integration
+
+| Data Source | Schema Class | Implemented | Location |
+|-------------|--------------|-------------|----------|
+| `business_metrics` | BusinessMetricsSchema | ✅ | pandera_schemas.py:45-81 |
+| `predictions` | PredictionsSchema | ✅ | pandera_schemas.py:84-118 |
+| `ml_predictions` | PredictionsSchema (alias) | ✅ | pandera_schemas.py:179 |
+| `triggers` | TriggersSchema | ✅ | pandera_schemas.py:121-142 |
+| `patient_journeys` | PatientJourneysSchema | ✅ | pandera_schemas.py:145-165 |
+| `causal_paths` | CausalPathsSchema | ✅ | pandera_schemas.py:103-115 |
+| `agent_activities` | AgentActivitiesSchema | ✅ | pandera_schemas.py:168-175 |
+
+**Status**: ✅ **COMPLIANT** - All 6 E2I data sources have Pandera schemas
+
+### E2I Business Constraints
+
+| Constraint | Type | Implementation |
+|------------|------|----------------|
+| Brands | ENUM | `["Remibrutinib", "Fabhalta", "Kisqali", "All_Brands"]` |
+| Regions | ENUM | `["northeast", "south", "midwest", "west"]` |
+| confidence_score | Range | `ge=0.0, le=1.0` |
+| causal_effect_size | Range | `ge=-1.0, le=1.0` |
+
+**Status**: ✅ **COMPLIANT** - E2I business constraints enforced
+
+### Schema Failures Are Blocking
+
+| Behavior | Expected | Implemented | Location |
+|----------|----------|-------------|----------|
+| Errors collected with `lazy=True` | ✅ | ✅ | schema_validator.py:78 |
+| Errors added to `blocking_issues` | ✅ | ✅ | schema_validator.py:96 |
+| Failed status blocks gate | ✅ | ✅ | graph.py:62-68 |
+
+**Status**: ✅ **COMPLIANT** - Schema failures properly block downstream training
+
+### Graph Integration
+
+| Requirement | Status | Location |
+|-------------|--------|----------|
+| Node added to graph | ✅ | graph.py:51 |
+| Wired after load_data | ✅ | graph.py:61 |
+| Wired before run_quality_checks | ✅ | graph.py:62 |
+| Import from nodes | ✅ | graph.py:17 |
+
+**Status**: ✅ **COMPLIANT** - Pandera validation integrated into LangGraph pipeline
+
+---
+
 ## QC Gate Contract Validation
 
 ### Gate Logic Requirements (tier0-contracts.md:278-322)
@@ -175,10 +246,11 @@ def check_gate(qc_report: QCReport) -> bool:
 
 | Tool | Required | Status | Notes |
 |------|----------|--------|-------|
+| Pandera | ✅ | ✅ | schema_validator.py - fast schema validation (~10ms) |
 | Great Expectations | ✅ | ✅ | ge_validator.py - full GE integration |
 | Opik (observability) | ✅ | ✅ | agent.py:121-142 - trace_agent context manager |
 
-**Status**: ✅ **COMPLIANT** - MLOps integrations implemented
+**Status**: ✅ **COMPLIANT** - MLOps integrations implemented (Pandera + GE + Opik)
 
 ---
 
@@ -250,15 +322,17 @@ def check_gate(qc_report: QCReport) -> bool:
 
 1. **Input Contract** - All required and optional inputs validated
 2. **Output Contract** - Complete QCReport, BaselineMetrics, DataReadiness schemas
-3. **QC Gate Logic** - Exact match with tier0-contracts.md specification
-4. **Test Coverage** - Comprehensive unit and integration tests (32 passed)
-5. **Data Leakage Prevention** - Train-only baseline computation enforced
-6. **Upstream/Downstream Integration** - Correct data flow
-7. **Database Persistence** - QC reports persisted via DataQualityReportRepository
-8. **Opik Observability** - trace_agent context manager for distributed tracing
-9. **Temporal Leakage Detection** - 3 strategies: explicit, split-based, auto-detect
-10. **Factory Registration** - data_preparer registered with Tier 0 support
-11. **Agent Metadata** - All class attributes match contract
+3. **Schema Validation (Pandera)** - Fast schema validation (~10ms) with 6 E2I schemas
+4. **QC Gate Logic** - Exact match with tier0-contracts.md specification
+5. **Test Coverage** - Comprehensive unit and integration tests (32 passed)
+6. **Data Leakage Prevention** - Train-only baseline computation enforced
+7. **Upstream/Downstream Integration** - Correct data flow
+8. **Database Persistence** - QC reports persisted via DataQualityReportRepository
+9. **Opik Observability** - trace_agent context manager for distributed tracing
+10. **Temporal Leakage Detection** - 3 strategies: explicit, split-based, auto-detect
+11. **Factory Registration** - data_preparer registered with Tier 0 support
+12. **Agent Metadata** - All class attributes match contract
+13. **Validation Pipeline** - Pandera → Quality Checker → Great Expectations
 
 ### ⚠️ Future Enhancements (Not Blocking)
 
@@ -280,11 +354,13 @@ def check_gate(qc_report: QCReport) -> bool:
 - [x] Comprehensive test coverage
 - [x] Agent metadata correct
 - [x] Database persistence implemented
+- [x] Pandera schema validation integrated
 - [x] Great Expectations integrated
 - [x] Opik integrated
 - [x] Data loading implemented
 - [x] Temporal leakage detection fully implemented
 - [x] Factory registration complete
+- [x] Schema validation pipeline order correct (Pandera → QC → GE)
 
 **Overall Contract Compliance**: ✅ **100% COMPLIANT**
 
@@ -296,3 +372,4 @@ def check_gate(qc_report: QCReport) -> bool:
 |------|---------|---------|
 | 2025-12-18 | 4.0 | Initial validation - 80% compliant |
 | 2025-12-23 | 4.6 | 100% compliant - implemented temporal leakage, database persistence, Opik, factory registration |
+| 2025-12-23 | 4.7 | Pandera integration - 6 E2I schemas, schema_validator node, validation pipeline order |

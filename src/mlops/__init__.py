@@ -9,11 +9,12 @@ Components:
 - opik_connector.py: Opik SDK wrapper with circuit breaker (CLOSED → OPEN → HALF_OPEN)
 - shap_explainer_realtime.py: Real-Time SHAP computation engine
 - data_quality.py: Great Expectations data quality validation
+- pandera_schemas.py: Pandera schema validation for E2I data sources
 - (future) bentoml_service.py: BentoML model serving
 - (future) feast_client.py: Feast feature store client
 
 Author: E2I Causal Analytics Team
-Version: 4.4.0 (Phase 3 - Great Expectations Integration)
+Version: 4.5.0 (Pandera Schema Validation Integration)
 """
 
 from .data_quality import (
@@ -49,6 +50,23 @@ from .shap_explainer_realtime import (
     SHAPResult,
     SHAPVisualization,
 )
+from .pandera_schemas import (
+    # Schema classes
+    AgentActivitiesSchema,
+    BusinessMetricsSchema,
+    CausalPathsSchema,
+    PatientJourneysSchema,
+    PredictionsSchema,
+    TriggersSchema,
+    # Registry and utilities
+    PANDERA_SCHEMA_REGISTRY,
+    get_schema,
+    list_registered_schemas,
+    validate_dataframe,
+    # E2I constants
+    E2I_BRANDS,
+    E2I_REGIONS,
+)
 
 __all__ = [
     # SHAP Explainer
@@ -83,6 +101,19 @@ __all__ = [
     "DataQualityAlerter",
     "get_default_alerter",
     "configure_alerter",
+    # Pandera Schema Validation
+    "BusinessMetricsSchema",
+    "PredictionsSchema",
+    "TriggersSchema",
+    "PatientJourneysSchema",
+    "CausalPathsSchema",
+    "AgentActivitiesSchema",
+    "PANDERA_SCHEMA_REGISTRY",
+    "get_schema",
+    "validate_dataframe",
+    "list_registered_schemas",
+    "E2I_BRANDS",
+    "E2I_REGIONS",
 ]
 
-__version__ = "4.4.0"
+__version__ = "4.5.0"

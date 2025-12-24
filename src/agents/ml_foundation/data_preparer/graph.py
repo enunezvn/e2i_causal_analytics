@@ -14,6 +14,7 @@ from .nodes import (
     load_data,
     run_ge_validation,
     run_quality_checks,
+    run_schema_validation,
     transform_data,
 )
 from .state import DataPreparerState
@@ -26,12 +27,18 @@ def create_data_preparer_graph() -> StateGraph:
 
     The graph executes the following pipeline:
     1. load_data - Load and split data from Supabase using MLDataLoader
-    2. run_quality_checks - Validate data quality (completeness, validity, etc.)
-    3. run_ge_validation - Great Expectations validation (Phase 3)
-    4. detect_leakage - Check for data leakage (temporal, target, train-test)
-    5. transform_data - Encode, scale, and impute features
-    6. compute_baseline_metrics - Compute baseline metrics from train split
-    7. finalize_output - Generate final output and QC gate decision
+    2. run_schema_validation - Pandera schema validation (fast, ~10ms)
+    3. run_quality_checks - Validate data quality (completeness, validity, etc.)
+    4. run_ge_validation - Great Expectations validation (business rules)
+    5. detect_leakage - Check for data leakage (temporal, target, train-test)
+    6. transform_data - Encode, scale, and impute features
+    7. compute_baseline_metrics - Compute baseline metrics from train split
+    8. finalize_output - Generate final output and QC gate decision
+
+    Validation Pipeline Order:
+    - Pandera: Fast schema checks (types, nullability, enums)
+    - Quality Checker: 5 dimension scoring (completeness, validity, etc.)
+    - Great Expectations: Business rules and statistical checks
 
     Returns:
         StateGraph ready to be compiled
@@ -41,6 +48,7 @@ def create_data_preparer_graph() -> StateGraph:
 
     # Add nodes
     graph.add_node("load_data", load_data)
+    graph.add_node("run_schema_validation", run_schema_validation)
     graph.add_node("run_quality_checks", run_quality_checks)
     graph.add_node("run_ge_validation", run_ge_validation)
     graph.add_node("detect_leakage", detect_leakage)
@@ -50,7 +58,8 @@ def create_data_preparer_graph() -> StateGraph:
 
     # Define edges (sequential execution)
     graph.set_entry_point("load_data")
-    graph.add_edge("load_data", "run_quality_checks")
+    graph.add_edge("load_data", "run_schema_validation")
+    graph.add_edge("run_schema_validation", "run_quality_checks")
     graph.add_edge("run_quality_checks", "run_ge_validation")
     graph.add_edge("run_ge_validation", "detect_leakage")
     graph.add_edge("detect_leakage", "transform_data")

@@ -12,16 +12,17 @@ The **Data Preparer** is the quality gatekeeper of the ML pipeline. It validates
 | **Primary Output** | QCReport, BaselineMetrics, DataReadiness |
 | **Database Tables** | `ml_data_quality_reports`, `ml_feature_store` |
 | **Memory Types** | Working, Episodic, Procedural |
-| **MLOps Tools** | Great Expectations, Feast |
+| **MLOps Tools** | Great Expectations, Pandera, Feast |
 
 ## Responsibilities
 
-1. **Data Quality Validation**: Run Great Expectations suites against data
-2. **Baseline Metrics**: Compute feature distributions for drift detection
-3. **Leakage Detection**: Identify temporal and target leakage risks
-4. **Label Quality**: Assess annotation quality and inter-annotator agreement
-5. **Feature Registration**: Register features in Feast feature store
-6. **QC Gating**: Block downstream training if quality thresholds fail
+1. **Schema Validation**: Run Pandera schema checks (types, nullability, enums)
+2. **Data Quality Validation**: Run Great Expectations suites against data
+3. **Baseline Metrics**: Compute feature distributions for drift detection
+4. **Leakage Detection**: Identify temporal and target leakage risks
+5. **Label Quality**: Assess annotation quality and inter-annotator agreement
+6. **Feature Registration**: Register features in Feast feature store
+7. **QC Gating**: Block downstream training if quality thresholds fail
 
 ## Position in Pipeline
 
@@ -580,6 +581,92 @@ class BaselineComputer:
             "dtype": str(series.dtype)
         }
 ```
+
+## Pandera Schema Validation
+
+Pandera runs BEFORE Great Expectations as a fast-fail validation step (~10ms).
+
+### Validation Pipeline Order
+
+```
+Input DataFrame
+     │
+     ▼
+[1] PANDERA SCHEMA VALIDATION (Fast, ~10ms)
+    - Column existence & naming
+    - Data types (int, float, str, datetime)
+    - Nullability constraints
+    - Value ranges & E2I categories (brands, regions)
+     │
+     ▼
+[2] QUALITY CHECKER (5 dimensions)
+    - Completeness, Validity, Consistency, Uniqueness, Timeliness
+     │
+     ▼
+[3] GREAT EXPECTATIONS (Business rules)
+    - Statistical expectations
+    - Cross-column consistency
+```
+
+### Schema Registry
+
+The following Pandera schemas are defined in `src/mlops/pandera_schemas.py`:
+
+| Data Source | Schema Class | Key Validations |
+|-------------|-------------|-----------------|
+| `business_metrics` | `BusinessMetricsSchema` | brand IN E2I_BRANDS, metric_date not null |
+| `predictions` | `PredictionsSchema` | confidence_score 0-1, prediction_value 0-1 |
+| `triggers` | `TriggersSchema` | priority IN E2I_PRIORITY_TYPES, confidence 0-1 |
+| `patient_journeys` | `PatientJourneysSchema` | brand/region enums, patient_id not null |
+| `causal_paths` | `CausalPathsSchema` | effect_strength -1 to 1, confidence 0-1 |
+| `agent_activities` | `AgentActivitiesSchema` | agent_tier IN E2I_AGENT_TIERS |
+
+### E2I Constants
+
+```python
+from src.mlops.pandera_schemas import E2I_BRANDS, E2I_REGIONS
+
+E2I_BRANDS = ["Remibrutinib", "Fabhalta", "Kisqali", "All_Brands"]
+E2I_REGIONS = ["northeast", "south", "midwest", "west"]
+```
+
+### Schema Validation Node
+
+```python
+# src/agents/ml_foundation/data_preparer/nodes/schema_validator.py
+
+async def run_schema_validation(state: DataPreparerState) -> Dict[str, Any]:
+    """Run Pandera schema validation on loaded data.
+
+    Returns:
+        schema_validation_status: "passed", "failed", "skipped", "error"
+        schema_validation_errors: List of error dicts
+        schema_splits_validated: Number of splits validated
+        blocking_issues: Extended if schema fails
+    """
+```
+
+### State Fields
+
+```python
+# Schema validation (Pandera)
+schema_validation_status: Literal["passed", "failed", "skipped", "error"]
+schema_validation_errors: List[Dict[str, Any]]
+schema_splits_validated: int
+schema_validation_time_ms: int
+```
+
+### Schema Failures Are Blocking
+
+If Pandera schema validation fails, blocking_issues are added to state:
+
+```python
+if all_errors:
+    blocking_issues.append(f"Schema validation failed: {error_summary}")
+    # This blocks downstream training via QC gate
+```
+
+---
 
 ## Great Expectations Integration
 

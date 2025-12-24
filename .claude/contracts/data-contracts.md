@@ -333,6 +333,91 @@ class DataValidator:
 
 ---
 
+## Pandera Schema Contract
+
+### Overview
+
+Pandera provides fast DataFrame schema validation (~10ms) as the FIRST validation step in the data_preparer pipeline. It validates structural constraints before Great Expectations business rules.
+
+### Validation Order
+
+1. **Pandera** (Fast): Types, nullability, enums, ranges
+2. **Quality Checker** (Medium): 5 dimension scoring
+3. **Great Expectations** (Full): Business rules, statistics
+
+### E2I Schema Registry
+
+```python
+from src.mlops.pandera_schemas import PANDERA_SCHEMA_REGISTRY
+
+# Available schemas (data_source -> SchemaClass)
+PANDERA_SCHEMA_REGISTRY = {
+    "business_metrics": BusinessMetricsSchema,
+    "predictions": PredictionsSchema,
+    "ml_predictions": PredictionsSchema,  # Alias
+    "triggers": TriggersSchema,
+    "patient_journeys": PatientJourneysSchema,
+    "causal_paths": CausalPathsSchema,
+    "agent_activities": AgentActivitiesSchema,
+}
+```
+
+### E2I Business Constraints
+
+All schemas enforce these E2I-specific constraints:
+
+```python
+# Brands (brand_type ENUM)
+E2I_BRANDS = ["Remibrutinib", "Fabhalta", "Kisqali", "All_Brands"]
+
+# Regions (region_type ENUM)
+E2I_REGIONS = ["northeast", "south", "midwest", "west"]
+
+# Confidence scores (all models)
+confidence_score: Series[float] = Field(ge=0.0, le=1.0)
+
+# Causal effect sizes
+causal_effect_size: Series[float] = Field(ge=-1.0, le=1.0)
+```
+
+### Schema Definition Requirements
+
+When adding a new data source, create a Pandera schema in `src/mlops/pandera_schemas.py`:
+
+```python
+class NewDataSourceSchema(DataFrameModel):
+    """Schema for new_data_source table."""
+
+    id: Series[str] = Field(nullable=False, unique=True)
+    timestamp: Series[pd.Timestamp] = Field(nullable=False, coerce=True)
+    brand: Optional[Series[str]] = Field(nullable=True, isin=E2I_BRANDS + [None])
+
+    class Config:
+        name = "new_data_source"
+        strict = False  # Allow extra columns
+        coerce = True   # Auto-coerce types
+```
+
+### Schema Failures Are Blocking
+
+If Pandera validation fails:
+1. Errors are collected with `lazy=True`
+2. `blocking_issues` is extended with error summary
+3. `gate_passed` becomes `False`
+4. Downstream training is blocked
+
+### Contract Obligations
+
+| Component | Obligation |
+|-----------|------------|
+| Data Source | Define schema in `pandera_schemas.py` |
+| Data Preparer | Run `run_schema_validation` node before quality_checks |
+| Schema | Use `strict=False` to allow extra columns |
+| Schema | Use `coerce=True` for type flexibility |
+| Caller | Check `schema_validation_status` before proceeding |
+
+---
+
 ## Change Management
 
 ### Breaking Changes
