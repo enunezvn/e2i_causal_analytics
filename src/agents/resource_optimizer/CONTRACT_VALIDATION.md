@@ -4,7 +4,9 @@
 **Tier**: 4 (ML Predictions)
 **Type**: Standard (Computational)
 **Target Latency**: <20s
-**Validation Date**: 2025-12-22
+**Version**: 2.1
+**Validation Date**: 2025-12-23 (Updated)
+**Status**: 95% COMPLIANT - Memory Hooks Pending
 **Contract Source**: `.claude/contracts/tier4-contracts.md` (lines 285-526)
 **Specialist Source**: `.claude/specialists/Agent_Specialists_Tiers 1-5/resource-optimizer.md`
 
@@ -14,12 +16,13 @@
 
 | Metric | Status |
 |--------|--------|
-| Contract Compliance | 100% |
+| Contract Compliance | 95% (Memory hooks pending) |
 | Test Coverage | 62 tests passing |
 | Implementation Files | 8 files |
 | Node Implementation | 4/4 nodes complete |
 | Graph Variants | 2 (full, simple) |
 | Latency Target | <20s (met) |
+| **4-Memory Architecture** | **PENDING** |
 
 ---
 
@@ -571,6 +574,41 @@ All nodes implement structured logging:
 This document certifies that the **Resource Optimizer Agent** implementation at `src/agents/resource_optimizer/` is **100% compliant** with the contract specification defined in `.claude/contracts/tier4-contracts.md` (lines 285-526) and the specialist documentation in `.claude/specialists/Agent_Specialists_Tiers 1-5/resource-optimizer.md`.
 
 **Validated By**: Claude Code Audit
-**Validation Date**: 2025-12-22
+**Validation Date**: 2025-12-23
 **Test Execution**: 62/62 tests passing
-**Contract Compliance**: 100%
+**Contract Compliance**: 95% (Memory hooks pending)
+
+---
+
+## 15. 4-Memory Architecture Contract (PENDING)
+
+**Reference**: `base-contract.md` Section 6, `E2I_Agentic_Memory_Documentation.html`
+
+**Required Memory Types**: Working, Procedural
+
+| Requirement | Contract | Implementation | Status | Notes |
+|-------------|----------|----------------|--------|-------|
+| `memory_hooks.py` | Required file | Not created | PENDING | Phase 3 implementation |
+| Working Memory | Redis (24h TTL) | Not implemented | PENDING | Cache optimization results |
+| Procedural Memory | Supabase + pgvector | Not implemented | PENDING | Learn effective allocations |
+| MemoryHooksInterface | ABC implementation | Not implemented | PENDING | See below |
+
+**MemoryHooksInterface Contract**:
+```python
+class ResourceOptimizerMemoryHooks:
+    """Memory integration hooks for resource_optimizer agent."""
+
+    async def get_context(self, session_id: str, query: str, **kwargs) -> MemoryContext:
+        """Retrieve past optimization patterns for similar constraints."""
+        ...
+
+    async def contribute_to_memory(self, result: Dict, state: State, **kwargs) -> None:
+        """Store allocation outcomes to improve future optimizations."""
+        ...
+```
+
+**Memory Usage Patterns**:
+1. **Working Memory**: Cache allocation solutions (24h TTL)
+2. **Procedural Memory**: Learn successful allocation strategies per constraint type
+
+**DSPy Role**: Recipient (consumes optimized prompts, no signal generation)

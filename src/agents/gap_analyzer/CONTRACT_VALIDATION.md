@@ -2,17 +2,20 @@
 
 **Agent**: Gap Analyzer
 **Tier**: 2 (Standard Agent - Computational)
-**Status**: Implementation Complete
-**Date**: 2025-12-18
+**Version**: 2.1
+**Status**: 92% Compliant (Memory + DSPy pending)
+**Date**: 2025-12-23
 
 ---
 
 ## Executive Summary
 
-The Gap Analyzer agent implementation is **fully compliant** with the Tier 2 contract specifications defined in `.claude/contracts/tier2-contracts.md` (lines 315-543). All 9 implementation files and 132 tests have been created successfully, achieving comprehensive coverage of the contract requirements.
+The Gap Analyzer agent implementation is **92% compliant** with the Tier 2 contract specifications defined in `.claude/contracts/tier2-contracts.md` (lines 315-543). All 9 implementation files and 132 tests have been created successfully. **Memory hooks and DSPy Sender integration are pending** (Phases 3-4).
 
 **Key Metrics**:
-- ✅ Contract compliance: 100%
+- ✅ Core contract compliance: 100%
+- ⏳ Memory Integration: PENDING (Phase 3)
+- ⏳ DSPy Sender: PENDING (Phase 4)
 - ✅ Test coverage: 132 tests across 4 test files
 - ✅ Test-to-code ratio: ~70% (132 tests for ~1,882 lines of implementation)
 - ✅ Performance target: <20s (met with mock execution)
@@ -788,7 +791,80 @@ async def test_run_complete_workflow(self):
 | **Strategic Bets Logic** | ✅ COMPLIANT | prioritizer.py:256-280 |
 | **Performance Target** | ✅ COMPLIANT | <20s (tested) |
 
-**Overall Status**: ✅ **100% CONTRACT COMPLIANT**
+**Overall Status**: ✅ **92% CONTRACT COMPLIANT** (Memory + DSPy pending)
+
+---
+
+## 12. 4-Memory Architecture Contract
+
+**Reference**: `integration-contracts.md`, `E2I_Agentic_Memory_Documentation.html`
+
+**Required Memory Types**: Working, Episodic
+
+| Requirement | Contract | Implementation | Status | Notes |
+|-------------|----------|----------------|--------|-------|
+| `memory_hooks.py` | Required file | Not created | PENDING | Phase 3 implementation |
+| Working Memory | Redis (24h TTL) | Not implemented | PENDING | Session-scoped gap context |
+| Episodic Memory | Supabase + pgvector | Not implemented | PENDING | Historical gap patterns |
+| `get_context()` | Memory retrieval | Not implemented | PENDING | Prior gap analyses for segment |
+| `contribute_to_memory()` | Memory storage | Not implemented | PENDING | Store significant gaps/ROI |
+
+**Memory Hook Implementation Requirements**:
+```python
+class GapAnalyzerMemoryHooks:
+    """Memory integration hooks for gap_analyzer agent."""
+
+    async def get_context(self, session_id: str, query: str, **kwargs) -> MemoryContext:
+        """Retrieve prior gap analyses for similar segments/brands."""
+        # Working: Current session gaps
+        # Episodic: Historical gap patterns for same brand/segment
+        ...
+
+    async def contribute_to_memory(self, result: Dict, state: State, **kwargs) -> None:
+        """Store significant gap discoveries."""
+        # Store gaps with ROI > threshold in episodic memory
+        # Cache session gaps in working memory
+        ...
+```
+
+**Priority**: BLOCKING - Required for cross-session learning
+
+---
+
+## 13. DSPy Integration Contract
+
+**Reference**: `integration-contracts.md`, `E2I_DSPy_Feedback_Learner_Architecture_V2.html`
+
+**DSPy Role**: Sender (generates training signals for feedback_learner)
+
+| Requirement | Contract | Implementation | Status | Notes |
+|-------------|----------|----------------|--------|-------|
+| DSPy Type | Sender | Not implemented | PENDING | Generates training signals |
+| Signal Type | EvidenceRelevanceSignature | Not implemented | PENDING | For evidence relevance scoring |
+| `dspy_integration.py` | Required file | Not created | PENDING | Phase 4 implementation |
+| `collect_training_signal()` | TrainingSignal generation | Not implemented | PENDING | Captures input/output pairs |
+| Signal buffer | Local collection before batch | Not implemented | PENDING | Buffered signal collection |
+| Quality scoring | Signal quality metrics | Not implemented | PENDING | ROI-based quality |
+
+**Required TrainingSignal Structure** (from integration-contracts.md):
+```python
+class TrainingSignal(TypedDict):
+    agent_name: str  # "gap_analyzer"
+    signature_type: str  # "EvidenceRelevanceSignature"
+    input_data: Dict[str, Any]  # Query, metrics, segments, brand
+    output_data: Dict[str, Any]  # Gaps, ROI estimates, quick_wins
+    quality_score: float  # 0.0-1.0 based on confidence + gap count
+    timestamp: str  # ISO format
+    metadata: Dict[str, Any]  # Total addressable value, segments analyzed
+```
+
+**Signal Collection Points**:
+1. After gap detection (input: metrics/segments → output: gaps_detected)
+2. After ROI calculation (input: gaps → output: roi_estimates, addressable_value)
+3. After prioritization (input: roi_estimates → output: quick_wins, strategic_bets)
+4. Quality score = confidence * (1 if gaps_found > 0 else 0.5)
+
+**Priority**: HIGH - Required for DSPy optimization loop
 
 ---
 

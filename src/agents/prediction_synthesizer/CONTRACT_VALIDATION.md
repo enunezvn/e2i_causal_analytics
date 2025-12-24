@@ -4,7 +4,9 @@
 **Tier**: 4 (ML Predictions)
 **Type**: Standard (Computational)
 **Target Latency**: <15s
-**Validation Date**: 2025-12-22
+**Version**: 2.1
+**Validation Date**: 2025-12-23 (Updated)
+**Status**: 92% COMPLIANT - Memory Hooks & DSPy Pending
 **Contract Source**: `.claude/contracts/tier4-contracts.md` (lines 72-281)
 **Specialist Source**: `.claude/specialists/Agent_Specialists_Tiers 1-5/prediction-synthesizer.md`
 
@@ -14,12 +16,14 @@
 
 | Metric | Status |
 |--------|--------|
-| Contract Compliance | 100% |
+| Contract Compliance | 92% (Memory + DSPy pending) |
 | Test Coverage | 66 tests passing |
 | Implementation Files | 8 files |
 | Node Implementation | 3/3 nodes complete |
 | Graph Variants | 2 (full, simple) |
 | Latency Target | <15s (met) |
+| **4-Memory Architecture** | **PENDING** |
+| **DSPy Integration** | **PENDING** |
 
 ---
 
@@ -510,6 +514,69 @@ All nodes implement structured logging:
 This document certifies that the **Prediction Synthesizer Agent** implementation at `src/agents/prediction_synthesizer/` is **100% compliant** with the contract specification defined in `.claude/contracts/tier4-contracts.md` (lines 72-281) and the specialist documentation in `.claude/specialists/Agent_Specialists_Tiers 1-5/prediction-synthesizer.md`.
 
 **Validated By**: Claude Code Audit
-**Validation Date**: 2025-12-22
+**Validation Date**: 2025-12-23
 **Test Execution**: 66/66 tests passing
-**Contract Compliance**: 100%
+**Contract Compliance**: 92% (Memory + DSPy pending)
+
+---
+
+## 15. 4-Memory Architecture Contract (PENDING)
+
+**Reference**: `base-contract.md` Section 6, `E2I_Agentic_Memory_Documentation.html`
+
+**Required Memory Types**: Working, Episodic
+
+| Requirement | Contract | Implementation | Status | Notes |
+|-------------|----------|----------------|--------|-------|
+| `memory_hooks.py` | Required file | Not created | PENDING | Phase 3 implementation |
+| Working Memory | Redis (24h TTL) | Not implemented | PENDING | Cache prediction results |
+| Episodic Memory | Supabase + pgvector | Not implemented | PENDING | Historical prediction accuracy |
+| MemoryHooksInterface | ABC implementation | Not implemented | PENDING | See below |
+
+**MemoryHooksInterface Contract**:
+```python
+class PredictionSynthesizerMemoryHooks:
+    """Memory integration hooks for prediction_synthesizer agent."""
+
+    async def get_context(self, session_id: str, query: str, **kwargs) -> MemoryContext:
+        """Retrieve historical predictions for context enrichment."""
+        ...
+
+    async def contribute_to_memory(self, result: Dict, state: State, **kwargs) -> None:
+        """Store prediction results with outcomes for calibration tracking."""
+        ...
+```
+
+---
+
+## 16. DSPy Integration Contract (PENDING)
+
+**Reference**: `integration-contracts.md`, `E2I_DSPy_Feedback_Learner_Architecture_V2.html`
+
+**DSPy Role**: Sender (generates training signals for feedback_learner)
+
+| Requirement | Contract | Implementation | Status | Notes |
+|-------------|----------|----------------|--------|-------|
+| DSPy Type | Sender | Not implemented | PENDING | Generates training signals |
+| Signal Type | EvidenceSynthesisSignature | Not implemented | PENDING | For ensemble optimization |
+| `dspy_integration.py` | Required file | Not created | PENDING | Phase 4 implementation |
+| TrainingSignal Structure | Required | Not implemented | PENDING | See below |
+
+**TrainingSignal Structure**:
+```python
+class TrainingSignal(TypedDict):
+    signal_id: str
+    agent_id: str          # "prediction_synthesizer"
+    signature_type: str    # "EvidenceSynthesisSignature"
+    input_data: Dict[str, Any]
+    output_data: Dict[str, Any]
+    quality_score: float   # 0.0-1.0
+    timestamp: str
+    metadata: Dict[str, Any]
+```
+
+**Signal Collection Points**:
+1. After model orchestration (input: entity/features → output: individual_predictions)
+2. After ensemble combination (input: predictions → output: ensemble, intervals)
+3. After context enrichment (input: prediction → output: similar_cases, trends)
+4. Quality score = (model_agreement * 0.4) + (calibration_score * 0.4) + (historical_accuracy * 0.2)
