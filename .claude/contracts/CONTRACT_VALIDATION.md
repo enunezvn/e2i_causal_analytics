@@ -19,8 +19,8 @@ This document provides the validation matrix for all 18 E2I agents across:
 
 | Category | Compliant | Total | Rate | Status |
 |----------|-----------|-------|------|--------|
-| Memory Hooks (Tier 1-5) | 10 | 12 | 83% | GOOD |
-| DSPy Integration (Tier 1-5) | 12 | 12 | 100% | COMPLETE |
+| Memory Hooks (Tier 1-5) | 12 | 12 | 100% | ✅ COMPLETE |
+| DSPy Integration (Tier 1-5) | 12 | 12 | 100% | ✅ COMPLETE |
 | RAG DSPy Integration | 1 | 1 | 100% | ✅ COMPLETE |
 | Tier 0 ML Foundation | N/A | 7 | N/A | OUT OF SCOPE |
 
@@ -158,15 +158,14 @@ class HeterogeneousOptimizationTrainingSignal:
 
 | Aspect | Status | Details |
 |--------|--------|---------|
-| **Memory Hooks** | ⚠️ MISSING | Required: Working, Episodic, Semantic |
-| Memory Types | N/A | Drift pattern detection needs semantic memory |
+| **Memory Hooks** | ✅ COMPLIANT | `src/agents/drift_monitor/memory_hooks.py` |
+| Memory Types | Working, Episodic, Semantic | Full tri-memory integration for drift pattern detection |
 | **DSPy Integration** | ✅ COMPLIANT | `src/agents/drift_monitor/dspy_integration.py` |
 | DSPy Type | Sender | Generates DriftDetectionTrainingSignal |
 | DSPy Signatures | DriftDetectionSignature, HopDecisionSignature, DriftInterpretationSignature | Drift detection |
 | **Contract** | ✅ VALIDATED | tier3-contracts.md (lines 375-540) |
 
-**Blocking Items**:
-- [ ] Implement `memory_hooks.py` with Working, Episodic, Semantic memory integration
+**Blocking Items**: None
 
 **Training Signal Schema**:
 ```python
@@ -190,15 +189,14 @@ class DriftDetectionTrainingSignal:
 
 | Aspect | Status | Details |
 |--------|--------|---------|
-| **Memory Hooks** | ⚠️ MISSING | Required: Working, Episodic |
-| Memory Types | N/A | Experiment history tracking |
+| **Memory Hooks** | ✅ COMPLIANT | `src/agents/experiment_designer/memory_hooks.py` |
+| Memory Types | Working, Episodic | Experiment history tracking and validity threat learning |
 | **DSPy Integration** | ✅ COMPLIANT | `src/agents/experiment_designer/dspy_integration.py` |
 | DSPy Type | Sender | Generates ExperimentDesignTrainingSignal |
 | DSPy Signatures | DesignReasoningSignature, InvestigationPlanSignature, ValidityAssessmentSignature | A/B test design |
 | **Contract** | ✅ VALIDATED | tier3-contracts.md (lines 541-706) |
 
-**Blocking Items**:
-- [ ] Implement `memory_hooks.py` with Working, Episodic memory integration
+**Blocking Items**: None
 
 **Training Signal Schema**:
 ```python
@@ -495,7 +493,7 @@ Tier 0 agents operate within the ML pipeline and do not require 4-Memory Archite
 - [x] MemoryType enum in base-contract.md
 - [x] MemoryHooksInterface ABC in base-contract.md
 - [x] drift_monitor memory_hooks.py implementation
-- [ ] experiment_designer memory_hooks.py implementation
+- [x] experiment_designer memory_hooks.py implementation
 
 ### DSPy Integration Validation
 
@@ -529,3 +527,4 @@ Tier 0 agents operate within the ML pipeline and do not require 4-Memory Archite
 | 2025-12-23 | ✅ RAG DSPy validated as COMPLETE - all 11 signatures exist in cognitive_rag_dspy.py |
 | 2025-12-23 | DSPy Integration now at 100% (13/13) including RAG |
 | 2025-12-23 | ✅ drift_monitor memory_hooks.py implemented - Memory hooks now at 11/12 (92%) |
+| 2025-12-23 | ✅ experiment_designer memory_hooks.py implemented - Memory hooks now at 12/12 (100%) COMPLETE |
