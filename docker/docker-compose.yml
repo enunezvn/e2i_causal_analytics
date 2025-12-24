@@ -166,7 +166,7 @@ services:
     container_name: e2i_falkordb_browser
     restart: unless-stopped
     ports:
-      - "3003:3000"  # Port 3000 used by BentoML
+      - "3030:3000"  # FalkorDB Browser (Port 3000 internal)
     environment:
       - FALKORDB_HOST=falkordb
       - FALKORDB_PORT=6379
