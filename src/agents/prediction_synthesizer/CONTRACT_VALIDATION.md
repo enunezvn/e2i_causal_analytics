@@ -362,7 +362,8 @@ def get_handoff(self, output: PredictionSynthesizerOutput) -> Dict[str, Any]:
 ### 7.3 Test Execution
 
 ```bash
-pytest -n auto tests/unit/test_agents/test_prediction_synthesizer/ -v
+# Uses memory-safe defaults from pyproject.toml (-n 4 --dist=loadscope)
+pytest tests/unit/test_agents/test_prediction_synthesizer/ -v
 # Result: 66 passed in 12.24s
 ```
 

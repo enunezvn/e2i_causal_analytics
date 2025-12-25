@@ -359,9 +359,31 @@ All PRs use:
 
 ### Testing
 
-- **Always use pytest-xdist** for parallel test execution: `pytest -n auto` or `pytest -n <num_workers>`
-- This significantly speeds up test runs, especially for large test suites
-- The `-n auto` flag automatically detects the number of CPU cores
+**CRITICAL: Memory-Aware Test Execution**
+
+This system has 217 test files with heavy ML imports (dspy, sklearn, econml, dowhy).
+Running with too many parallel workers causes memory exhaustion and system freezes.
+
+**Mandatory Settings** (enforced in `pyproject.toml`):
+- **Max 4 workers**: `-n 4` (NOT `-n auto` which spawns 14 workers)
+- **Scope-based distribution**: `--dist=loadscope` (groups tests by module)
+- **30s timeout per test**: Prevents hanging tests
+
+**Test Commands**:
+```bash
+make test        # Default: 4 workers, coverage (RECOMMENDED)
+make test-fast   # 4 workers, no coverage (faster)
+make test-seq    # Sequential run (low memory systems)
+pytest tests/    # Uses pyproject.toml defaults automatically
+```
+
+**NEVER use**:
+- `pytest -n auto` - Spawns 14 workers, exhausts 7.5GB RAM
+- `pytest -n 8` or higher - Risk of memory exhaustion
+
+**DSPy Tests**:
+- All dspy test files have `@pytest.mark.xdist_group(name="dspy_integration")`
+- This ensures they run on the same worker to prevent import race conditions
 
 ---
 
@@ -370,8 +392,13 @@ All PRs use:
 ```bash
 # Development
 make dev              # Start dev environment
-make test             # Run all tests (use pytest -n auto for parallel)
 make lint             # Lint and format
+
+# Testing (Memory-Safe - ALWAYS use these)
+make test             # 4 workers + coverage (RECOMMENDED)
+make test-fast        # 4 workers, no coverage (faster)
+make test-seq         # Sequential (low memory systems)
+# NEVER: pytest -n auto (causes memory exhaustion!)
 
 # Database
 python scripts/setup_db.py

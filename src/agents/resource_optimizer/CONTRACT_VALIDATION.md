@@ -417,7 +417,8 @@ def get_handoff(self, output: ResourceOptimizerOutput) -> Dict[str, Any]:
 ### 7.3 Test Execution
 
 ```bash
-pytest -n auto tests/unit/test_agents/test_resource_optimizer/ -v
+# Uses memory-safe defaults from pyproject.toml (-n 4 --dist=loadscope)
+pytest tests/unit/test_agents/test_resource_optimizer/ -v
 # Result: 62 passed in 2.24s
 ```
 

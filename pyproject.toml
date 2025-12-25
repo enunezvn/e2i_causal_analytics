@@ -168,6 +168,7 @@ markers = [
     "requires_redis: Test requires Redis connection",
     "requires_falkordb: Test requires FalkorDB connection",
     "requires_supabase: Test requires Supabase connection",
+    "heavy_ml: Tests with heavy ML imports (dspy, econml, dowhy) - grouped on single worker",
 ]
 # Filter warnings
 filterwarnings = [
@@ -175,4 +176,7 @@ filterwarnings = [
     "ignore::pytest.PytestUnraisableExceptionWarning",
 ]
 # Add custom options
-addopts = "-v --tb=short"
+# IMPORTANT: Limit parallel workers to prevent memory exhaustion
+# System has 7.5GB RAM, heavy ML imports use ~500MB/worker
+# Safe default: 4 workers = ~2GB for tests + ~4GB for OS/services
+addopts = "-v --tb=short -n 4 --dist=loadscope"

@@ -5,6 +5,7 @@ This module provides:
 2. Auto-skip fixtures for external services (Redis, FalkorDB, Supabase)
 3. Safe async fixtures with built-in timeouts
 4. pytest hooks for service-based test filtering
+5. Memory-aware test grouping for heavy ML imports
 
 Usage:
     # In test files, use the fixtures:
@@ -16,6 +17,17 @@ Usage:
     @pytest.mark.skipif(not SERVICES_AVAILABLE["redis"], reason="Redis not available")
     def test_something():
         ...
+
+    # For memory-heavy tests (dspy, econml, etc.):
+    @pytest.mark.xdist_group(name="heavy_ml")
+    def test_heavy_ml_operation():
+        import dspy  # Heavy import grouped on single worker
+        ...
+
+Memory Management:
+    - Default: 4 parallel workers (safe for 7.5GB RAM systems)
+    - xdist_group markers ensure heavy imports share workers
+    - Use `pytest -n 0` for sequential runs on low-memory systems
 """
 
 from __future__ import annotations

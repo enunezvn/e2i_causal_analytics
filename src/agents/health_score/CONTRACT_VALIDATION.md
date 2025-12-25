@@ -313,11 +313,11 @@ The Health Score Agent is a **Fast Path Agent**:
 ### 6.3 Test Commands
 
 ```bash
-# Run all health_score tests
-pytest -n auto tests/unit/test_agents/test_health_score/
+# Run all health_score tests (uses memory-safe defaults from pyproject.toml)
+pytest tests/unit/test_agents/test_health_score/
 
 # Run with verbose output
-pytest -n auto tests/unit/test_agents/test_health_score/ -v
+pytest tests/unit/test_agents/test_health_score/ -v
 
 # Run specific test file
 pytest tests/unit/test_agents/test_health_score/test_agent.py -v

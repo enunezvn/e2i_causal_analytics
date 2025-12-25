@@ -6,10 +6,16 @@ Tests the DSPy Sender role implementation including:
 - Reward computation
 - Signal collector
 - Singleton access patterns
+
+Note: This module is marked to run sequentially (not in parallel) because
+the dspy import has race conditions during parallel pytest-xdist execution.
 """
 
 import pytest
 from datetime import datetime, timezone
+
+# Mark entire module to run on same worker - prevents import race conditions
+pytestmark = pytest.mark.xdist_group(name="dspy_integration")
 
 from src.agents.experiment_designer.dspy_integration import (
     ExperimentDesignTrainingSignal,

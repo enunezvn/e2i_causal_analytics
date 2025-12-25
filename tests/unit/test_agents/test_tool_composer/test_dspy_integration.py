@@ -7,10 +7,16 @@ Tests the DSPy Hybrid role implementation including:
 - Signal collector
 - Hybrid integration (prompt optimization)
 - Singleton access patterns
+
+Note: This module is marked to run sequentially (not in parallel) because
+the dspy import has race conditions during parallel pytest-xdist execution.
 """
 
 import pytest
 from datetime import datetime, timezone
+
+# Mark entire module to run on same worker - prevents import race conditions
+pytestmark = pytest.mark.xdist_group(name="dspy_integration")
 
 from src.agents.tool_composer.dspy_integration import (
     CompositionTrainingSignal,
