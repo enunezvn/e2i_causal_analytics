@@ -11,12 +11,18 @@ Tests cover:
 - Mock backends
 
 Author: E2I Causal Analytics Team
+
+Note: This module is marked to run sequentially (not in parallel) because
+the dspy import has race conditions during parallel pytest-xdist execution.
 """
 
 from dataclasses import asdict
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+# Mark entire module to run on same worker - prevents import race conditions
+pytestmark = pytest.mark.xdist_group(name="dspy_integration")
 
 # =============================================================================
 # ENUM TESTS
