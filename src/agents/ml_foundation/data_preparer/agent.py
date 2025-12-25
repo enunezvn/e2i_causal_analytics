@@ -59,7 +59,7 @@ class DataPreparerAgent:
     agent_name = "data_preparer"
     agent_type = "standard"
     sla_seconds = 60
-    tools = ["great_expectations", "pandas", "numpy", "scipy"]
+    tools = ["great_expectations", "pandas", "numpy", "scipy", "feast"]
     primary_model = None  # No LLM usage
 
     def __init__(self):
@@ -194,6 +194,13 @@ class DataPreparerAgent:
                     "qc_passed": final_state["qc_passed"],
                     "qc_score": final_state["qc_score"],
                     "blockers": final_state["blockers"],
+                },
+                "feast_registration": {
+                    "status": final_state.get("feast_registration_status", "skipped"),
+                    "features_registered": final_state.get("feast_features_registered", 0),
+                    "freshness_check": final_state.get("feast_freshness_check"),
+                    "warnings": final_state.get("feast_warnings", []),
+                    "registered_at": final_state.get("feast_registered_at"),
                 },
                 "gate_passed": final_state["gate_passed"],
             }

@@ -330,6 +330,35 @@ class QCGate:
 - **Blocking**: YES - Implements QC gate that blocks model_trainer
 - **MLOps Tools**: Great Expectations, Feast
 
+### Feast Integration (v4.3)
+
+```python
+# data_preparer registers features in Feast AFTER QC passes
+# src/agents/ml_foundation/data_preparer/nodes/feast_registrar.py
+
+class FeastRegistrarNode:
+    """Register validated features in Feast after QC passes."""
+
+    async def execute(self, state: DataPreparerState) -> DataPreparerState:
+        if not state.get("qc_passed"):
+            return state  # Skip Feast registration if QC failed
+
+        registration = await self.feast_client.register_features(
+            experiment_id=state["experiment_id"],
+            features_df=state["validated_data"],
+            entity_key="hcp_id",
+        )
+
+        return {**state, "feast_registration": registration}
+```
+
+**Output Addition**:
+```python
+class DataPreparerOutput(BaseModel):
+    # ... existing fields ...
+    feast_registration: Optional[FeastRegistration] = None  # NEW in v4.3
+```
+
 ---
 
 ## 3. model_selector Contracts
@@ -536,6 +565,44 @@ def check_training_gate(qc_report: QCReport) -> None:
 - **Database**: Writes to `ml_training_runs`
 - **Blocking**: YES - Must verify QC gate passed before training
 - **MLOps Tools**: MLflow, Optuna, Feast
+
+### Feast Integration (v4.3)
+
+```python
+# model_trainer uses Feast for point-in-time correct feature retrieval
+# src/agents/ml_foundation/model_trainer/nodes/split_loader.py
+
+class SplitLoaderNode:
+    """Load training splits with point-in-time feature retrieval."""
+
+    async def _load_from_feast(
+        self,
+        entity_df: pd.DataFrame,  # Must include event_timestamp column
+        feature_refs: List[str],
+    ) -> pd.DataFrame:
+        """Load features from Feast with point-in-time correctness.
+
+        CRITICAL: Uses event_timestamp for temporal joins to prevent data leakage.
+        Features are retrieved as-of the event_timestamp, ensuring the model
+        only sees data that was available at prediction time.
+        """
+        return await self.feast_client.get_historical_features(
+            entity_df=entity_df,
+            features=feature_refs,
+        )
+```
+
+**Point-in-Time Correctness**:
+```
+entity_df:
+  hcp_id | event_timestamp      | target
+  001    | 2024-01-15 00:00:00  | 1
+  002    | 2024-01-20 00:00:00  | 0
+
+Feast returns features AS OF event_timestamp:
+  - For hcp_001: features as of 2024-01-15 (no future data)
+  - For hcp_002: features as of 2024-01-20 (no future data)
+```
 
 ---
 
