@@ -14,7 +14,15 @@ Configuration:
 - Supabase: From environment variables
 
 Run with: pytest tests/e2e/test_memory_dspy_e2e.py -v
+
+Note: This module is marked to run sequentially (not in parallel) because
+the dspy import has race conditions during parallel pytest-xdist execution.
 """
+
+import pytest
+
+# Mark entire module to run on same worker - prevents import race conditions
+pytestmark = pytest.mark.xdist_group(name="dspy_integration")
 
 import asyncio
 import os

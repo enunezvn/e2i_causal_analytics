@@ -1,4 +1,4 @@
-.PHONY: help install dev-install test lint format clean docker-up docker-down db-init data-generate
+.PHONY: help install dev-install test test-fast test-seq lint format clean docker-up docker-down db-init data-generate
 
 help:
 	@echo "E2I Causal Analytics - Available Commands"
@@ -8,7 +8,9 @@ help:
 	@echo "  make dev-install   Install development dependencies"
 	@echo ""
 	@echo "Development:"
-	@echo "  make test          Run tests"
+	@echo "  make test          Run tests (4 workers, memory-safe)"
+	@echo "  make test-fast     Run tests (no coverage, faster)"
+	@echo "  make test-seq      Run tests sequentially (low memory systems)"
 	@echo "  make lint          Run linting checks"
 	@echo "  make format        Format code with black"
 	@echo "  make clean         Clean build artifacts"
@@ -29,8 +31,18 @@ dev-install:
 	pip install -r requirements.txt
 	pip install -e ".[dev]"
 
+# Memory-safe test run: 4 workers, scope-based distribution, coverage
+# System: 7.5GB RAM, heavy ML imports (~500MB/worker)
 test:
-	pytest tests/ -v --cov=src
+	pytest tests/ --cov=src --cov-report=term-missing
+
+# Fast test run without coverage (lower memory footprint)
+test-fast:
+	pytest tests/
+
+# Sequential run for very low memory systems (--cov adds overhead)
+test-seq:
+	pytest tests/ -n 0 --cov=src --cov-report=term-missing
 
 lint:
 	ruff check src/ tests/
