@@ -616,6 +616,139 @@ class TestOptimize:
 
         assert results["n_trials"] == 5
 
+    @pytest.mark.asyncio
+    async def test_optimize_with_timeout(self, classification_data):
+        """Test that optimize handles timeout and returns partial results."""
+        X_train, y_train, X_val, y_val = classification_data
+
+        from sklearn.ensemble import RandomForestClassifier
+
+        optimizer = OptunaOptimizer(
+            experiment_id="test_exp",
+            mlflow_tracking=False,
+        )
+
+        study = await optimizer.create_study(
+            study_name="test_timeout",
+            direction="maximize",
+        )
+
+        search_space = {
+            "n_estimators": {"type": "int", "low": 5, "high": 10},
+        }
+
+        objective = optimizer.create_validation_objective(
+            model_class=RandomForestClassifier,
+            X_train=X_train,
+            y_train=y_train,
+            X_val=X_val,
+            y_val=y_val,
+            search_space=search_space,
+            fixed_params={"random_state": 42},
+        )
+
+        # Run with very short timeout and high trial count
+        # We expect fewer trials than requested
+        results = await optimizer.optimize(
+            study=study,
+            objective=objective,
+            n_trials=1000,  # High trial count
+            timeout=1,  # 1 second timeout
+        )
+
+        # Should return valid results even with timeout
+        assert "best_params" in results
+        assert "best_value" in results
+        assert results["n_trials"] < 1000  # Shouldn't complete all trials
+        assert results["n_completed"] >= 1  # At least one trial completed
+        assert "duration_seconds" in results
+
+    @pytest.mark.asyncio
+    async def test_optimize_counts_pruned_trials(self, classification_data):
+        """Test that pruned trials are counted correctly."""
+        X_train, y_train, X_val, y_val = classification_data
+
+        optimizer = OptunaOptimizer(
+            experiment_id="test_exp",
+            mlflow_tracking=False,
+        )
+
+        # Create study with MedianPruner (aggressive on later trials)
+        from optuna.pruners import MedianPruner
+
+        study = await optimizer.create_study(
+            study_name="test_pruning",
+            direction="maximize",
+            pruner=MedianPruner(n_startup_trials=1, n_warmup_steps=0),
+        )
+
+        # Create objective that sometimes gets pruned
+        import optuna
+
+        trial_count = {"count": 0}
+
+        def prunable_objective(trial: optuna.Trial) -> float:
+            trial_count["count"] += 1
+
+            # First trial completes to establish baseline
+            if trial_count["count"] == 1:
+                trial.report(0.9, step=0)
+                return 0.9
+
+            # Later trials report low value and may get pruned
+            trial.report(0.1, step=0)
+            if trial.should_prune():
+                raise optuna.TrialPruned()
+            return 0.1
+
+        results = await optimizer.optimize(
+            study=study,
+            objective=prunable_objective,
+            n_trials=5,
+        )
+
+        # Should count both completed and pruned trials
+        assert results["n_trials"] == 5
+        assert results["n_completed"] >= 1  # At least first trial completed
+        assert results["n_completed"] + results["n_pruned"] == 5
+
+    @pytest.mark.asyncio
+    async def test_optimize_handles_objective_errors(self, classification_data):
+        """Test that optimize handles exceptions in objective function."""
+        X_train, y_train, X_val, y_val = classification_data
+
+        optimizer = OptunaOptimizer(
+            experiment_id="test_exp",
+            mlflow_tracking=False,
+        )
+
+        study = await optimizer.create_study(
+            study_name="test_error_handling",
+            direction="maximize",
+        )
+
+        # Track how many times objective was called
+        call_count = {"count": 0}
+
+        def error_objective(trial):
+            call_count["count"] += 1
+            if call_count["count"] <= 2:
+                raise ValueError("Simulated error")
+            return 0.8
+
+        # Should continue even when some trials fail
+        results = await optimizer.optimize(
+            study=study,
+            objective=error_objective,
+            n_trials=5,
+            catch=(Exception,),  # Catch exceptions
+        )
+
+        # Should have completed some trials
+        assert results["n_trials"] == 5
+        # Best value should come from successful trial
+        assert results["best_value"] == 0.8
+
 
 class TestGetOptimizationHistory:
     """Tests for get_optimization_history method."""
