@@ -1,7 +1,8 @@
 """
 E2I Prediction Synthesizer Agent - Context Enricher Node
-Version: 4.2
+Version: 4.3
 Purpose: Enrich prediction with context for interpretation
+Feast Integration: Online feature retrieval for real-time predictions
 """
 
 from __future__ import annotations
@@ -37,36 +38,67 @@ class ContextStore(Protocol):
 
 
 class FeatureStore(Protocol):
-    """Protocol for feature store"""
+    """Protocol for feature store with Feast integration support.
+
+    Implementations may provide:
+    - get_importance: Feature importance for models (required)
+    - get_online_features: Real-time features from Feast (optional)
+    - check_feature_freshness: Validate feature freshness (optional)
+    """
 
     async def get_importance(self, model_id: str) -> Dict[str, float]:
         """Get feature importance for model"""
+        ...
+
+    # Optional methods for Feast integration
+    async def get_online_features(
+        self, entity_id: str, feature_refs: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """Get online features for entity (optional - Feast integration)"""
+        ...
+
+    async def check_feature_freshness(
+        self, entity_id: str, max_staleness_hours: float = 24.0
+    ) -> Dict[str, Any]:
+        """Check feature freshness (optional - Feast integration)"""
         ...
 
 
 class ContextEnricherNode:
     """
     Enrich prediction with context for interpretation.
-    Fetches similar cases, feature importance, and trends.
+    Fetches similar cases, feature importance, trends, and online features from Feast.
+
+    Feast Integration:
+        When feature_store supports get_online_features(), this node will:
+        1. Fetch real-time features for the entity
+        2. Validate feature freshness
+        3. Merge online features with input features
     """
 
     def __init__(
         self,
         context_store: Optional[ContextStore] = None,
         feature_store: Optional[FeatureStore] = None,
+        enable_online_features: bool = True,
+        max_staleness_hours: float = 24.0,
     ):
         """
         Initialize context enricher.
 
         Args:
             context_store: Store for historical context
-            feature_store: Store for feature metadata
+            feature_store: Store for feature metadata (may be FeastFeatureStore)
+            enable_online_features: Whether to fetch online features from Feast
+            max_staleness_hours: Maximum acceptable feature age for freshness check
         """
         self.context_store = context_store
         self.feature_store = feature_store
+        self.enable_online_features = enable_online_features
+        self.max_staleness_hours = max_staleness_hours
 
     async def execute(self, state: PredictionSynthesizerState) -> PredictionSynthesizerState:
-        """Enrich prediction with context."""
+        """Enrich prediction with context and online features."""
         start_time = time.time()
 
         if state.get("status") in ["failed", "completed"]:
@@ -83,16 +115,28 @@ class ContextEnricherNode:
             }
 
         try:
-            # Fetch context elements in parallel
+            warnings = []
+
+            # Fetch context elements in parallel (including online features)
             tasks = [
                 self._get_similar_cases(state),
                 self._get_feature_importance(state),
                 self._get_historical_accuracy(state),
                 self._get_trend(state),
+                self._get_online_features(state),
             ]
 
             results = await asyncio.gather(*tasks, return_exceptions=True)
-            similar, importance, accuracy, trend = results
+            similar, importance, accuracy, trend, online_features_result = results
+
+            # Process online features result
+            online_features = {}
+            feast_freshness = None
+            if isinstance(online_features_result, dict):
+                online_features = online_features_result.get("features", {})
+                feast_freshness = online_features_result.get("freshness")
+                if freshness_warnings := online_features_result.get("warnings", []):
+                    warnings.extend(freshness_warnings)
 
             context = PredictionContext(
                 similar_cases=(similar if not isinstance(similar, Exception) else []),
@@ -108,18 +152,33 @@ class ContextEnricherNode:
                 + context_time
             )
 
+            # Merge online features with input features
+            merged_features = {**state.get("features", {}), **online_features}
+
             logger.info(
                 f"Context enrichment complete: "
                 f"similar_cases={len(context['similar_cases'])}, "
+                f"online_features={len(online_features)}, "
                 f"duration={context_time}ms"
             )
 
-            return {
+            result_state = {
                 **state,
                 "prediction_context": context,
+                "features": merged_features,
                 "total_latency_ms": total_time,
                 "status": "completed",
             }
+
+            # Add Feast metadata if available
+            if online_features:
+                result_state["feast_online_features"] = online_features
+            if feast_freshness:
+                result_state["feast_freshness"] = feast_freshness
+            if warnings:
+                result_state["warnings"] = warnings
+
+            return result_state
 
         except Exception as e:
             logger.warning(f"Context enrichment failed: {e}")
@@ -204,3 +263,65 @@ class ContextEnricherNode:
             return "decreasing"
         else:
             return "stable"
+
+    async def _get_online_features(
+        self, state: PredictionSynthesizerState
+    ) -> Dict[str, Any]:
+        """Get online features from Feast for the entity.
+
+        Fetches real-time features from Feast online store and validates
+        feature freshness. This enables using the latest feature values
+        for predictions rather than potentially stale input features.
+
+        Args:
+            state: Current prediction state with entity_id
+
+        Returns:
+            Dictionary with:
+                - features: Dict of online feature values
+                - freshness: Freshness check result (if available)
+                - warnings: List of any warnings (e.g., stale features)
+        """
+        if not self.enable_online_features:
+            return {"features": {}, "freshness": None, "warnings": []}
+
+        if not self.feature_store:
+            return {"features": {}, "freshness": None, "warnings": []}
+
+        entity_id = state.get("entity_id")
+        if not entity_id:
+            return {"features": {}, "freshness": None, "warnings": []}
+
+        result = {"features": {}, "freshness": None, "warnings": []}
+
+        try:
+            # Check if feature_store supports online features (Feast)
+            if hasattr(self.feature_store, "get_online_features"):
+                features = await self.feature_store.get_online_features(
+                    entity_id=entity_id,
+                    feature_refs=None,  # Get all features from default view
+                )
+                result["features"] = features if features else {}
+                logger.debug(f"Retrieved {len(result['features'])} online features")
+
+            # Check feature freshness if supported
+            if hasattr(self.feature_store, "check_feature_freshness"):
+                freshness = await self.feature_store.check_feature_freshness(
+                    entity_id=entity_id,
+                    max_staleness_hours=self.max_staleness_hours,
+                )
+                result["freshness"] = freshness
+
+                # Add warning if features are stale
+                if freshness and not freshness.get("fresh", True):
+                    stale_features = freshness.get("stale_features", [])
+                    result["warnings"].append(
+                        f"Stale features detected: {', '.join(stale_features[:5])}"
+                        + (f" (+{len(stale_features) - 5} more)" if len(stale_features) > 5 else "")
+                    )
+
+        except Exception as e:
+            logger.debug(f"Online feature retrieval failed for {entity_id}: {e}")
+            result["warnings"].append(f"Online feature retrieval failed: {str(e)}")
+
+        return result

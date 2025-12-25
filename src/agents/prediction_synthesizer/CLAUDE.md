@@ -25,7 +25,48 @@ You are a **Standard Computational Agent** optimized for:
 
 1. **Model Orchestration** - Run predictions from multiple models in parallel
 2. **Ensemble Combination** - Combine predictions using specified method
-3. **Context Enrichment** - Add historical context and feature importance
+3. **Context Enrichment** - Add historical context, feature importance, and Feast online features
+
+### Feast Integration (v4.3)
+
+The agent integrates with **Feast Feature Store** for real-time feature retrieval:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Context Enrichment Phase                                   │
+│                                                             │
+│  ┌─────────────┐     ┌─────────────┐     ┌──────────────┐  │
+│  │ Similar     │     │ Feature     │     │ Feast Online │  │
+│  │ Cases       │     │ Importance  │     │ Features     │  │
+│  └──────┬──────┘     └──────┬──────┘     └──────┬───────┘  │
+│         │                   │                    │          │
+│         └───────────────────┼────────────────────┘          │
+│                             ▼                               │
+│                    ┌─────────────────┐                      │
+│                    │ Merged Features │                      │
+│                    └─────────────────┘                      │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Key Components:**
+- `FeastFeatureStore` - Adapter wrapping `FeatureAnalyzerAdapter` for online serving
+- `ContextEnricherNode` - Fetches online features and validates freshness
+- Graceful degradation when Feast is unavailable
+
+**Online Feature Retrieval:**
+```python
+# Features fetched from Feast online store
+online_features = await feast_store.get_online_features(
+    entity_id="hcp_123",
+    feature_refs=None,  # All features from default view
+)
+
+# Freshness validation
+freshness = await feast_store.check_feature_freshness(
+    entity_id="hcp_123",
+    max_staleness_hours=24.0,
+)
+```
 
 ## Ensemble Methods
 

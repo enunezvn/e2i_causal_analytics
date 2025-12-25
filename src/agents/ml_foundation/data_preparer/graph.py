@@ -12,6 +12,7 @@ from .nodes import (
     compute_baseline_metrics,
     detect_leakage,
     load_data,
+    register_features_in_feast,
     run_ge_validation,
     run_quality_checks,
     run_schema_validation,
@@ -32,13 +33,19 @@ def create_data_preparer_graph() -> StateGraph:
     4. run_ge_validation - Great Expectations validation (business rules)
     5. detect_leakage - Check for data leakage (temporal, target, train-test)
     6. transform_data - Encode, scale, and impute features
-    7. compute_baseline_metrics - Compute baseline metrics from train split
-    8. finalize_output - Generate final output and QC gate decision
+    7. register_features_in_feast - Register features in Feast feature store
+    8. compute_baseline_metrics - Compute baseline metrics from train split
+    9. finalize_output - Generate final output and QC gate decision
 
     Validation Pipeline Order:
     - Pandera: Fast schema checks (types, nullability, enums)
     - Quality Checker: 5 dimension scoring (completeness, validity, etc.)
     - Great Expectations: Business rules and statistical checks
+
+    Feast Integration:
+    - Features registered after transformation (ready for point-in-time retrieval)
+    - Freshness check included in registration (QC validation)
+    - Non-blocking: failures generate warnings, not errors
 
     Returns:
         StateGraph ready to be compiled
@@ -53,6 +60,7 @@ def create_data_preparer_graph() -> StateGraph:
     graph.add_node("run_ge_validation", run_ge_validation)
     graph.add_node("detect_leakage", detect_leakage)
     graph.add_node("transform_data", transform_data)
+    graph.add_node("register_features_in_feast", register_features_in_feast)
     graph.add_node("compute_baseline_metrics", compute_baseline_metrics)
     graph.add_node("finalize_output", finalize_output)
 
@@ -63,7 +71,8 @@ def create_data_preparer_graph() -> StateGraph:
     graph.add_edge("run_quality_checks", "run_ge_validation")
     graph.add_edge("run_ge_validation", "detect_leakage")
     graph.add_edge("detect_leakage", "transform_data")
-    graph.add_edge("transform_data", "compute_baseline_metrics")
+    graph.add_edge("transform_data", "register_features_in_feast")
+    graph.add_edge("register_features_in_feast", "compute_baseline_metrics")
     graph.add_edge("compute_baseline_metrics", "finalize_output")
     graph.add_edge("finalize_output", END)
 

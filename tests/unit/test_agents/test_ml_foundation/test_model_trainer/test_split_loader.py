@@ -1,9 +1,16 @@
-"""Tests for split loader node."""
+"""Tests for split loader node including Feast integration."""
+
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
+import pandas as pd
 import pytest
 
-from src.agents.ml_foundation.model_trainer.nodes.split_loader import load_splits
+from src.agents.ml_foundation.model_trainer.nodes.split_loader import (
+    _fetch_splits_from_feast,
+    load_splits,
+)
 
 
 @pytest.mark.asyncio
@@ -72,17 +79,25 @@ class TestLoadSplits:
         assert result["test_ratio"] == 0.15
         assert result["holdout_ratio"] == 0.05
 
-    async def test_error_when_experiment_id_without_feast(self):
-        """Should return error when experiment_id present but Feast not implemented."""
+    async def test_error_when_experiment_id_without_feast_or_db(self):
+        """Should return error when experiment_id present but Feast and DB unavailable."""
         state = {
             "experiment_id": "exp_123",
         }
 
-        result = await load_splits(state)
+        # Mock both Feast and DB as unavailable
+        with patch(
+            "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_feature_analyzer_adapter",
+            return_value=None,
+        ), patch(
+            "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_ml_data_loader",
+            return_value=None,
+        ):
+            result = await load_splits(state)
 
         assert "error" in result
-        assert "not yet implemented" in result["error"].lower()
-        assert result["error_type"] == "split_fetch_not_implemented"
+        assert "unavailable" in result["error"].lower()
+        assert result["error_type"] == "split_loader_unavailable"
 
     async def test_error_when_no_splits_and_no_experiment_id(self):
         """Should return error when neither splits nor experiment_id provided."""
@@ -218,3 +233,269 @@ class TestLoadSplits:
 
         # Shape should be preserved
         assert result["train_data"]["X"].shape == original_X_train_shape
+
+
+@pytest.mark.asyncio
+class TestFeastSplitLoading:
+    """Tests for Feast feature store integration in split loading."""
+
+    @pytest.fixture
+    def mock_split_metadata(self):
+        """Create mock split metadata for Feast retrieval."""
+        base_ts = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        return {
+            "train": {
+                "entity_ids": ["hcp_001", "hcp_002", "hcp_003"],
+                "event_timestamps": [base_ts, base_ts, base_ts],
+                "targets": [0, 1, 0],
+                "target_column": "target",
+            },
+            "validation": {
+                "entity_ids": ["hcp_004", "hcp_005"],
+                "event_timestamps": [base_ts, base_ts],
+                "targets": [1, 0],
+                "target_column": "target",
+            },
+            "test": {
+                "entity_ids": ["hcp_006", "hcp_007"],
+                "event_timestamps": [base_ts, base_ts],
+                "targets": [0, 1],
+                "target_column": "target",
+            },
+            "holdout": {
+                "entity_ids": ["hcp_008"],
+                "event_timestamps": [base_ts],
+                "targets": [1],
+                "target_column": "target",
+            },
+        }
+
+    @pytest.fixture
+    def mock_feast_features(self):
+        """Create mock feature DataFrame from Feast."""
+        return pd.DataFrame({
+            "hcp_id": ["hcp_001", "hcp_002", "hcp_003"],
+            "event_timestamp": pd.to_datetime(["2024-01-01"] * 3),
+            "feature_view__feature1": [0.1, 0.2, 0.3],
+            "feature_view__feature2": [1.0, 2.0, 3.0],
+            "target": [0, 1, 0],
+        })
+
+    async def test_fetch_splits_from_feast_success(self, mock_split_metadata, mock_feast_features):
+        """Should successfully fetch splits from Feast."""
+        mock_adapter = MagicMock()
+        mock_adapter.get_training_features = AsyncMock(return_value=mock_feast_features)
+
+        mock_loader = MagicMock()
+        mock_loader.get_split_metadata = AsyncMock(return_value=mock_split_metadata)
+
+        with patch(
+            "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_feature_analyzer_adapter",
+            return_value=mock_adapter,
+        ), patch(
+            "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_ml_data_loader",
+            return_value=mock_loader,
+        ):
+            result = await _fetch_splits_from_feast(
+                experiment_id="exp_test_123",
+                feature_refs=["feature_view:feature1", "feature_view:feature2"],
+            )
+
+        assert result is not None
+        assert result["feast_source"] is True
+        assert "train_data" in result
+        assert "validation_data" in result
+        assert "test_data" in result
+        assert "holdout_data" in result
+        assert result["train_data"]["feast_retrieved"] is True
+
+    async def test_fetch_splits_returns_none_when_adapter_unavailable(self):
+        """Should return None when FeatureAnalyzerAdapter is unavailable."""
+        with patch(
+            "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_feature_analyzer_adapter",
+            return_value=None,
+        ):
+            result = await _fetch_splits_from_feast(experiment_id="exp_test_123")
+
+        assert result is None
+
+    async def test_fetch_splits_returns_none_when_ml_loader_unavailable(self):
+        """Should return None when MLDataLoader is unavailable."""
+        mock_adapter = MagicMock()
+
+        with patch(
+            "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_feature_analyzer_adapter",
+            return_value=mock_adapter,
+        ), patch(
+            "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_ml_data_loader",
+            return_value=None,
+        ):
+            result = await _fetch_splits_from_feast(experiment_id="exp_test_123")
+
+        assert result is None
+
+    async def test_fetch_splits_returns_none_when_no_metadata(self):
+        """Should return None when no split metadata found."""
+        mock_adapter = MagicMock()
+        mock_loader = MagicMock()
+        mock_loader.get_split_metadata = AsyncMock(return_value=None)
+
+        with patch(
+            "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_feature_analyzer_adapter",
+            return_value=mock_adapter,
+        ), patch(
+            "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_ml_data_loader",
+            return_value=mock_loader,
+        ):
+            result = await _fetch_splits_from_feast(experiment_id="exp_test_123")
+
+        assert result is None
+
+    async def test_load_splits_uses_feast_when_experiment_id_provided(
+        self, mock_split_metadata, mock_feast_features
+    ):
+        """Should use Feast when experiment_id is provided."""
+        mock_adapter = MagicMock()
+        mock_adapter.get_training_features = AsyncMock(return_value=mock_feast_features)
+
+        mock_loader = MagicMock()
+        mock_loader.get_split_metadata = AsyncMock(return_value=mock_split_metadata)
+
+        state = {"experiment_id": "exp_feast_test"}
+
+        with patch(
+            "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_feature_analyzer_adapter",
+            return_value=mock_adapter,
+        ), patch(
+            "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_ml_data_loader",
+            return_value=mock_loader,
+        ):
+            result = await load_splits(state)
+
+        # Should have successfully loaded splits
+        assert "error" not in result
+        assert "train_data" in result
+        assert result["train_samples"] >= 0
+
+    async def test_load_splits_falls_back_to_database(self, mock_split_metadata):
+        """Should fall back to database when Feast fails."""
+        mock_loader = MagicMock()
+        # First call for Feast fails (returns None)
+        mock_loader.get_split_metadata = AsyncMock(return_value=None)
+        # Second call for DB fallback succeeds
+        mock_loader.load_experiment_splits = AsyncMock(
+            return_value={
+                "train": {
+                    "X": np.random.rand(100, 5),
+                    "y": np.random.rand(100),
+                    "row_count": 100,
+                },
+                "validation": {
+                    "X": np.random.rand(30, 5),
+                    "y": np.random.rand(30),
+                    "row_count": 30,
+                },
+                "test": {
+                    "X": np.random.rand(20, 5),
+                    "y": np.random.rand(20),
+                    "row_count": 20,
+                },
+                "holdout": {
+                    "X": np.random.rand(10, 5),
+                    "y": np.random.rand(10),
+                    "row_count": 10,
+                },
+            }
+        )
+
+        state = {"experiment_id": "exp_db_fallback_test"}
+
+        with patch(
+            "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_feature_analyzer_adapter",
+            return_value=None,  # Feast unavailable
+        ), patch(
+            "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_ml_data_loader",
+            return_value=mock_loader,
+        ):
+            result = await load_splits(state)
+
+        # Should have successfully loaded splits from DB
+        assert "error" not in result
+        assert result["train_samples"] == 100
+
+    async def test_fetch_splits_handles_exception(self, mock_split_metadata):
+        """Should handle exceptions gracefully and return None."""
+        mock_adapter = MagicMock()
+        mock_adapter.get_training_features = AsyncMock(
+            side_effect=Exception("Feast connection failed")
+        )
+
+        mock_loader = MagicMock()
+        mock_loader.get_split_metadata = AsyncMock(return_value=mock_split_metadata)
+
+        with patch(
+            "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_feature_analyzer_adapter",
+            return_value=mock_adapter,
+        ), patch(
+            "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_ml_data_loader",
+            return_value=mock_loader,
+        ):
+            result = await _fetch_splits_from_feast(experiment_id="exp_test_123")
+
+        # Should return None on exception
+        assert result is None
+
+    async def test_fetch_splits_uses_custom_entity_key(self, mock_split_metadata, mock_feast_features):
+        """Should use custom entity key when provided."""
+        mock_adapter = MagicMock()
+        mock_adapter.get_training_features = AsyncMock(return_value=mock_feast_features)
+
+        mock_loader = MagicMock()
+        mock_loader.get_split_metadata = AsyncMock(return_value=mock_split_metadata)
+
+        with patch(
+            "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_feature_analyzer_adapter",
+            return_value=mock_adapter,
+        ), patch(
+            "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_ml_data_loader",
+            return_value=mock_loader,
+        ):
+            result = await _fetch_splits_from_feast(
+                experiment_id="exp_test_123",
+                entity_key="custom_entity_id",
+            )
+
+        assert result is not None
+        # Verify adapter was called (we can check the call count)
+        assert mock_adapter.get_training_features.call_count > 0
+
+    async def test_load_splits_passes_feature_refs_from_state(
+        self, mock_split_metadata, mock_feast_features
+    ):
+        """Should pass feature_refs from state to Feast."""
+        mock_adapter = MagicMock()
+        mock_adapter.get_training_features = AsyncMock(return_value=mock_feast_features)
+
+        mock_loader = MagicMock()
+        mock_loader.get_split_metadata = AsyncMock(return_value=mock_split_metadata)
+
+        state = {
+            "experiment_id": "exp_feature_refs_test",
+            "feature_refs": ["view1:feature1", "view2:feature2"],
+            "entity_key": "custom_id",
+        }
+
+        with patch(
+            "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_feature_analyzer_adapter",
+            return_value=mock_adapter,
+        ), patch(
+            "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_ml_data_loader",
+            return_value=mock_loader,
+        ):
+            result = await load_splits(state)
+
+        # Should have loaded successfully
+        assert "error" not in result
+        # Verify adapter was called with the right feature_refs
+        call_kwargs = mock_adapter.get_training_features.call_args_list[0].kwargs
+        assert call_kwargs["feature_refs"] == ["view1:feature1", "view2:feature2"]
