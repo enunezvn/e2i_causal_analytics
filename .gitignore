@@ -106,3 +106,5 @@ Thumbs.db
 
 # Windows NTFS alternate data streams
 *.html:*
+# Downloaded/exported documentation files
+docs/*.html
