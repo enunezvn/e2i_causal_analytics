@@ -5,6 +5,7 @@ Fast intent classification optimized for <500ms:
 - LLM fallback for ambiguous cases (Haiku)
 """
 
+import logging
 import re
 import time
 from typing import Any, Dict
@@ -12,6 +13,22 @@ from typing import Any, Dict
 from langchain_anthropic import ChatAnthropic
 
 from ..state import IntentClassification, OrchestratorState
+
+logger = logging.getLogger(__name__)
+
+
+def _get_opik_connector():
+    """Lazy import of OpikConnector to avoid circular imports."""
+    try:
+        from src.mlops.opik_connector import get_opik_connector
+
+        return get_opik_connector()
+    except ImportError:
+        logger.debug("OpikConnector not available")
+        return None
+    except Exception as e:
+        logger.warning(f"Failed to get OpikConnector: {e}")
+        return None
 
 
 class IntentClassifierNode:
@@ -190,7 +207,29 @@ Respond with ONLY a JSON object:
 {{"primary_intent": "<intent>", "confidence": <0.0-1.0>, "requires_multi_agent": <bool>}}"""
 
         try:
-            response = await self.llm.ainvoke(prompt)
+            # Get OpikConnector for LLM call tracing
+            opik = _get_opik_connector()
+
+            if opik and opik.is_enabled:
+                # Trace the LLM call
+                async with opik.trace_llm_call(
+                    model="claude-haiku-4-20250414",
+                    provider="anthropic",
+                    prompt_template="intent_classification",
+                    input_data={"query": query, "prompt": prompt},
+                    metadata={"agent": "orchestrator", "operation": "intent_classification"},
+                ) as llm_span:
+                    response = await self.llm.ainvoke(prompt)
+                    # Log tokens from response metadata
+                    usage = response.response_metadata.get("usage", {})
+                    llm_span.log_tokens(
+                        input_tokens=usage.get("input_tokens", 0),
+                        output_tokens=usage.get("output_tokens", 0),
+                    )
+            else:
+                # Fallback: no tracing
+                response = await self.llm.ainvoke(prompt)
+
             import json
 
             result = json.loads(response.content)
@@ -200,7 +239,8 @@ Respond with ONLY a JSON object:
                 secondary_intents=[],
                 requires_multi_agent=result.get("requires_multi_agent", False),
             )
-        except Exception:
+        except Exception as e:
+            logger.warning(f"LLM classification failed: {e}")
             return IntentClassification(
                 primary_intent="general",
                 confidence=0.3,
