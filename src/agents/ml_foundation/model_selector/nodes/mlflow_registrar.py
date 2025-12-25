@@ -42,8 +42,8 @@ async def register_selection_in_mlflow(state: Dict[str, Any]) -> Dict[str, Any]:
         # Set or create experiment
         mlflow_experiment_id = await _ensure_experiment(connector, experiment_id)
 
-        # Start run for model selection
-        run = await connector.start_run(
+        # Start run for model selection using async context manager
+        async with connector.start_run(
             experiment_id=mlflow_experiment_id,
             run_name=f"model_selection_{primary_candidate['name']}",
             tags={
@@ -52,29 +52,21 @@ async def register_selection_in_mlflow(state: Dict[str, Any]) -> Dict[str, Any]:
                 "algorithm_family": primary_candidate.get("family", "unknown"),
                 "selection_type": "automated",
             },
-        )
+        ) as run:
+            run_id = run.run_id
 
-        if not run:
-            return {
-                "registered_in_mlflow": False,
-                "mlflow_registration_error": "Failed to start MLflow run",
-            }
+            # Log parameters (using run object, not connector)
+            await _log_selection_params(run, primary_candidate, state)
 
-        run_id = run.info.run_id
+            # Log metrics (using run object, not connector)
+            await _log_selection_metrics(run, primary_candidate, benchmark_results)
 
-        # Log parameters
-        await _log_selection_params(connector, primary_candidate, state)
+            # Log artifacts (using run object, not connector)
+            await _log_selection_artifacts(
+                run, selection_rationale, state.get("alternatives_considered", [])
+            )
 
-        # Log metrics
-        await _log_selection_metrics(connector, primary_candidate, benchmark_results)
-
-        # Log artifacts
-        await _log_selection_artifacts(
-            connector, selection_rationale, state.get("alternatives_considered", [])
-        )
-
-        # End run
-        await connector.end_run()
+            # Run automatically ends when exiting context manager
 
         return {
             "registered_in_mlflow": True,
@@ -124,14 +116,14 @@ async def _ensure_experiment(
 
 
 async def _log_selection_params(
-    connector: Any,
+    run: Any,
     candidate: Dict[str, Any],
     state: Dict[str, Any],
 ) -> None:
     """Log selection parameters to MLflow.
 
     Args:
-        connector: MLflowConnector instance
+        run: MLflowRun instance from context manager
         candidate: Selected algorithm
         state: Full state
     """
@@ -150,18 +142,18 @@ async def _log_selection_params(
     for key, value in default_params.items():
         params[f"default_{key}"] = str(value)
 
-    await connector.log_params(params)
+    await run.log_params(params)
 
 
 async def _log_selection_metrics(
-    connector: Any,
+    run: Any,
     candidate: Dict[str, Any],
     benchmark_results: Dict[str, Dict[str, Any]],
 ) -> None:
     """Log selection metrics to MLflow.
 
     Args:
-        connector: MLflowConnector instance
+        run: MLflowRun instance from context manager
         candidate: Selected algorithm
         benchmark_results: Benchmark results
     """
@@ -188,18 +180,18 @@ async def _log_selection_metrics(
     if combined_score is not None:
         metrics["combined_score"] = combined_score
 
-    await connector.log_metrics(metrics)
+    await run.log_metrics(metrics)
 
 
 async def _log_selection_artifacts(
-    connector: Any,
+    run: Any,
     rationale: str,
     alternatives: list,
 ) -> None:
     """Log selection artifacts to MLflow.
 
     Args:
-        connector: MLflowConnector instance
+        run: MLflowRun instance from context manager
         rationale: Selection rationale text
         alternatives: List of alternatives considered
     """
@@ -216,7 +208,7 @@ async def _log_selection_artifacts(
             rationale_path = f.name
 
         try:
-            await connector.log_artifact(rationale_path, "selection_rationale.txt")
+            await run.log_artifact(rationale_path, "selection_rationale.txt")
         finally:
             os.unlink(rationale_path)
 
@@ -229,7 +221,7 @@ async def _log_selection_artifacts(
             alternatives_path = f.name
 
         try:
-            await connector.log_artifact(alternatives_path, "alternatives_considered.json")
+            await run.log_artifact(alternatives_path, "alternatives_considered.json")
         finally:
             os.unlink(alternatives_path)
 
@@ -237,43 +229,33 @@ async def _log_selection_artifacts(
 async def log_benchmark_comparison(state: Dict[str, Any]) -> Dict[str, Any]:
     """Log detailed benchmark comparison to MLflow.
 
-    Creates a comparison chart/table of all benchmarked algorithms.
+    NOTE: This function is DEPRECATED. Benchmark metrics should be logged
+    within the register_selection_in_mlflow function's context manager block.
+
+    This function cannot correctly log to a completed run because MLflow
+    requires an active run context for logging operations.
 
     Args:
         state: ModelSelectorState with benchmark_results
 
     Returns:
-        Dictionary with benchmark_logged status
+        Dictionary with benchmark_logged status (always False with deprecation warning)
     """
-    benchmark_results = state.get("benchmark_results", {})
-    mlflow_run_id = state.get("mlflow_run_id")
+    import warnings
 
-    if not benchmark_results or not mlflow_run_id:
-        return {"benchmark_logged": False}
+    warnings.warn(
+        "log_benchmark_comparison is deprecated. Benchmark metrics should be logged "
+        "within register_selection_in_mlflow's async context manager block.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
 
-    try:
-        from src.mlops.mlflow_connector import MLflowConnector
-
-        connector = MLflowConnector()
-
-        # Log each algorithm's benchmark as nested metrics
-        for algo_name, results in benchmark_results.items():
-            if "error" not in results:
-                prefix = f"benchmark_{algo_name.lower()}"
-                metrics = {
-                    f"{prefix}_cv_mean": results.get("cv_score_mean", 0.0),
-                    f"{prefix}_cv_std": results.get("cv_score_std", 0.0),
-                    f"{prefix}_time": results.get("training_time_seconds", 0.0),
-                }
-                await connector.log_metrics(metrics)
-
-        return {"benchmark_logged": True}
-
-    except Exception as e:
-        return {
-            "benchmark_logged": False,
-            "benchmark_log_error": str(e),
-        }
+    # Return False since we can't log to a completed run
+    # Benchmark metrics are now logged in register_selection_in_mlflow via _log_selection_metrics
+    return {
+        "benchmark_logged": False,
+        "benchmark_log_error": "Deprecated: Cannot log to completed run. Use register_selection_in_mlflow.",
+    }
 
 
 async def create_selection_summary(state: Dict[str, Any]) -> Dict[str, Any]:

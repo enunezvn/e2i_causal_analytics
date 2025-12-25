@@ -37,7 +37,7 @@ src/mlops/
 ├── __init__.py
 ├── CLAUDE.md                           # This file
 │
-├── mlflow_client.py                    # Experiment tracking & model registry
+├── mlflow_connector.py                 # Experiment tracking & model registry (async singleton with circuit breaker)
 ├── opik_connector.py                   # LLM/Agent observability
 ├── great_expectations_validator.py     # Data quality validation
 ├── feast_client.py                     # Feature store
@@ -60,10 +60,10 @@ src/mlops/
 
 ---
 
-## 1. MLflow Client
+## 1. MLflow Connector
 
 ### Purpose
-Experiment tracking, model versioning, and registry management.
+Experiment tracking, model versioning, and registry management with async support and circuit breaker fault tolerance.
 
 ### Configuration
 
@@ -76,192 +76,346 @@ mlflow:
   default_tags:
     platform: "e2i"
     environment: "${ENVIRONMENT}"
+  circuit_breaker:
+    failure_threshold: 5
+    recovery_timeout: 30
+    half_open_requests: 3
 ```
 
 ### Implementation
 
 ```python
-# src/mlops/mlflow_client.py
+# src/mlops/mlflow_connector.py
 
 import mlflow
 from mlflow.tracking import MlflowClient
-from contextlib import contextmanager
+from contextlib import asynccontextmanager
 from typing import Dict, Optional, Any
+from enum import Enum
 
-class MLflowClientWrapper:
-    """MLflow integration for experiment tracking and model registry."""
-    
-    def __init__(self, config: MLflowConfig):
-        self.config = config
-        mlflow.set_tracking_uri(config.tracking_uri)
-        self.client = MlflowClient()
-    
+class ModelStage(Enum):
+    """Model lifecycle stages."""
+    DEVELOPMENT = "Development"
+    STAGING = "Staging"
+    SHADOW = "Shadow"
+    PRODUCTION = "Production"
+    ARCHIVED = "Archived"
+
+class MLflowConnector:
+    """MLflow integration with async support and circuit breaker.
+
+    Features:
+    - Async singleton pattern (one instance per process)
+    - Circuit breaker for fault tolerance
+    - Automatic retry with exponential backoff
+    - Graceful degradation when MLflow unavailable
+    """
+
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+
+    def __init__(self):
+        if self._initialized:
+            return
+        self._initialized = True
+        self._circuit_breaker = CircuitBreaker()
+        self._client = None
+        self._enabled = True
+
+    @property
+    def enabled(self) -> bool:
+        """Check if MLflow integration is enabled and available."""
+        return self._enabled and self._circuit_breaker.state != "open"
+
     # ═══════════════════════════════════════════════════════════════
     # Experiment Management
     # ═══════════════════════════════════════════════════════════════
-    
-    def get_or_create_experiment(self, experiment_id: str) -> str:
-        """Get or create MLflow experiment."""
-        experiment_name = f"{self.config.experiment_prefix}{experiment_id}"
-        
-        experiment = mlflow.get_experiment_by_name(experiment_name)
-        if experiment:
-            return experiment.experiment_id
-        
-        return mlflow.create_experiment(
-            name=experiment_name,
-            artifact_location=f"{self.config.artifact_root}/{experiment_id}",
-            tags=self.config.default_tags
-        )
-    
-    @contextmanager
-    def start_run(
+
+    async def get_or_create_experiment(
         self,
-        experiment_id: str,
-        run_name: str,
+        name: str,
+        tags: Dict[str, str] = None
+    ) -> Optional[str]:
+        """Get or create MLflow experiment (async)."""
+        if not self.enabled:
+            return None
+
+        async with self._circuit_breaker:
+            experiment = mlflow.get_experiment_by_name(name)
+            if experiment:
+                return experiment.experiment_id
+
+            return mlflow.create_experiment(name=name, tags=tags or {})
+
+    @asynccontextmanager
+    async def start_run(
+        self,
+        experiment_id: str = None,
+        experiment_name: str = None,
+        run_name: str = None,
         tags: Dict[str, str] = None
     ):
-        """Context manager for MLflow runs."""
-        mlflow_experiment_id = self.get_or_create_experiment(experiment_id)
-        
-        with mlflow.start_run(
-            experiment_id=mlflow_experiment_id,
-            run_name=run_name,
-            tags={**self.config.default_tags, **(tags or {})}
-        ) as run:
-            yield MLflowRunContext(run, self)
-    
+        """Async context manager for MLflow runs.
+
+        Usage:
+            async with connector.start_run(experiment_name="exp", run_name="run") as run:
+                await run.log_params({"lr": 0.01})
+                await run.log_metrics({"auc": 0.95})
+                # Run automatically ends when exiting context
+        """
+        if not self.enabled:
+            yield MockMLflowRun()
+            return
+
+        async with self._circuit_breaker:
+            # Get or create experiment if name provided
+            if experiment_name and not experiment_id:
+                experiment_id = await self.get_or_create_experiment(experiment_name)
+
+            with mlflow.start_run(
+                experiment_id=experiment_id,
+                run_name=run_name,
+                tags=tags or {}
+            ) as mlflow_run:
+                yield MLflowRun(mlflow_run, self)
+
     # ═══════════════════════════════════════════════════════════════
-    # Logging
+    # Model Registry
     # ═══════════════════════════════════════════════════════════════
-    
-    def log_params(self, params: Dict[str, Any]):
-        """Log parameters to active run."""
+
+    async def register_model(
+        self,
+        run_id: str,
+        model_name: str,
+        model_path: str = "model"
+    ) -> Optional["ModelVersion"]:
+        """Register model in MLflow registry (async).
+
+        Args:
+            run_id: MLflow run ID containing the model
+            model_name: Name to register model under
+            model_path: Path to model artifact within run
+
+        Returns:
+            ModelVersion object or None if registration failed
+        """
+        if not self.enabled:
+            return None
+
+        async with self._circuit_breaker:
+            model_uri = f"runs:/{run_id}/{model_path}"
+            result = mlflow.register_model(model_uri, model_name)
+            return ModelVersion(
+                name=result.name,
+                version=result.version,
+                stage=ModelStage.DEVELOPMENT
+            )
+
+    async def transition_model_stage(
+        self,
+        model_name: str,
+        version: str,
+        stage: ModelStage,
+        archive_existing: bool = True
+    ) -> bool:
+        """Transition model to new stage (async).
+
+        Args:
+            model_name: Registered model name
+            version: Model version number
+            stage: Target ModelStage enum value
+            archive_existing: Whether to archive existing models in target stage
+
+        Returns:
+            True if transition successful, False otherwise
+        """
+        if not self.enabled:
+            return False
+
+        async with self._circuit_breaker:
+            client = MlflowClient()
+            client.transition_model_version_stage(
+                name=model_name,
+                version=version,
+                stage=stage.value,
+                archive_existing_versions=archive_existing
+            )
+            return True
+
+    async def get_latest_model_version(
+        self,
+        model_name: str,
+        stages: list = None
+    ) -> Optional["ModelVersion"]:
+        """Get latest model version for given stages (async)."""
+        if not self.enabled:
+            return None
+
+        stages = stages or [ModelStage.PRODUCTION.value, ModelStage.STAGING.value]
+
+        async with self._circuit_breaker:
+            client = MlflowClient()
+            versions = client.get_latest_versions(model_name, stages)
+            if versions:
+                v = versions[0]
+                return ModelVersion(
+                    name=v.name,
+                    version=v.version,
+                    stage=ModelStage(v.current_stage) if v.current_stage else None
+                )
+            return None
+
+
+class MLflowRun:
+    """Context object for active MLflow run with async logging methods."""
+
+    def __init__(self, mlflow_run, connector: MLflowConnector):
+        self._run = mlflow_run
+        self._connector = connector
+        self.run_id = mlflow_run.info.run_id
+
+    @property
+    def artifact_uri(self) -> str:
+        return self._run.info.artifact_uri
+
+    async def log_params(self, params: Dict[str, Any]):
+        """Log parameters to run (async)."""
         mlflow.log_params(params)
-    
-    def log_metrics(self, metrics: Dict[str, float], step: int = None):
-        """Log metrics to active run."""
+
+    async def log_metrics(self, metrics: Dict[str, float], step: int = None):
+        """Log metrics to run (async)."""
         mlflow.log_metrics(metrics, step=step)
-    
-    def log_model(
+
+    async def log_artifact(self, local_path: str, artifact_path: str = None):
+        """Log artifact file to run (async)."""
+        mlflow.log_artifact(local_path, artifact_path)
+
+    async def log_model(
         self,
         model: Any,
         artifact_path: str,
         registered_model_name: str = None
     ) -> str:
-        """Log model artifact and optionally register."""
+        """Log model artifact to run (async)."""
         model_info = mlflow.sklearn.log_model(
             model,
             artifact_path,
             registered_model_name=registered_model_name
         )
         return model_info.model_uri
-    
-    def log_artifact(self, local_path: str, artifact_path: str = None):
-        """Log arbitrary artifact."""
-        mlflow.log_artifact(local_path, artifact_path)
-    
-    # ═══════════════════════════════════════════════════════════════
-    # Model Registry
-    # ═══════════════════════════════════════════════════════════════
-    
-    def register_model(
-        self,
-        model_uri: str,
-        name: str,
-        tags: Dict[str, str] = None
-    ) -> str:
-        """Register model in registry."""
-        result = mlflow.register_model(model_uri, name)
-        
-        if tags:
-            for key, value in tags.items():
-                self.client.set_model_version_tag(
-                    name, result.version, key, value
-                )
-        
-        return result.version
-    
-    def transition_model_version_stage(
-        self,
-        name: str,
-        version: int,
-        stage: str,
-        archive_existing: bool = True
-    ):
-        """Transition model version to new stage."""
-        self.client.transition_model_version_stage(
-            name=name,
-            version=version,
-            stage=stage,
-            archive_existing_versions=archive_existing
-        )
-    
-    def get_latest_version(
-        self,
-        name: str,
-        stages: list = None
-    ) -> Optional[str]:
-        """Get latest model version for given stages."""
-        stages = stages or ["Production", "Staging"]
-        versions = self.client.get_latest_versions(name, stages)
-        
-        if versions:
-            return versions[0].version
-        return None
-    
-    def load_model(self, model_uri: str) -> Any:
-        """Load model from MLflow."""
-        return mlflow.sklearn.load_model(model_uri)
 
 
-class MLflowRunContext:
-    """Context object for active MLflow run."""
-    
-    def __init__(self, run, client: MLflowClientWrapper):
-        self.run = run
-        self.client = client
-        self.run_id = run.info.run_id
-    
-    @property
-    def artifact_uri(self) -> str:
-        return self.run.info.artifact_uri
-    
-    @property
-    def duration_seconds(self) -> float:
-        return (self.run.info.end_time - self.run.info.start_time) / 1000
+class ModelVersion:
+    """Model version information."""
+
+    def __init__(self, name: str, version: str, stage: Optional[ModelStage] = None):
+        self.name = name
+        self.version = version
+        self.stage = stage
+
+
+class MockMLflowRun:
+    """Mock run for when MLflow is unavailable (graceful degradation)."""
+
+    run_id = "mock-run-id"
+    artifact_uri = "/tmp/mock-artifacts"
+
+    async def log_params(self, params: Dict[str, Any]):
+        pass
+
+    async def log_metrics(self, metrics: Dict[str, float], step: int = None):
+        pass
+
+    async def log_artifact(self, local_path: str, artifact_path: str = None):
+        pass
+
+    async def log_model(self, model: Any, artifact_path: str, **kwargs) -> str:
+        return f"mock://model/{artifact_path}"
 ```
+
+### Circuit Breaker Behavior
+
+The MLflowConnector uses a circuit breaker pattern for fault tolerance:
+
+| State | Behavior |
+|-------|----------|
+| **Closed** | Normal operation, requests pass through |
+| **Open** | All requests fail-fast, returns graceful defaults |
+| **Half-Open** | Limited requests allowed to test recovery |
+
+The circuit opens after 5 consecutive failures and attempts recovery after 30 seconds.
 
 ### Usage Example
 
 ```python
-# In model_trainer:
+# In model_trainer (correct async pattern):
 
-async with self.mlflow_client.start_run(
-    experiment_id="exp_remib_northeast_2025",
+from src.mlops.mlflow_connector import MLflowConnector
+
+connector = MLflowConnector()
+
+async with connector.start_run(
+    experiment_name="e2i_model_training_exp_remib_northeast_2025",
     run_name="run_20250115_143022",
-    tags={"algorithm": "CausalForest", "brand": "Remibrutinib"}
-) as mlflow_run:
-    
-    # Log hyperparameters
-    self.mlflow_client.log_params(best_params)
-    
+    tags={"algorithm": "CausalForest", "brand": "Remibrutinib", "agent": "model_trainer"}
+) as run:
+    # All logging MUST be inside this async context block
+    await run.log_params(best_params)
+
     # Train model
     model.fit(X_train, y_train)
-    
+
     # Log metrics
-    self.mlflow_client.log_metrics({
+    await run.log_metrics({
         "train_auc": train_auc,
         "val_auc": val_auc,
         "test_auc": test_auc
     })
-    
+
     # Log model
-    model_uri = self.mlflow_client.log_model(
-        model, 
+    model_uri = await run.log_model(
+        model,
         "model",
         registered_model_name=f"e2i_{experiment_id}"
     )
+
+    # Run automatically ends when exiting context - NO need to call end_run()
+```
+
+### Model Registry Usage
+
+```python
+# Register model after training
+from src.mlops.mlflow_connector import MLflowConnector, ModelStage
+
+connector = MLflowConnector()
+
+# Register model from a run
+model_version = await connector.register_model(
+    run_id="abc123",
+    model_name="e2i_remib_model",
+    model_path="model"
+)
+
+# Transition to staging
+await connector.transition_model_stage(
+    model_name="e2i_remib_model",
+    version=model_version.version,
+    stage=ModelStage.STAGING
+)
+
+# After shadow mode validation, promote to production
+await connector.transition_model_stage(
+    model_name="e2i_remib_model",
+    version=model_version.version,
+    stage=ModelStage.PRODUCTION,
+    archive_existing=True  # Archive current production model
+)
 ```
 
 ---
@@ -1157,20 +1311,27 @@ bentoml>=1.2.0
 # tests/integration/test_mlops_integration.py
 
 class TestMLOpsIntegration:
-    
+
     async def test_full_training_pipeline(self):
         """Test MLflow → Optuna → SHAP → BentoML pipeline."""
-        
-        # 1. Start MLflow run
-        with mlflow_client.start_run(experiment_id, run_name) as run:
-            
+        from src.mlops.mlflow_connector import MLflowConnector
+
+        connector = MLflowConnector()
+
+        # 1. Start MLflow run (async context manager)
+        async with connector.start_run(
+            experiment_name=f"e2i_test_{experiment_id}",
+            run_name=run_name,
+            tags={"test": "integration"}
+        ) as run:
+
             # 2. Validate data with Great Expectations
             ge_result = await ge_validator.validate(data_source, suite_name)
             assert ge_result.success
-            
+
             # 3. Get features from Feast
             features = feast_client.get_historical_features(entity_df, feature_list)
-            
+
             # 4. Tune hyperparameters with Optuna
             best_params = await optuna_tuner.optimize(
                 algorithm="XGBoost",
@@ -1180,19 +1341,22 @@ class TestMLOpsIntegration:
                 X_val=X_val,
                 y_val=y_val
             )
-            
-            # 5. Train and log model
+
+            # 5. Log params and train model
+            await run.log_params(best_params)
             model.fit(X_train, y_train)
-            model_uri = mlflow_client.log_model(model, "model")
-            
-            # 6. Compute SHAP
+            model_uri = await run.log_model(model, "model")
+
+            # 6. Compute SHAP and log metrics
             shap_values, _ = shap_explainer.compute_shap_values(model, X_val)
-            
+            await run.log_metrics({"val_auc": val_auc})
+
             # 7. Package with BentoML
             bento_tag = await bentoml_service.package_model(
                 model_uri, preprocessing_uri, name, version
             )
-        
+
+        # Run automatically ended when exiting context
         assert bento_tag is not None
 ```
 
