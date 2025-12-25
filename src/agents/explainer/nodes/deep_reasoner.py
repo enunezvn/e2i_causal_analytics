@@ -17,6 +17,20 @@ from ..state import ExplainerState, Insight
 logger = logging.getLogger(__name__)
 
 
+def _get_opik_connector():
+    """Lazy import of OpikConnector to avoid circular imports."""
+    try:
+        from src.mlops.opik_connector import get_opik_connector
+
+        return get_opik_connector()
+    except ImportError:
+        logger.debug("OpikConnector not available")
+        return None
+    except Exception as e:
+        logger.warning(f"Failed to get OpikConnector: {e}")
+        return None
+
+
 class DeepReasonerNode:
     """
     Deep reasoning for insight extraction and narrative planning.
@@ -272,9 +286,32 @@ class DeepReasonerNode:
         prompt = self._build_reasoning_prompt(state)
 
         try:
-            response = await self.llm.ainvoke(prompt)
+            # Get OpikConnector for LLM call tracing
+            opik = _get_opik_connector()
+            model_name = getattr(self.llm, "model", "claude")
+
+            if opik and opik.is_enabled:
+                # Trace the LLM call
+                async with opik.trace_llm_call(
+                    model=model_name,
+                    provider="anthropic",
+                    prompt_template="deep_reasoning",
+                    input_data={"prompt": prompt[:500]},
+                    metadata={"agent": "explainer", "operation": "deep_reasoning"},
+                ) as llm_span:
+                    response = await self.llm.ainvoke(prompt)
+                    # Log tokens from response metadata
+                    usage = response.response_metadata.get("usage", {})
+                    llm_span.log_tokens(
+                        input_tokens=usage.get("input_tokens", 0),
+                        output_tokens=usage.get("output_tokens", 0),
+                    )
+            else:
+                # Fallback: no tracing
+                response = await self.llm.ainvoke(prompt)
+
             parsed = self._parse_reasoning(response.content)
-            parsed["model_used"] = getattr(self.llm, "model", "claude")
+            parsed["model_used"] = model_name
             return parsed
         except Exception as e:
             logger.warning(f"LLM reasoning failed, using fallback: {e}")

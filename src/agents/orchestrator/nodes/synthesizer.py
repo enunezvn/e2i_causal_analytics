@@ -4,12 +4,29 @@ Combine multi-agent results into coherent response.
 Uses fast model for synthesis.
 """
 
+import logging
 import time
 from typing import Any, Dict, List
 
 from langchain_anthropic import ChatAnthropic
 
 from ..state import AgentResult, OrchestratorState
+
+logger = logging.getLogger(__name__)
+
+
+def _get_opik_connector():
+    """Lazy import of OpikConnector to avoid circular imports."""
+    try:
+        from src.mlops.opik_connector import get_opik_connector
+
+        return get_opik_connector()
+    except ImportError:
+        logger.debug("OpikConnector not available")
+        return None
+    except Exception as e:
+        logger.warning(f"Failed to get OpikConnector: {e}")
+        return None
 
 
 class SynthesizerNode:
@@ -119,7 +136,28 @@ Provide a unified 2-3 paragraph response that:
 3. Provides clear recommendations"""
 
         try:
-            response = await self.llm.ainvoke(synthesis_prompt)
+            # Get OpikConnector for LLM call tracing
+            opik = _get_opik_connector()
+
+            if opik and opik.is_enabled:
+                # Trace the LLM call
+                async with opik.trace_llm_call(
+                    model="claude-haiku-4-20250414",
+                    provider="anthropic",
+                    prompt_template="multi_agent_synthesis",
+                    input_data={"summaries": summaries, "prompt": synthesis_prompt},
+                    metadata={"agent": "orchestrator", "operation": "response_synthesis"},
+                ) as llm_span:
+                    response = await self.llm.ainvoke(synthesis_prompt)
+                    # Log tokens from response metadata
+                    usage = response.response_metadata.get("usage", {})
+                    llm_span.log_tokens(
+                        input_tokens=usage.get("input_tokens", 0),
+                        output_tokens=usage.get("output_tokens", 0),
+                    )
+            else:
+                # Fallback: no tracing
+                response = await self.llm.ainvoke(synthesis_prompt)
 
             # Calculate weighted confidence (round to avoid floating point precision issues)
             avg_confidence = round(sum(confidences) / len(confidences) if confidences else 0.5, 2)

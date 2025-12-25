@@ -17,6 +17,20 @@ from ..state import DetectedPattern, FeedbackLearnerState
 logger = logging.getLogger(__name__)
 
 
+def _get_opik_connector():
+    """Lazy import of OpikConnector to avoid circular imports."""
+    try:
+        from src.mlops.opik_connector import get_opik_connector
+
+        return get_opik_connector()
+    except ImportError:
+        logger.debug("OpikConnector not available")
+        return None
+    except Exception as e:
+        logger.warning(f"Failed to get OpikConnector: {e}")
+        return None
+
+
 class PatternAnalyzerNode:
     """
     Deep reasoning for pattern detection in feedback.
@@ -213,14 +227,38 @@ class PatternAnalyzerNode:
 
         try:
             prompt = self._build_analysis_prompt(state)
-            response = await self.llm.ainvoke(prompt)
+
+            # Get OpikConnector for LLM call tracing
+            opik = _get_opik_connector()
+            model_name = getattr(self.llm, "model", "claude")
+
+            if opik and opik.is_enabled:
+                # Trace the LLM call
+                async with opik.trace_llm_call(
+                    model=model_name,
+                    provider="anthropic",
+                    prompt_template="pattern_analysis",
+                    input_data={"prompt": prompt[:500]},
+                    metadata={"agent": "feedback_learner", "operation": "pattern_analysis"},
+                ) as llm_span:
+                    response = await self.llm.ainvoke(prompt)
+                    # Log tokens from response metadata
+                    usage = response.response_metadata.get("usage", {})
+                    llm_span.log_tokens(
+                        input_tokens=usage.get("input_tokens", 0),
+                        output_tokens=usage.get("output_tokens", 0),
+                    )
+            else:
+                # Fallback: no tracing
+                response = await self.llm.ainvoke(prompt)
+
             patterns = self._parse_patterns(response.content)
             clusters = self._cluster_patterns(patterns)
 
             return {
                 "patterns": patterns,
                 "clusters": clusters,
-                "model_used": getattr(self.llm, "model", "claude"),
+                "model_used": model_name,
             }
         except Exception as e:
             logger.warning(f"LLM analysis failed, using fallback: {e}")
