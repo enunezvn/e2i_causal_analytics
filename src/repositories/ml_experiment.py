@@ -668,6 +668,108 @@ class MLTrainingRunRepository(BaseRepository[MLTrainingRun]):
 
         return best
 
+    async def set_optuna_info(
+        self,
+        run_id: UUID,
+        optuna_study_name: str,
+        optuna_trial_number: Optional[int] = None,
+        is_best_trial: bool = False,
+    ) -> bool:
+        """Set Optuna HPO information for a training run.
+
+        This links the training run to its HPO study for traceability.
+
+        Args:
+            run_id: Training run ID
+            optuna_study_name: Name of the Optuna study
+            optuna_trial_number: Trial number if from HPO
+            is_best_trial: Whether this was the best trial
+
+        Returns:
+            True if successful
+        """
+        if not self.client:
+            return False
+
+        updates = {
+            "optuna_study_name": optuna_study_name,
+        }
+        if optuna_trial_number is not None:
+            updates["optuna_trial_number"] = optuna_trial_number
+        updates["is_best_trial"] = is_best_trial
+
+        await (
+            self.client.table(self.table_name)
+            .update(updates)
+            .eq("id", str(run_id))
+            .execute()
+        )
+        return True
+
+    async def create_run_with_hpo(
+        self,
+        experiment_id: UUID,
+        run_name: str,
+        mlflow_run_id: str,
+        algorithm: str,
+        hyperparameters: Dict[str, Any],
+        training_samples: int,
+        feature_names: List[str],
+        optuna_study_name: Optional[str] = None,
+        optuna_trial_number: Optional[int] = None,
+        is_best_trial: bool = False,
+        validation_samples: Optional[int] = None,
+        test_samples: Optional[int] = None,
+    ) -> MLTrainingRun:
+        """Create a new training run record with HPO information.
+
+        This is the preferred method when creating runs from model_trainer
+        as it includes all HPO linkage information.
+
+        Args:
+            experiment_id: Parent experiment ID
+            run_name: Run name
+            mlflow_run_id: MLflow run ID
+            algorithm: Algorithm name
+            hyperparameters: Hyperparameter dict
+            training_samples: Number of training samples
+            feature_names: List of feature names
+            optuna_study_name: Name of HPO study (if HPO was used)
+            optuna_trial_number: Best trial number (if HPO was used)
+            is_best_trial: Whether this represents the best HPO trial
+            validation_samples: Number of validation samples
+            test_samples: Number of test samples
+
+        Returns:
+            Created MLTrainingRun
+        """
+        run = MLTrainingRun(
+            id=uuid4(),
+            experiment_id=experiment_id,
+            run_name=run_name,
+            mlflow_run_id=mlflow_run_id,
+            algorithm=algorithm,
+            hyperparameters=hyperparameters,
+            training_samples=training_samples,
+            validation_samples=validation_samples,
+            test_samples=test_samples,
+            feature_names=feature_names,
+            started_at=datetime.now(timezone.utc),
+            status="running",
+            optuna_study_name=optuna_study_name,
+            optuna_trial_number=optuna_trial_number,
+            is_best_trial=is_best_trial,
+        )
+
+        if self.client:
+            data = run.to_dict()
+            data.pop("id", None)
+            result = await self.client.table(self.table_name).insert(data).execute()
+            if result.data:
+                return self._to_model(result.data[0])
+
+        return run
+
 
 class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
     """Repository for ML Model Registry."""
