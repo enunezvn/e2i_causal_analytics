@@ -109,26 +109,45 @@ class TestRefutationSuite:
     """Test RefutationSuite dataclass."""
 
     def _create_test_results(self, passed_count: int = 4, failed_count: int = 1) -> list:
-        """Helper to create test results."""
+        """Helper to create test results with unique test types.
+
+        Uses different RefutationTestType for each result to avoid key collisions
+        in to_legacy_format() which uses a Dict with test names as keys.
+        """
+        # Available test types to cycle through
+        test_types = [
+            RefutationTestType.PLACEBO_TREATMENT,
+            RefutationTestType.RANDOM_COMMON_CAUSE,
+            RefutationTestType.DATA_SUBSET,
+            RefutationTestType.BOOTSTRAP,
+            RefutationTestType.SENSITIVITY_E_VALUE,
+        ]
+
         results = []
+        type_index = 0
+
         for _i in range(passed_count):
             results.append(
                 RefutationResult(
-                    test_name=RefutationTestType.PLACEBO_TREATMENT,
+                    test_name=test_types[type_index % len(test_types)],
                     status=RefutationStatus.PASSED,
                     original_effect=0.5,
                     refuted_effect=0.02,
                 )
             )
+            type_index += 1
+
         for _i in range(failed_count):
             results.append(
                 RefutationResult(
-                    test_name=RefutationTestType.BOOTSTRAP,
+                    test_name=test_types[type_index % len(test_types)],
                     status=RefutationStatus.FAILED,
                     original_effect=0.5,
                     refuted_effect=0.8,
                 )
             )
+            type_index += 1
+
         return results
 
     def test_create_suite(self):
@@ -247,7 +266,11 @@ class TestRefutationSuite:
         assert "created_at" in d
 
     def test_to_legacy_format(self):
-        """Test backward-compatible legacy format."""
+        """Test backward-compatible legacy format.
+
+        Note: to_legacy_format() returns individual_tests as a Dict with
+        test names as keys (e.g., "placebo_treatment", "random_common_cause").
+        """
         tests = self._create_test_results(passed_count=3, failed_count=1)
         suite = RefutationSuite(
             passed=True,
@@ -266,8 +289,13 @@ class TestRefutationSuite:
         assert legacy["gate_decision"] == "proceed"
         assert len(legacy["individual_tests"]) == 4
 
-        # Check individual test format
-        test = legacy["individual_tests"][0]
+        # Check individual test format - individual_tests is a Dict with test names as keys
+        individual_tests = legacy["individual_tests"]
+        assert isinstance(individual_tests, dict)
+
+        # Get first test entry from the dict
+        first_key = next(iter(individual_tests))
+        test = individual_tests[first_key]
         assert "test_name" in test
         assert "passed" in test
         assert "new_effect" in test
