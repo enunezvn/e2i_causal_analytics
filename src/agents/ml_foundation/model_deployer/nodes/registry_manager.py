@@ -1,9 +1,11 @@
 """Registry Manager Node - MLflow registration and stage promotion.
 
 Handles:
-1. Model registration in MLflow registry
-2. Stage validation and promotion
+1. Model registration in MLflow registry (via MLflowConnector)
+2. Stage validation and promotion (via MLflowConnector)
 3. Shadow mode criteria validation
+
+Uses MLflowConnector for circuit breaker protection and async support.
 """
 
 import logging
@@ -12,86 +14,117 @@ from typing import Any, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-# Try to import MLflow with graceful fallback
-try:
-    import mlflow
-    from mlflow.tracking import MlflowClient
 
-    MLFLOW_AVAILABLE = True
-except ImportError:
-    MLFLOW_AVAILABLE = False
-    logger.warning("MLflow not available, using simulated registry operations")
-
-
-def _get_mlflow_client() -> Optional[Any]:
-    """Get MLflow client if available.
+def _get_mlflow_connector() -> Optional[Any]:
+    """Get MLflow connector singleton if available.
 
     Returns:
-        MlflowClient instance or None if MLflow unavailable
+        MLflowConnector instance or None if unavailable
     """
-    if MLFLOW_AVAILABLE:
-        try:
-            return MlflowClient()
-        except Exception as e:
-            logger.warning(f"Failed to create MLflow client: {e}")
-    return None
+    try:
+        from src.mlops.mlflow_connector import MLflowConnector
+
+        connector = MLflowConnector()
+        return connector if connector.enabled else None
+    except ImportError:
+        logger.warning("MLflowConnector not available")
+        return None
+    except Exception as e:
+        logger.warning(f"Failed to get MLflow connector: {e}")
+        return None
 
 
-def _register_model_mlflow(
+async def _register_model_mlflow(
     model_uri: str, deployment_name: str
 ) -> Tuple[Optional[str], Optional[int], Optional[str]]:
-    """Register model with real MLflow API.
+    """Register model with MLflow via MLflowConnector.
 
     Args:
-        model_uri: MLflow model URI
+        model_uri: MLflow model URI (runs:/<run_id>/model)
         deployment_name: Name to register model under
 
     Returns:
         Tuple of (registered_name, version, stage) or (None, None, None) on failure
     """
-    if not MLFLOW_AVAILABLE:
+    connector = _get_mlflow_connector()
+    if not connector:
         return None, None, None
 
     try:
-        # Register the model
-        model_version = mlflow.register_model(model_uri=model_uri, name=deployment_name)
+        # Extract run_id and model_path from model_uri (format: runs:/<run_id>/<path>)
+        if model_uri.startswith("runs:/"):
+            parts = model_uri[6:].split("/", 1)
+            run_id = parts[0]
+            model_path = parts[1] if len(parts) > 1 else "model"
+        else:
+            logger.warning(f"Unexpected model_uri format: {model_uri}")
+            return None, None, None
 
-        return (
-            model_version.name,
-            int(model_version.version),
-            model_version.current_stage or "None",
+        # Use MLflowConnector's async register_model method
+        from src.mlops.mlflow_connector import ModelStage
+
+        model_version = await connector.register_model(
+            run_id=run_id,
+            model_name=deployment_name,
+            model_path=model_path,
         )
+
+        if model_version:
+            return (
+                model_version.name,
+                int(model_version.version),
+                model_version.stage.value if model_version.stage else "None",
+            )
+        return None, None, None
+
     except Exception as e:
-        logger.warning(f"MLflow registration failed, will use simulation: {e}")
+        logger.warning(f"MLflow registration failed via connector: {e}")
         return None, None, None
 
 
-def _transition_stage_mlflow(
+async def _transition_stage_mlflow(
     model_name: str, version: int, target_stage: str
 ) -> bool:
-    """Transition model stage with real MLflow API.
+    """Transition model stage via MLflowConnector.
 
     Args:
         model_name: Registered model name
         version: Model version
-        target_stage: Target stage name
+        target_stage: Target stage name (Staging, Production, Archived)
 
     Returns:
         True if successful, False otherwise
     """
-    client = _get_mlflow_client()
-    if not client:
+    connector = _get_mlflow_connector()
+    if not connector:
         return False
 
     try:
-        client.transition_model_version_stage(
-            name=model_name,
+        from src.mlops.mlflow_connector import ModelStage
+
+        # Map MLflow stage names to our enum
+        stage_map = {
+            "None": ModelStage.DEVELOPMENT,
+            "Staging": ModelStage.STAGING,
+            "Shadow": ModelStage.SHADOW,
+            "Production": ModelStage.PRODUCTION,
+            "Archived": ModelStage.ARCHIVED,
+        }
+
+        stage = stage_map.get(target_stage, ModelStage.DEVELOPMENT)
+
+        # Use MLflowConnector's async transition_model_stage method
+        success = await connector.transition_model_stage(
+            model_name=model_name,
             version=str(version),
-            stage=target_stage,
-            archive_existing_versions=(target_stage == "Production"),
+            stage=stage,
+            archive_existing=(target_stage == "Production"),
         )
-        logger.info(f"MLflow: Transitioned {model_name} v{version} to {target_stage}")
-        return True
+
+        if success:
+            logger.info(f"MLflow: Transitioned {model_name} v{version} to {target_stage}")
+        return success
+
     except Exception as e:
         logger.warning(f"MLflow stage transition failed: {e}")
         return False
@@ -126,7 +159,7 @@ async def register_model(state: Dict[str, Any]) -> Dict[str, Any]:
             }
 
         # Try real MLflow registration first
-        registered_model_name, model_version, current_stage = _register_model_mlflow(
+        registered_model_name, model_version, current_stage = await _register_model_mlflow(
             model_uri, deployment_name
         )
 
@@ -143,7 +176,7 @@ async def register_model(state: Dict[str, Any]) -> Dict[str, Any]:
             "current_stage": current_stage,
             "registration_successful": True,
             "registration_timestamp": datetime.now(tz=None).isoformat(),
-            "mlflow_available": MLFLOW_AVAILABLE,
+            "mlflow_available": registered_model_name is not None,
         }
 
     except Exception as e:
@@ -290,7 +323,7 @@ async def promote_stage(state: Dict[str, Any]) -> Dict[str, Any]:
         # Try real MLflow stage transition first
         mlflow_success = False
         if registered_model_name and model_version:
-            mlflow_success = _transition_stage_mlflow(
+            mlflow_success = await _transition_stage_mlflow(
                 model_name=registered_model_name,
                 version=int(model_version),
                 target_stage=promotion_target_stage,
