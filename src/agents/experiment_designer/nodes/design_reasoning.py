@@ -10,10 +10,13 @@ Contract: .claude/contracts/tier3-contracts.md lines 82-142
 
 import asyncio
 import json
+import logging
 import re
 import time
 from datetime import datetime, timezone
 from typing import Any
+
+from langchain_anthropic import ChatAnthropic
 
 from src.agents.experiment_designer.state import (
     ErrorDetails,
@@ -22,70 +25,21 @@ from src.agents.experiment_designer.state import (
     TreatmentDefinition,
 )
 
-
-# ===== MOCK LLM =====
-# TODO: Replace with actual LangChain ChatAnthropic when API is configured
-# Integration blocker documented in CONTRACT_VALIDATION.md
-class MockLLM:
-    """Mock LLM for testing design reasoning.
-
-    CRITICAL: This is a temporary mock. Replace with:
-        from langchain_anthropic import ChatAnthropic
-        self.llm = ChatAnthropic(model="claude-sonnet-4-20250514", max_tokens=8192)
-    """
-
-    async def ainvoke(self, prompt: str) -> "MockResponse":
-        """Mock LLM invocation that returns structured design output."""
-        # Simulate LLM latency
-        await asyncio.sleep(0.1)
-
-        # Return mock design response
-        mock_response = {
-            "refined_hypothesis": "Increasing rep visit frequency from 2x/month to 4x/month will improve HCP engagement scores by at least 15% within 8 weeks",
-            "treatment_definition": {
-                "name": "rep_visit_frequency",
-                "description": "Number of rep visits per month to HCPs",
-                "implementation_details": "Double visit frequency from baseline",
-                "target_population": "High-value HCPs in target territories",
-                "dosage_or_intensity": "4 visits/month vs 2 visits/month",
-                "duration": "8 weeks",
-                "delivery_mechanism": "Field sales force",
-            },
-            "outcome_definition": {
-                "name": "hcp_engagement_score",
-                "metric_type": "continuous",
-                "measurement_method": "Composite engagement index (0-100)",
-                "measurement_frequency": "Weekly",
-                "baseline_value": 45.0,
-                "expected_effect_size": 0.25,
-                "minimum_detectable_effect": 0.15,
-                "is_primary": True,
-            },
-            "design_type": "cluster_rct",
-            "design_rationale": "Cluster RCT at territory level prevents contamination between treatment and control HCPs. Geographic clustering also accounts for regional variation in prescribing patterns.",
-            "stratification_vars": ["region", "hcp_specialty", "prior_engagement_quartile"],
-            "blocking_variables": ["territory_size"],
-            "randomization_unit": "cluster",
-            "randomization_method": "stratified_block_randomization",
-            "causal_assumptions": [
-                "SUTVA: No spillover between territories",
-                "Ignorability: Randomization ensures treatment independence",
-                "Positivity: All territories can receive either treatment level",
-            ],
-            "anticipated_confounders": [
-                {"name": "competitive_activity", "how_addressed": "Stratification by market"},
-                {"name": "seasonal_effects", "how_addressed": "Time-matched control"},
-            ],
-        }
-
-        return MockResponse(json.dumps(mock_response))
+logger = logging.getLogger(__name__)
 
 
-class MockResponse:
-    """Mock response from LLM."""
+def _get_opik_connector():
+    """Lazy import of OpikConnector to avoid circular imports."""
+    try:
+        from src.mlops.opik_connector import get_opik_connector
 
-    def __init__(self, content: str):
-        self.content = content
+        return get_opik_connector()
+    except ImportError:
+        logger.debug("OpikConnector not available")
+        return None
+    except Exception as e:
+        logger.warning(f"Failed to get OpikConnector: {e}")
+        return None
 
 
 class DesignReasoningNode:
@@ -102,12 +56,11 @@ class DesignReasoningNode:
     """
 
     def __init__(self):
-        """Initialize design reasoning node."""
-        # TODO: Replace with actual LLM when API is configured
-        self.llm = MockLLM()
-        self.fallback_llm = MockLLM()
+        """Initialize design reasoning node with real LLM."""
         self.model_name = "claude-sonnet-4-20250514"
         self.fallback_model_name = "claude-haiku-4-20250414"
+        self.llm = ChatAnthropic(model=self.model_name, max_tokens=8192, timeout=120)
+        self.fallback_llm = ChatAnthropic(model=self.fallback_model_name, max_tokens=4096, timeout=60)
 
     async def execute(self, state: ExperimentDesignState) -> ExperimentDesignState:
         """Execute design reasoning.
@@ -131,14 +84,56 @@ class DesignReasoningNode:
             # Build prompt with organizational context
             prompt = self._build_design_prompt(state)
 
+            # Get OpikConnector for LLM call tracing
+            opik = _get_opik_connector()
+
             # Invoke LLM with fallback
             try:
-                response = await asyncio.wait_for(
-                    self.llm.ainvoke(prompt),
-                    timeout=120,
-                )
+                if opik and opik.is_enabled:
+                    # Trace the LLM call
+                    async with opik.trace_llm_call(
+                        model=self.model_name,
+                        provider="anthropic",
+                        prompt_template="experiment_design_reasoning",
+                        input_data={"prompt": prompt[:500], "business_question": state.get("business_question", "")},
+                        metadata={"agent": "experiment_designer", "operation": "design_reasoning"},
+                    ) as llm_span:
+                        response = await asyncio.wait_for(
+                            self.llm.ainvoke(prompt),
+                            timeout=120,
+                        )
+                        # Log tokens from response metadata
+                        usage = response.response_metadata.get("usage", {})
+                        llm_span.log_tokens(
+                            input_tokens=usage.get("input_tokens", 0),
+                            output_tokens=usage.get("output_tokens", 0),
+                        )
+                else:
+                    # Fallback: no tracing
+                    response = await asyncio.wait_for(
+                        self.llm.ainvoke(prompt),
+                        timeout=120,
+                    )
             except (asyncio.TimeoutError, Exception) as e:
-                response = await self.fallback_llm.ainvoke(self._build_simplified_prompt(state))
+                logger.warning(f"Primary LLM failed, using fallback: {e}")
+                # Use fallback LLM with tracing
+                fallback_prompt = self._build_simplified_prompt(state)
+                if opik and opik.is_enabled:
+                    async with opik.trace_llm_call(
+                        model=self.fallback_model_name,
+                        provider="anthropic",
+                        prompt_template="experiment_design_reasoning_fallback",
+                        input_data={"prompt": fallback_prompt[:500]},
+                        metadata={"agent": "experiment_designer", "operation": "design_reasoning_fallback"},
+                    ) as llm_span:
+                        response = await self.fallback_llm.ainvoke(fallback_prompt)
+                        usage = response.response_metadata.get("usage", {})
+                        llm_span.log_tokens(
+                            input_tokens=usage.get("input_tokens", 0),
+                            output_tokens=usage.get("output_tokens", 0),
+                        )
+                else:
+                    response = await self.fallback_llm.ainvoke(fallback_prompt)
                 state["warnings"] = state.get("warnings", []) + [f"Design used fallback: {str(e)}"]
 
             # Parse design response
@@ -192,9 +187,10 @@ class DesignReasoningNode:
 
             # Update metadata
             state["node_latencies_ms"] = node_latencies
-            state["total_llm_tokens_used"] = (
-                state.get("total_llm_tokens_used", 0) + 2000
-            )  # Estimate
+            # Get actual token usage from response
+            usage = response.response_metadata.get("usage", {})
+            actual_tokens = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+            state["total_llm_tokens_used"] = state.get("total_llm_tokens_used", 0) + actual_tokens
 
             # Update status for next node
             state["status"] = "calculating"
