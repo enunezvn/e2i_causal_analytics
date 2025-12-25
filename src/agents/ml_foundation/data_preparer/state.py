@@ -62,6 +62,13 @@ class DataPreparerState(TypedDict, total=False):
     target_distribution: Dict[str, Any]
     correlation_matrix: Dict[str, Dict[str, float]]
 
+    # Feast registration
+    feast_registration_status: Literal["completed", "empty", "skipped", "error"]
+    feast_features_registered: int  # Count of features registered
+    feast_freshness_check: Optional[Dict[str, Any]]  # Freshness check result
+    feast_warnings: List[str]  # Non-blocking warnings
+    feast_registered_at: Optional[str]  # ISO timestamp
+
     # Recommendations
     remediation_steps: List[str]
     blocking_issues: List[str]  # If non-empty, blocks training
