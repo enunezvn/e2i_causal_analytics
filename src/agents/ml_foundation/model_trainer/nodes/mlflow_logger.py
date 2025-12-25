@@ -6,7 +6,10 @@ This module logs training runs to MLflow, including:
 - Trained model artifacts
 - Model registration
 
-Version: 1.0.0
+It also persists training runs to the database with HPO linkage
+for complete traceability between Optuna studies and training runs.
+
+Version: 1.1.0
 """
 
 import logging
@@ -14,9 +17,24 @@ import tempfile
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
+from uuid import UUID
 
 logger = logging.getLogger(__name__)
+
+
+def _get_training_run_repository():
+    """Lazy import of MLTrainingRunRepository to avoid circular imports."""
+    try:
+        from src.repositories.ml_experiment import MLTrainingRunRepository
+
+        return MLTrainingRunRepository()
+    except ImportError:
+        logger.debug("MLTrainingRunRepository not available")
+        return None
+    except Exception as e:
+        logger.warning(f"Failed to get MLTrainingRunRepository: {e}")
+        return None
 
 
 async def log_to_mlflow(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -74,6 +92,8 @@ async def log_to_mlflow(state: Dict[str, Any]) -> Dict[str, Any]:
     hpo_completed = state.get("hpo_completed", False)
     hpo_best_value = state.get("hpo_best_value")
     hpo_trials_run = state.get("hpo_trials_run", 0)
+    hpo_study_name = state.get("hpo_study_name")  # Optuna study name for linkage
+    hpo_best_trial = state.get("hpo_best_trial")  # Best trial number
 
     # Evaluation metrics
     evaluation_metrics = state.get("evaluation_metrics", {})
@@ -87,6 +107,12 @@ async def log_to_mlflow(state: Dict[str, Any]) -> Dict[str, Any]:
     model_name = state.get("model_name", f"{algorithm_name.lower()}_model")
     model_description = state.get("model_description", "")
     model_tags = state.get("model_tags", {})
+
+    # Training data metadata (for database persistence)
+    training_samples = state.get("training_samples", 0)
+    validation_samples = state.get("validation_samples")
+    test_samples = state.get("test_samples")
+    feature_names = state.get("feature_names", [])
 
     try:
         from src.mlops.mlflow_connector import get_mlflow_connector
@@ -187,6 +213,21 @@ async def log_to_mlflow(state: Dict[str, Any]) -> Dict[str, Any]:
                     f"Registered model: {model_name} v{model_version.version}"
                 )
 
+        # Persist training run to database with HPO linkage
+        db_run_id = await _persist_training_run(
+            experiment_id=experiment_id,
+            run_name=run_name,
+            mlflow_run_id=mlflow_run_id,
+            algorithm_name=algorithm_name,
+            hyperparameters=best_hyperparameters,
+            training_samples=training_samples,
+            validation_samples=validation_samples,
+            test_samples=test_samples,
+            feature_names=feature_names,
+            hpo_study_name=hpo_study_name,
+            hpo_best_trial=hpo_best_trial,
+        )
+
         return {
             "mlflow_status": "success",
             "mlflow_run_id": mlflow_run_id,
@@ -195,6 +236,7 @@ async def log_to_mlflow(state: Dict[str, Any]) -> Dict[str, Any]:
             "mlflow_registered": model_version is not None,
             "mlflow_model_version": model_version.version if model_version else None,
             "mlflow_model_name": model_name if model_version else None,
+            "db_training_run_id": str(db_run_id) if db_run_id else None,
         }
 
     except ImportError as e:
@@ -481,3 +523,81 @@ def _get_primary_metric(
             return float(metrics[metric_name])
 
     return None
+
+
+async def _persist_training_run(
+    experiment_id: str,
+    run_name: str,
+    mlflow_run_id: str,
+    algorithm_name: str,
+    hyperparameters: Dict[str, Any],
+    training_samples: int,
+    validation_samples: Optional[int],
+    test_samples: Optional[int],
+    feature_names: List[str],
+    hpo_study_name: Optional[str],
+    hpo_best_trial: Optional[int],
+) -> Optional[UUID]:
+    """Persist training run to database with HPO linkage.
+
+    This creates a record in ml_training_runs table that links the
+    training run to its Optuna HPO study for complete traceability.
+
+    Args:
+        experiment_id: ML experiment ID (may be string or UUID)
+        run_name: Human-readable run name
+        mlflow_run_id: MLflow run ID for cross-reference
+        algorithm_name: Algorithm used
+        hyperparameters: Best hyperparameters used
+        training_samples: Number of training samples
+        validation_samples: Number of validation samples
+        test_samples: Number of test samples
+        feature_names: List of feature names
+        hpo_study_name: Optuna study name for HPO linkage
+        hpo_best_trial: Best trial number from Optuna
+
+    Returns:
+        Database run ID if successful, None otherwise
+    """
+    repo = _get_training_run_repository()
+    if not repo:
+        logger.debug("Training run repository not available, skipping DB persistence")
+        return None
+
+    try:
+        # Convert experiment_id to UUID if it's a valid UUID string
+        try:
+            exp_uuid = UUID(experiment_id) if experiment_id != "unknown" else None
+        except (ValueError, TypeError):
+            exp_uuid = None
+
+        if not exp_uuid:
+            logger.debug("No valid experiment_id for DB persistence")
+            return None
+
+        # Create training run with HPO linkage
+        run = await repo.create_run_with_hpo(
+            experiment_id=exp_uuid,
+            run_name=run_name,
+            mlflow_run_id=mlflow_run_id,
+            algorithm=algorithm_name,
+            hyperparameters=hyperparameters or {},
+            training_samples=training_samples,
+            validation_samples=validation_samples,
+            test_samples=test_samples,
+            feature_names=feature_names or [],
+            optuna_study_name=hpo_study_name,
+            optuna_trial_number=hpo_best_trial,
+            is_best_trial=hpo_best_trial is not None,
+        )
+
+        logger.info(
+            f"Persisted training run to database: id={run.id}, "
+            f"hpo_study={hpo_study_name or 'None'}"
+        )
+        return run.id
+
+    except Exception as e:
+        # Non-fatal: MLflow logging succeeded, DB persistence is secondary
+        logger.warning(f"Failed to persist training run to database: {e}")
+        return None
