@@ -7,10 +7,18 @@ Tests the DSPy Hub role implementation including:
 - Signal collector
 - Hub coordination
 - Singleton access patterns
+
+Note: This module is marked to run sequentially (not in parallel) because
+the dspy import has race conditions during parallel pytest-xdist execution.
 """
 
 import pytest
 from datetime import datetime, timezone
+
+# Mark entire module to run on same worker - prevents import race conditions
+# with dspy when running tests in parallel with pytest-xdist.
+# xdist_group ensures all tests in this module run on the same worker sequentially.
+pytestmark = pytest.mark.xdist_group(name="dspy_integration")
 
 from src.agents.orchestrator.dspy_integration import (
     RoutingTrainingSignal,
