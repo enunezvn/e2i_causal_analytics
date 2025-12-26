@@ -55,7 +55,7 @@ class ShapAnalysisRepository(BaseRepository):
                     "interpretation": interaction.get("interpretation"),
                 })
 
-            # Map Python types to database types
+            # Map Python types to database column names (per mlops_tables.sql schema)
             db_record = {
                 "id": str(uuid.uuid4()),
                 "model_registry_id": model_registry_id,
@@ -65,9 +65,11 @@ class ShapAnalysisRepository(BaseRepository):
                 "natural_language_explanation": analysis_dict.get("interpretation"),
                 "key_drivers": analysis_dict.get("top_features", [])[:5],
                 "sample_size": analysis_dict.get("samples_analyzed"),
-                "computation_time_seconds": analysis_dict.get("computation_time_seconds"),
-                "model_type": analysis_dict.get("explainer_type"),
-                "model_version_id": analysis_dict.get("model_version"),
+                # Schema uses computation_duration_seconds (INTEGER), not computation_time_seconds
+                "computation_duration_seconds": int(analysis_dict.get("computation_time_seconds", 0)),
+                # Schema uses computation_method, not model_type
+                "computation_method": analysis_dict.get("explainer_type"),
+                # Note: model_version is stored in ml_model_registry, not in this table
             }
 
             # Remove None values for optional fields
@@ -86,17 +88,17 @@ class ShapAnalysisRepository(BaseRepository):
             logger.error(f"Failed to store SHAP analysis: {e}", exc_info=True)
             return None
 
-    async def get_by_model_version(
+    async def get_by_model_registry_id(
         self,
-        model_version_id: str,
+        model_registry_id: str,
         analysis_type: str = "global",
         limit: int = 10,
     ) -> List[Dict[str, Any]]:
         """
-        Get SHAP analyses for a specific model version.
+        Get SHAP analyses for a specific model from the registry.
 
         Args:
-            model_version_id: Model version identifier
+            model_registry_id: Model registry ID (references ml_model_registry.id)
             analysis_type: Type of analysis (global, local, segment)
             limit: Maximum number of records to return
 
@@ -111,9 +113,9 @@ class ShapAnalysisRepository(BaseRepository):
             result = await (
                 self.client.table(self.table_name)
                 .select("*")
-                .eq("model_version_id", model_version_id)
+                .eq("model_registry_id", model_registry_id)
                 .eq("analysis_type", analysis_type)
-                .order("created_at", desc=True)
+                .order("computed_at", desc=True)
                 .limit(limit)
                 .execute()
             )
@@ -131,7 +133,7 @@ class ShapAnalysisRepository(BaseRepository):
         Get the latest SHAP analysis for a model.
 
         Args:
-            model_registry_id: Model registry ID
+            model_registry_id: Model registry ID (references ml_model_registry.id)
 
         Returns:
             Latest SHAP analysis record or None
@@ -144,7 +146,7 @@ class ShapAnalysisRepository(BaseRepository):
                 self.client.table(self.table_name)
                 .select("*")
                 .eq("model_registry_id", model_registry_id)
-                .order("created_at", desc=True)
+                .order("computed_at", desc=True)
                 .limit(1)
                 .execute()
             )
@@ -156,15 +158,15 @@ class ShapAnalysisRepository(BaseRepository):
 
     async def get_feature_importance_trends(
         self,
-        model_version_id: str,
-        days: int = 30,
+        model_registry_id: str,
+        limit: int = 30,
     ) -> List[Dict[str, Any]]:
         """
         Get feature importance trends over time for a model.
 
         Args:
-            model_version_id: Model version identifier
-            days: Number of days to look back
+            model_registry_id: Model registry ID (references ml_model_registry.id)
+            limit: Maximum number of analyses to return (default 30)
 
         Returns:
             List of trend records with feature importance over time
@@ -173,14 +175,13 @@ class ShapAnalysisRepository(BaseRepository):
             return []
 
         try:
-            # Use the view if available, otherwise query directly
             result = await (
                 self.client.table(self.table_name)
-                .select("id, global_importance, created_at")
-                .eq("model_version_id", model_version_id)
+                .select("id, global_importance, computed_at")
+                .eq("model_registry_id", model_registry_id)
                 .eq("analysis_type", "global")
-                .order("created_at", desc=True)
-                .limit(days)
+                .order("computed_at", desc=True)
+                .limit(limit)
                 .execute()
             )
             return result.data if result.data else []
