@@ -17,11 +17,45 @@ This audit validates the E2I Causal Analytics MLflow and Opik observability impl
 - **Hybrid Agents**: feature_analyzer, feedback_learner (use BOTH tools)
 
 ### Current Implementation Status
-Both tools have existing plans marked as "100% complete":
-- MLflow: `.claude/plans/mlflow-audit-implementation.md` (2025-12-25)
-- Opik: `.claude/plans/OPIK_IMPLEMENTATION_PLAN.md` (2025-12-25)
+Both tools were implemented and fixed in prior sessions:
+- MLflow: Fixed 2025-12-25 (bugs in model_selector, model_deployer)
+- Opik: Implemented 2025-12-25 (see `OPIK_IMPLEMENTATION_PLAN.md`)
 
 This audit provides **independent verification** against the spec document.
+
+### Historical: MLflow Bug Fixes (2025-12-25)
+
+The following issues were discovered and fixed prior to this audit:
+
+| Issue | Agent | Resolution |
+|-------|-------|------------|
+| `end_run()` bug (Line 77) | model_selector | Removed non-existent call, uses async context manager |
+| Context bug (Lines 66, 69) | model_selector | Refactored to log inside `async with start_run()` block |
+| Wrapper bypass | model_deployer | Now uses `MLflowConnector.register_model()` with circuit breaker |
+| Spec mismatch | Documentation | Updated `mlops_integration.md` to document async `MLflowConnector` |
+
+### Reference: Correct MLflow Usage Pattern
+
+```python
+from src.mlops.mlflow_connector import MLflowConnector
+
+async def log_experiment(state: ModelTrainerState) -> ModelTrainerState:
+    connector = MLflowConnector()
+
+    async with connector.start_run(
+        experiment_name=state.experiment_name,
+        run_name=state.run_name,
+        tags={"agent": "model_trainer"}
+    ) as run:
+        # All logging MUST be inside this block
+        await run.log_params(state.hyperparameters)
+        await run.log_metrics(state.metrics)
+        await run.log_artifact(state.model_path)
+        await run.log_model(state.model, "model")
+        # Run auto-ends when exiting context
+
+    return state
+```
 
 ---
 
