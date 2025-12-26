@@ -466,7 +466,335 @@ class DataSplitter:
         )
 
 
-# Convenience function
+# =============================================================================
+# LEAKAGE DETECTION
+# =============================================================================
+
+
+@dataclass
+class LeakageReport:
+    """Report of leakage detection results."""
+
+    has_leakage: bool
+    entity_leakage: bool = False
+    temporal_leakage: bool = False
+    feature_leakage: bool = False
+    entity_overlap: Dict[str, List[Any]] = field(default_factory=dict)
+    temporal_violations: List[Dict[str, Any]] = field(default_factory=list)
+    feature_warnings: List[str] = field(default_factory=list)
+    recommendations: List[str] = field(default_factory=list)
+
+    def summary(self) -> Dict[str, Any]:
+        """Return summary of leakage report."""
+        return {
+            "has_leakage": self.has_leakage,
+            "entity_leakage": self.entity_leakage,
+            "temporal_leakage": self.temporal_leakage,
+            "feature_leakage": self.feature_leakage,
+            "entity_overlap_count": sum(len(v) for v in self.entity_overlap.values()),
+            "temporal_violation_count": len(self.temporal_violations),
+            "feature_warning_count": len(self.feature_warnings),
+            "recommendations": self.recommendations,
+        }
+
+
+class LeakageDetector:
+    """
+    Detects data leakage in train/val/test splits.
+
+    Detects three types of leakage:
+    1. Entity leakage: Same entity appears in multiple splits
+    2. Temporal leakage: Future data in training set
+    3. Feature leakage: Target information in features
+
+    Example:
+        detector = LeakageDetector()
+        report = detector.detect_leakage(
+            train_df, val_df, test_df,
+            entity_column="patient_id",
+            date_column="created_at"
+        )
+        if report.has_leakage:
+            print(report.recommendations)
+    """
+
+    def detect_leakage(
+        self,
+        train_df: pd.DataFrame,
+        val_df: pd.DataFrame,
+        test_df: pd.DataFrame,
+        entity_column: Optional[str] = None,
+        date_column: Optional[str] = None,
+        target_column: Optional[str] = None,
+        holdout_df: Optional[pd.DataFrame] = None,
+    ) -> LeakageReport:
+        """
+        Comprehensive leakage detection across all splits.
+
+        Args:
+            train_df: Training DataFrame
+            val_df: Validation DataFrame
+            test_df: Test DataFrame
+            entity_column: Column containing entity IDs (e.g., patient_id)
+            date_column: Column containing dates
+            target_column: Target column to check for feature leakage
+            holdout_df: Optional holdout DataFrame
+
+        Returns:
+            LeakageReport with detected issues and recommendations
+        """
+        report = LeakageReport(has_leakage=False)
+
+        # Check entity leakage
+        if entity_column:
+            entity_report = self._check_entity_leakage(
+                train_df, val_df, test_df, entity_column, holdout_df
+            )
+            if entity_report["has_leakage"]:
+                report.entity_leakage = True
+                report.entity_overlap = entity_report["overlap"]
+                report.recommendations.extend(entity_report["recommendations"])
+
+        # Check temporal leakage
+        if date_column:
+            temporal_report = self._check_temporal_leakage(
+                train_df, val_df, test_df, date_column, holdout_df
+            )
+            if temporal_report["has_leakage"]:
+                report.temporal_leakage = True
+                report.temporal_violations = temporal_report["violations"]
+                report.recommendations.extend(temporal_report["recommendations"])
+
+        # Check feature leakage (target information in features)
+        if target_column:
+            feature_report = self._check_feature_leakage(
+                train_df, val_df, test_df, target_column
+            )
+            if feature_report["has_warnings"]:
+                report.feature_leakage = feature_report["has_critical"]
+                report.feature_warnings = feature_report["warnings"]
+                report.recommendations.extend(feature_report["recommendations"])
+
+        report.has_leakage = report.entity_leakage or report.temporal_leakage or report.feature_leakage
+        return report
+
+    def _check_entity_leakage(
+        self,
+        train_df: pd.DataFrame,
+        val_df: pd.DataFrame,
+        test_df: pd.DataFrame,
+        entity_column: str,
+        holdout_df: Optional[pd.DataFrame] = None,
+    ) -> Dict[str, Any]:
+        """Check if entities appear in multiple splits."""
+        train_entities = set(train_df[entity_column].unique())
+        val_entities = set(val_df[entity_column].unique())
+        test_entities = set(test_df[entity_column].unique())
+        holdout_entities = set(holdout_df[entity_column].unique()) if holdout_df is not None else set()
+
+        overlap = {}
+        recommendations = []
+
+        # Check train-val overlap
+        train_val_overlap = train_entities & val_entities
+        if train_val_overlap:
+            overlap["train_val"] = list(train_val_overlap)[:10]  # Limit for readability
+            recommendations.append(
+                f"Found {len(train_val_overlap)} entities in both train and validation sets. "
+                f"Use entity_split() to prevent entity leakage."
+            )
+
+        # Check train-test overlap
+        train_test_overlap = train_entities & test_entities
+        if train_test_overlap:
+            overlap["train_test"] = list(train_test_overlap)[:10]
+            recommendations.append(
+                f"Found {len(train_test_overlap)} entities in both train and test sets. "
+                f"CRITICAL: Test data is contaminated."
+            )
+
+        # Check val-test overlap
+        val_test_overlap = val_entities & test_entities
+        if val_test_overlap:
+            overlap["val_test"] = list(val_test_overlap)[:10]
+            recommendations.append(
+                f"Found {len(val_test_overlap)} entities in both validation and test sets."
+            )
+
+        # Check holdout overlaps
+        if holdout_entities:
+            for split_name, split_entities in [("train", train_entities), ("val", val_entities), ("test", test_entities)]:
+                holdout_overlap = holdout_entities & split_entities
+                if holdout_overlap:
+                    overlap[f"{split_name}_holdout"] = list(holdout_overlap)[:10]
+                    recommendations.append(
+                        f"Found {len(holdout_overlap)} entities in both {split_name} and holdout sets."
+                    )
+
+        return {
+            "has_leakage": len(overlap) > 0,
+            "overlap": overlap,
+            "recommendations": recommendations,
+        }
+
+    def _check_temporal_leakage(
+        self,
+        train_df: pd.DataFrame,
+        val_df: pd.DataFrame,
+        test_df: pd.DataFrame,
+        date_column: str,
+        holdout_df: Optional[pd.DataFrame] = None,
+    ) -> Dict[str, Any]:
+        """Check if temporal ordering is violated."""
+        violations = []
+        recommendations = []
+
+        # Convert to datetime
+        train_dates = pd.to_datetime(train_df[date_column])
+        val_dates = pd.to_datetime(val_df[date_column])
+        test_dates = pd.to_datetime(test_df[date_column])
+
+        train_max = train_dates.max()
+        val_min = val_dates.min() if len(val_dates) > 0 else None
+        val_max = val_dates.max() if len(val_dates) > 0 else None
+        test_min = test_dates.min() if len(test_dates) > 0 else None
+
+        # Check train max vs val min
+        if val_min is not None and train_max > val_min:
+            violations.append({
+                "type": "train_val_overlap",
+                "train_max": train_max.isoformat(),
+                "val_min": val_min.isoformat(),
+                "severity": "high",
+            })
+            recommendations.append(
+                f"Training data contains dates ({train_max.date()}) after validation start ({val_min.date()}). "
+                f"Use temporal_split() to prevent future data leakage."
+            )
+
+        # Check val max vs test min
+        if val_max is not None and test_min is not None and val_max > test_min:
+            violations.append({
+                "type": "val_test_overlap",
+                "val_max": val_max.isoformat(),
+                "test_min": test_min.isoformat(),
+                "severity": "high",
+            })
+            recommendations.append(
+                f"Validation data contains dates ({val_max.date()}) after test start ({test_min.date()})."
+            )
+
+        # Check train max vs test min (critical)
+        if test_min is not None and train_max > test_min:
+            violations.append({
+                "type": "train_test_overlap",
+                "train_max": train_max.isoformat(),
+                "test_min": test_min.isoformat(),
+                "severity": "critical",
+            })
+            recommendations.append(
+                f"CRITICAL: Training data contains dates ({train_max.date()}) after test start ({test_min.date()}). "
+                f"Test evaluation is invalid."
+            )
+
+        return {
+            "has_leakage": len(violations) > 0,
+            "violations": violations,
+            "recommendations": recommendations,
+        }
+
+    def _check_feature_leakage(
+        self,
+        train_df: pd.DataFrame,
+        val_df: pd.DataFrame,
+        test_df: pd.DataFrame,
+        target_column: str,
+    ) -> Dict[str, Any]:
+        """Check for potential feature leakage (target info in features)."""
+        warnings = []
+        recommendations = []
+        has_critical = False
+
+        # Get feature columns (exclude target)
+        feature_columns = [c for c in train_df.columns if c != target_column]
+
+        for col in feature_columns:
+            # Skip non-numeric columns for correlation check
+            if not pd.api.types.is_numeric_dtype(train_df[col]):
+                continue
+
+            # Check correlation with target
+            correlation = train_df[col].corr(train_df[target_column])
+            if abs(correlation) > 0.95:
+                warnings.append(
+                    f"Feature '{col}' has very high correlation ({correlation:.3f}) with target. "
+                    f"Possible target leakage."
+                )
+                has_critical = True
+                recommendations.append(
+                    f"Investigate feature '{col}' - may contain target information."
+                )
+            elif abs(correlation) > 0.8:
+                warnings.append(
+                    f"Feature '{col}' has high correlation ({correlation:.3f}) with target."
+                )
+
+        # Check for columns with "target" or similar names
+        suspect_names = ["target", "label", "outcome", "result", "prediction"]
+        for col in feature_columns:
+            if any(s in col.lower() for s in suspect_names):
+                warnings.append(
+                    f"Feature '{col}' has suspicious name suggesting target leakage."
+                )
+                recommendations.append(
+                    f"Review feature '{col}' - name suggests it may be derived from target."
+                )
+
+        return {
+            "has_warnings": len(warnings) > 0,
+            "has_critical": has_critical,
+            "warnings": warnings,
+            "recommendations": recommendations,
+        }
+
+    def validate_split_result(
+        self,
+        split_result: SplitResult,
+        target_column: Optional[str] = None,
+    ) -> LeakageReport:
+        """
+        Validate a SplitResult for leakage.
+
+        Convenience method that extracts config from SplitResult.
+
+        Args:
+            split_result: SplitResult from DataSplitter
+            target_column: Target column to check for feature leakage
+
+        Returns:
+            LeakageReport
+        """
+        return self.detect_leakage(
+            train_df=split_result.train,
+            val_df=split_result.val,
+            test_df=split_result.test,
+            holdout_df=split_result.holdout,
+            entity_column=split_result.config.entity_column,
+            date_column=split_result.config.date_column,
+            target_column=target_column,
+        )
+
+
+# =============================================================================
+# CONVENIENCE FUNCTIONS
+# =============================================================================
+
+
 def get_data_splitter(random_seed: int = 42) -> DataSplitter:
     """Get a DataSplitter instance."""
     return DataSplitter(random_seed=random_seed)
+
+
+def get_leakage_detector() -> LeakageDetector:
+    """Get a LeakageDetector instance."""
+    return LeakageDetector()

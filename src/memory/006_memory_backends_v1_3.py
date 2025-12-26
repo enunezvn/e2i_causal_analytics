@@ -101,26 +101,35 @@ class E2IRegion(str, Enum):
 
 
 class E2IAgentName(str, Enum):
-    """E2I 11-agent architecture names."""
+    """E2I 18-agent architecture names (6 tiers)."""
 
-    # Tier 1: Coordination
+    # Tier 0: ML Foundation (7 agents)
+    SCOPE_DEFINER = "scope_definer"
+    DATA_PREPARER = "data_preparer"
+    FEATURE_ANALYZER = "feature_analyzer"
+    MODEL_SELECTOR = "model_selector"
+    MODEL_TRAINER = "model_trainer"
+    MODEL_DEPLOYER = "model_deployer"
+    OBSERVABILITY_CONNECTOR = "observability_connector"
+    # Tier 1: Coordination (2 agents)
     ORCHESTRATOR = "orchestrator"
-    # Tier 2: Causal Analytics
+    TOOL_COMPOSER = "tool_composer"
+    # Tier 2: Causal Analytics (3 agents)
     CAUSAL_IMPACT = "causal_impact"
     GAP_ANALYZER = "gap_analyzer"
-    DRIFT_MONITOR = "drift_monitor"
     HETEROGENEOUS_OPTIMIZER = "heterogeneous_optimizer"
-    # Tier 3: Monitoring
-    FAIRNESS_GUARDIAN = "fairness_guardian"
-    HEALTH_SCORE = "health_score"
-    # Tier 4: ML Predictions
+    # Tier 3: Monitoring & Experimentation (3 agents)
+    DRIFT_MONITOR = "drift_monitor"
     EXPERIMENT_DESIGNER = "experiment_designer"
+    HEALTH_SCORE = "health_score"
+    # Tier 4: ML Predictions (2 agents)
     PREDICTION_SYNTHESIZER = "prediction_synthesizer"
-    # Tier 5: Self-Improvement
+    RESOURCE_OPTIMIZER = "resource_optimizer"
+    # Tier 5: Self-Improvement (2 agents)
     FEEDBACK_LEARNER = "feedback_learner"
     EXPLAINER = "explainer"
-    # Supporting
-    RESOURCE_OPTIMIZER = "resource_optimizer"
+    # Legacy (kept for backwards compatibility)
+    FAIRNESS_GUARDIAN = "fairness_guardian"
 
 
 # ============================================================================
