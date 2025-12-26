@@ -956,3 +956,86 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
             filters["experiment_id"] = str(experiment_id)
 
         return await self.get_many(filters=filters, limit=limit)
+
+    async def register_model_candidate(
+        self,
+        experiment_id: str,
+        model_name: str,
+        model_type: str,
+        model_class: str,
+        hyperparameters: Dict[str, Any],
+        hyperparameter_search_space: Dict[str, Any],
+        selection_score: float,
+        selection_rationale: str,
+        stage: str = "candidate",
+        created_by: str = "model_selector",
+        mlflow_run_id: Optional[str] = None,
+        mlflow_experiment_id: Optional[str] = None,
+    ) -> Optional[MLModelRegistry]:
+        """Register a model candidate from model_selector.
+
+        This is called during model selection to store the selected
+        algorithm configuration before training begins.
+
+        Args:
+            experiment_id: Parent experiment ID
+            model_name: Algorithm name (e.g., "RandomForestClassifier")
+            model_type: Algorithm family (e.g., "ensemble")
+            model_class: Full class path (e.g., "sklearn.ensemble.RandomForestClassifier")
+            hyperparameters: Default hyperparameters
+            hyperparameter_search_space: HPO search space
+            selection_score: Selection score from model_selector
+            selection_rationale: Why this model was selected
+            stage: Model stage (default: "candidate")
+            created_by: Agent that created this entry
+            mlflow_run_id: MLflow run ID for audit trail
+            mlflow_experiment_id: MLflow experiment ID
+
+        Returns:
+            Created MLModelRegistry or None if creation failed
+        """
+        if not self.client:
+            return None
+
+        from uuid import uuid4
+
+        model_id = uuid4()
+
+        # Generate version from timestamp for candidates
+        from datetime import datetime, timezone
+
+        version = f"candidate-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
+
+        data = {
+            "id": str(model_id),
+            "experiment_id": experiment_id,
+            "model_name": model_name,
+            "model_version": version,
+            "algorithm": model_name,  # For compatibility with existing schema
+            "hyperparameters": hyperparameters,
+            "metrics": {"selection_score": selection_score},
+            "stage": stage,
+            "is_champion": False,
+            "description": selection_rationale,
+            "mlflow_run_id": mlflow_run_id,
+            "mlflow_model_uri": None,  # Not set until model is trained
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_by": created_by,
+            # Store additional selection metadata
+            "tags": {
+                "model_type": model_type,
+                "model_class": model_class,
+                "hyperparameter_search_space": hyperparameter_search_space,
+                "mlflow_experiment_id": mlflow_experiment_id,
+            },
+        }
+
+        try:
+            result = await (
+                self.client.table(self.table_name).insert(data).execute()
+            )
+            if result.data:
+                return self._to_model(result.data[0])
+            return None
+        except Exception:
+            return None

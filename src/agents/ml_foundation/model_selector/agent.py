@@ -379,9 +379,10 @@ class ModelSelectorAgent:
 
             model_candidate = output.get("model_candidate", {})
             experiment_id = output.get("experiment_id", "")
+            mlflow_info = output.get("mlflow_info", {})
 
-            # Register model in ml_model_registry table
-            result = await repo.register_model(
+            # Register model candidate in ml_model_registry table with MLflow audit trail
+            result = await repo.register_model_candidate(
                 experiment_id=experiment_id,
                 model_name=model_candidate.get("algorithm_name", "unknown"),
                 model_type=model_candidate.get("algorithm_family", "unknown"),
@@ -392,6 +393,8 @@ class ModelSelectorAgent:
                 selection_rationale=output.get("selection_rationale", {}).get("selection_rationale", ""),
                 stage="candidate",
                 created_by="model_selector",
+                mlflow_run_id=mlflow_info.get("mlflow_run_id"),
+                mlflow_experiment_id=mlflow_info.get("mlflow_experiment_id"),
             )
 
             if result:
