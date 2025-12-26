@@ -116,12 +116,14 @@ class MockModelService:
         self._start_time = SERVICE_START_TIME
         logger.info("Mock BentoML service initialized")
 
-    @bentoml.api
-    async def predict(self, input_data: PredictionInput) -> PredictionOutput:
-        """Run mock prediction.
+    def _run_prediction(
+        self, input_data: PredictionInput, model_id: str = "mock_model_v1"
+    ) -> PredictionOutput:
+        """Internal prediction logic shared by all endpoints.
 
         Args:
             input_data: Features and configuration
+            model_id: Model identifier for response
 
         Returns:
             Mock predictions
@@ -145,10 +147,74 @@ class MockModelService:
         return PredictionOutput(
             predictions=predictions,
             probabilities=probabilities,
-            model_id="mock_model_v1",
+            model_id=model_id,
             prediction_time_ms=elapsed_ms,
             is_mock=True,
         )
+
+    @bentoml.api
+    async def predict(self, input_data: PredictionInput) -> PredictionOutput:
+        """Run mock prediction (generic endpoint).
+
+        Args:
+            input_data: Features and configuration
+
+        Returns:
+            Mock predictions
+        """
+        return self._run_prediction(input_data)
+
+    @bentoml.api(route="/churn_model/predict")
+    async def churn_model_predict(self, input_data: PredictionInput) -> PredictionOutput:
+        """Run mock churn model prediction.
+
+        Args:
+            input_data: Features and configuration
+
+        Returns:
+            Mock predictions
+        """
+        return self._run_prediction(input_data, model_id="churn_model_v1")
+
+    @bentoml.api(route="/conversion_model/predict")
+    async def conversion_model_predict(
+        self, input_data: PredictionInput
+    ) -> PredictionOutput:
+        """Run mock conversion model prediction.
+
+        Args:
+            input_data: Features and configuration
+
+        Returns:
+            Mock predictions
+        """
+        return self._run_prediction(input_data, model_id="conversion_model_v1")
+
+    @bentoml.api(route="/ltv_model/predict")
+    async def ltv_model_predict(self, input_data: PredictionInput) -> PredictionOutput:
+        """Run mock LTV model prediction.
+
+        Args:
+            input_data: Features and configuration
+
+        Returns:
+            Mock predictions (regression)
+        """
+        input_data.model_type = "regression"
+        return self._run_prediction(input_data, model_id="ltv_model_v1")
+
+    @bentoml.api(route="/cate_model/predict")
+    async def cate_model_predict(self, input_data: PredictionInput) -> PredictionOutput:
+        """Run mock CATE model prediction.
+
+        Args:
+            input_data: Features and configuration
+
+        Returns:
+            Mock predictions (regression for treatment effects)
+        """
+        input_data.model_type = "regression"
+        return self._run_prediction(input_data, model_id="cate_model_v1")
 
     @bentoml.api
     async def predict_batch(
@@ -227,10 +293,20 @@ class MockModelService:
             "is_mock": True,
             "supported_endpoints": [
                 "/predict",
+                "/churn_model/predict",
+                "/conversion_model/predict",
+                "/ltv_model/predict",
+                "/cate_model/predict",
                 "/predict_batch",
                 "/health",
                 "/metrics",
                 "/model_info",
+            ],
+            "available_models": [
+                "churn_model",
+                "conversion_model",
+                "ltv_model",
+                "cate_model",
             ],
         }
 
