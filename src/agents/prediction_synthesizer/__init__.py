@@ -7,6 +7,7 @@ Provides:
 - Ensemble methods (average, weighted, voting)
 - Uncertainty quantification
 - Prediction context enrichment
+- HTTP-based model clients for BentoML endpoints
 """
 
 from .agent import (
@@ -14,6 +15,12 @@ from .agent import (
     PredictionSynthesizerInput,
     PredictionSynthesizerOutput,
     synthesize_predictions,
+)
+from .clients import (
+    HTTPModelClient,
+    HTTPModelClientConfig,
+    ModelClientFactory,
+    get_model_client,
 )
 from .graph import build_prediction_synthesizer_graph
 from .state import (
@@ -36,4 +43,9 @@ __all__ = [
     "PredictionContext",
     # Graph
     "build_prediction_synthesizer_graph",
+    # Model Clients
+    "HTTPModelClient",
+    "HTTPModelClientConfig",
+    "ModelClientFactory",
+    "get_model_client",
 ]

@@ -1,0 +1,61 @@
+# Model Endpoints Configuration
+# This file configures the model endpoints used by prediction_synthesizer
+
+# Default settings for all endpoints
+default_base_url: ${BENTOML_SERVICE_URL:-http://localhost:3000}
+default_timeout: 5.0
+default_max_retries: 3
+
+# Model endpoint definitions
+endpoints:
+  # Churn prediction model
+  churn_model:
+    url: ${BENTOML_SERVICE_URL:-http://localhost:3000}/churn_model
+    client_type: http
+    timeout: 5.0
+    max_retries: 3
+    enabled: true
+
+  # Conversion prediction model
+  conversion_model:
+    url: ${BENTOML_SERVICE_URL:-http://localhost:3000}/conversion_model
+    client_type: http
+    timeout: 5.0
+    max_retries: 3
+    enabled: true
+
+  # Adoption prediction model
+  adoption_model:
+    url: ${BENTOML_SERVICE_URL:-http://localhost:3000}/adoption_model
+    client_type: http
+    timeout: 5.0
+    max_retries: 3
+    enabled: true
+
+  # Causal effect model
+  causal_model:
+    url: ${BENTOML_SERVICE_URL:-http://localhost:3000}/causal_model
+    client_type: http
+    timeout: 10.0  # Higher timeout for causal models
+    max_retries: 3
+    enabled: true
+
+  # ROI prediction model
+  roi_model:
+    url: ${BENTOML_SERVICE_URL:-http://localhost:3000}/roi_model
+    client_type: http
+    timeout: 5.0
+    max_retries: 3
+    enabled: true
+
+  # Mock model for testing (always available)
+  mock_model:
+    client_type: mock
+    default_prediction: 0.65
+    default_confidence: 0.85
+    enabled: true
+
+# Development environment overrides
+# Uncomment to use mock clients for all models during development
+# dev_mode:
+#   use_mock_clients: true
