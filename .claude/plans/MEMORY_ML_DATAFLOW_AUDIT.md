@@ -256,7 +256,7 @@ pytest tests/integration/test_agents/test_tier_0/ -v -n 4
 - [x] All existing tests pass (800+ tests validated)
 - [x] New tests for remediation code (leakage detector: 8 tests)
 - [x] Integration tests validate end-to-end flow (13 tests)
-- [ ] Data lineage tests (pending creation)
+- [x] Data lineage tests (65 tests created)
 
 ---
 
@@ -277,7 +277,7 @@ pytest tests/integration/test_agents/test_tier_0/ -v -n 4
 | 3C RPC Functions | ✅ COMPLETE | - | Migration 019 applied to Supabase |
 | 4A Preprocessing | ✅ COMPLETE | 13 | sklearn pipeline with StandardScaler, OneHotEncoder, SimpleImputer |
 | 4B Leakage Detection | ✅ COMPLETE | 8 | Entity, temporal, feature leakage detection |
-| 4C Data Lineage | ✅ COMPLETE | 0 (pending) | Full implementation (962 lines), tests need creation |
+| 4C Data Lineage | ✅ COMPLETE | 65 | Full implementation (962 lines), tests created |
 | 5A Status Update | ✅ COMPLETE | - | implementation-status.md updated |
 | 5B Doc Sync | ✅ COMPLETE | - | Docstrings match documentation |
 | 6A Memory Integration | ✅ VALIDATED | 13 | Data preparer pipeline integration tests |
