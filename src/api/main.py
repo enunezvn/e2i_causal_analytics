@@ -16,6 +16,7 @@ Version: 4.1.0
 """
 
 import logging
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict
@@ -26,12 +27,20 @@ from fastapi.responses import JSONResponse
 
 from src.api.routes.cognitive import router as cognitive_router
 
+# Import dependencies
+from src.api.dependencies.bentoml_client import (
+    close_bentoml_client,
+    configure_bentoml_endpoints,
+    get_bentoml_client,
+)
+
 # Import routers
 from src.api.routes.explain import router as explain_router
 from src.api.routes.experiments import router as experiments_router
 from src.api.routes.graph import router as graph_router
 from src.api.routes.memory import router as memory_router
 from src.api.routes.monitoring import router as monitoring_router
+from src.api.routes.predictions import router as predictions_router
 from src.api.routes.rag import router as rag_router
 
 # Configure logging
@@ -59,12 +68,25 @@ async def lifespan(app: FastAPI):
     logger.info("Version: 4.1.0")
     logger.info("Timestamp: %s", datetime.now(timezone.utc).isoformat())
 
-    # TODO: Initialize connections
+    # Initialize BentoML client
+    try:
+        bentoml_client = await get_bentoml_client()
+        logger.info("BentoML client initialized successfully")
+
+        # Configure model endpoints from environment or defaults
+        configure_bentoml_endpoints({
+            "churn_model": os.environ.get("CHURN_MODEL_URL", "http://localhost:3000"),
+            "conversion_model": os.environ.get("CONVERSION_MODEL_URL", "http://localhost:3001"),
+            "causal_model": os.environ.get("CAUSAL_MODEL_URL", "http://localhost:3002"),
+        })
+    except Exception as e:
+        logger.warning(f"BentoML client initialization failed (non-critical): {e}")
+
+    # TODO: Initialize other connections
     # - Redis connection pool
     # - FalkorDB client
     # - Supabase client
     # - MLflow client
-    # - BentoML client
     # - Feast client
     # - Opik client
 
@@ -75,7 +97,14 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("E2I Causal Analytics Platform - Shutting down")
 
-    # TODO: Cleanup connections
+    # Cleanup BentoML client
+    try:
+        await close_bentoml_client()
+        logger.info("BentoML client closed")
+    except Exception as e:
+        logger.warning(f"BentoML client cleanup failed: {e}")
+
+    # TODO: Cleanup other connections
     # - Close Redis connections
     # - Close database connections
     # - Flush pending logs
@@ -200,6 +229,9 @@ app.include_router(monitoring_router)
 
 # A/B testing & experiment execution endpoints (Phase 15)
 app.include_router(experiments_router)
+
+# Model prediction endpoints (BentoML integration)
+app.include_router(predictions_router)
 
 # TODO: Add additional routers as they're developed:
 # - Agent orchestration: /api/agents
