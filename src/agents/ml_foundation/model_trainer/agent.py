@@ -295,35 +295,22 @@ class ModelTrainerAgent:
         test_samples = final_state.get("test_samples", 0)
         total_samples = final_state.get("total_samples", 0)
 
-        # TODO: MLflow Integration
-        # import mlflow
-        #
-        # # Start MLflow run
-        # with mlflow.start_run(run_name=training_run_id):
-        #     # Log parameters
-        #     mlflow.log_params(best_hyperparameters)
-        #     mlflow.log_param("algorithm_name", algorithm_name)
-        #     mlflow.log_param("enable_hpo", enable_hpo)
-        #     mlflow.log_param("hpo_trials_run", hpo_trials_run)
-        #
-        #     # Log metrics
-        #     for metric_name, value in test_metrics.items():
-        #         mlflow.log_metric(f"test_{metric_name}", value)
-        #     for metric_name, value in validation_metrics.items():
-        #         mlflow.log_metric(f"val_{metric_name}", value)
-        #
-        #     # Log model artifact
-        #     mlflow.sklearn.log_model(trained_model, "model")
-        #
-        #     # Get MLflow info
-        #     mlflow_run_id = mlflow.active_run().info.run_id
-        #     model_artifact_uri = mlflow.get_artifact_uri("model")
+        # MLflow Integration - Extract values from graph result
+        # The mlflow_logger node logs to MLflow and returns these values in state
+        mlflow_run_id = final_state.get("mlflow_run_id")
+        mlflow_experiment_id = final_state.get("mlflow_experiment_id")
+        model_artifact_uri = final_state.get("mlflow_model_uri")
+        preprocessing_artifact_uri = final_state.get("preprocessing_artifact_uri")
+        mlflow_status = final_state.get("mlflow_status", "not_logged")
+        mlflow_model_version = final_state.get("mlflow_model_version")
+        mlflow_model_name = final_state.get("mlflow_model_name")
 
-        # PLACEHOLDER: MLflow info (TODO)
-        mlflow_run_id = None
-        mlflow_experiment_id = None
-        model_artifact_uri = "TODO://mlflow/artifacts/model"
-        preprocessing_artifact_uri = "TODO://mlflow/artifacts/preprocessor"
+        # Log warning if MLflow logging failed
+        if mlflow_status != "success" and mlflow_run_id is None:
+            logger.warning(
+                f"MLflow logging not completed for training run {training_run_id}. "
+                f"Status: {mlflow_status}"
+            )
 
         # Construct output
         output = {
@@ -355,9 +342,12 @@ class ModelTrainerAgent:
             # Success criteria
             "success_criteria_met": success_criteria_met,
             "success_criteria_results": success_criteria_results,
-            # MLflow info (TODO: Full MLflow integration)
+            # MLflow info (extracted from mlflow_logger node)
             "mlflow_run_id": mlflow_run_id,
             "mlflow_experiment_id": mlflow_experiment_id,
+            "mlflow_status": mlflow_status,
+            "mlflow_model_version": mlflow_model_version,
+            "mlflow_model_name": mlflow_model_name,
             "model_artifact_uri": model_artifact_uri,
             "preprocessing_artifact_uri": preprocessing_artifact_uri,
             # Training metadata
@@ -384,7 +374,7 @@ class ModelTrainerAgent:
             "problem_type": problem_type,
             # Status
             "training_status": "completed",
-            "framework": "sklearn",  # TODO: Detect from algorithm_class
+            "framework": self._detect_framework(algorithm_class),
             "trained_by": "model_trainer",
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
@@ -508,3 +498,35 @@ class ModelTrainerAgent:
 
         except Exception as e:
             logger.debug(f"Failed to update procedural memory: {e}")
+
+    def _detect_framework(self, algorithm_class: str | None) -> str:
+        """Detect ML framework from algorithm class name.
+
+        Args:
+            algorithm_class: The algorithm class name (e.g., "sklearn.ensemble.RandomForestClassifier")
+
+        Returns:
+            Framework name: "sklearn", "xgboost", "lightgbm", "catboost", "statsmodels", or "unknown"
+        """
+        if not algorithm_class:
+            return "unknown"
+
+        algorithm_lower = algorithm_class.lower()
+
+        # Framework detection patterns
+        if "sklearn" in algorithm_lower or "scikit" in algorithm_lower:
+            return "sklearn"
+        elif "xgboost" in algorithm_lower or "xgb" in algorithm_lower:
+            return "xgboost"
+        elif "lightgbm" in algorithm_lower or "lgb" in algorithm_lower:
+            return "lightgbm"
+        elif "catboost" in algorithm_lower:
+            return "catboost"
+        elif "statsmodels" in algorithm_lower:
+            return "statsmodels"
+        elif "econml" in algorithm_lower:
+            return "econml"
+        elif "dowhy" in algorithm_lower:
+            return "dowhy"
+        else:
+            return "sklearn"  # Default fallback for common sklearn-compatible models
