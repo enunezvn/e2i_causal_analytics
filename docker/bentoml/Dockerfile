@@ -25,7 +25,7 @@ WORKDIR /home/bentoml
 # Install BentoML and dependencies
 FROM base as dependencies
 
-COPY requirements-bentoml.txt ./
+COPY docker/bentoml/requirements-bentoml.txt ./
 RUN pip install --no-cache-dir -r requirements-bentoml.txt
 
 # Production stage
@@ -35,6 +35,9 @@ FROM dependencies as production
 COPY --chown=bentoml:bentoml src/mlops/bentoml_service.py ./src/mlops/
 COPY --chown=bentoml:bentoml src/mlops/bentoml_templates/ ./src/mlops/bentoml_templates/
 COPY --chown=bentoml:bentoml src/mlops/bentoml_packaging.py ./src/mlops/
+
+# Copy mock service for development/testing
+COPY --chown=bentoml:bentoml docker/bentoml/mock_service.py ./mock_service.py
 
 # Create directories for models and data
 RUN mkdir -p /home/bentoml/bentoml /home/bentoml/data \
@@ -46,9 +49,9 @@ USER bentoml
 # Expose BentoML default port
 EXPOSE 3000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:3000/health || exit 1
+# Health check - use BentoML's built-in healthz endpoint
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:3000/healthz || exit 1
 
-# Default command - override with specific service
-CMD ["bentoml", "serve", "service:svc", "--host", "0.0.0.0", "--port", "3000"]
+# Default command - use mock service for testing (override for production)
+CMD ["bentoml", "serve", "mock_service:svc", "--host", "0.0.0.0", "--port", "3000"]
