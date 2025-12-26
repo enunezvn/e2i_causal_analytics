@@ -275,37 +275,72 @@ class RealTimeSHAPExplainer:
     ) -> Any:
         """
         Create SHAP explainer (CPU-bound, runs in thread pool).
+
+        Raises:
+            ValueError: If explainer type is unknown or model is incompatible.
+            RuntimeError: If explainer creation fails due to SHAP library errors.
         """
-        if explainer_type == ExplainerType.TREE:
-            # TreeExplainer is fastest for tree-based models
-            return shap.TreeExplainer(model)
+        try:
+            if explainer_type == ExplainerType.TREE:
+                # TreeExplainer is fastest for tree-based models
+                return shap.TreeExplainer(model)
 
-        elif explainer_type == ExplainerType.LINEAR:
-            return shap.LinearExplainer(model, background_data)
+            elif explainer_type == ExplainerType.LINEAR:
+                if background_data is None:
+                    raise ValueError(
+                        "LinearExplainer requires background_data but None was provided"
+                    )
+                return shap.LinearExplainer(model, background_data)
 
-        elif explainer_type == ExplainerType.KERNEL:
-            # KernelExplainer needs background data
-            if background_data is None:
-                # Generate synthetic background if not provided
-                background_data = self._generate_synthetic_background(feature_names)
+            elif explainer_type == ExplainerType.KERNEL:
+                # KernelExplainer needs background data
+                if background_data is None:
+                    # Generate synthetic background if not provided
+                    background_data = self._generate_synthetic_background(feature_names)
 
-            # Sample background for speed
-            if len(background_data) > self.default_background_sample:
-                indices = np.random.choice(
-                    len(background_data), self.default_background_sample, replace=False
-                )
-                background_data = background_data[indices]
+                # Sample background for speed
+                if len(background_data) > self.default_background_sample:
+                    indices = np.random.choice(
+                        len(background_data), self.default_background_sample, replace=False
+                    )
+                    background_data = background_data[indices]
 
-            return shap.KernelExplainer(model.predict_proba, background_data)
+                return shap.KernelExplainer(model.predict_proba, background_data)
 
-        elif explainer_type == ExplainerType.DEEP:
-            return shap.DeepExplainer(model, background_data)
+            elif explainer_type == ExplainerType.DEEP:
+                if background_data is None:
+                    raise ValueError(
+                        "DeepExplainer requires background_data but None was provided"
+                    )
+                return shap.DeepExplainer(model, background_data)
 
-        elif explainer_type == ExplainerType.GRADIENT:
-            return shap.GradientExplainer(model, background_data)
+            elif explainer_type == ExplainerType.GRADIENT:
+                if background_data is None:
+                    raise ValueError(
+                        "GradientExplainer requires background_data but None was provided"
+                    )
+                return shap.GradientExplainer(model, background_data)
 
-        else:
-            raise ValueError(f"Unknown explainer type: {explainer_type}")
+            else:
+                raise ValueError(f"Unknown explainer type: {explainer_type}")
+
+        except ValueError:
+            # Re-raise ValueError (validation errors) as-is
+            raise
+        except AttributeError as e:
+            # Model doesn't have expected interface (e.g., missing predict_proba)
+            raise ValueError(
+                f"Model incompatible with {explainer_type.value} explainer: {e}"
+            ) from e
+        except Exception as e:
+            # Wrap SHAP library errors in RuntimeError with context
+            logger.error(
+                f"Failed to create {explainer_type.value} explainer: {e}",
+                exc_info=True,
+            )
+            raise RuntimeError(
+                f"SHAP explainer creation failed for {explainer_type.value}: {e}"
+            ) from e
 
     def _generate_synthetic_background(self, feature_names: List[str]) -> np.ndarray:
         """
