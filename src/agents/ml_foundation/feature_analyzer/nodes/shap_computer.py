@@ -4,13 +4,67 @@ Computes SHAP values for model interpretability using the SHAP library.
 This is a deterministic computation node with no LLM calls.
 """
 
+import re
 import time
 import uuid
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Tuple
 
 import mlflow
 import numpy as np
 import shap
+
+
+def validate_model_uri(model_uri: str) -> Tuple[bool, Optional[str]]:
+    """Validate MLflow model URI format.
+
+    Supported formats:
+    - runs:/<run_id>/<artifact_path> (run artifacts)
+    - models:/<model_name>/<version> (model registry by version)
+    - models:/<model_name>/<stage> (model registry by stage)
+    - file://<absolute_path> (local file path)
+
+    Args:
+        model_uri: The model URI to validate
+
+    Returns:
+        Tuple of (is_valid, error_message). error_message is None if valid.
+    """
+    if not model_uri or not isinstance(model_uri, str):
+        return False, "model_uri must be a non-empty string"
+
+    model_uri = model_uri.strip()
+
+    # Pattern for runs:/<run_id>/<artifact_path>
+    # run_id is typically 32 hex chars but MLflow allows variations
+    runs_pattern = r"^runs:/[a-zA-Z0-9_-]+/.+$"
+
+    # Pattern for models:/<model_name>/<version_or_stage>
+    # version is numeric, stage is one of: None, Staging, Production, Archived
+    models_version_pattern = r"^models:/[a-zA-Z0-9_.-]+/\d+$"
+    models_stage_pattern = r"^models:/[a-zA-Z0-9_.-]+/(None|Staging|Production|Archived)$"
+
+    # Pattern for file:// URIs (absolute paths)
+    file_pattern = r"^file:///.+$"
+
+    # Pattern for absolute paths without file:// prefix (Unix/Windows)
+    absolute_path_pattern = r"^(/|[A-Za-z]:).+$"
+
+    if re.match(runs_pattern, model_uri):
+        return True, None
+    elif re.match(models_version_pattern, model_uri):
+        return True, None
+    elif re.match(models_stage_pattern, model_uri):
+        return True, None
+    elif re.match(file_pattern, model_uri):
+        return True, None
+    elif re.match(absolute_path_pattern, model_uri):
+        return True, None
+
+    return False, (
+        f"Invalid model_uri format: '{model_uri}'. "
+        "Expected one of: 'runs:/<run_id>/<path>', 'models:/<name>/<version>', "
+        "'models:/<name>/<stage>', 'file:///<path>', or absolute file path"
+    )
 
 
 async def compute_shap(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -41,6 +95,15 @@ async def compute_shap(state: Dict[str, Any]) -> Dict[str, Any]:
             return {
                 "error": "Missing model_uri",
                 "error_type": "missing_model_uri",
+                "status": "failed",
+            }
+
+        # Validate model_uri format before passing to MLflow
+        is_valid, validation_error = validate_model_uri(model_uri)
+        if not is_valid:
+            return {
+                "error": validation_error,
+                "error_type": "invalid_model_uri",
                 "status": "failed",
             }
 
