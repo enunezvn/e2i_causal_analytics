@@ -7,7 +7,7 @@ This is a deterministic computation node with no LLM calls.
 import re
 import time
 import uuid
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import mlflow
 import numpy as np
@@ -65,6 +65,92 @@ def validate_model_uri(model_uri: str) -> Tuple[bool, Optional[str]]:
         "Expected one of: 'runs:/<run_id>/<path>', 'models:/<name>/<version>', "
         "'models:/<name>/<stage>', 'file:///<path>', or absolute file path"
     )
+
+
+def _generate_domain_aware_background(
+    feature_names: List[str],
+    n_samples: int,
+) -> np.ndarray:
+    """Generate synthetic background data using domain-aware distributions.
+
+    Instead of uniform random values, this function infers appropriate
+    distributions from feature name patterns commonly used in pharma
+    commercial analytics.
+
+    Args:
+        feature_names: List of feature names to generate data for
+        n_samples: Number of samples to generate
+
+    Returns:
+        Background data array with shape (n_samples, n_features)
+    """
+    n_features = len(feature_names)
+    background = np.zeros((n_samples, n_features))
+
+    for i, name in enumerate(feature_names):
+        name_lower = name.lower()
+
+        # Binary/boolean features (is_*, has_*, flag_*)
+        if name_lower.startswith(("is_", "has_", "flag_")):
+            # Bernoulli with 30% positive rate (typical for boolean flags)
+            background[:, i] = np.random.binomial(1, 0.3, n_samples)
+
+        # Count features (poisson distribution)
+        elif any(x in name_lower for x in ["_count", "num_", "total_", "n_"]):
+            # Poisson with lambda=5 (typical for count data)
+            background[:, i] = np.random.poisson(5, n_samples)
+
+        # Rate/ratio features (beta distribution, 0-1 range)
+        elif any(x in name_lower for x in ["_rate", "_ratio", "_pct", "_percent", "adherence"]):
+            # Beta distribution for rates (mean ~0.5, some variance)
+            background[:, i] = np.random.beta(2, 2, n_samples)
+
+        # Score features (normal distribution, bounded)
+        elif any(x in name_lower for x in ["_score", "index", "nps"]):
+            # Normal distribution with mean 50, std 15 (like many scoring systems)
+            background[:, i] = np.clip(np.random.normal(50, 15, n_samples), 0, 100)
+
+        # Age features
+        elif "age" in name_lower:
+            # Normal distribution centered around 50 for patient/HCP ages
+            background[:, i] = np.clip(np.random.normal(50, 15, n_samples), 18, 90)
+
+        # Days/duration features (exponential-ish)
+        elif any(x in name_lower for x in ["days_", "_days", "duration", "tenure"]):
+            # Exponential with mean 30 days
+            background[:, i] = np.random.exponential(30, n_samples)
+
+        # Monetary/revenue features (log-normal)
+        elif any(x in name_lower for x in ["revenue", "cost", "price", "value", "_amount"]):
+            # Log-normal for monetary values (right-skewed)
+            background[:, i] = np.random.lognormal(mean=5, sigma=1, size=n_samples)
+
+        # Tier/category encoded as ordinal (1-5 typically)
+        elif any(x in name_lower for x in ["tier", "category", "segment", "bucket"]):
+            # Discrete uniform 1-5
+            background[:, i] = np.random.randint(1, 6, n_samples)
+
+        # Default: standard normal (mean 0, std 1)
+        else:
+            background[:, i] = np.random.randn(n_samples)
+
+    return background
+
+
+def _anonymize_feature_names(
+    feature_names: List[str],
+) -> Tuple[List[str], Dict[str, str]]:
+    """Anonymize feature names to prevent schema information leakage.
+
+    Args:
+        feature_names: Original feature names
+
+    Returns:
+        Tuple of (anonymized_names, mapping from anonymous to original)
+    """
+    anonymized = [f"feature_{i}" for i in range(len(feature_names))]
+    mapping = {anon: orig for anon, orig in zip(anonymized, feature_names)}
+    return anonymized, mapping
 
 
 async def compute_shap(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -132,6 +218,15 @@ async def compute_shap(state: Dict[str, Any]) -> Dict[str, Any]:
             )
             feature_names = [f"feature_{i}" for i in range(n_features)]
 
+        # L5 Fix: Support feature name anonymization to prevent schema leakage
+        anonymize_features = state.get("anonymize_features", False)
+        feature_name_mapping = None
+        if anonymize_features:
+            original_feature_names = feature_names
+            feature_names, feature_name_mapping = _anonymize_feature_names(feature_names)
+        else:
+            original_feature_names = feature_names
+
         # Load sample data for SHAP computation
         # In production, this would come from Feast or the training data
         # For now, we'll use the data from state or generate synthetic
@@ -139,10 +234,13 @@ async def compute_shap(state: Dict[str, Any]) -> Dict[str, Any]:
         y_sample = state.get("y_sample")
 
         if X_sample is None:
-            # Generate synthetic sample data for demonstration
+            # L2 Fix: Generate domain-aware synthetic sample data
+            # Uses feature name patterns to infer appropriate distributions
             # In production, this should load from Feast or training artifacts
-            n_features = len(feature_names)
-            X_sample = np.random.rand(min(max_samples, 1000), n_features)
+            X_sample = _generate_domain_aware_background(
+                original_feature_names,  # Use original names for distribution inference
+                min(max_samples, 1000),
+            )
 
         # Limit sample size
         if len(X_sample) > max_samples:
@@ -226,6 +324,9 @@ async def compute_shap(state: Dict[str, Any]) -> Dict[str, Any]:
             "model_version": model_version,
             "loaded_model": loaded_model,
             "feature_names": feature_names,
+            "original_feature_names": original_feature_names,  # L5: Always include original names
+            "feature_name_mapping": feature_name_mapping,  # L5: Mapping for de-anonymization
+            "features_anonymized": anonymize_features,  # L5: Flag indicating if anonymized
             "X_sample": X_sample,
             "y_sample": y_sample,
             "samples_analyzed": samples_analyzed,
