@@ -166,12 +166,26 @@ async def health_check() -> Dict[str, Any]:
     - Kubernetes liveness/readiness probes
     - Load balancers
     """
+    # Check BentoML status (non-blocking, with fallback)
+    bentoml_status = "unknown"
+    try:
+        client = await get_bentoml_client()
+        health = await client.health_check()
+        bentoml_status = health.get("status", "unknown")
+    except Exception:
+        bentoml_status = "unavailable"
+
     return {
         "status": "healthy",
         "service": "e2i-causal-analytics-api",
         "version": "4.1.0",
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "components": {"api": "operational", "workers": "available", "memory_systems": "connected"},
+        "components": {
+            "api": "operational",
+            "workers": "available",
+            "memory_systems": "connected",
+            "bentoml": bentoml_status,
+        },
     }
 
 
@@ -179,6 +193,54 @@ async def health_check() -> Dict[str, Any]:
 async def healthz() -> Dict[str, str]:
     """Kubernetes-style health check (alias for /health)."""
     return {"status": "ok"}
+
+
+@app.get("/health/bentoml", tags=["Health"])
+async def bentoml_health_check() -> Dict[str, Any]:
+    """
+    Detailed health check for BentoML model serving endpoints.
+
+    Returns health status for each configured model endpoint.
+    """
+    try:
+        client = await get_bentoml_client()
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"BentoML client not available: {e}",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+    # Check base service health
+    base_health = await client.health_check()
+
+    # Check individual model endpoints
+    model_endpoints = client.config.model_endpoints
+    model_health = {}
+
+    for model_name in model_endpoints:
+        try:
+            health = await client.health_check(model_name)
+            model_health[model_name] = health
+        except Exception as e:
+            model_health[model_name] = {
+                "status": "error",
+                "error": str(e),
+            }
+
+    # Determine overall status
+    all_healthy = base_health.get("status") == "healthy"
+    if model_health:
+        all_healthy = all_healthy and all(
+            h.get("status") == "healthy" for h in model_health.values()
+        )
+
+    return {
+        "status": "healthy" if all_healthy else "degraded",
+        "base_service": base_health,
+        "models": model_health,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 @app.get("/ready", tags=["Health"])
