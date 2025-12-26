@@ -88,6 +88,113 @@ This runbook provides operational guidance for managing BentoML model serving in
 
 ---
 
+## Local vs Docker Installation
+
+### Why Both Are Required
+
+The E2I Causal Analytics platform requires **both** a local pip installation of BentoML AND Docker-based BentoML services. This is not redundant—each serves a distinct purpose in the ML lifecycle.
+
+### Separation of Concerns
+
+| Phase | Installation | Purpose | Components |
+|-------|-------------|---------|------------|
+| **BUILD-TIME** | Local (pip) | Model packaging & registration | model_deployer agent, CI/CD pipelines |
+| **RUN-TIME** | Docker | Model serving & inference | prediction_synthesizer, API routes |
+
+### Local Installation (pip install bentoml)
+
+**Purpose**: Model packaging, registration, and containerization
+
+**Used By**:
+- `src/agents/ml_foundation/model_deployer/` - Registers trained models
+- CI/CD pipelines - Creates Bento bundles for deployment
+- Development workflows - Local model testing
+
+**Key Operations**:
+```python
+# Register model to BentoML store
+bentoml.sklearn.save_model("churn_model", model, signatures={...})
+
+# Build Bento bundle
+bentoml.build()
+
+# Containerize for deployment
+bentoml.containerize("churn_model:latest")
+```
+
+**What Breaks Without It**:
+- Cannot register new models to BentoML model store
+- Cannot create Bento bundles for deployment
+- Cannot containerize models for production
+- model_deployer agent fails completely
+
+### Docker Installation (BentoML containers)
+
+**Purpose**: Serve models via HTTP with production-grade infrastructure
+
+**Used By**:
+- `src/agents/prediction_synthesizer/` - Calls prediction endpoints
+- `src/api/dependencies/bentoml_client.py` - HTTP client for inference
+- API routes - `/api/predict`, `/health/bentoml`
+
+**Key Features**:
+- HTTP API endpoints (`/predict`, `/churn_model/predict`, etc.)
+- Connection pooling for high throughput
+- Request batching and queuing
+- Prometheus metrics exposure
+- Health checks and readiness probes
+
+**What Breaks Without It**:
+- No HTTP endpoints for predictions
+- prediction_synthesizer cannot get inferences
+- API health checks fail
+- No metrics for monitoring
+
+### Graceful Degradation
+
+The system handles missing installations gracefully:
+
+| Scenario | Behavior |
+|----------|----------|
+| Local BentoML unavailable | MockBentoMLPackager used for testing |
+| Docker services down | Circuit breaker opens, cached predictions returned |
+| Both unavailable | System degrades to rule-based predictions |
+
+### Environment Configuration
+
+```bash
+# Local installation (development machine, CI/CD)
+pip install bentoml
+
+# Docker services (configured via docker-compose)
+docker compose -f docker/bentoml/docker-compose.yaml up -d
+```
+
+### Summary
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                        ML Model Lifecycle                           │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  TRAIN          PACKAGE           DEPLOY           SERVE            │
+│    │               │                │                │              │
+│    │               │                │                │              │
+│    ▼               ▼                ▼                ▼              │
+│  ┌─────┐    ┌───────────┐    ┌───────────┐    ┌───────────┐        │
+│  │Model│───▶│ BentoML   │───▶│ Docker    │───▶│ BentoML   │        │
+│  │Train│    │ save_model│    │ Container │    │ HTTP API  │        │
+│  └─────┘    └───────────┘    └───────────┘    └───────────┘        │
+│              (LOCAL pip)       (BUILD)         (DOCKER)            │
+│                                                                     │
+│  MLflow        model_deployer   CI/CD         prediction_synthesizer│
+│  Trainer       agent                          API routes            │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
 ## Quick Start
 
 ### Start All Services
