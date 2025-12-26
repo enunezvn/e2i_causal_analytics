@@ -33,14 +33,8 @@ from src.rag.retriever import hybrid_search
 
 logger = logging.getLogger(__name__)
 
-# Graphiti integration for knowledge graph
-try:
-    from src.memory.graphiti_service import get_graphiti_service
-
-    GRAPHITI_AVAILABLE = True
-except ImportError:
-    GRAPHITI_AVAILABLE = False
-    logger.info("Graphiti service not available for knowledge graph integration")
+# Graphiti integration for knowledge graph (mandatory)
+from src.memory.graphiti_service import get_graphiti_service
 
 
 # =============================================================================
@@ -521,16 +515,15 @@ class CognitiveService:
             )
 
             # Store to Graphiti knowledge graph for entity extraction
-            if GRAPHITI_AVAILABLE:
-                await self._store_to_graphiti(
-                    session_id=session_id,
-                    cycle_id=cycle_id,
-                    query=query,
-                    query_type=query_type,
-                    response=response,
-                    confidence=confidence,
-                    agent_used=agent_used,
-                )
+            await self._store_to_graphiti(
+                session_id=session_id,
+                cycle_id=cycle_id,
+                query=query,
+                query_type=query_type,
+                response=response,
+                confidence=confidence,
+                agent_used=agent_used,
+            )
 
             # Record learning signal
             signal = LearningSignalInput(
