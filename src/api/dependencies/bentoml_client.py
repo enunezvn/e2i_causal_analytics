@@ -274,9 +274,13 @@ class BentoMLClient:
                 if trace_id:
                     headers["X-Trace-ID"] = trace_id
 
+                # BentoML expects input wrapped in parameter name from method signature
+                # e.g., async def predict(self, input_data: Model) expects {"input_data": {...}}
+                wrapped_input = {"input_data": input_data}
+
                 response = await self._client.post(
                     f"{endpoint_url}/predict",
-                    json=input_data,
+                    json=wrapped_input,
                     timeout=timeout or self.config.timeout,
                     headers=headers,
                 )

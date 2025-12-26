@@ -281,7 +281,7 @@ BENTOML_SERVICE_URL=http://localhost:3001 PROMETHEUS_URL=http://localhost:9090 \
 ### Phase 5.3: Documentation Update
 - [x] 5.3.1 E2E test documentation in test file docstrings ✅
 - [x] 5.3.2 Plan file updated with test results ✅
-- [ ] 5.3.3 Create BentoML operations runbook (optional - tracked separately)
+- [x] 5.3.3 Create BentoML operations runbook ✅ (docs/operations/bentoml-runbook.md)
 
 ---
 
@@ -341,8 +341,13 @@ Tests run against Docker mock service (`mock_service.py`):
 | Test | Result | Notes |
 |------|--------|-------|
 | `test_live_health_check` | ✅ PASSED | Mock service health endpoint works |
-| `test_live_prediction_latency` | ⚠️ EXPECTED FAIL | Mock has `/predict`, test expects `/churn_model/predict` |
+| `test_live_prediction_latency` | ✅ PASSED | Fixed input wrapping in BentoMLClient (2025-12-25) |
 | `test_live_prometheus_metrics` | ✅ PASSED | Prometheus API query works |
+
+**All 3 live tests passing** (2025-12-25)
+
+**Fix Applied**: BentoML expects request body wrapped as `{"input_data": {...}}` (matching the
+method parameter name). Fixed in `src/api/dependencies/bentoml_client.py` line 277-279.
 
 **Test Infrastructure Requirements**:
 
@@ -350,14 +355,17 @@ Tests run against Docker mock service (`mock_service.py`):
 |---------------|--------------|-----------------|
 | Health checks | ✅ Works | ✅ Works |
 | Prometheus metrics | ✅ Works | ✅ Works |
-| Model-specific predictions | ❌ N/A | ✅ Required |
+| Model-specific predictions | ✅ Works | ✅ Works |
 | Multi-model ensemble | ❌ N/A | ✅ Required |
 | Deployment flow (package → serve) | ❌ N/A | ✅ Required |
 
-**Mock Service Limitations**:
-- Single generic `/predict` endpoint (no model routing)
-- No model registration/versioning
-- No real ML inference (returns random mock values)
+**Mock Service Endpoints** (all functional):
+- `/predict` - Generic prediction endpoint
+- `/churn_model/predict` - Churn model predictions
+- `/conversion_model/predict` - Conversion model predictions
+- `/ltv_model/predict` - LTV model predictions (regression)
+- `/cate_model/predict` - CATE model predictions (treatment effects)
+- `/health`, `/metrics`, `/model_info` - Service metadata
 
 **For Full Deployment Testing**:
 1. Register real models with `bentoml models save`
