@@ -73,6 +73,8 @@ class SHAPResult:
     explainer_type: ExplainerType
     feature_count: int
     model_version_id: str
+    features_anonymized: bool = False  # L5: Indicates if feature names were anonymized
+    feature_name_mapping: Optional[Dict[str, str]] = None  # L5: Mapping from anonymized to original names
 
 
 class RealTimeSHAPExplainer:
@@ -342,17 +344,143 @@ class RealTimeSHAPExplainer:
                 f"SHAP explainer creation failed for {explainer_type.value}: {e}"
             ) from e
 
-    def _generate_synthetic_background(self, feature_names: List[str]) -> np.ndarray:
+    def _generate_synthetic_background(
+        self,
+        feature_names: List[str],
+        feast_client: Optional[Any] = None,
+    ) -> np.ndarray:
         """
-        Generate synthetic background data when real data isn't available.
-        Uses domain knowledge for realistic distributions.
+        Generate background data for SHAP explainers.
+
+        Attempts to use real data from Feast feature store first. Falls back to
+        domain-aware synthetic data based on feature name patterns.
+
+        Args:
+            feature_names: List of feature names
+            feast_client: Optional Feast client for retrieving real feature statistics
+
+        Returns:
+            Background data array of shape (n_samples, n_features)
         """
         n_samples = self.default_background_sample
         n_features = len(feature_names)
 
-        # Generate random data with reasonable distributions
-        # In production, this would use actual data statistics from Feast
-        return np.random.randn(n_samples, n_features)
+        # Try to get real data from Feast first
+        if feast_client is not None:
+            try:
+                background = self._get_background_from_feast(
+                    feast_client, feature_names, n_samples
+                )
+                if background is not None:
+                    logger.info("Using real feature data from Feast for SHAP background")
+                    return background
+            except Exception as e:
+                logger.warning(f"Failed to get Feast data, using synthetic: {e}")
+
+        # Generate domain-aware synthetic data based on feature name patterns
+        logger.info("Using domain-aware synthetic data for SHAP background")
+        return self._generate_domain_aware_background(feature_names, n_samples)
+
+    def _get_background_from_feast(
+        self,
+        feast_client: Any,
+        feature_names: List[str],
+        n_samples: int,
+    ) -> Optional[np.ndarray]:
+        """
+        Attempt to retrieve background data from Feast feature store.
+
+        Args:
+            feast_client: Feast client instance
+            feature_names: Features to retrieve
+            n_samples: Number of samples to retrieve
+
+        Returns:
+            Background array or None if retrieval fails
+        """
+        try:
+            # Try to get historical features for background
+            if hasattr(feast_client, "get_historical_features"):
+                # Create entity DataFrame with sample entity IDs
+                import pandas as pd
+
+                entity_df = pd.DataFrame({
+                    "patient_id": [f"sample_{i}" for i in range(n_samples)],
+                })
+
+                features = feast_client.get_historical_features(
+                    entity_df=entity_df,
+                    features=[f"patient_features:{f}" for f in feature_names],
+                )
+                df = features.to_df()
+
+                # Extract feature columns and convert to numpy
+                feature_cols = [c for c in df.columns if c in feature_names]
+                if feature_cols:
+                    return df[feature_cols].fillna(0).values
+
+            return None
+        except Exception as e:
+            logger.debug(f"Feast retrieval failed: {e}")
+            return None
+
+    def _generate_domain_aware_background(
+        self,
+        feature_names: List[str],
+        n_samples: int,
+    ) -> np.ndarray:
+        """
+        Generate synthetic background data using domain-aware distributions.
+
+        Uses feature name patterns to infer appropriate distributions:
+        - Binary features (is_*, has_*): Bernoulli(0.3)
+        - Count features (*_count, num_*): Poisson(5)
+        - Rate/score features (*_rate, *_score): Beta(2, 5) scaled
+        - Age features (*_age*, *_days*): Gamma(5, 10)
+        - Default: Standard normal
+
+        Args:
+            feature_names: List of feature names
+            n_samples: Number of samples to generate
+
+        Returns:
+            Background array of shape (n_samples, n_features)
+        """
+        n_features = len(feature_names)
+        background = np.zeros((n_samples, n_features))
+
+        for i, name in enumerate(feature_names):
+            name_lower = name.lower()
+
+            if name_lower.startswith(("is_", "has_", "flag_")):
+                # Binary features: Bernoulli distribution
+                background[:, i] = np.random.binomial(1, 0.3, n_samples)
+
+            elif any(x in name_lower for x in ["_count", "num_", "total_", "n_"]):
+                # Count features: Poisson distribution
+                background[:, i] = np.random.poisson(5, n_samples)
+
+            elif any(x in name_lower for x in ["_rate", "_ratio", "_pct", "_percent"]):
+                # Rate features: Beta distribution scaled to [0, 1]
+                background[:, i] = np.random.beta(2, 5, n_samples)
+
+            elif any(x in name_lower for x in ["_score", "score_"]):
+                # Score features: Beta distribution scaled to [0, 100]
+                background[:, i] = np.random.beta(2, 2, n_samples) * 100
+
+            elif any(x in name_lower for x in ["_age", "age_", "_days", "days_"]):
+                # Age/duration features: Gamma distribution (always positive)
+                background[:, i] = np.random.gamma(5, 10, n_samples)
+
+            elif any(x in name_lower for x in ["_amount", "amount_", "_value", "value_"]):
+                # Monetary/value features: Log-normal distribution
+                background[:, i] = np.random.lognormal(3, 1, n_samples)
+
+            else:
+                # Default: Standard normal (mean=0, std=1)
+                background[:, i] = np.random.randn(n_samples)
+
+        return background
 
     def _load_model_from_mlflow(self, model_uri: str) -> Any:
         """
@@ -459,6 +587,7 @@ class RealTimeSHAPExplainer:
         model_version_id: str,
         top_k: Optional[int] = None,
         model_uri: Optional[str] = None,
+        anonymize_features: bool = False,
     ) -> SHAPResult:
         """
         Compute SHAP values for a single instance.
@@ -469,6 +598,7 @@ class RealTimeSHAPExplainer:
             model_version_id: Specific model version
             top_k: If provided, return only top K features by importance
             model_uri: Optional MLflow model URI for production use
+            anonymize_features: If True, anonymize feature names in output (L5 security)
 
         Returns:
             SHAPResult with SHAP values and metadata
@@ -480,11 +610,19 @@ class RealTimeSHAPExplainer:
         feature_names = list(features.keys())
         feature_values = np.array([list(features.values())])
 
-        # Get explainer
+        # L5: Apply feature name anonymization if requested
+        feature_name_mapping = None
+        output_feature_names = feature_names
+        if anonymize_features:
+            output_feature_names, feature_name_mapping = self._anonymize_feature_names(
+                feature_names
+            )
+
+        # Get explainer (uses original feature names internally)
         explainer, config = await self.get_explainer(
             model_type=model_type,
             model_version_id=model_version_id,
-            feature_names=feature_names,
+            feature_names=feature_names,  # Use original names for computation
             model_uri=model_uri,
         )
 
@@ -494,8 +632,8 @@ class RealTimeSHAPExplainer:
             _executor, self._compute_shap_sync, explainer, feature_values, config.explainer_type
         )
 
-        # Convert to dict
-        shap_dict = dict(zip(feature_names, shap_values.flatten(), strict=False))
+        # Convert to dict (use output feature names which may be anonymized)
+        shap_dict = dict(zip(output_feature_names, shap_values.flatten(), strict=False))
 
         # Optionally filter to top K
         if top_k is not None:
@@ -514,6 +652,8 @@ class RealTimeSHAPExplainer:
             explainer_type=config.explainer_type,
             feature_count=len(feature_names),
             model_version_id=model_version_id,
+            features_anonymized=anonymize_features,
+            feature_name_mapping=feature_name_mapping,
         )
 
     def _compute_shap_sync(
@@ -543,6 +683,7 @@ class RealTimeSHAPExplainer:
         model_version_id: str,
         top_k: Optional[int] = None,
         model_uri: Optional[str] = None,
+        anonymize_features: bool = False,
     ) -> List[SHAPResult]:
         """
         Compute SHAP values for a batch of instances.
@@ -556,6 +697,7 @@ class RealTimeSHAPExplainer:
             model_version_id: Specific model version
             top_k: If provided, return only top K features by importance
             model_uri: Optional MLflow model URI for production use
+            anonymize_features: If True, anonymize feature names in output (L5 security)
 
         Returns:
             List of SHAPResult with SHAP values and metadata
@@ -567,11 +709,19 @@ class RealTimeSHAPExplainer:
         feature_names = list(features_batch[0].keys())
         feature_values = np.array([list(f.values()) for f in features_batch])
 
-        # Get explainer
+        # L5: Apply feature name anonymization if requested
+        feature_name_mapping = None
+        output_feature_names = feature_names
+        if anonymize_features:
+            output_feature_names, feature_name_mapping = self._anonymize_feature_names(
+                feature_names
+            )
+
+        # Get explainer (uses original feature names internally)
         explainer, config = await self.get_explainer(
             model_type=model_type,
             model_version_id=model_version_id,
-            feature_names=feature_names,
+            feature_names=feature_names,  # Use original names for computation
             model_uri=model_uri,
         )
 
@@ -588,11 +738,11 @@ class RealTimeSHAPExplainer:
         total_time_ms = (time.time() - start_time) * 1000
         per_instance_time = total_time_ms / len(features_batch)
 
-        # Convert to individual results
+        # Convert to individual results (use output feature names which may be anonymized)
         results = []
         for i, _features in enumerate(features_batch):
             instance_shap = shap_values[i] if len(shap_values.shape) > 1 else shap_values
-            shap_dict = dict(zip(feature_names, instance_shap.flatten(), strict=False))
+            shap_dict = dict(zip(output_feature_names, instance_shap.flatten(), strict=False))
 
             if top_k is not None:
                 sorted_features = sorted(shap_dict.items(), key=lambda x: abs(x[1]), reverse=True)[
@@ -609,6 +759,8 @@ class RealTimeSHAPExplainer:
                     explainer_type=config.explainer_type,
                     feature_count=len(feature_names),
                     model_version_id=model_version_id,
+                    features_anonymized=anonymize_features,
+                    feature_name_mapping=feature_name_mapping,
                 )
             )
 
@@ -637,6 +789,23 @@ class RealTimeSHAPExplainer:
             "cached_models": list(self._explainer_cache.keys()),
             "background_data_cached": len(self._background_cache),
         }
+
+    @staticmethod
+    def _anonymize_feature_names(
+        feature_names: List[str],
+    ) -> Tuple[List[str], Dict[str, str]]:
+        """
+        Anonymize feature names to prevent schema information leakage.
+
+        Args:
+            feature_names: Original feature names
+
+        Returns:
+            Tuple of (anonymized_names, mapping from anonymous to original)
+        """
+        anonymized = [f"feature_{i}" for i in range(len(feature_names))]
+        mapping = {anon: orig for anon, orig in zip(anonymized, feature_names)}
+        return anonymized, mapping
 
 
 # =============================================================================
