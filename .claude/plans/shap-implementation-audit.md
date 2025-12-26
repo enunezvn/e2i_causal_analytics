@@ -358,10 +358,10 @@ _None found_
 | # | Issue | Location | Description | Remediation |
 |---|-------|----------|-------------|-------------|
 | L1 | Missing error handling | shap_explainer_realtime.py:269-343 | `_create_explainer` has no try-catch | ✅ FIXED - Added comprehensive error handling |
-| L2 | Synthetic background data | Both files | Random data fallback may not represent real distributions | Use Feast data when available |
+| L2 | Synthetic background data | Both files | Random data fallback may not represent real distributions | ✅ FIXED - Added domain-aware distributions |
 | L3 | Empty history endpoint | explain.py:691-742 | GET /history returns placeholder | ✅ FIXED - Now queries ml_shap_analyses |
 | L4 | No model_uri validation | shap_computer.py:17-67, 101-108 | Model URI passed directly to MLflow | ✅ FIXED - Added validate_model_uri() |
-| L5 | Feature names exposure | Both SHAP files | Feature names could leak schema information | Consider anonymization option |
+| L5 | Feature names exposure | Both SHAP files | Feature names could leak schema information | ✅ FIXED - Added anonymize_features option |
 
 ### Observations
 - ✅ Agent integration is well-implemented with graceful degradation
