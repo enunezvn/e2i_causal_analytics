@@ -279,6 +279,71 @@ In addition to the E2I domain-specific agents, the framework provides BMAD-inspi
 - **Frontend**: React, TypeScript, Redux Toolkit
 - **Testing**: Pytest (backend), Vitest (frontend)
 
+### Prompt Optimization
+- **GEPA**: Generative Evolutionary Prompting with AI (replaced MIPROv2)
+- **Module Location**: `src/optimization/gepa/`
+- **Configuration**: `config/gepa_config.yaml`
+
+---
+
+## GEPA Prompt Optimization (V4.3)
+
+The DSPy prompt optimization has been migrated from MIPROv2 to GEPA for 10%+ performance improvement:
+
+### Architecture
+```
+src/optimization/gepa/
+├── metrics/                    # Agent-specific GEPA metrics
+│   ├── base.py                # E2IGEPAMetric protocol
+│   ├── causal_impact_metric.py
+│   ├── experiment_designer_metric.py
+│   ├── feedback_learner_metric.py
+│   └── standard_agent_metric.py
+├── tools/causal_tools.py      # DoWhy/EconML tool definitions
+├── integration/               # MLOps integrations
+│   ├── mlflow_integration.py
+│   ├── opik_integration.py
+│   └── ragas_feedback.py
+├── optimizer_setup.py         # Factory function
+├── versioning.py              # Module versioning
+└── ab_test.py                 # A/B testing
+```
+
+### Key Features
+- **Budget Presets**: light (quick), medium (balanced), heavy (thorough)
+- **Agent-specific Metrics**: Tailored evaluation for each agent tier
+- **Tool Optimization**: Joint optimization of DoWhy/EconML tool selection
+- **MLOps Integration**: MLflow logging, Opik tracing, RAGAS feedback
+
+### Usage
+```python
+from src.optimization.gepa import create_optimizer_for_agent, get_metric_for_agent
+
+# Create optimizer for specific agent
+optimizer = create_optimizer_for_agent(
+    agent_name="causal_impact",
+    trainset=training_data,
+    valset=validation_data,
+    budget="medium",
+)
+
+# Get metric for agent
+metric = get_metric_for_agent("causal_impact")
+```
+
+### Agents with GEPA Support
+| Agent | Type | Metric Class | Status |
+|-------|------|--------------|--------|
+| Feedback Learner | Deep | FeedbackLearnerGEPAMetric | ✅ Primary |
+| Causal Impact | Hybrid | CausalImpactGEPAMetric | ✅ Primary |
+| Experiment Designer | Hybrid | ExperimentDesignerGEPAMetric | ✅ Primary |
+| Standard Agents | Standard | StandardAgentGEPAMetric | ✅ Light |
+
+### Migration Documentation
+- Plan: `.claude/plans/E2I_GEPA_Migration_Plan.md`
+- Progress: `DSPy miprov2 to gepa/GEPA_Migration_Progress.md`
+- Schema: `database/ml/023_gepa_optimization_tables.sql`
+
 ---
 
 ## Critical Constraints
