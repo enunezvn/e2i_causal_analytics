@@ -24,13 +24,22 @@ class CausalGraph(TypedDict, total=False):
 
 
 class EstimationResult(TypedDict, total=False):
-    """Causal effect estimation results."""
+    """Causal effect estimation results.
+
+    V4.2 Enhancement: Energy Score-based Estimator Selection
+    Added fields for multi-estimator evaluation and selection.
+    """
 
     method: Literal[
         "CausalForestDML",
         "LinearDML",
         "linear_regression",
         "propensity_score_weighting",
+        # V4.2: Additional estimator types
+        "causal_forest",
+        "linear_dml",
+        "drlearner",
+        "ols",
     ]
     ate: float  # Average Treatment Effect
     ate_ci_lower: float  # 95% confidence interval lower bound
@@ -43,6 +52,17 @@ class EstimationResult(TypedDict, total=False):
     sample_size: int
     covariates_adjusted: List[str]
     heterogeneity_detected: bool  # Whether CATE varies significantly
+
+    # V4.2 Enhancement: Energy Score-based Selection
+    selection_strategy: NotRequired[Literal["first_success", "best_energy", "ensemble"]]
+    selected_estimator: NotRequired[str]  # Name of selected estimator
+    energy_score: NotRequired[float]  # Selected estimator's energy score (0-1)
+    energy_score_data: NotRequired[Dict[str, Any]]  # Full EnergyScoreData
+    all_estimators_evaluated: NotRequired[List[Dict[str, Any]]]  # All estimator results
+    selection_reason: NotRequired[str]  # Why this estimator was selected
+    energy_score_gap: NotRequired[float]  # Gap between best and second-best
+    n_estimators_evaluated: NotRequired[int]  # Number of estimators tried
+    n_estimators_succeeded: NotRequired[int]  # Number that succeeded
 
 
 class RefutationTest(TypedDict, total=False):
@@ -92,6 +112,31 @@ class SensitivityAnalysis(TypedDict, total=False):
     interpretation: str  # What E-value means in context
     robust_to_confounding: bool  # Whether effect is robust
     unmeasured_confounder_strength: str  # "weak", "moderate", "strong" threshold
+
+
+class EnergyScoreData(TypedDict, total=False):
+    """Energy score details for estimator quality assessment.
+
+    V4.2 Enhancement: Energy Score-based Estimator Selection
+    Lower scores indicate better quality (0-1 scale).
+
+    Quality Tiers:
+    - Excellent: ≤0.25 (high confidence)
+    - Good: ≤0.45 (reasonable confidence)
+    - Acceptable: ≤0.65 (use with caution)
+    - Poor: ≤0.80 (low confidence)
+    - Unreliable: ≤1.00 (results unreliable)
+    """
+
+    score: float  # Composite energy score (0-1, lower is better)
+    treatment_balance_score: float  # IPW-weighted covariate balance (35% weight)
+    outcome_fit_score: float  # DR residual fit quality (45% weight)
+    propensity_calibration: float  # Propensity score calibration (20% weight)
+    ci_lower: NotRequired[float]  # Bootstrap CI lower bound
+    ci_upper: NotRequired[float]  # Bootstrap CI upper bound
+    bootstrap_std: NotRequired[float]  # Bootstrap standard deviation
+    computation_time_ms: float  # Energy score computation time
+    quality_tier: NotRequired[Literal["excellent", "good", "acceptable", "poor", "unreliable"]]
 
 
 class NaturalLanguageInterpretation(TypedDict, total=False):
@@ -155,6 +200,14 @@ class CausalImpactState(TypedDict):
     estimation_result: NotRequired[EstimationResult]
     estimation_latency_ms: NotRequired[float]
     estimation_error: NotRequired[str]
+
+    # V4.2 Enhancement: Energy Score Configuration & Outputs
+    energy_score_enabled: NotRequired[bool]  # Enable energy score selection (default: True)
+    selection_strategy: NotRequired[Literal["first_success", "best_energy", "ensemble"]]
+    estimator_selection_result: NotRequired[Dict[str, Any]]  # Full SelectionResult
+    energy_score_latency_ms: NotRequired[float]  # Energy score computation time
+    best_energy_score: NotRequired[float]  # Best estimator's energy score
+    energy_score_quality_tier: NotRequired[Literal["excellent", "good", "acceptable", "poor", "unreliable"]]
 
     # Refutation outputs
     refutation_results: NotRequired[RefutationResults]
@@ -278,6 +331,16 @@ class CausalImpactOutput(TypedDict):
     refutation_tests_passed: NotRequired[int]
     refutation_tests_total: NotRequired[int]
     sensitivity_e_value: NotRequired[float]
+
+    # V4.2 Enhancement: Energy Score-based Selection
+    energy_score: NotRequired[float]  # Selected estimator's energy score (0-1)
+    energy_score_quality_tier: NotRequired[Literal["excellent", "good", "acceptable", "poor", "unreliable"]]
+    selection_strategy: NotRequired[Literal["first_success", "best_energy", "ensemble"]]
+    selected_estimator: NotRequired[str]  # Name of selected estimator
+    energy_score_gap: NotRequired[float]  # Gap between best and second-best
+    n_estimators_evaluated: NotRequired[int]  # Number of estimators tried
+    n_estimators_succeeded: NotRequired[int]  # Number that succeeded
+    energy_score_latency_ms: NotRequired[float]  # Energy score computation time
 
     # Visualizations (optional)
     visualizations: NotRequired[List[Dict[str, Any]]]

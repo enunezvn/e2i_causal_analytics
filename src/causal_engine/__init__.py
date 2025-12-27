@@ -1,6 +1,6 @@
 """
 E2I Causal Engine
-Version: 4.3
+Version: 4.4
 Purpose: Causal inference and validation utilities
 
 This module provides:
@@ -10,6 +10,7 @@ This module provides:
 - DAG version hashing for expert review workflow
 - ValidationOutcome: Feedback Learner integration (Phase 4)
 - ExperimentKnowledgeStore: Past failure queries (Phase 4)
+- Energy Score: Estimator selection based on quality metrics (V4.2 Enhancement)
 """
 
 from .refutation_runner import (
@@ -68,6 +69,27 @@ from .validation_outcome_store import (
     log_validation_outcome,
 )
 
+# V4.2 Enhancement: Energy Score-based Estimator Selection
+from .energy_score import (
+    # Score Calculator
+    EnergyScoreCalculator,
+    EnergyScoreConfig,
+    EnergyScoreResult,
+    EnergyScoreVariant,
+    compute_energy_score,
+    # Estimator Selection
+    EstimatorSelector,
+    EstimatorSelectorConfig,
+    EstimatorType,
+    EstimatorResult,
+    SelectionResult,
+    SelectionStrategy,
+    select_best_estimator,
+    # MLflow Integration
+    EnergyScoreMLflowTracker,
+    create_tracker,
+)
+
 __all__ = [
     # ENUMs
     "RefutationStatus",
@@ -109,4 +131,19 @@ __all__ = [
     "get_validation_outcome_store",
     "get_experiment_knowledge_store",
     "log_validation_outcome",
+    # V4.2 Enhancement: Energy Score
+    "EnergyScoreCalculator",
+    "EnergyScoreConfig",
+    "EnergyScoreResult",
+    "EnergyScoreVariant",
+    "compute_energy_score",
+    "EstimatorSelector",
+    "EstimatorSelectorConfig",
+    "EstimatorType",
+    "EstimatorResult",
+    "SelectionResult",
+    "SelectionStrategy",
+    "select_best_estimator",
+    "EnergyScoreMLflowTracker",
+    "create_tracker",
 ]
