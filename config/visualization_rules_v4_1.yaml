@@ -1,0 +1,477 @@
+# E2I Causal Analytics - Visualization Rules V4.1
+# ============================================================
+# This file maps agent outputs to dashboard visualization components
+# Addresses Gap 3: Agent Output → Visualization Component Mapping
+# ============================================================
+
+version: "4.1.0"
+last_updated: "2025-12-14"
+
+# ============================================================
+# LIBRARY SELECTION RULES
+# ============================================================
+
+library_selection:
+  chart_js:
+    use_for:
+      - simple_bar
+      - simple_line
+      - doughnut
+      - sparkline
+    strengths: "Fast rendering, small bundle, good for KPI cards"
+    max_data_points: 1000
+    
+  plotly:
+    use_for:
+      - heatmap
+      - sankey
+      - radar
+      - box_plot
+      - scatter_3d
+      - treemap
+    strengths: "Complex visualizations, interactivity, export"
+    max_data_points: 10000
+    
+  d3_js:
+    use_for:
+      - causal_dag
+      - force_directed
+      - custom_interactions
+    strengths: "Full control, causal graph layouts, transitions"
+    max_data_points: 500
+    
+  css_custom:
+    use_for:
+      - causal_chain
+      - badges
+      - status_indicators
+      - timeline
+    strengths: "No JS overhead, semantic HTML, accessibility"
+
+# ============================================================
+# TAB → AGENT → VISUALIZATION MAPPING
+# ============================================================
+
+tab_mappings:
+  # Tab 1: AI Agent Insights
+  ai_agent_insights:
+    agents:
+      - orchestrator
+      - gap_analyzer
+      - causal_impact
+      - drift_monitor
+      - experiment_designer
+      - heterogeneous_optimizer
+      - health_score
+      - resource_optimizer
+    visualizations:
+      - component: executive_brief_card
+        agent: orchestrator
+        output: SynthesizedResponse
+        viz_type: card
+        library: css_custom
+        
+      - component: priority_actions_list
+        agent: gap_analyzer
+        output: ROIPrioritization
+        viz_type: action_list
+        library: css_custom
+        
+      - component: causal_chains_display
+        agent: causal_impact
+        output: CausalChain
+        viz_type: chain
+        library: css_custom
+        config:
+          nodes: variables
+          edges: effects
+          layout: horizontal_flow
+          
+      - component: predictive_alerts
+        agent: drift_monitor
+        output: DriftReport
+        viz_type: alert_timeline
+        library: css_custom
+        
+      - component: experiment_queue
+        agent: experiment_designer
+        output: ExperimentDesign
+        viz_type: experiment_cards
+        library: css_custom
+        
+      - component: heterogeneous_heatmap
+        agent: heterogeneous_optimizer
+        output: CATEAnalysis
+        viz_type: heatmap
+        library: plotly
+        config:
+          x_axis: time_periods
+          y_axis: hcp_segments
+          values: treatment_effects
+          colorscale: [[0, '#fc8181'], [0.2, '#feebc8'], [0.5, '#c6f6d5'], [1, '#667eea']]
+          
+      - component: resource_sankey
+        agent: resource_optimizer
+        output: AllocationPlan
+        viz_type: sankey
+        library: plotly
+        config:
+          nodes: [current_budget_items, optimal_budget_items]
+          links: reallocation_flows
+          
+      - component: health_radar
+        agent: health_score
+        output: HealthScore
+        viz_type: radar
+        library: plotly
+        config:
+          dimensions:
+            - data_coverage
+            - model_auc
+            - trigger_accept
+            - business_impact
+            - data_freshness
+            - fairness
+            - system_uptime
+            - user_adoption
+          ranges: [0, 100]
+          
+  # Tab 2: Overview
+  overview:
+    agents:
+      - orchestrator
+      - health_score
+    visualizations:
+      - component: system_status_summary
+        agent: orchestrator
+        output: SynthesizedResponse
+        viz_type: summary_card
+        library: css_custom
+        
+      - component: workstream_pipeline_chart
+        agent: health_score
+        output: HealthScore
+        viz_type: multi_axis_line
+        library: chart_js
+        config:
+          y_axes:
+            - data_quality_percent
+            - model_performance_auc
+            - trigger_precision_percent
+            - business_impact_pp
+            
+  # Tab 3: WS1 Data Quality
+  ws1_data:
+    agents:
+      - data_preparer
+      - observability_connector
+    visualizations:
+      - component: patient_coverage_doughnut
+        agent: data_preparer
+        output: QCReport
+        viz_type: doughnut
+        library: chart_js
+        config:
+          metric: patient_coverage_percent
+          
+      - component: geographic_coverage_bar
+        agent: data_preparer
+        output: QCReport
+        viz_type: bar
+        library: chart_js
+        config:
+          x_axis: regions
+          y_axis: coverage_percent
+          
+      - component: data_quality_heatmap
+        agent: data_preparer
+        output: QCReport
+        viz_type: heatmap
+        library: plotly
+        config:
+          x_axis: quality_dimensions  # completeness, validity, match_rate, coverage
+          y_axis: data_sources  # IQVIA, HealthVerity, Veeva, Komodo
+          
+      - component: freshness_timeline
+        agent: observability_connector
+        output: QualityMetrics
+        viz_type: line
+        library: chart_js
+        
+  # Tab 4: WS1 ML & Model
+  ws1_ml:
+    agents:
+      - model_trainer
+      - feature_analyzer
+      - model_deployer
+      - drift_monitor
+    visualizations:
+      - component: model_performance_chart
+        agent: model_trainer
+        output: ValidationMetrics
+        viz_type: line
+        library: chart_js
+        config:
+          metrics: [auc, precision, recall, f1]
+          
+      - component: feature_importance_bar
+        agent: feature_analyzer
+        output: SHAPAnalysis
+        viz_type: horizontal_bar
+        library: chart_js
+        config:
+          y_axis: feature_names
+          x_axis: shap_importance
+          
+      - component: psi_timeline
+        agent: drift_monitor
+        output: PSIScore
+        viz_type: line_with_threshold
+        library: chart_js
+        config:
+          threshold: 0.25
+          warning_zone: [0.15, 0.25]
+          
+      - component: model_stage_indicators
+        agent: model_deployer
+        output: VersionRecord
+        viz_type: status_badges
+        library: css_custom
+        
+  # Tab 5: WS2 Triggers
+  ws2_triggers:
+    agents:
+      - prediction_synthesizer
+      - drift_monitor
+    visualizations:
+      - component: trigger_acceptance_trend
+        agent: prediction_synthesizer
+        output: Prediction
+        viz_type: line
+        library: chart_js
+        
+      - component: action_rate_bar
+        agent: prediction_synthesizer
+        output: Prediction
+        viz_type: stacked_bar
+        library: chart_js
+        config:
+          categories: [accepted_acted, accepted_not_acted, rejected]
+          
+  # Tab 6: WS3 Impact
+  ws3_impact:
+    agents:
+      - causal_impact
+      - gap_analyzer
+      - resource_optimizer
+    visualizations:
+      - component: impact_sankey
+        agent: resource_optimizer
+        output: AllocationPlan
+        viz_type: sankey
+        library: plotly
+        
+      - component: roi_waterfall
+        agent: gap_analyzer
+        output: ROIPrioritization
+        viz_type: waterfall
+        library: plotly
+        
+      - component: brand_kpi_cards
+        agent: causal_impact
+        output: TreatmentEffect
+        viz_type: kpi_cards
+        library: css_custom
+        
+  # Tab 7: Causal Analysis
+  causal:
+    agents:
+      - causal_impact
+      - heterogeneous_optimizer
+      - explainer
+    visualizations:
+      - component: causal_dag
+        agent: causal_impact
+        output: CausalChain
+        viz_type: force_directed_graph
+        library: d3_js
+        config:
+          layout: dagre
+          node_types:
+            treatment: circle
+            outcome: diamond
+            confounder: square
+          edge_width: effect_strength
+          
+      - component: effect_forest_plot
+        agent: causal_impact
+        output: TreatmentEffect
+        viz_type: forest_plot
+        library: plotly
+        config:
+          x_axis: effect_estimate
+          y_axis: subgroups
+          error_bars: confidence_intervals
+          
+      - component: sensitivity_curve
+        agent: causal_impact
+        output: CounterfactualOutcome
+        viz_type: line
+        library: chart_js
+        
+      # V4.1 NEW: Validation Badge
+      - component: validation_badge
+        agent: causal_impact
+        output: ValidationSuite
+        viz_type: validation_badge
+        library: css_custom
+        config:
+          show_gate_decision: true
+          show_tests_passed: true
+          show_confidence: true
+          show_e_value: true
+        
+  # Tab 8-10: Static Content (no agent visualization)
+  kpi_dictionary:
+    static: true
+  legend:
+    static: true
+  methodology:
+    static: true
+
+# ============================================================
+# AGENT OUTPUT SCHEMAS → VISUALIZATION CONFIGS
+# ============================================================
+
+output_schemas:
+  CausalChain:
+    required_fields:
+      - nodes: array<{id, label, type, value}>
+      - edges: array<{source, target, effect, confidence}>
+    viz_config_generator: causal_chain_config
+    
+  CATEAnalysis:
+    required_fields:
+      - segments: array<string>
+      - time_periods: array<string>
+      - effects_matrix: array<array<float>>
+      - p_values_matrix: array<array<float>>
+    viz_config_generator: heatmap_config
+    
+  AllocationPlan:
+    required_fields:
+      - current_allocation: dict<category, amount>
+      - optimal_allocation: dict<category, amount>
+      - reallocation_flows: array<{source, target, value}>
+    viz_config_generator: sankey_config
+    
+  HealthScore:
+    required_fields:
+      - dimensions: array<{name, current_value, target_value}>
+      - composite_score: float
+      - trend: string  # improving, stable, degrading
+    viz_config_generator: radar_config
+    
+  ValidationSuite:
+    required_fields:
+      - estimate_id: string
+      - tests: array<{test_type, status, p_value, details}>
+      - gate_decision: string  # proceed, review, block
+      - confidence_score: float
+      - e_value: float
+    viz_config_generator: validation_badge_config
+
+# ============================================================
+# FILTER → QUERY INJECTION RULES
+# ============================================================
+
+filter_injection:
+  brand_filter:
+    target_entity: brands
+    injection_point: ExtractedEntities
+    null_value_behavior: include_all
+    
+  region_filter:
+    target_entity: regions
+    injection_point: ExtractedEntities
+    null_value_behavior: include_all
+    
+  date_range_filter:
+    target_entities:
+      - start_date
+      - end_date
+    injection_point: QueryContext
+    affects:
+      - sql_where_clause
+      - aggregation_window
+
+# ============================================================
+# REAL-TIME UPDATE RULES
+# ============================================================
+
+refresh_strategies:
+  ai_agent_insights:
+    trigger: on_filter_change | on_tab_switch | manual_refresh
+    cache_ttl: 300  # 5 minutes
+    prefetch: [overview, causal]
+    
+  overview:
+    trigger: on_tab_switch | manual_refresh
+    cache_ttl: 600  # 10 minutes
+    
+  ws1_data:
+    trigger: on_tab_switch
+    cache_ttl: 1800  # 30 minutes (stable data)
+    
+  ws1_ml:
+    trigger: on_tab_switch
+    cache_ttl: 900  # 15 minutes
+    
+  causal:
+    trigger: on_tab_switch | on_filter_change
+    cache_ttl: 300
+    
+# ============================================================
+# VALIDATION BADGE COMPONENT SPECIFICATION (V4.1)
+# ============================================================
+
+validation_badge:
+  component_name: ValidationBadge
+  
+  gate_decision_styles:
+    proceed:
+      icon: "✓"
+      color: "#10b981"
+      background: "#ecfdf5"
+      label: "VALIDATED"
+    review:
+      icon: "⚠"
+      color: "#f59e0b"
+      background: "#fffbeb"
+      label: "NEEDS REVIEW"
+    block:
+      icon: "✗"
+      color: "#ef4444"
+      background: "#fef2f2"
+      label: "BLOCKED"
+      
+  test_indicators:
+    passed:
+      icon: "●"
+      color: "#10b981"
+    failed:
+      icon: "●"
+      color: "#ef4444"
+    warning:
+      icon: "●"
+      color: "#f59e0b"
+    skipped:
+      icon: "○"
+      color: "#9ca3af"
+      
+  display_rules:
+    - always_show_gate_decision: true
+    - show_test_count: true  # "4/5 tests passed"
+    - show_confidence_if_above: 0.5
+    - show_e_value_if_causal: true
+    - expand_details_on_click: true
