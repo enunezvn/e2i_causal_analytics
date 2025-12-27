@@ -7,6 +7,11 @@ Evaluates:
 3. Context Precision - Are retrieved documents ranked correctly?
 4. Context Recall - Did we retrieve all relevant documents?
 
+Integration:
+- MLflow for experiment tracking
+- Opik for LLM observability and tracing
+- Rubric evaluation for domain-specific quality assessment
+
 CRITICAL: Evaluation is for OPERATIONAL queries only.
 NOT for: Medical/clinical query evaluation.
 """
@@ -24,6 +29,36 @@ import mlflow
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Opik Integration Flag
+# =============================================================================
+
+_OPIK_AVAILABLE = False
+_OPIK_TRACER = None
+
+try:
+    from .opik_integration import (
+        CombinedEvaluationResult,
+        OpikEvaluationTracer,
+        log_ragas_scores_to_opik,
+        log_rubric_scores_to_opik,
+    )
+
+    _OPIK_AVAILABLE = True
+except ImportError:
+    logger.debug("Opik integration not available, continuing without tracing")
+
+
+def _get_opik_tracer() -> Optional["OpikEvaluationTracer"]:
+    """Get or create the Opik tracer singleton."""
+    global _OPIK_TRACER
+    if not _OPIK_AVAILABLE:
+        return None
+    if _OPIK_TRACER is None:
+        _OPIK_TRACER = OpikEvaluationTracer()
+    return _OPIK_TRACER
 
 
 # =============================================================================
@@ -304,15 +339,17 @@ def save_evaluation_dataset(samples: List[EvaluationSample], path: str) -> None:
 
 class RAGASEvaluator:
     """
-    Wrapper for RAGAS evaluation metrics.
+    Wrapper for RAGAS evaluation metrics with Opik observability.
 
     Implements graceful degradation when RAGAS or LLM is unavailable.
+    Includes Opik tracing for evaluation observability.
     """
 
     def __init__(
         self,
         config: Optional[EvaluationConfig] = None,
         llm_provider: str = "anthropic",
+        enable_opik_tracing: bool = True,
     ):
         """
         Initialize RAGAS evaluator.
@@ -320,11 +357,14 @@ class RAGASEvaluator:
         Args:
             config: Evaluation configuration
             llm_provider: LLM provider for metrics (anthropic, openai)
+            enable_opik_tracing: Whether to trace evaluations to Opik
         """
         self.config = config or EvaluationConfig()
         self.llm_provider = llm_provider
+        self.enable_opik_tracing = enable_opik_tracing and _OPIK_AVAILABLE
         self._ragas_available = self._check_ragas()
         self._llm_configured = self._check_llm()
+        self._opik_tracer = _get_opik_tracer() if self.enable_opik_tracing else None
 
     def _check_ragas(self) -> bool:
         """Check if RAGAS is available."""
@@ -347,17 +387,20 @@ class RAGASEvaluator:
     async def evaluate_sample(
         self,
         sample: EvaluationSample,
+        run_id: Optional[str] = None,
     ) -> EvaluationResult:
         """
-        Evaluate a single sample using RAGAS metrics.
+        Evaluate a single sample using RAGAS metrics with optional Opik tracing.
 
         Args:
             sample: Evaluation sample with query, answer, and contexts
+            run_id: Optional run ID for Opik tracing
 
         Returns:
             Evaluation result with metric scores
         """
         sample_id = f"{sample.metadata.get('brand', 'unknown')}_{int(time.time())}"
+        eval_run_id = run_id or sample_id
 
         if not sample.answer:
             logger.warning(f"Sample {sample_id} has no answer to evaluate")
@@ -370,10 +413,59 @@ class RAGASEvaluator:
         if not sample.retrieved_contexts:
             sample.retrieved_contexts = sample.contexts
 
-        if self._ragas_available and self._llm_configured:
+        # Execute evaluation with optional Opik tracing
+        if self._opik_tracer and self.enable_opik_tracing:
+            return await self._evaluate_with_tracing(sample, sample_id, eval_run_id)
+        elif self._ragas_available and self._llm_configured:
             return await self._evaluate_with_ragas(sample, sample_id)
         else:
             return await self._evaluate_with_fallback(sample, sample_id)
+
+    async def _evaluate_with_tracing(
+        self,
+        sample: EvaluationSample,
+        sample_id: str,
+        run_id: str,
+    ) -> EvaluationResult:
+        """
+        Evaluate sample with Opik tracing.
+
+        Args:
+            sample: Evaluation sample
+            sample_id: Sample identifier
+            run_id: Run ID for tracing
+
+        Returns:
+            Evaluation result
+        """
+        metadata = {
+            "query": sample.query,
+            "brand": sample.metadata.get("brand"),
+            "kpi": sample.metadata.get("kpi"),
+            "contexts_count": len(sample.retrieved_contexts),
+        }
+
+        async with self._opik_tracer.trace_evaluation(run_id, metadata) as trace_ctx:
+            # Perform actual evaluation
+            if self._ragas_available and self._llm_configured:
+                result = await self._evaluate_with_ragas(sample, sample_id)
+            else:
+                result = await self._evaluate_with_fallback(sample, sample_id)
+
+            # Log RAGAS scores to Opik trace
+            trace_ctx.log_ragas_scores(
+                faithfulness=result.faithfulness,
+                answer_relevancy=result.answer_relevancy,
+                context_precision=result.context_precision,
+                context_recall=result.context_recall,
+                overall_score=result.overall_score,
+            )
+
+            # Add trace info to result metadata
+            result.metadata["opik_trace_id"] = trace_ctx.trace_id
+            result.metadata["opik_run_id"] = trace_ctx.run_id
+
+            return result
 
     async def _evaluate_with_ragas(
         self,
@@ -566,24 +658,127 @@ class RAGASEvaluator:
     async def evaluate_batch(
         self,
         samples: List[EvaluationSample],
+        batch_run_id: Optional[str] = None,
     ) -> List[EvaluationResult]:
         """
-        Evaluate multiple samples concurrently.
+        Evaluate multiple samples concurrently with optional batch tracing.
 
         Args:
             samples: List of evaluation samples
+            batch_run_id: Optional batch run ID for tracing
 
         Returns:
             List of evaluation results
         """
         semaphore = asyncio.Semaphore(self.config.max_concurrent)
 
-        async def evaluate_with_semaphore(sample: EvaluationSample) -> EvaluationResult:
+        async def evaluate_with_semaphore(
+            sample: EvaluationSample, idx: int
+        ) -> EvaluationResult:
             async with semaphore:
-                return await self.evaluate_sample(sample)
+                run_id = f"{batch_run_id}_{idx}" if batch_run_id else None
+                return await self.evaluate_sample(sample, run_id=run_id)
 
-        tasks = [evaluate_with_semaphore(s) for s in samples]
+        tasks = [evaluate_with_semaphore(s, i) for i, s in enumerate(samples)]
         return await asyncio.gather(*tasks)
+
+    def log_rubric_scores(
+        self,
+        run_id: str,
+        weighted_score: Optional[float] = None,
+        decision: Optional[str] = None,
+        criterion_scores: Optional[Dict[str, float]] = None,
+        pattern_flags: Optional[List[str]] = None,
+    ) -> bool:
+        """
+        Log rubric evaluation scores to Opik.
+
+        Args:
+            run_id: Evaluation run identifier
+            weighted_score: Overall weighted rubric score
+            decision: Rubric decision (acceptable, suggestion, auto_update, escalate)
+            criterion_scores: Individual criterion scores
+            pattern_flags: Pattern flags from rubric evaluation
+
+        Returns:
+            True if logging succeeded, False otherwise
+        """
+        if not self.enable_opik_tracing or not _OPIK_AVAILABLE:
+            logger.debug("Opik tracing not enabled, skipping rubric score logging")
+            return False
+
+        try:
+            log_rubric_scores_to_opik(
+                run_id=run_id,
+                weighted_score=weighted_score,
+                decision=decision,
+                criterion_scores=criterion_scores,
+                pattern_flags=pattern_flags,
+            )
+            logger.debug(f"Logged rubric scores to Opik for run {run_id}")
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to log rubric scores to Opik: {e}")
+            return False
+
+    async def evaluate_with_rubric(
+        self,
+        sample: EvaluationSample,
+        rubric_evaluation: Optional[Dict[str, Any]] = None,
+        run_id: Optional[str] = None,
+    ) -> "CombinedEvaluationResult":
+        """
+        Evaluate sample with both RAGAS and rubric metrics.
+
+        Args:
+            sample: Evaluation sample
+            rubric_evaluation: Rubric evaluation result (from feedback_learner)
+            run_id: Optional run ID for tracing
+
+        Returns:
+            Combined evaluation result with both RAGAS and rubric scores
+        """
+        # Perform RAGAS evaluation
+        ragas_result = await self.evaluate_sample(sample, run_id=run_id)
+
+        # Build combined result
+        if _OPIK_AVAILABLE:
+            combined = CombinedEvaluationResult(
+                run_id=run_id or ragas_result.sample_id,
+                sample_id=ragas_result.sample_id,
+                query=sample.query,
+                faithfulness=ragas_result.faithfulness,
+                answer_relevancy=ragas_result.answer_relevancy,
+                context_precision=ragas_result.context_precision,
+                context_recall=ragas_result.context_recall,
+                ragas_overall=ragas_result.overall_score,
+                rubric_weighted_score=rubric_evaluation.get("weighted_score")
+                if rubric_evaluation
+                else None,
+                rubric_decision=rubric_evaluation.get("decision") if rubric_evaluation else None,
+                rubric_criterion_scores=rubric_evaluation.get("criterion_scores")
+                if rubric_evaluation
+                else None,
+                rubric_pattern_flags=rubric_evaluation.get("pattern_flags")
+                if rubric_evaluation
+                else None,
+                passed_thresholds=ragas_result.passed_thresholds,
+                metadata=ragas_result.metadata,
+            )
+
+            # Log combined scores to Opik if tracing enabled
+            if self.enable_opik_tracing and run_id:
+                combined.log_to_opik()
+
+            return combined
+        else:
+            # Return a basic dict-like structure if CombinedEvaluationResult not available
+            return {
+                "run_id": run_id or ragas_result.sample_id,
+                "ragas_result": ragas_result,
+                "rubric_evaluation": rubric_evaluation,
+                "passed_thresholds": ragas_result.passed_thresholds,
+            }
 
 
 # =============================================================================
@@ -593,18 +788,20 @@ class RAGASEvaluator:
 
 class RAGEvaluationPipeline:
     """
-    Complete RAG evaluation pipeline with MLflow integration.
+    Complete RAG evaluation pipeline with MLflow and Opik integration.
 
     Usage:
         pipeline = RAGEvaluationPipeline()
         report = await pipeline.run_evaluation()
         pipeline.log_to_mlflow(report)
+        pipeline.log_to_opik(report)  # Optional Opik logging
     """
 
     def __init__(
         self,
         config: Optional[EvaluationConfig] = None,
         dataset_path: Optional[str] = None,
+        enable_opik_tracing: bool = True,
     ):
         """
         Initialize evaluation pipeline.
@@ -612,9 +809,13 @@ class RAGEvaluationPipeline:
         Args:
             config: Evaluation configuration
             dataset_path: Path to custom evaluation dataset
+            enable_opik_tracing: Whether to trace evaluations to Opik
         """
         self.config = config or EvaluationConfig()
-        self.evaluator = RAGASEvaluator(config=self.config)
+        self.enable_opik_tracing = enable_opik_tracing and _OPIK_AVAILABLE
+        self.evaluator = RAGASEvaluator(
+            config=self.config, enable_opik_tracing=enable_opik_tracing
+        )
         self.dataset = load_evaluation_dataset(dataset_path)
 
     async def run_evaluation(
@@ -640,8 +841,8 @@ class RAGEvaluationPipeline:
         if rag_pipeline:
             await self._generate_answers(rag_pipeline)
 
-        # Evaluate all samples
-        results = await self.evaluator.evaluate_batch(self.dataset)
+        # Evaluate all samples with batch tracing
+        results = await self.evaluator.evaluate_batch(self.dataset, batch_run_id=run_id)
 
         # Aggregate metrics
         valid_results = [r for r in results if r.faithfulness is not None]
@@ -755,6 +956,38 @@ class RAGEvaluationPipeline:
 
         except Exception as e:
             logger.error(f"Failed to log to MLflow: {e}")
+
+    def log_to_opik(self, report: EvaluationReport) -> bool:
+        """
+        Log evaluation results to Opik.
+
+        Args:
+            report: Evaluation report to log
+
+        Returns:
+            True if logging succeeded, False otherwise
+        """
+        if not self.enable_opik_tracing or not _OPIK_AVAILABLE:
+            logger.debug("Opik tracing not enabled, skipping report logging")
+            return False
+
+        try:
+            # Log aggregate scores using convenience function
+            log_ragas_scores_to_opik(
+                run_id=report.run_id,
+                faithfulness=report.avg_faithfulness,
+                answer_relevancy=report.avg_answer_relevancy,
+                context_precision=report.avg_context_precision,
+                context_recall=report.avg_context_recall,
+                overall_score=report.overall_score,
+            )
+
+            logger.info(f"Logged aggregate evaluation results to Opik for run {report.run_id}")
+            return True
+
+        except Exception as e:
+            logger.warning(f"Failed to log to Opik: {e}")
+            return False
 
     def check_thresholds(self, report: EvaluationReport) -> Tuple[bool, List[str]]:
         """

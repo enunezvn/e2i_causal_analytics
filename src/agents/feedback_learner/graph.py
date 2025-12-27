@@ -24,6 +24,7 @@ from .nodes.feedback_collector import FeedbackCollectorNode
 from .nodes.knowledge_updater import KnowledgeUpdaterNode
 from .nodes.learning_extractor import LearningExtractorNode
 from .nodes.pattern_analyzer import PatternAnalyzerNode
+from .nodes.rubric_node import RubricNode
 from .state import FeedbackLearnerState
 
 logger = logging.getLogger(__name__)
@@ -36,15 +37,17 @@ def build_feedback_learner_graph(
     use_llm: bool = False,
     llm: Optional[Any] = None,
     cognitive_rag: Optional[Any] = None,
+    db_client: Optional[Any] = None,
+    enable_rubric_evaluation: bool = True,
 ):
     """
     Build the Feedback Learner agent graph with DSPy integration.
 
-    Architecture (with DSPy):
-        [enrich] → [collect] → [analyze] → [extract] → [update] → [finalize] → END
+    Architecture (with rubric evaluation enabled):
+        [enrich] → [collect] → [analyze] → [rubric] → [extract] → [update] → [finalize] → END
 
-    Architecture (without DSPy):
-        [collect] → [analyze] → [extract] → [update] → END
+    Architecture (without rubric evaluation):
+        [enrich] → [collect] → [analyze] → [extract] → [update] → [finalize] → END
 
     Args:
         feedback_store: Store for user feedback
@@ -53,6 +56,8 @@ def build_feedback_learner_graph(
         use_llm: Whether to use LLM for analysis
         llm: Optional LLM instance
         cognitive_rag: Optional CognitiveRAG instance for context enrichment
+        db_client: Optional database client for storing rubric evaluations
+        enable_rubric_evaluation: Whether to include rubric evaluation node (default: True)
 
     Returns:
         Compiled LangGraph workflow
@@ -60,6 +65,7 @@ def build_feedback_learner_graph(
     # Initialize nodes
     collector = FeedbackCollectorNode(feedback_store, outcome_store)
     analyzer = PatternAnalyzerNode(use_llm=use_llm, llm=llm)
+    rubric_node = RubricNode(db_client=db_client) if enable_rubric_evaluation else None
     extractor = LearningExtractorNode(use_llm=use_llm, llm=llm)
     updater = KnowledgeUpdaterNode(knowledge_stores)
 
@@ -74,6 +80,8 @@ def build_feedback_learner_graph(
     workflow.add_node("enrich", enrich_node)
     workflow.add_node("collect", collector.execute)
     workflow.add_node("analyze", analyzer.execute)
+    if rubric_node:
+        workflow.add_node("rubric", rubric_node.execute)
     workflow.add_node("extract", extractor.execute)
     workflow.add_node("update", updater.execute)
     workflow.add_node("finalize", _finalize_training_signal)
@@ -92,11 +100,25 @@ def build_feedback_learner_graph(
         {"analyze": "analyze", "error": "error_handler"},
     )
 
-    workflow.add_conditional_edges(
-        "analyze",
-        lambda s: "error" if s.get("status") == "failed" else "extract",
-        {"extract": "extract", "error": "error_handler"},
-    )
+    # Analyze proceeds to rubric (if enabled) or extract
+    if rubric_node:
+        workflow.add_conditional_edges(
+            "analyze",
+            lambda s: "error" if s.get("status") == "failed" else "rubric",
+            {"rubric": "rubric", "error": "error_handler"},
+        )
+
+        workflow.add_conditional_edges(
+            "rubric",
+            lambda s: "error" if s.get("status") == "failed" else "extract",
+            {"extract": "extract", "error": "error_handler"},
+        )
+    else:
+        workflow.add_conditional_edges(
+            "analyze",
+            lambda s: "error" if s.get("status") == "failed" else "extract",
+            {"extract": "extract", "error": "error_handler"},
+        )
 
     workflow.add_conditional_edges(
         "extract",
@@ -217,6 +239,11 @@ async def _finalize_training_signal(state: FeedbackLearnerState) -> FeedbackLear
     min(1.0, 5000 / max(state.get("total_latency_ms", 1), 1))  # Target < 5s
     min(len(patterns) / max(len(feedback_items), 1), 1.0) if feedback_items else 0.0
 
+    # Get rubric evaluation metrics if available
+    rubric_weighted_score = state.get("rubric_weighted_score")
+    rubric_decision = state.get("rubric_decision")
+    rubric_pattern_flags = state.get("rubric_pattern_flags") or []
+
     training_signal = FeedbackLearnerTrainingSignal(
         batch_id=state.get("batch_id", ""),
         feedback_count=len(feedback_items),
@@ -230,6 +257,9 @@ async def _finalize_training_signal(state: FeedbackLearnerState) -> FeedbackLear
         pattern_accuracy=pattern_accuracy,
         recommendation_actionability=recommendation_actionability,
         update_effectiveness=update_effectiveness,
+        rubric_weighted_score=rubric_weighted_score,
+        rubric_decision=rubric_decision,
+        rubric_pattern_flags=len(rubric_pattern_flags),
         collection_latency_ms=state.get("collection_latency_ms", 0),
         analysis_latency_ms=state.get("analysis_latency_ms", 0),
         extraction_latency_ms=state.get("extraction_latency_ms", 0),
@@ -238,9 +268,13 @@ async def _finalize_training_signal(state: FeedbackLearnerState) -> FeedbackLear
         model_used=state.get("model_used") or "deterministic",
     )
 
+    rubric_info = ""
+    if rubric_weighted_score is not None:
+        rubric_info = f", rubric_score={rubric_weighted_score:.2f}, rubric_decision={rubric_decision}"
+
     logger.info(
         f"Training signal finalized: reward={training_signal.compute_reward():.3f}, "
-        f"patterns={len(patterns)}, recommendations={len(recommendations)}"
+        f"patterns={len(patterns)}, recommendations={len(recommendations)}{rubric_info}"
     )
 
     return {

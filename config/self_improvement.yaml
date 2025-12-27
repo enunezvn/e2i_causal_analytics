@@ -1,0 +1,305 @@
+# E2I Self-Improvement Configuration
+# Version: 1.0.0
+# Integrates with: feedback_learner (Tier 5), Reflector Node, ExperimentKnowledgeStore
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CAUSAL ANALYTICS EVALUATION RUBRIC
+# Adapted from generic chatbot rubric to pharmaceutical causal analytics domain
+# ═══════════════════════════════════════════════════════════════════════════════
+
+rubric:
+  version: "1.0.0"
+  
+  criteria:
+    causal_validity:
+      weight: 0.25
+      description: "Did the response correctly distinguish causation from correlation?"
+      scoring_guide:
+        5: "Properly caveated causal claims with confidence intervals and refutation status"
+        4: "Correctly identified causal vs correlational with methodology reference"
+        3: "Mentioned causality but didn't specify validation method"
+        2: "Unclear distinction between causal and correlational claims"
+        1: "Presented correlational data as causal without qualification"
+      
+    actionability:
+      weight: 0.25
+      description: "Did the response provide specific, actionable recommendations?"
+      scoring_guide:
+        5: "Specific intervention recommendations with expected effect sizes and timeline"
+        4: "Clear recommendations with general impact estimates"
+        3: "General recommendations without quantified impact"
+        2: "Vague suggestions that are hard to implement"
+        1: "No actionable guidance provided"
+      
+    evidence_chain:
+      weight: 0.20
+      description: "Was the reasoning traceable through a clear causal chain?"
+      scoring_guide:
+        5: "Complete pathway: Data → Analysis → Finding → Implication → Action"
+        4: "Clear chain with minor gaps in one step"
+        3: "Partial chain with some gaps in reasoning"
+        2: "Disconnected points without clear flow"
+        1: "Conclusion without supporting evidence chain"
+      
+    regulatory_awareness:
+      weight: 0.15
+      description: "Did the response appropriately consider compliance constraints?"
+      scoring_guide:
+        5: "Proactively flagged compliance considerations and guardrails"
+        4: "Mentioned relevant regulations when appropriate"
+        3: "Compliant but didn't highlight relevant regulations"
+        2: "Borderline compliance awareness"
+        1: "Missed obvious regulatory implications"
+      
+    uncertainty_communication:
+      weight: 0.15
+      description: "Were confidence levels and limitations clearly communicated?"
+      scoring_guide:
+        5: "Included confidence intervals, sensitivity context, and explicit caveats"
+        4: "Clear uncertainty acknowledgment with some quantification"
+        3: "Mentioned uncertainty without quantification"
+        2: "Implied certainty but with hedging language"
+        1: "Presented findings as certain without acknowledging limitations"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# DECISION FRAMEWORK
+# Score-based actions and thresholds
+# ═══════════════════════════════════════════════════════════════════════════════
+
+decision_framework:
+  thresholds:
+    acceptable: 4.0      # Score >= 4.0: Log only, no changes
+    suggestion: 3.0      # Score 3.0-3.9: Queue for human review
+    auto_update: 2.0     # Score 2.0-2.9: Auto-update (with safety checks)
+    escalate: 2.0        # Score < 2.0: Critical failure, alert team
+    
+  override_conditions:
+    # Trigger SUGGESTION even with acceptable overall score if:
+    - condition: "any_criterion_below"
+      threshold: 2.0
+      action: "suggestion"
+      
+    - condition: "same_weakness_pattern"
+      occurrence_count: 3
+      action: "suggestion"
+      
+    - condition: "high_score_variance"
+      std_dev_threshold: 1.0
+      action: "suggestion"
+      
+    - condition: "user_negative_feedback"
+      feedback_score_threshold: 3
+      action: "suggestion"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SAFETY CONTROLS
+# Prevent runaway self-modification
+# ═══════════════════════════════════════════════════════════════════════════════
+
+safety_controls:
+  cooldown:
+    minimum_hours_between_updates: 6
+    maximum_updates_per_day: 3
+    burn_in_hours_after_major_change: 24
+    
+  version_control:
+    versions_to_keep: 5
+    auto_rollback_score_drop_threshold: 0.5
+    rollback_window_hours: 48
+    
+  human_override:
+    require_approval_mode: false  # If true, all changes need approval
+    pause_auto_updates: false      # Emergency stop
+    escalation_email: "e2i-alerts@company.com"
+    
+  north_star_guardrails:
+    # These rules CANNOT be modified by self-improvement
+    - "Never loosen HIPAA compliance requirements"
+    - "Never reduce uncertainty communication standards"
+    - "Never expand beyond causal analytics domain"
+    - "Never remove audit trail requirements"
+    - "Never modify fairness guardian constraints"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# REFLECTION LOOP CONFIGURATION
+# When and how to evaluate responses
+# ═══════════════════════════════════════════════════════════════════════════════
+
+reflection_loop:
+  trigger:
+    mode: "async"                    # Run after response delivered
+    batch_size: 5                    # Evaluate last N exchanges per run
+    schedule_minutes: 15             # Run every N minutes (if using scheduled)
+    
+  evaluation:
+    model: "claude-haiku-4-5-20251001"  # Use Haiku for cost-effective evaluation
+    max_tokens: 1500
+    temperature: 0.3                    # Low temp for consistent scoring
+    
+  prompt_improvement:
+    model: "claude-sonnet-4-5-20250929"  # Use Sonnet for quality improvements
+    max_tokens: 2000
+    include_examples: true              # Include example good/bad responses
+    query_knowledge_store: true         # Check past learnings before generating
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# BEHAVIORAL PATTERN TRACKING
+# For feature adaptation beyond RAG responses
+# ═══════════════════════════════════════════════════════════════════════════════
+
+behavior_tracking:
+  enabled: true
+  
+  patterns_to_track:
+    query_patterns:
+      - type: "reformulation"
+        description: "User rephrases same question"
+        signal: "NLP understanding gap"
+        
+      - type: "clarification_request"
+        description: "User asks for clarification"
+        signal: "Response clarity issue"
+        
+      - type: "entity_correction"
+        description: "User corrects brand/region extraction"
+        signal: "Entity extraction failure"
+        
+    visualization_patterns:
+      - type: "chart_type_request"
+        description: "User requests different chart after seeing initial"
+        signal: "Visualization preference mismatch"
+        
+      - type: "drill_down"
+        description: "User requests more detail"
+        signal: "Default detail level too low"
+        
+      - type: "quick_dismiss"
+        description: "User dismisses visualization within 3 seconds"
+        signal: "Visualization not useful"
+        
+    agent_patterns:
+      - type: "skip_output"
+        description: "User skips certain agent outputs"
+        signal: "Agent output not valued"
+        
+      - type: "detail_request"
+        description: "User asks for more/less detail"
+        signal: "Verbosity calibration needed"
+        
+    feature_gaps:
+      - type: "unfulfilled_request"
+        description: "Request cannot be fulfilled"
+        signal: "Missing feature"
+        
+      - type: "workaround_pattern"
+        description: "User manually does what system could do"
+        signal: "Feature discovery opportunity"
+        
+  analysis:
+    minimum_occurrences: 5           # Pattern must occur N times before action
+    analysis_window_days: 7          # Look at last N days of behavior
+    correlation_threshold: 0.3       # Minimum correlation with scores to flag
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# COMPONENT TARGETS
+# Which components can be improved
+# ═══════════════════════════════════════════════════════════════════════════════
+
+improvable_components:
+  prompts:
+    - component: "orchestrator_system_prompt"
+      path: "config/agent_config.yaml#orchestrator.system_prompt"
+      risk_level: "medium"
+      auto_update_allowed: true
+      
+    - component: "causal_impact_system_prompt"
+      path: "config/agent_config.yaml#causal_impact.system_prompt"
+      risk_level: "high"
+      auto_update_allowed: false  # Requires human approval
+      
+    - component: "explainer_system_prompt"
+      path: "config/agent_config.yaml#explainer.system_prompt"
+      risk_level: "low"
+      auto_update_allowed: true
+      
+    - component: "feedback_learner_system_prompt"
+      path: "config/agent_config.yaml#feedback_learner.system_prompt"
+      risk_level: "high"
+      auto_update_allowed: false  # Self-modification requires approval
+      
+  configurations:
+    - component: "visualization_rules"
+      path: "config/visualization_rules.yaml"
+      risk_level: "low"
+      auto_update_allowed: true
+      
+    - component: "intent_classification_examples"
+      path: "src/nlp/models/intent_examples.yaml"
+      risk_level: "medium"
+      auto_update_allowed: true
+      
+  never_modify:
+    - "config/compliance_rules.yaml"
+    - "config/thresholds.yaml#regulatory_*"
+    - "src/agents/tier3/fairness_guardian.py"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# INTEGRATION POINTS
+# Where self-improvement connects to existing E2I architecture
+# ═══════════════════════════════════════════════════════════════════════════════
+
+integration:
+  tables:
+    learning_signals:
+      action: "extend"
+      new_fields:
+        - "rubric_scores"
+        - "weighted_score"
+        - "decision_type"
+        - "evaluation_context"
+        - "pattern_flags"
+        - "prompt_version_id"
+        
+    procedural_memories:
+      action: "extend"
+      new_fields:
+        - "prompt_content"
+        - "prompt_version"
+        - "is_active"
+        - "improvement_reason"
+        - "improvement_source"
+        - "avg_score_before"
+        - "avg_score_after"
+        - "rollback_available"
+        - "cooldown_until"
+        
+    improvement_queue:
+      action: "create"
+      
+    behavior_patterns:
+      action: "create"
+      
+  agents:
+    feedback_learner:
+      action: "extend"
+      new_capabilities:
+        - "evaluate_with_rubric"
+        - "generate_prompt_improvement"
+        - "version_prompt"
+        - "queue_for_review"
+        - "detect_patterns"
+        
+    reflector_node:
+      action: "extend"
+      new_capabilities:
+        - "trigger_rubric_evaluation"
+        - "store_scores"
+        - "invoke_decision_gate"
+        
+  stores:
+    experiment_knowledge_store:
+      action: "connect"
+      usage:
+        - "Store failed improvement attempts"
+        - "Query past learnings before generating"
+        - "Prevent repeating known-bad patterns"

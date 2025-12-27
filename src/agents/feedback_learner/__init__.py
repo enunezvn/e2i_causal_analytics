@@ -7,6 +7,11 @@ DSPy Integration Support:
 - CognitiveContext from CognitiveRAG 4-phase cycle
 - Training signals for MIPROv2 optimization
 - Memory contribution helpers
+
+Self-Improvement Support:
+- RubricEvaluator for AI-as-judge response evaluation
+- Configuration loading from self_improvement.yaml
+- Pattern detection and improvement suggestions
 """
 
 from .agent import (
@@ -14,6 +19,12 @@ from .agent import (
     FeedbackLearnerInput,
     FeedbackLearnerOutput,
     process_feedback_batch,
+)
+
+# Config exports
+from .config import (
+    SelfImprovementConfig,
+    load_self_improvement_config,
 )
 from .dspy_integration import (
     DSPY_AVAILABLE,
@@ -23,7 +34,20 @@ from .dspy_integration import (
     FeedbackLearnerTrainingSignal,
     create_memory_contribution,
 )
+
+# Evaluation exports
+from .evaluation import (
+    CriterionScore,
+    EvaluationContext,
+    ImprovementDecision,
+    PatternFlag,
+    RubricEvaluation,
+    RubricEvaluator,
+)
 from .graph import build_feedback_learner_graph, build_simple_feedback_learner_graph
+
+# Node exports
+from .nodes import RubricNode
 from .state import (
     DetectedPattern,
     FeedbackItem,
@@ -55,6 +79,17 @@ __all__ = [
     "FeedbackLearnerOptimizer",
     "create_memory_contribution",
     "DSPY_AVAILABLE",
+    # Rubric Evaluation
+    "RubricEvaluator",
+    "RubricEvaluation",
+    "EvaluationContext",
+    "CriterionScore",
+    "ImprovementDecision",
+    "PatternFlag",
+    "RubricNode",
+    # Configuration
+    "SelfImprovementConfig",
+    "load_self_improvement_config",
     # Convenience functions
     "process_feedback_batch",
 ]

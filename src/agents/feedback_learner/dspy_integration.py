@@ -123,6 +123,11 @@ class FeedbackLearnerTrainingSignal:
     recommendation_actionability: float = 0.0  # Percentage implemented
     update_effectiveness: float = 0.0  # Downstream metric improvement
 
+    # === Rubric Evaluation Metrics ===
+    rubric_weighted_score: Optional[float] = None  # AI-as-judge rubric score (1-5)
+    rubric_decision: Optional[str] = None  # ImprovementDecision value
+    rubric_pattern_flags: int = 0  # Number of quality issues flagged
+
     # === Latency ===
     collection_latency_ms: float = 0.0
     analysis_latency_ms: float = 0.0
@@ -147,23 +152,35 @@ class FeedbackLearnerTrainingSignal:
         """
         Compute reward score for MIPROv2 optimization.
 
-        Weighting:
-        - pattern_accuracy: 0.25 (finding real patterns)
-        - recommendation_actionability: 0.25 (practical recommendations)
-        - update_effectiveness: 0.25 (updates that work)
-        - efficiency: 0.15 (latency vs. feedback processed)
+        Weighting (with rubric):
+        - pattern_accuracy: 0.20 (finding real patterns)
+        - recommendation_actionability: 0.20 (practical recommendations)
+        - update_effectiveness: 0.20 (updates that work)
+        - rubric_quality: 0.20 (AI-as-judge rubric score)
+        - efficiency: 0.10 (latency vs. feedback processed)
         - coverage: 0.10 (patterns per feedback item)
 
         Returns:
             Float reward in range [0.0, 1.0]
         """
-        weights = {
-            "pattern_accuracy": 0.25,
-            "recommendation_actionability": 0.25,
-            "update_effectiveness": 0.25,
-            "efficiency": 0.15,
-            "coverage": 0.10,
-        }
+        # Adjust weights based on whether rubric evaluation is available
+        if self.rubric_weighted_score is not None:
+            weights = {
+                "pattern_accuracy": 0.20,
+                "recommendation_actionability": 0.20,
+                "update_effectiveness": 0.20,
+                "rubric_quality": 0.20,
+                "efficiency": 0.10,
+                "coverage": 0.10,
+            }
+        else:
+            weights = {
+                "pattern_accuracy": 0.25,
+                "recommendation_actionability": 0.25,
+                "update_effectiveness": 0.25,
+                "efficiency": 0.15,
+                "coverage": 0.10,
+            }
 
         # Pattern accuracy (0-1)
         accuracy_score = min(1.0, self.pattern_accuracy)
@@ -192,6 +209,13 @@ class FeedbackLearnerTrainingSignal:
         else:
             coverage_score = 0.0
 
+        # Rubric quality: normalize 1-5 scale to 0-1
+        # Score >= 4.0 is "acceptable", so 4.0 maps to 0.75, 5.0 maps to 1.0
+        if self.rubric_weighted_score is not None:
+            rubric_score = max(0.0, min(1.0, (self.rubric_weighted_score - 1.0) / 4.0))
+        else:
+            rubric_score = 0.0
+
         # Weighted sum
         reward = (
             weights["pattern_accuracy"] * accuracy_score
@@ -200,6 +224,10 @@ class FeedbackLearnerTrainingSignal:
             + weights["efficiency"] * efficiency_score
             + weights["coverage"] * coverage_score
         )
+
+        # Add rubric score if available
+        if self.rubric_weighted_score is not None and "rubric_quality" in weights:
+            reward += weights["rubric_quality"] * rubric_score
 
         return round(reward, 4)
 
@@ -226,6 +254,11 @@ class FeedbackLearnerTrainingSignal:
                 "pattern_accuracy": self.pattern_accuracy,
                 "recommendation_actionability": self.recommendation_actionability,
                 "update_effectiveness": self.update_effectiveness,
+            },
+            "rubric_evaluation": {
+                "weighted_score": self.rubric_weighted_score,
+                "decision": self.rubric_decision,
+                "pattern_flags": self.rubric_pattern_flags,
             },
             "latency": {
                 "collection_ms": self.collection_latency_ms,
