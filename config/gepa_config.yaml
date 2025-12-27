@@ -1,0 +1,164 @@
+# ==============================================================================
+# E2I Causal Analytics - GEPA Optimizer Configuration
+# ==============================================================================
+# Version: 4.2
+# Date: December 2025
+# Description: Configuration for GEPA (Generative Evolutionary Prompting with AI)
+# ==============================================================================
+
+# Default reflection model for GEPA evolution
+reflection:
+  model: "anthropic/claude-sonnet-4-20250514"
+  temperature: 1.0
+  max_tokens: 16000
+
+# Budget presets
+budgets:
+  light:
+    max_metric_calls: 500
+    description: "Quick experimentation for Standard agents (~15 min)"
+    use_cases:
+      - "Standard agents (Tiers 0, 1, 4)"
+      - "Quick iteration"
+      - "Baseline establishment"
+
+  medium:
+    max_metric_calls: 2000
+    description: "Balanced optimization for Hybrid agents (~1 hour)"
+    use_cases:
+      - "Hybrid agents (causal_impact, experiment_designer)"
+      - "Production optimization"
+      - "A/B test preparation"
+
+  heavy:
+    max_metric_calls: 4000
+    description: "Thorough optimization for Deep agents (~2-3 hours)"
+    use_cases:
+      - "Deep agents (explainer, feedback_learner)"
+      - "Major releases"
+      - "Maximum performance"
+
+# Agent-specific configurations
+agents:
+  # Tier 2: Causal Analytics (Hybrid)
+  causal_impact:
+    budget: medium
+    enable_tool_optimization: true
+    metric_weights:
+      refutation: 0.30
+      sensitivity: 0.25
+      methodology: 0.25
+      business: 0.20
+    refutation_tests:
+      - placebo_treatment
+      - random_common_cause
+      - data_subset
+      - bootstrap
+      - sensitivity_e_value
+
+  gap_analyzer:
+    budget: medium
+    enable_tool_optimization: true
+    metric_weights:
+      roi_accuracy: 0.35
+      opportunity_coverage: 0.25
+      prioritization: 0.25
+      actionability: 0.15
+
+  heterogeneous_optimizer:
+    budget: medium
+    enable_tool_optimization: true
+    metric_weights:
+      cate_accuracy: 0.40
+      segment_validity: 0.30
+      treatment_coverage: 0.30
+
+  # Tier 3: Monitoring (Hybrid)
+  experiment_designer:
+    budget: medium
+    enable_tool_optimization: true
+    metric_weights:
+      power: 0.35
+      design: 0.30
+      learning: 0.20
+      prereg: 0.15
+    target_power: 0.80
+
+  drift_monitor:
+    budget: light
+    enable_tool_optimization: false
+    metric_weights:
+      detection_accuracy: 0.50
+      false_positive_rate: 0.30
+      latency: 0.20
+
+  health_score:
+    budget: light
+    enable_tool_optimization: false
+    metric_weights:
+      score_accuracy: 0.50
+      component_coverage: 0.30
+      interpretability: 0.20
+
+  # Tier 4: ML Predictions (Standard)
+  prediction_synthesizer:
+    budget: light
+    enable_tool_optimization: false
+    sla_threshold_ms: 2000
+
+  resource_optimizer:
+    budget: light
+    enable_tool_optimization: false
+    sla_threshold_ms: 2000
+
+  # Tier 5: Self-Improvement (Deep)
+  explainer:
+    budget: heavy
+    enable_tool_optimization: false
+    metric_weights:
+      clarity: 0.35
+      accuracy: 0.35
+      coverage: 0.30
+
+  feedback_learner:
+    budget: heavy
+    enable_tool_optimization: false
+    metric_weights:
+      extraction: 0.40
+      storage: 0.20
+      application: 0.40
+
+# GEPA algorithm settings
+algorithm:
+  candidate_selection_strategy: "pareto"
+  use_merge: true
+  max_merge_invocations: 5
+  track_stats: true
+  seed: 42
+
+# MLOps integration
+mlops:
+  use_mlflow: true
+  mlflow_experiment_prefix: "gepa_optimization"
+  use_opik: true
+  opik_project: "e2i-gepa"
+
+# Output settings
+output:
+  base_log_dir: "./gepa_logs"
+  save_all_candidates: false
+  save_pareto_frontier: true
+
+# A/B testing defaults
+ab_testing:
+  default_traffic_split: 0.10
+  default_target_sample_size: 1000
+  significance_level: 0.05
+  min_runtime_hours: 24
+  max_runtime_hours: 168  # 1 week
+
+# Versioning
+versioning:
+  output_dir: "./optimized_modules"
+  auto_backup: true
+  max_versions_per_agent: 10

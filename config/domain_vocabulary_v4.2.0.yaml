@@ -1,12 +1,14 @@
 # =============================================================================
 # E2I Causal Analytics - Domain Vocabulary
 # =============================================================================
-# Version: 4.2.0
-# Date: 2024-12-17
+# Version: 4.3.0
+# Date: 2024-12-27
 # Description: Fixed entity vocabularies for NLP processing, agent routing,
 #              and system-wide standardization. NO medical NER required.
 #
 # Changelog:
+#   v4.3.0 - Added GEPA Prompt Optimization vocabularies (Section 13)
+#   v4.2.2 - Added Energy Score Enhancement vocabularies (Section 12)
 #   v4.2.0 - Added Tool Composer & Orchestrator Classifier vocabularies
 #   v4.1.0 - Added causal validation ENUMs (v3.1.0 internal)
 #   v4.0.0 - Added ML Foundation and MLOps vocabularies
@@ -874,15 +876,177 @@ quality_tiers:
 
 
 # =============================================================================
+# SECTION 13: GEPA PROMPT OPTIMIZATION (V4.3.0)
+# =============================================================================
+# GEPA: Generative Evolutionary Prompting with AI
+# Replaces MIPROv2 as the default DSPy optimizer, providing:
+# - 10%+ performance improvement over MIPROv2
+# - Reflective evolution with rich textual feedback
+# - Joint tool optimization for DoWhy/EconML tools
+# - Pareto frontier for multi-objective KPI optimization
+
+optimizer_types:
+  description: "DSPy optimizer types for prompt optimization"
+  values:
+    - miprov2              # Previous DSPy optimizer (baseline)
+    - gepa                 # GEPA: Generative Evolutionary Prompting with AI
+    - bootstrap_fewshot    # DSPy BootstrapFewShot
+    - bootstrap_rs         # DSPy BootstrapRandomSearch
+    - copro                # DSPy COPRO (Collaborative Prompt Optimization)
+    - simba                # DSPy SIMBA
+    - labeled_fewshot      # DSPy LabeledFewShot
+    - knn_fewshot          # DSPy KNNFewShot
+    - manual               # Manual prompt engineering
+  default: gepa
+  added_in: "4.3.0"
+
+gepa_budget_presets:
+  description: "GEPA auto budget presets controlling optimization depth"
+  values:
+    - light                # Quick experimentation, ~500 metric calls
+    - medium               # Balanced optimization, ~2000 metric calls
+    - heavy                # Thorough optimization, ~4000+ metric calls
+    - custom               # User-defined max_metric_calls
+  default: medium
+  notes: |
+    - light: Best for rapid iteration, Standard agents (13 agents)
+    - medium: Recommended for Hybrid agents (causal_impact, experiment_designer, feature_analyzer)
+    - heavy: Recommended for Deep agents (explainer, feedback_learner)
+    - custom: When precise budget control needed
+  added_in: "4.3.0"
+
+ab_test_variants:
+  description: "A/B test variant identifiers for prompt optimization"
+  values:
+    - baseline             # MIPROv2 or manual baseline
+    - gepa                 # GEPA optimized version
+    - gepa_v2              # Second GEPA iteration
+    - gepa_v3              # Third GEPA iteration
+    - control              # Unoptimized control
+  default: baseline
+  added_in: "4.3.0"
+
+gepa_candidate_selection_strategies:
+  description: "GEPA candidate selection strategies for evolutionary optimization"
+  values:
+    - pareto               # Select from Pareto frontier (recommended)
+    - current_best         # Always select current best performer
+  default: pareto
+  notes: |
+    pareto maintains diversity and avoids local optima by sampling
+    candidates that excel on different validation instances.
+  added_in: "4.3.0"
+
+gepa_metric_components:
+  description: "Components of GEPA feedback metrics for different agent types"
+  causal_impact:
+    - refutation           # DoWhy refutation test pass rate (weight: 0.30)
+    - sensitivity          # E-value robustness (weight: 0.25)
+    - methodology          # DAG validity, method selection (weight: 0.25)
+    - business             # KPI attribution, actionability (weight: 0.20)
+  experiment_designer:
+    - power                # Power analysis validity (weight: 0.35)
+    - design               # Randomization, controls, blinding (weight: 0.30)
+    - learning             # ExperimentKnowledgeStore integration (weight: 0.20)
+    - preregistration      # Protocol completeness (weight: 0.15)
+  feedback_learner:
+    - extraction           # Learning extraction quality (weight: 0.40)
+    - storage              # Storage efficiency (weight: 0.20)
+    - application          # Downstream application success (weight: 0.40)
+  standard:
+    - sla                  # SLA compliance (weight: 0.40)
+    - accuracy             # Prediction accuracy (weight: 0.60)
+  added_in: "4.3.0"
+
+reflection_models:
+  description: "Recommended LLMs for GEPA reflection"
+  values:
+    - anthropic/claude-sonnet-4-20250514     # Recommended for most cases
+    - anthropic/claude-opus-4-5-20251101     # For complex deep reasoning
+    - openai/gpt-4o                          # Cost-effective alternative
+  default: anthropic/claude-sonnet-4-20250514
+  notes: |
+    Reflection LM is used by GEPA to reflect on execution traces
+    and propose improved instructions. Strong reasoning capability
+    is more important than speed for this role.
+  added_in: "4.3.0"
+
+gepa_agent_config:
+  description: "GEPA configuration by agent (augments agents section)"
+  priority_0:
+    description: "Optimize first - highest ROI Hybrid agents"
+    agents:
+      - causal_impact
+      - experiment_designer
+    config:
+      default_budget: medium
+      enable_tool_optimization: true
+  priority_1:
+    description: "Optimize second - Deep agents with extended reasoning"
+    agents:
+      - feedback_learner
+      - explainer
+      - feature_analyzer
+    config:
+      default_budget: heavy
+      enable_tool_optimization: false
+  priority_2:
+    description: "Optimize last - Standard agents with light optimization"
+    agents:
+      - orchestrator
+      - gap_analyzer
+      - heterogeneous_optimizer
+      - drift_monitor
+      - health_score
+      - prediction_synthesizer
+      - resource_optimizer
+      - scope_definer
+      - data_preparer
+      - model_selector
+      - model_trainer
+      - model_deployer
+      - observability_connector
+    config:
+      default_budget: light
+      enable_tool_optimization: false
+  added_in: "4.3.0"
+
+prompt_optimization_tables:
+  description: "Database tables for GEPA optimization tracking"
+  count: 5
+  tables:
+    - prompt_optimization_runs       # Tracks optimization runs
+    - optimized_instructions         # Stores optimized prompts
+    - optimized_tool_descriptions    # Stores optimized tool configs
+    - prompt_ab_tests                # A/B test definitions
+    - prompt_ab_test_observations    # A/B test observations
+  migration: "023_gepa_optimization_tables.sql"
+  added_in: "4.3.0"
+
+
+# =============================================================================
 # METADATA
 # =============================================================================
 
 _metadata:
-  version: "4.2.2"
-  last_updated: "2024-12-26"
+  version: "4.3.0"
+  last_updated: "2024-12-27"
   maintainer: "E2I Platform Team"
 
   version_history:
+    - version: "4.3.0"
+      date: "2024-12-27"
+      changes:
+        - "Added GEPA Prompt Optimization section (SECTION 13)"
+        - "Added optimizer_types vocabulary (miprov2, gepa, bootstrap_fewshot, etc.)"
+        - "Added gepa_budget_presets (light, medium, heavy, custom)"
+        - "Added ab_test_variants for A/B testing"
+        - "Added gepa_candidate_selection_strategies (pareto, current_best)"
+        - "Added gepa_metric_components with weights by agent type"
+        - "Added reflection_models for GEPA reflection LLM configuration"
+        - "Added gepa_agent_config for per-agent GEPA configuration"
+        - "Added prompt_optimization_tables for database tracking"
+
     - version: "4.2.2"
       date: "2024-12-26"
       changes:
