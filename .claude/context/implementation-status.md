@@ -88,9 +88,9 @@ All 18 agents are now fully implemented with LangGraph workflows, test suites, a
 | Agent | Code Path | Tests | Compliance | Status |
 |-------|-----------|-------|------------|--------|
 | explainer | src/agents/explainer/ | ✅ 85 tests | 100% | ✅ Production-ready |
-| feedback_learner | src/agents/feedback_learner/ | ✅ 84 tests | 100% | ✅ Production-ready |
+| feedback_learner | src/agents/feedback_learner/ | ✅ 148 tests | 100% | ✅ Production-ready (RAGAS-Opik enhanced) |
 
-**Tier 5 Readiness**: Code ✅ 100% | Tests ✅
+**Tier 5 Readiness**: Code ✅ 100% | Tests ✅ | RAGAS-Opik ✅
 
 #### Additional Agents (Not in original 18-agent spec)
 
@@ -177,6 +177,15 @@ All database tables defined and ready for use.
 - ✅ audit_chain_tables (audit trail tracking) - database/audit/011_audit_chain_tables.sql
 - ✅ causal_validation_tables (causal validation gates) - database/ml/010_causal_validation_tables.sql
 
+#### Self-Improvement Tables (RAGAS-Opik) - database/ml/022_self_improvement_tables.sql
+- ✅ evaluation_results (rubric evaluation outcomes)
+- ✅ retrieval_configurations (RAG retrieval settings)
+- ✅ prompt_configurations (prompt version management)
+- ✅ improvement_actions (auto-update tracking)
+- ✅ experiment_knowledge_store (DSPy experiment cache)
+- ✅ improvement_type ENUM (prompt_optimization, retrieval_tuning, model_selection, knowledge_update)
+- ✅ improvement_priority ENUM (critical, high, medium, low)
+
 **Database Readiness**: 100% ✅
 
 ---
@@ -231,6 +240,37 @@ All 7 MLOps tools are **configured** with varying implementation status.
 | Config Loader | ✅ | config/observability.yaml with environment overrides |
 
 **Test Coverage**: 284+ unit tests, 31 integration tests, 100% contract compliance (69/69)
+
+### RAGAS-Opik Self-Improvement Integration (Completed 2025-12-26)
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| RubricEvaluator | ✅ | AI-as-judge with 5 weighted criteria, Claude API + fallback |
+| RubricNode | ✅ | LangGraph node for feedback_learner pipeline |
+| RAGASEvaluator | ✅ | RAGAS metrics (faithfulness, relevancy, precision, recall) |
+| OpikEvaluationTracer | ✅ | Centralized Opik tracing with circuit breaker |
+| SelfImprovementConfig | ✅ | Pydantic config loader for self_improvement.yaml |
+
+#### Rubric Criteria (5 weighted)
+
+| Criterion | Weight | Purpose |
+|-----------|--------|---------|
+| causal_validity | 0.25 | Correct causal reasoning |
+| actionability | 0.25 | Actionable recommendations |
+| evidence_chain | 0.20 | Evidence-backed claims |
+| regulatory_awareness | 0.15 | Pharma compliance awareness |
+| uncertainty_communication | 0.15 | Proper uncertainty handling |
+
+#### Decision Framework
+
+| Decision | Threshold | Action |
+|----------|-----------|--------|
+| ACCEPTABLE | score >= 4.0 | No action needed |
+| SUGGESTION | score 3.0-3.9 | Generate improvement suggestion |
+| AUTO_UPDATE | score 2.0-2.9 | Apply automatic improvement |
+| ESCALATE | score < 2.0 | Escalate to human review |
+
+**Test Coverage**: 148 tests for feedback_learner module
 
 **Note**: Remaining MLOps integration depends on Tier 0 agent implementations.
 
@@ -389,6 +429,7 @@ All phases completed. Every agent has:
 
 1. ~~**Opik Integration**~~ ✅ Completed 2025-12-21 (circuit breaker, batch processing, caching, self-monitoring)
 2. ~~**Agent Implementation**~~ ✅ Completed 2025-12-22 (all 18 agents with CONTRACT_VALIDATION.md and test suites)
+3. ~~**Self-Improvement Loop**~~ ✅ Completed 2025-12-26 (RAGAS-Opik integration with rubric evaluator, Opik tracing, config loader)
 
 ---
 
@@ -442,6 +483,14 @@ pip list | grep -E "mlflow|opik|optuna|feast|great-expectations|bentoml|shap"
 **Next Review**: 2026-01-26 (monthly cadence)
 **Maintained By**: E2I Development Team
 **Recent Changes**:
+- 2025-12-26: RAGAS-Opik Self-Improvement Integration Complete
+  - RubricEvaluator: AI-as-judge with 5 weighted criteria (Claude API + heuristic fallback)
+  - RubricNode: LangGraph node integrated into feedback_learner 7-phase pipeline
+  - RAGASEvaluator: RAGAS metrics (faithfulness, answer_relevancy, context_precision, context_recall)
+  - OpikEvaluationTracer: Centralized Opik tracing with circuit breaker for graceful degradation
+  - SelfImprovementConfig: Pydantic-validated YAML config loader (config/self_improvement.yaml)
+  - Database: 5 new tables + 2 ENUMs (database/ml/022_self_improvement_tables.sql)
+  - Tests: feedback_learner now has 148 tests (up from 84)
 - 2025-12-26: Memory & ML Data Flow Audit Complete
   - Database Migration 018: Added 8 Tier 0 + tool_composer agents to e2i_agent_name enum (now 20 total)
   - Database Migration 019: Fixed get_agent_activity_context RPC function signatures (Python-compatible field names)
