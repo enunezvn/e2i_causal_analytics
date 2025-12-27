@@ -252,21 +252,57 @@ async def run_pilot(
             )
             callbacks.append(mlflow_callback)
 
+        # Set up Opik tracer for observability
+        opik_tracer = None
+        if track_opik:
+            opik_tracer = GEPAOpikTracer(
+                project_name=f"gepa_pilot_{agent_name}",
+                tags={
+                    "pilot": "true",
+                    "budget": budget,
+                },
+            )
+            if opik_tracer.enabled:
+                logger.info("Opik tracing enabled for optimization run")
+            else:
+                logger.warning("Opik tracer created but connector not available")
+
         # Run optimization
         logger.info("Starting GEPA optimization...")
         start_time = datetime.now()
 
-        optimized = optimizer.compile(
-            student,
-            trainset=trainset,
-        )
+        # Run with Opik tracing if enabled
+        if opik_tracer and opik_tracer.enabled:
+            async with opik_tracer.trace_run(
+                agent_name=agent_name,
+                budget=budget,
+                enable_tool_optimization=True,
+            ):
+                optimized = optimizer.compile(
+                    student,
+                    trainset=trainset,
+                )
+                elapsed = (datetime.now() - start_time).total_seconds()
 
-        elapsed = (datetime.now() - start_time).total_seconds()
+                # Log completion to Opik
+                await opik_tracer.log_optimization_complete(
+                    best_score=getattr(optimizer, "best_score", 0.0),
+                    total_generations=getattr(optimizer, "total_generations", 0),
+                    total_metric_calls=getattr(optimizer, "total_metric_calls", 0),
+                    total_seconds=elapsed,
+                )
+        else:
+            optimized = optimizer.compile(
+                student,
+                trainset=trainset,
+            )
+            elapsed = (datetime.now() - start_time).total_seconds()
 
         # Extract results
         results["status"] = "completed"
         results["elapsed_seconds"] = elapsed
         results["completed_at"] = datetime.now().isoformat()
+        results["opik_enabled"] = track_opik and opik_tracer and opik_tracer.enabled
 
         # Get final score if available
         if hasattr(optimizer, "best_score"):

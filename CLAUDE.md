@@ -341,8 +341,21 @@ metric = get_metric_for_agent("causal_impact")
 
 ### Migration Documentation
 - Plan: `.claude/plans/E2I_GEPA_Migration_Plan.md`
-- Progress: `DSPy miprov2 to gepa/GEPA_Migration_Progress.md`
-- Schema: `database/ml/023_gepa_optimization_tables.sql`
+- Schema: `database/ml/011_gepa_optimization_tables.sql`
+
+### Opik Integration
+GEPA uses the `GEPAOpikTracer` class for observability:
+```python
+from src.optimization.gepa.integration import GEPAOpikTracer
+
+tracer = GEPAOpikTracer(project_name="gepa_optimization")
+async with tracer.trace_run(agent_name="causal_impact", budget="medium") as ctx:
+    # Optimization runs here
+    ctx.log_generation(gen_num, best_score, candidates)
+    ctx.log_optimization_complete(best_score, total_gens, total_calls, elapsed)
+```
+
+Local Opik instance: http://localhost:5173 (via nginx proxy to port 8080)
 
 ---
 
@@ -539,11 +552,19 @@ This document combines:
 - **Claude Code Framework v3.0** - Unified framework base with BMAD features
 - **E2I Extensions** - Domain-specific specialists, contracts, context
 
-**Last Updated**: 2025-12-19
-**E2I Version**: v4.2 (Architecture alignment)
+**Last Updated**: 2025-12-27
+**E2I Version**: v4.3 (GEPA Prompt Optimization)
 **Framework Version**: v3.0 + BMAD (v2.1)
 
-**Latest Changes**:
+**Latest Changes (v4.3)**:
+- Migrated DSPy optimizer from MIPROv2 to GEPA (10%+ performance improvement)
+- Added `src/optimization/gepa/` module with agent-specific metrics
+- Added GEPA Opik integration for optimization tracing (UUID v7 compatible)
+- Added database schema `database/ml/011_gepa_optimization_tables.sql`
+- Added 60+ GEPA-related tests across unit and integration
+- Updated Feedback Learner with GEPA optimizer support
+
+**Previous Changes (v4.2)**:
 - Renamed `src/causal/` to `src/causal_engine/` (aligned with docs)
 - Created `src/rag/` with CausalRAG implementation structure
 - Created `src/repositories/` with split-aware data access layer
