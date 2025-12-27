@@ -1,13 +1,20 @@
 """
 E2I Feedback Learner Agent - DSPy Integration Module
-Version: 4.2
-Purpose: DSPy signatures, training signals, and MIPROv2 optimization for feedback learning
+Version: 4.3
+Purpose: DSPy signatures, training signals, and GEPA/MIPROv2 optimization for feedback learning
 
 This module implements the DSPy integration patterns for the Feedback Learner agent,
 enabling continuous self-improvement through:
 1. Training signal collection from all agents
-2. MIPROv2 prompt optimization
-3. Cognitive context enrichment from CognitiveRAG
+2. GEPA prompt optimization (primary, 10%+ improvement over MIPROv2)
+3. MIPROv2 prompt optimization (fallback)
+4. Cognitive context enrichment from CognitiveRAG
+
+GEPA Migration (v4.3):
+- Added GEPA as the default optimizer for Feedback Learner
+- FeedbackLearnerOptimizer now supports optimizer_type="gepa" or "miprov2"
+- Integrated with FeedbackLearnerGEPAMetric for reflective evaluation
+- Module versioning support via save_optimized_module
 """
 
 from __future__ import annotations
@@ -15,9 +22,12 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Optional, TypedDict
+from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
 
 logger = logging.getLogger(__name__)
+
+# Type alias for optimizer selection
+OptimizerType = Literal["miprov2", "gepa"]
 
 
 # =============================================================================
@@ -395,28 +405,80 @@ except ImportError:
 
 
 # =============================================================================
-# 5. MIPROv2 OPTIMIZATION HELPERS
+# 4.1 GEPA OPTIMIZER SUPPORT
+# =============================================================================
+
+# Conditional GEPA import
+try:
+    from src.optimization.gepa import (
+        create_gepa_optimizer,
+        get_metric_for_agent,
+        save_optimized_module,
+        load_optimized_module,
+    )
+    from src.optimization.gepa.metrics import FeedbackLearnerGEPAMetric
+
+    GEPA_AVAILABLE = True
+    logger.info("GEPA optimizer loaded for Feedback Learner agent")
+except ImportError:
+    GEPA_AVAILABLE = False
+    logger.info("GEPA not available - using MIPROv2 optimizer")
+
+    # Placeholder functions when GEPA is not available
+    create_gepa_optimizer = None
+    get_metric_for_agent = None
+    save_optimized_module = None
+    load_optimized_module = None
+    FeedbackLearnerGEPAMetric = None
+
+
+# =============================================================================
+# 5. DSPy OPTIMIZATION HELPERS (MIPROv2 + GEPA)
 # =============================================================================
 
 
 class FeedbackLearnerOptimizer:
     """
-    MIPROv2 optimizer for Feedback Learner agent prompts.
+    DSPy optimizer for Feedback Learner agent prompts.
 
-    Uses collected training signals to optimize the DSPy signatures
-    used in pattern detection, recommendation generation, and
-    knowledge updates.
+    Supports both MIPROv2 and GEPA optimizers. Uses collected training
+    signals to optimize the DSPy signatures used in pattern detection,
+    recommendation generation, and knowledge updates.
+
+    GEPA provides 10%+ improvement over MIPROv2 via:
+    - Reflective evolution with rich textual feedback
+    - Pareto frontier for multi-objective optimization
+    - Better exploration of prompt space
     """
 
-    def __init__(self, signal_store: Optional[Any] = None):
+    def __init__(
+        self,
+        signal_store: Optional[Any] = None,
+        optimizer_type: OptimizerType = "gepa",
+    ):
         """
         Initialize optimizer with signal store.
 
         Args:
             signal_store: Store for retrieving historical training signals
+            optimizer_type: Optimizer to use - "gepa" (recommended) or "miprov2"
         """
         self.signal_store = signal_store
         self._cached_examples = {}
+
+        # Select optimizer based on availability and preference
+        if optimizer_type == "gepa" and GEPA_AVAILABLE:
+            self.optimizer_type = "gepa"
+            logger.info("Using GEPA optimizer for Feedback Learner")
+        elif DSPY_AVAILABLE:
+            self.optimizer_type = "miprov2"
+            if optimizer_type == "gepa":
+                logger.warning("GEPA not available, falling back to MIPROv2")
+            else:
+                logger.info("Using MIPROv2 optimizer for Feedback Learner")
+        else:
+            self.optimizer_type = None
+            logger.warning("No optimizer available - optimization disabled")
 
     def pattern_metric(self, example, prediction, trace=None) -> float:
         """
@@ -494,10 +556,122 @@ class FeedbackLearnerOptimizer:
         self,
         phase: Literal["pattern", "recommendation", "update", "summary"],
         training_signals: List[Dict[str, Any]],
+        budget: Union[int, str] = "medium",
+    ) -> Optional[Any]:
+        """
+        Run optimization for a specific phase using GEPA or MIPROv2.
+
+        Args:
+            phase: Which signature to optimize
+            training_signals: Historical training signals
+            budget: For GEPA: "light", "medium", "heavy". For MIPROv2: int (trials)
+
+        Returns:
+            Optimized DSPy module or None if optimization fails
+        """
+        if self.optimizer_type == "gepa":
+            return await self._optimize_with_gepa(phase, training_signals, budget)
+        elif self.optimizer_type == "miprov2":
+            # Convert string budget to int for MIPROv2
+            mipro_budget = (
+                {"light": 20, "medium": 50, "heavy": 100}.get(budget, 50)
+                if isinstance(budget, str)
+                else budget
+            )
+            return await self._optimize_with_miprov2(phase, training_signals, mipro_budget)
+        else:
+            logger.warning("No optimizer available")
+            return None
+
+    async def _optimize_with_gepa(
+        self,
+        phase: Literal["pattern", "recommendation", "update", "summary"],
+        training_signals: List[Dict[str, Any]],
+        budget: str = "medium",
+    ) -> Optional[Any]:
+        """
+        Run GEPA optimization for a specific phase.
+
+        GEPA uses reflective evolution with rich textual feedback,
+        providing 10%+ improvement over MIPROv2.
+
+        Args:
+            phase: Which signature to optimize
+            training_signals: Historical training signals
+            budget: GEPA budget preset - "light", "medium", "heavy"
+
+        Returns:
+            Optimized DSPy module or None if optimization fails
+        """
+        if not GEPA_AVAILABLE or not DSPY_AVAILABLE:
+            logger.warning("GEPA or DSPy not available for optimization")
+            return None
+
+        import dspy
+
+        # Convert signals to examples
+        examples = self._signals_to_examples(training_signals, phase)
+        trainset = examples[: int(len(examples) * 0.8)]
+        valset = examples[int(len(examples) * 0.8) :]
+
+        if len(trainset) < 5:
+            logger.warning(f"Insufficient examples ({len(trainset)}) for GEPA optimization")
+            return None
+
+        signatures = {
+            "pattern": PatternDetectionSignature,
+            "recommendation": RecommendationGenerationSignature,
+            "update": KnowledgeUpdateSignature,
+            "summary": LearningSummarySignature,
+        }
+
+        if phase not in signatures or signatures[phase] is None:
+            logger.warning(f"Unknown or unavailable optimization phase: {phase}")
+            return None
+
+        # Get GEPA metric for feedback learner
+        metric = get_metric_for_agent("feedback_learner")
+
+        # Create GEPA optimizer
+        optimizer = create_gepa_optimizer(
+            metric=metric,
+            trainset=trainset,
+            valset=valset,
+            budget=budget,
+            enable_tool_optimization=False,  # Feedback Learner is Deep agent, not Hybrid
+            seed=42,
+        )
+
+        # Create module
+        module = dspy.ChainOfThought(signatures[phase])
+
+        # Run optimization
+        logger.info(f"Starting GEPA optimization for {phase} phase with budget={budget}")
+        optimized = optimizer.compile(module, trainset=trainset)
+
+        # Optionally save optimized module
+        if optimized and hasattr(optimizer, "best_score"):
+            try:
+                version_id = await save_optimized_module(
+                    agent_name="feedback_learner",
+                    optimized_module=optimized,
+                    budget=budget,
+                    score=optimizer.best_score,
+                )
+                logger.info(f"Saved optimized module version: {version_id}")
+            except Exception as e:
+                logger.warning(f"Failed to save optimized module: {e}")
+
+        return optimized
+
+    async def _optimize_with_miprov2(
+        self,
+        phase: Literal["pattern", "recommendation", "update", "summary"],
+        training_signals: List[Dict[str, Any]],
         budget: int = 50,
     ) -> Optional[Any]:
         """
-        Run MIPROv2 optimization for a specific phase.
+        Run MIPROv2 optimization for a specific phase (legacy).
 
         Args:
             phase: Which signature to optimize
@@ -708,6 +882,8 @@ __all__ = [
     # Optimization
     "FeedbackLearnerOptimizer",
     "DSPY_AVAILABLE",
+    "GEPA_AVAILABLE",
+    "OptimizerType",
     # Memory
     "create_memory_contribution",
 ]

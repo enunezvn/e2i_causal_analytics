@@ -9,6 +9,45 @@
 
 ## [Unreleased]
 
+### Added - GEPA Prompt Optimization (V4.3)
+- **src/optimization/gepa/**: New GEPA optimizer module replacing MIPROv2
+  - `metrics/base.py`: E2IGEPAMetric protocol with ScoreWithFeedback support
+  - `metrics/causal_impact_metric.py`: Tier 2 Hybrid agent metric
+  - `metrics/experiment_designer_metric.py`: Tier 3 Hybrid agent metric
+  - `metrics/feedback_learner_metric.py`: Tier 5 Deep agent metric
+  - `metrics/standard_agent_metric.py`: Standard agents metric
+  - `optimizer_setup.py`: GEPA optimizer factory (light/medium/heavy budgets)
+  - `versioning.py`: Module versioning with save/load/rollback
+  - `ab_test.py`: A/B testing for optimized modules
+  - `tools/causal_tools.py`: 9 DoWhy/EconML tools for joint optimization
+  - `integration/mlflow_integration.py`: GEPAMLflowCallback
+  - `integration/opik_integration.py`: GEPAOpikTracer
+  - `integration/ragas_feedback.py`: RAGASFeedbackProvider
+- **src/agents/feedback_learner/dspy_integration.py**: GEPA optimizer support
+  - `OptimizerType = Literal["miprov2", "gepa"]` for optimizer selection
+  - GEPA as default with MIPROv2 fallback
+- **src/rag/cognitive_rag_dspy.py**: GEPA support for Cognitive RAG phases
+  - Optimizer dispatch to GEPA or MIPROv2
+  - RAGAS metric integration for RAG evaluation
+- **database/ml/023_gepa_optimization_tables.sql**: Database schema
+  - Tables: gepa_optimization_runs, gepa_module_versions, gepa_ab_experiments
+  - Views: v_gepa_performance_summary
+- **config/gepa_config.yaml**: GEPA configuration
+  - Budget presets (light, medium, heavy)
+  - Agent-specific optimization settings
+- **config/domain_vocabulary_v4.2.0.yaml**: Added GEPA vocabulary (Section 13)
+  - optimizer_types, gepa_budget_presets, ab_test_variants
+  - gepa_candidate_selection_strategies, gepa_metric_components
+  - reflection_models, gepa_agent_config, prompt_optimization_tables
+- **scripts/gepa_pilot.py**: Phase 1 pilot for Causal Impact
+- **scripts/gepa_phase2_hybrid.py**: Phase 2 all hybrid agents
+- **scripts/gepa_integration_test.py**: Integration test suite
+- **Tests**: Comprehensive GEPA test coverage (60+ tests)
+  - `tests/unit/test_optimization/test_gepa_metrics.py`: Metric unit tests
+  - `tests/unit/test_optimization/test_gepa_optimizer.py`: Optimizer unit tests
+  - `tests/integration/test_gepa_integration.py`: Integration tests
+  - All tests use xdist_group markers for DSPy import safety
+
 ### Added - Energy Score-based Estimator Selection (V4.2)
 - **src/causal_engine/energy_score/**: New module for quality-based estimator selection
   - `score_calculator.py`: EnergyScoreCalculator with 3 weighted components
