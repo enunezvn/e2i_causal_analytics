@@ -26,6 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from src.api.routes.cognitive import router as cognitive_router
+from src.api.routes.digital_twin import router as digital_twin_router
 
 # Import dependencies
 from src.api.dependencies.bentoml_client import (
@@ -292,13 +293,15 @@ app.include_router(monitoring_router)
 # A/B testing & experiment execution endpoints (Phase 15)
 app.include_router(experiments_router)
 
+# Digital Twin pre-screening endpoints (Phase 15)
+app.include_router(digital_twin_router)
+
 # Model prediction endpoints (BentoML integration)
 app.include_router(predictions_router)
 
 # TODO: Add additional routers as they're developed:
 # - Agent orchestration: /api/agents
 # - Causal inference: /api/causal
-# - Digital twins: /api/twins
 # - Feature engineering: /api/features
 # - Model training: /api/models
 

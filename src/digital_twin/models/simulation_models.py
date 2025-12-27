@@ -153,7 +153,7 @@ class SimulationResult(BaseModel):
     # Configuration
     intervention_config: InterventionConfig
     population_filters: PopulationFilter = Field(default_factory=PopulationFilter)
-    twin_count: int = Field(ge=1)
+    twin_count: int = Field(ge=0)  # Can be 0 for error cases (insufficient twins)
 
     # Effect estimates
     simulated_ate: float = Field(description="Average Treatment Effect")

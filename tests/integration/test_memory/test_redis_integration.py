@@ -12,6 +12,7 @@ Environment variables:
 
 import asyncio
 import os
+import uuid
 
 import pytest
 
@@ -25,10 +26,12 @@ except ImportError:
 
 
 # Use both the package check and the marker for auto-skip via global conftest
+# xdist_group ensures all Redis tests run on the same worker to prevent race conditions
 pytestmark = [
     pytest.mark.skipif(not REDIS_AVAILABLE, reason="redis package not installed"),
     pytest.mark.requires_redis,
     pytest.mark.integration,
+    pytest.mark.xdist_group(name="redis_integration"),
 ]
 
 
@@ -51,34 +54,36 @@ async def redis_client():
 
     yield client
 
-    # Cleanup: delete all test keys
-    try:
-        keys = await client.keys("e2i:test:*")
-        if keys:
-            await client.delete(*keys)
-    except Exception:
-        pass  # Ignore cleanup errors
     await client.aclose()
 
 
 @pytest.fixture
 async def working_memory(redis_client):
-    """Create a working memory instance with test prefixes."""
+    """Create a working memory instance with unique test prefixes per test.
+
+    Each test gets a unique prefix to prevent race conditions when running
+    tests in parallel with pytest-xdist.
+    """
     from src.memory.working_memory import RedisWorkingMemory, reset_working_memory
+
+    # Generate unique prefix for this test instance to avoid parallel test conflicts
+    test_id = uuid.uuid4().hex[:8]
+    session_prefix = f"e2i:test:{test_id}:session:"
+    evidence_prefix = f"e2i:test:{test_id}:evidence:"
 
     reset_working_memory()
     wm = RedisWorkingMemory()
     wm._client = redis_client
 
-    # Use test prefixes to avoid conflicts
-    wm._working_config.session_prefix = "e2i:test:session:"
-    wm._working_config.evidence_prefix = "e2i:test:evidence:"
+    # Use unique test prefixes to avoid conflicts between parallel tests
+    wm._working_config.session_prefix = session_prefix
+    wm._working_config.evidence_prefix = evidence_prefix
 
     yield wm
 
-    # Cleanup sessions created during test
+    # Cleanup: only delete keys for this specific test instance
     try:
-        keys = await redis_client.keys("e2i:test:*")
+        keys = await redis_client.keys(f"e2i:test:{test_id}:*")
         if keys:
             await redis_client.delete(*keys)
     except Exception:
