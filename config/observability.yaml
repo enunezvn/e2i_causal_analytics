@@ -27,8 +27,11 @@ opik:
   project_name: "e2i-causal-analytics"     # Project name in Opik dashboard
 
   # Local mode (for development/testing without cloud)
-  use_local: false
-  local_port: 5173                         # Port for local Opik instance
+  # Set to true to use local Opik instance (UI: localhost:5173, API: localhost:8080)
+  # Can be overridden with OPIK_USE_LOCAL=true environment variable
+  use_local: true
+  local_endpoint: "http://localhost:5173"  # Local Opik API endpoint (via nginx proxy)
+  local_port: 5173                         # Port for local Opik UI
 
   # Auto-flush settings
   flush_on_shutdown: true

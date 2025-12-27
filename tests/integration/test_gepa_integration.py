@@ -459,3 +459,143 @@ class TestGEPAVocabulary:
 
         # Check for expected sections
         assert "budget_presets" in config or "budgets" in str(config).lower()
+
+
+class TestGEPAOpikIntegration:
+    """Test GEPA Opik tracing integration."""
+
+    def test_opik_integration_imports(self):
+        """Test Opik integration module imports correctly."""
+        from src.optimization.gepa.integration.opik_integration import (
+            GEPAOpikTracer,
+            GEPASpanContext,
+            trace_optimization,
+        )
+
+        assert GEPAOpikTracer is not None
+        assert GEPASpanContext is not None
+        assert trace_optimization is not None
+
+    def test_gepa_opik_tracer_initialization(self):
+        """Test GEPAOpikTracer can be initialized."""
+        from src.optimization.gepa.integration.opik_integration import GEPAOpikTracer
+
+        tracer = GEPAOpikTracer(
+            project_name="gepa_test",
+            tags={"test": "true"},
+            sample_rate=0.5,
+        )
+
+        assert tracer.project_name == "gepa_test"
+        assert tracer.tags == {"test": "true"}
+        assert tracer.sample_rate == 0.5
+        assert tracer.log_candidates is True
+        assert tracer.log_instructions is True
+
+    def test_gepa_span_context_dataclass(self):
+        """Test GEPASpanContext dataclass fields."""
+        from src.optimization.gepa.integration.opik_integration import GEPASpanContext
+
+        ctx = GEPASpanContext(
+            trace_id="test-trace-id",
+            span_id="test-span-id",
+            agent_name="causal_impact",
+        )
+
+        assert ctx.trace_id == "test-trace-id"
+        assert ctx.span_id == "test-span-id"
+        assert ctx.agent_name == "causal_impact"
+        assert ctx.generation is None
+        assert ctx.metadata == {}
+        assert ctx._generation_events == []
+
+    def test_gepa_span_context_log_generation(self):
+        """Test GEPASpanContext can log generation events."""
+        from src.optimization.gepa.integration.opik_integration import GEPASpanContext
+
+        ctx = GEPASpanContext(
+            trace_id="test-trace-id",
+            span_id="test-span-id",
+            agent_name="causal_impact",
+        )
+
+        # Log generation without Opik span (should not raise)
+        ctx.log_generation(
+            generation=0,
+            best_score=0.75,
+            pareto_size=3,
+            candidate_count=10,
+            metric_calls=25,
+            elapsed_seconds=5.5,
+        )
+
+        assert len(ctx._generation_events) == 1
+        assert ctx._generation_events[0]["generation"] == 0
+        assert ctx._generation_events[0]["best_score"] == 0.75
+        assert ctx.generation == 0
+
+    def test_gepa_span_context_log_optimization_complete(self):
+        """Test GEPASpanContext can log optimization completion."""
+        from src.optimization.gepa.integration.opik_integration import GEPASpanContext
+
+        ctx = GEPASpanContext(
+            trace_id="test-trace-id",
+            span_id="test-span-id",
+            agent_name="causal_impact",
+        )
+
+        # Log some generations first
+        ctx.log_generation(generation=0, best_score=0.5)
+        ctx.log_generation(generation=1, best_score=0.7)
+
+        # Log completion (should not raise without Opik span)
+        ctx.log_optimization_complete(
+            best_score=0.85,
+            total_generations=2,
+            total_metric_calls=50,
+            total_seconds=10.0,
+            optimized_instructions="Test instructions",
+            pareto_frontier_size=5,
+        )
+
+        assert len(ctx._generation_events) == 2
+
+    @pytest.mark.asyncio
+    async def test_gepa_opik_tracer_disabled_mode(self):
+        """Test GEPAOpikTracer yields context when disabled."""
+        from src.optimization.gepa.integration.opik_integration import GEPAOpikTracer
+
+        # Create tracer with 0% sample rate to ensure it's disabled
+        tracer = GEPAOpikTracer(
+            project_name="gepa_test",
+            sample_rate=0.0,  # Always disable tracing
+        )
+
+        async with tracer.trace_run(
+            agent_name="test_agent",
+            budget="light",
+        ) as ctx:
+            assert ctx.trace_id == "disabled"
+            assert ctx.span_id == "disabled"
+            assert ctx.agent_name == "test_agent"
+
+            # Should still allow logging (no-op)
+            ctx.log_generation(generation=0, best_score=0.5)
+            ctx.log_optimization_complete(
+                best_score=0.5,
+                total_generations=1,
+                total_metric_calls=10,
+                total_seconds=1.0,
+            )
+
+    def test_trace_optimization_decorator_exists(self):
+        """Test trace_optimization decorator is callable."""
+        from src.optimization.gepa.integration.opik_integration import trace_optimization
+
+        decorator = trace_optimization(
+            agent_name="causal_impact",
+            budget="medium",
+            project_name="test_project",
+        )
+
+        assert callable(decorator)
