@@ -16,12 +16,14 @@ from typing_extensions import NotRequired, TypedDict
 AgentStatus = Literal[
     "pending",
     "loading_context",
+    "simulating_twins",  # Phase 15: Twin simulation step
     "reasoning",
     "calculating",
     "auditing",
     "redesigning",
     "generating",
     "completed",
+    "skipped",  # Phase 15: Experiment skipped due to twin recommendation
     "failed",
 ]
 FormalityLevel = Literal["light", "medium", "heavy"]
@@ -204,12 +206,29 @@ class ExperimentDesignState(TypedDict):
     max_redesign_iterations: int
     enable_validity_audit: bool
 
+    # ===== Digital Twin Pre-Screening =====
+    # Added in Phase 15 for twin simulation integration
+    enable_twin_simulation: NotRequired[bool]
+    intervention_type: NotRequired[str]
+    brand: NotRequired[str]
+    treatment_variable: NotRequired[str]
+    outcome_variable: NotRequired[str]
+
     # ===== Organizational Context =====
     historical_experiments: NotRequired[list[dict[str, Any]]]
     domain_knowledge: NotRequired[dict[str, Any]]
     regulatory_requirements: NotRequired[list[str]]
     budget_constraints: NotRequired[dict[str, Any]]
     timeline_constraints: NotRequired[dict[str, Any]]
+
+    # ===== Twin Simulation Outputs =====
+    # Phase 15: Digital Twin pre-screening results
+    twin_simulation_result: NotRequired[dict[str, Any]]
+    twin_recommendation: NotRequired[str]  # "deploy", "skip", "refine"
+    twin_simulated_ate: NotRequired[float]
+    twin_recommended_sample_size: NotRequired[int]
+    twin_top_segments: NotRequired[list[dict[str, Any]]]
+    skip_experiment: NotRequired[bool]  # True if twin recommends skip
 
     # ===== Design Reasoning Outputs =====
     design_type: NotRequired[DesignType]

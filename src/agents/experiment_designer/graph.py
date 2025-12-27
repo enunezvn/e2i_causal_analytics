@@ -3,8 +3,14 @@
 This module assembles the LangGraph workflow for the experiment designer agent.
 
 Workflow: Sequential execution with conditional redesign loop
-    START → context_loader → design_reasoning → power_analysis → validity_audit →
-    (conditional: redesign → power_analysis) → template_generator → END
+    START → context_loader → twin_simulation (optional) → design_reasoning →
+    power_analysis → validity_audit → (conditional: redesign → power_analysis) →
+    template_generator → END
+
+Phase 15 Integration:
+    - Added twin_simulation node between context_loader and design_reasoning
+    - If simulation recommends SKIP, workflow exits early
+    - If simulation recommends DEPLOY, passes prior_estimate to power_analysis
 
 Graph Architecture: .claude/specialists/Agent_Specialists_Tiers 1-5/experiment-designer.md lines 864-951
 Contract: .claude/contracts/tier3-contracts.md lines 82-142
@@ -21,6 +27,7 @@ from src.agents.experiment_designer.nodes import (
     PowerAnalysisNode,
     RedesignNode,
     TemplateGeneratorNode,
+    TwinSimulationNode,
     ValidityAuditNode,
 )
 from src.agents.experiment_designer.state import ExperimentDesignState
@@ -87,29 +94,40 @@ def error_handler_node(state: ExperimentDesignState) -> ExperimentDesignState:
 def create_experiment_designer_graph(
     knowledge_store: Any = None,
     max_redesign_iterations: int = 2,
+    enable_twin_simulation: bool = True,
+    auto_skip_on_low_effect: bool = True,
 ) -> StateGraph:
     """Create the experiment designer agent graph with redesign loop.
 
     Workflow:
         1. context_loader: Load organizational learning context
-        2. design_reasoning: Deep reasoning for experiment design (LLM)
-        3. power_analysis: Statistical power calculations
-        4. validity_audit: Adversarial validity assessment (LLM)
-        5. (conditional) redesign: Incorporate feedback if needed
-        6. template_generator: Generate DoWhy code and pre-registration docs
+        2. twin_simulation: Digital twin pre-screening (Phase 15)
+        3. design_reasoning: Deep reasoning for experiment design (LLM)
+        4. power_analysis: Statistical power calculations
+        5. validity_audit: Adversarial validity assessment (LLM)
+        6. (conditional) redesign: Incorporate feedback if needed
+        7. template_generator: Generate DoWhy code and pre-registration docs
 
     The redesign loop allows the agent to iterate on the design based on
     validity audit feedback, up to max_redesign_iterations times.
 
+    Phase 15 Integration:
+        - Twin simulation pre-screens experiments before design
+        - If simulation recommends SKIP, workflow exits early
+        - If simulation recommends DEPLOY, prior_estimate passes to power_analysis
+
     Args:
         knowledge_store: Optional knowledge store for context loading
         max_redesign_iterations: Maximum number of redesign iterations (default: 2)
+        enable_twin_simulation: Whether to run twin simulation pre-screening (default: True)
+        auto_skip_on_low_effect: If True, skip workflow when twin recommends SKIP (default: True)
 
     Returns:
         Compiled StateGraph ready for execution
     """
     # Initialize nodes
     context_node = ContextLoaderNode(knowledge_store)
+    twin_node = TwinSimulationNode(auto_skip_on_low_effect=auto_skip_on_low_effect)
     design_node = DesignReasoningNode()
     power_node = PowerAnalysisNode()
     validity_node = ValidityAuditNode()
@@ -121,6 +139,7 @@ def create_experiment_designer_graph(
 
     # Add nodes to graph (wrapped for sync compatibility)
     workflow.add_node("context_loader", wrap_async_node(context_node.execute))
+    workflow.add_node("twin_simulation", wrap_async_node(twin_node.execute))
     workflow.add_node("design_reasoning", wrap_async_node(design_node.execute))
     workflow.add_node("power_analysis", wrap_async_node(power_node.execute))
     workflow.add_node("validity_audit", wrap_async_node(validity_node.execute))
@@ -132,8 +151,33 @@ def create_experiment_designer_graph(
     workflow.set_entry_point("context_loader")
 
     # Define edges
-    # context_loader → design_reasoning (always)
-    workflow.add_edge("context_loader", "design_reasoning")
+    # context_loader → twin_simulation (always)
+    workflow.add_edge("context_loader", "twin_simulation")
+
+    # twin_simulation → design_reasoning, error_handler, or END (if skipped)
+    def twin_to_next(state: ExperimentDesignState) -> str:
+        """Determine next step after twin simulation.
+
+        Returns:
+            - "design_reasoning" if proceeding with experiment design
+            - "end" if twin recommends skip (early exit)
+            - "error_handler" if workflow failed
+        """
+        if state.get("status") == "failed":
+            return "error_handler"
+        if state.get("status") == "skipped":
+            return "end"
+        return "design_reasoning"
+
+    workflow.add_conditional_edges(
+        "twin_simulation",
+        twin_to_next,
+        {
+            "design_reasoning": "design_reasoning",
+            "end": END,
+            "error_handler": "error_handler",
+        },
+    )
 
     # design_reasoning → power_analysis or error_handler
     def design_to_next(state: ExperimentDesignState) -> str:
@@ -203,6 +247,10 @@ def create_initial_state(
     preregistration_formality: str = "medium",
     max_redesign_iterations: int = 2,
     enable_validity_audit: bool = True,
+    # Phase 15: Twin simulation parameters
+    enable_twin_simulation: bool = True,
+    intervention_type: str | None = None,
+    brand: str | None = None,
 ) -> ExperimentDesignState:
     """Create initial state for experiment designer workflow.
 
@@ -215,11 +263,14 @@ def create_initial_state(
         preregistration_formality: Level of pre-registration detail ("light", "medium", "heavy")
         max_redesign_iterations: Maximum redesign iterations
         enable_validity_audit: Whether to run validity audit
+        enable_twin_simulation: Whether to run twin simulation pre-screening (Phase 15)
+        intervention_type: Type of intervention for twin simulation
+        brand: Pharmaceutical brand for twin simulation
 
     Returns:
         Initialized ExperimentDesignState
     """
-    return ExperimentDesignState(
+    state = ExperimentDesignState(
         # Input fields
         business_question=business_question,
         constraints=constraints or {},
@@ -227,8 +278,18 @@ def create_initial_state(
         preregistration_formality=preregistration_formality,  # type: ignore
         max_redesign_iterations=max_redesign_iterations,
         enable_validity_audit=enable_validity_audit,
+        # Phase 15: Twin simulation
+        enable_twin_simulation=enable_twin_simulation,
         # Error handling (initialized)
         errors=[],
         warnings=[],
         status="pending",
     )
+
+    # Add optional twin simulation fields if provided
+    if intervention_type:
+        state["intervention_type"] = intervention_type
+    if brand:
+        state["brand"] = brand
+
+    return state

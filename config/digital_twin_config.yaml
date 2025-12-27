@@ -1,0 +1,179 @@
+# Digital Twin Configuration
+# Phase 15: Digital Twin Pre-Screening for A/B Tests
+#
+# This configuration controls digital twin generation, simulation, and fidelity tracking.
+
+# Twin Generation Settings
+twin_generation:
+  # Default number of twins to generate per simulation
+  default_twin_count: 10000
+
+  # Minimum and maximum twins per simulation
+  min_twins: 100
+  max_twins: 100000
+
+  # Default algorithm for outcome prediction
+  default_algorithm: "random_forest"
+
+  # Supported algorithms
+  supported_algorithms:
+    - random_forest
+    - gradient_boosting
+    - xgboost
+    - lightgbm
+
+  # Model hyperparameters
+  model_params:
+    n_estimators: 100
+    max_depth: 10
+    learning_rate: 0.1
+
+  # Training configuration
+  training:
+    default_samples: 50000
+    min_samples: 1000
+    validation_split: 0.2
+    cv_folds: 5
+    random_state: 42
+
+  # Feature columns by twin type
+  features:
+    hcp:
+      - specialty
+      - decile
+      - region
+      - patient_volume
+      - adoption_stage
+      - prescribing_history
+    patient:
+      - age_group
+      - diagnosis
+      - treatment_history
+      - insurance_type
+    territory:
+      - region
+      - population
+      - market_share
+      - competitive_intensity
+
+# Simulation Engine Settings
+simulation:
+  # Minimum effect threshold for DEPLOY recommendation
+  min_effect_threshold: 0.05  # 5% minimum ATE
+
+  # Confidence threshold for reliable recommendations
+  confidence_threshold: 0.70
+
+  # Statistical confidence level for CI calculation
+  confidence_level: 0.95
+
+  # Timeout for simulation execution (seconds)
+  simulation_timeout_seconds: 300
+
+  # Enable heterogeneous effect calculation
+  calculate_heterogeneity: true
+
+  # Intervention types and their effect modifiers
+  intervention_effects:
+    email_campaign:
+      base_effect: 0.08
+      channel_modifier: 1.0
+      personalization_bonus: 0.02
+    call_frequency_increase:
+      base_effect: 0.15
+      intensity_modifier: 0.1
+    sample_provision:
+      base_effect: 0.10
+      product_modifier: 1.2
+    rep_visit_frequency:
+      base_effect: 0.12
+      territory_modifier: 1.0
+    digital_engagement:
+      base_effect: 0.07
+      channel_modifier: 0.9
+    peer_influence:
+      base_effect: 0.09
+      influence_threshold: 0.7
+
+  # Recommendation thresholds
+  recommendations:
+    # Effect size boundaries for recommendations
+    deploy_threshold: 0.05     # ATE >= 5% -> DEPLOY
+    refine_threshold: 0.02     # 2% <= ATE < 5% -> REFINE
+    # ATE < 2% -> SKIP
+
+    # Minimum sample size recommendation settings
+    min_power: 0.80
+    default_alpha: 0.05
+
+# Fidelity Tracking Settings
+fidelity:
+  # Grade thresholds (based on prediction error percentage)
+  grade_thresholds:
+    excellent: 0.10   # Error < 10%
+    good: 0.20        # Error 10-20%
+    fair: 0.35        # Error 20-35%
+    # poor: > 35%
+
+  # Minimum required fidelity score for model confidence
+  min_fidelity_score: 0.70
+
+  # Degradation detection settings
+  degradation:
+    lookback_days: 90            # Days to analyze for degradation
+    threshold: 0.10              # 10% increase triggers alert
+    min_validations: 5           # Minimum validations for alert
+
+  # Cache settings
+  cache:
+    enabled: true
+    ttl_seconds: 3600            # 1 hour cache for fidelity reports
+
+# Repository Settings
+repository:
+  # Database table names
+  tables:
+    models: "digital_twin_models"
+    simulations: "twin_simulations"
+    fidelity: "twin_fidelity_tracking"
+
+  # Redis cache settings
+  cache:
+    enabled: true
+    model_cache_ttl: 3600        # 1 hour
+    simulation_cache_ttl: 1800   # 30 minutes
+    key_prefix: "digital_twin:"
+
+  # Query limits
+  query_limits:
+    max_simulations_list: 100
+    max_models_list: 50
+
+# API Settings
+api:
+  # Default pagination
+  default_page_size: 20
+  max_page_size: 100
+
+  # Rate limiting
+  rate_limit:
+    simulations_per_minute: 10
+    validations_per_minute: 30
+
+  # Response settings
+  include_heterogeneity_in_list: false
+  include_full_config_in_list: false
+
+# Logging & Observability
+observability:
+  # Log simulation executions to MLflow
+  log_to_mlflow: true
+
+  # Track fidelity metrics
+  track_fidelity_metrics: true
+
+  # Alert channels for degradation
+  alerts:
+    email_enabled: false
+    slack_enabled: false
+    webhook_url: null

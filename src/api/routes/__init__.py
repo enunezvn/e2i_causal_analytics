@@ -13,6 +13,8 @@ Available Routes:
 - rag: Hybrid RAG endpoints
 - monitoring: Model monitoring & drift detection (Phase 14)
 - experiments: A/B testing execution & monitoring (Phase 15)
+- digital_twin: Digital Twin pre-screening & fidelity tracking (Phase 15)
+- predictions: BentoML model prediction endpoints
 
 Author: E2I Causal Analytics Team
 """
