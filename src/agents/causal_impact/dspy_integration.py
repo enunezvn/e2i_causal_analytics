@@ -56,6 +56,15 @@ class CausalAnalysisTrainingSignal:
     effect_size: str = ""  # small, medium, large
     sample_size: int = 0
 
+    # === V4.2 Enhancement: Energy Score Selection ===
+    energy_score_enabled: bool = False
+    selection_strategy: str = ""  # first_success, best_energy, ensemble
+    selected_estimator: str = ""  # causal_forest, linear_dml, drlearner, ols
+    energy_score: float = 0.0  # Selected estimator's energy score (0-1)
+    energy_score_gap: float = 0.0  # Gap between best and second-best
+    n_estimators_evaluated: int = 0
+    n_estimators_succeeded: int = 0
+
     # === Refutation Phase ===
     refutation_tests_passed: int = 0
     refutation_tests_failed: int = 0
@@ -83,22 +92,23 @@ class CausalAnalysisTrainingSignal:
         """
         Compute reward for MIPROv2 optimization.
 
-        Weighting:
-        - refutation_robustness: 0.30 (passed / total)
-        - estimation_quality: 0.25 (significance + CI width)
-        - interpretation_quality: 0.20 (depth + findings)
+        Weighting (V4.2 Updated):
+        - refutation_robustness: 0.28 (passed / total)
+        - estimation_quality: 0.24 (significance + CI width)
+        - interpretation_quality: 0.18 (depth + findings)
         - efficiency: 0.15 (latency)
         - user_satisfaction: 0.10 (if available)
+        - energy_score_quality: 0.05 (lower energy score = better)
         """
         reward = 0.0
 
-        # Refutation robustness
+        # Refutation robustness (28%)
         total_tests = self.refutation_tests_passed + self.refutation_tests_failed
         if total_tests > 0:
             robustness = self.refutation_tests_passed / total_tests
-            reward += 0.30 * robustness
+            reward += 0.28 * robustness
 
-        # Estimation quality
+        # Estimation quality (24%)
         estimation_score = 0.0
         if self.statistical_significance:
             estimation_score += 0.5
@@ -109,18 +119,18 @@ class CausalAnalysisTrainingSignal:
             estimation_score += 0.5 * ci_quality
         else:
             estimation_score += 0.25
-        reward += 0.25 * estimation_score
+        reward += 0.24 * estimation_score
 
-        # Interpretation quality
+        # Interpretation quality (18%)
         interp_score = 0.0
         depth_scores = {"none": 0.0, "minimal": 0.3, "standard": 0.7, "deep": 1.0}
         interp_score += 0.5 * depth_scores.get(self.interpretation_depth, 0.0)
         # Quality proxy: findings + recommendations
         finding_quality = min(1.0, (self.key_findings_count + self.recommendations_count) / 8)
         interp_score += 0.5 * finding_quality
-        reward += 0.20 * interp_score
+        reward += 0.18 * interp_score
 
-        # Efficiency (target < 15s for full analysis)
+        # Efficiency (15%, target < 15s for full analysis)
         target_latency = 15000
         if self.total_latency_ms > 0:
             efficiency = min(1.0, target_latency / self.total_latency_ms)
@@ -128,12 +138,21 @@ class CausalAnalysisTrainingSignal:
         else:
             reward += 0.15
 
-        # User satisfaction
+        # User satisfaction (10%)
         if self.user_satisfaction is not None:
             satisfaction_score = (self.user_satisfaction - 1) / 4  # 1-5 to 0-1
             reward += 0.10 * satisfaction_score
         else:
             reward += 0.05  # Partial credit
+
+        # V4.2 Enhancement: Energy Score Quality (5%)
+        # Lower energy score = better quality (0-1 scale, lower is better)
+        if self.energy_score_enabled and self.energy_score > 0:
+            energy_quality = 1.0 - min(1.0, self.energy_score)
+            reward += 0.05 * energy_quality
+        elif not self.energy_score_enabled:
+            # Partial credit for legacy path
+            reward += 0.025
 
         return round(min(1.0, reward), 4)
 
@@ -163,6 +182,14 @@ class CausalAnalysisTrainingSignal:
                 "statistical_significance": self.statistical_significance,
                 "effect_size": self.effect_size,
                 "sample_size": self.sample_size,
+                # V4.2 Enhancement: Energy Score Selection
+                "energy_score_enabled": self.energy_score_enabled,
+                "selection_strategy": self.selection_strategy,
+                "selected_estimator": self.selected_estimator,
+                "energy_score": self.energy_score,
+                "energy_score_gap": self.energy_score_gap,
+                "n_estimators_evaluated": self.n_estimators_evaluated,
+                "n_estimators_succeeded": self.n_estimators_succeeded,
             },
             "refutation": {
                 "tests_passed": self.refutation_tests_passed,
@@ -340,6 +367,27 @@ class CausalImpactSignalCollector:
         signal.statistical_significance = statistical_significance
         signal.effect_size = effect_size
         signal.sample_size = sample_size
+        return signal
+
+    def update_energy_score(
+        self,
+        signal: CausalAnalysisTrainingSignal,
+        energy_score_enabled: bool,
+        selection_strategy: str = "",
+        selected_estimator: str = "",
+        energy_score: float = 0.0,
+        energy_score_gap: float = 0.0,
+        n_estimators_evaluated: int = 0,
+        n_estimators_succeeded: int = 0,
+    ) -> CausalAnalysisTrainingSignal:
+        """Update signal with V4.2 energy score selection results."""
+        signal.energy_score_enabled = energy_score_enabled
+        signal.selection_strategy = selection_strategy
+        signal.selected_estimator = selected_estimator
+        signal.energy_score = energy_score
+        signal.energy_score_gap = energy_score_gap
+        signal.n_estimators_evaluated = n_estimators_evaluated
+        signal.n_estimators_succeeded = n_estimators_succeeded
         return signal
 
     def update_refutation(

@@ -447,6 +447,25 @@ def _extract_mlflow_metrics(
         if estimation.get("sample_size") is not None:
             metrics["sample_size"] = float(estimation["sample_size"])
 
+        # V4.2 Enhancement: Energy Score metrics
+        if estimation.get("energy_score") is not None:
+            metrics["energy_score"] = float(estimation["energy_score"])
+        if estimation.get("energy_score_gap") is not None:
+            metrics["energy_score_gap"] = float(estimation["energy_score_gap"])
+        if estimation.get("n_estimators_evaluated") is not None:
+            metrics["n_estimators_evaluated"] = float(estimation["n_estimators_evaluated"])
+        if estimation.get("n_estimators_succeeded") is not None:
+            metrics["n_estimators_succeeded"] = float(estimation["n_estimators_succeeded"])
+
+        # Per-estimator energy scores
+        all_evaluated = estimation.get("all_estimators_evaluated", [])
+        for est_result in all_evaluated:
+            if isinstance(est_result, dict):
+                est_name = est_result.get("estimator_type", "")
+                es_data = est_result.get("energy_score_data", {})
+                if est_name and es_data and es_data.get("score") is not None:
+                    metrics[f"energy_score_{est_name}"] = float(es_data["score"])
+
     # Refutation metrics
     refutation = state.get("refutation_results", {})
     if refutation:
@@ -470,6 +489,10 @@ def _extract_mlflow_metrics(
         latency_key = f"{node}_latency_ms"
         if state.get(latency_key) is not None:
             metrics[latency_key] = float(state[latency_key])
+
+    # V4.2: Energy score computation latency
+    if state.get("energy_score_latency_ms") is not None:
+        metrics["energy_score_latency_ms"] = float(state["energy_score_latency_ms"])
 
     # Overall confidence
     interpretation = state.get("interpretation", {})
@@ -509,6 +532,16 @@ def _extract_mlflow_result_tags(state: Dict[str, Any]) -> Dict[str, str]:
     # Effect size
     if estimation.get("effect_size"):
         tags["effect_size"] = estimation["effect_size"]
+
+    # V4.2 Enhancement: Energy Score tags
+    if state.get("energy_score_enabled") is not None:
+        tags["energy_score_enabled"] = str(state["energy_score_enabled"]).lower()
+    if estimation.get("selection_strategy"):
+        tags["selection_strategy"] = estimation["selection_strategy"]
+    if estimation.get("selected_estimator"):
+        tags["selected_estimator"] = estimation["selected_estimator"]
+    if state.get("energy_score_quality_tier"):
+        tags["energy_score_quality_tier"] = state["energy_score_quality_tier"]
 
     # Refutation gate decision
     refutation = state.get("refutation_results", {})

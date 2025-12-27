@@ -66,13 +66,18 @@ causal_impact/
 ├── graph.py              # LangGraph assembly
 ├── nodes/
 │   ├── graph_builder.py  # Causal DAG construction
-│   ├── estimation.py     # DoWhy effect estimation
+│   ├── estimation.py     # DoWhy effect estimation (with Energy Score selection)
 │   ├── refutation.py     # Robustness tests
 │   ├── sensitivity.py    # Sensitivity analysis
 │   └── interpretation.py # Deep reasoning node
 ├── chain_tracer.py       # Causal chain identification
 ├── effect_narrator.py    # Natural language generation
-└── prompts.py            # Claude prompts for interpretation
+├── prompts.py            # Claude prompts for interpretation
+└── energy_score/         # V4.2: Energy Score Enhancement
+    ├── __init__.py
+    ├── energy_score.py       # Core energy score calculator
+    ├── estimator_selection.py # Best-score estimator selector
+    └── mlflow_integration.py  # MLflow tracking for energy scores
 ```
 
 ## LangGraph State Definition
@@ -112,7 +117,7 @@ class SensitivityAnalysis(TypedDict):
 
 class CausalImpactState(TypedDict):
     """Complete state for Causal Impact hybrid agent"""
-    
+
     # === INPUT ===
     query: str
     treatment_var: str
@@ -120,13 +125,17 @@ class CausalImpactState(TypedDict):
     confounders: List[str]
     data_source: str  # Table or query reference
     filters: Optional[Dict[str, Any]]
-    
+
     # === CONFIGURATION ===
     interpretation_depth: Literal["none", "minimal", "standard", "deep"]
     user_expertise: Literal["executive", "analyst", "data_scientist"]
     estimation_method: str  # Default: "backdoor.econml.dml.CausalForestDML"
     confidence_level: float  # Default: 0.95
-    
+
+    # === V4.2: ENERGY SCORE CONFIGURATION ===
+    selection_strategy: Literal["first_success", "best_energy", "ensemble"]  # Default: "best_energy"
+    energy_score_config: Optional[Dict[str, Any]]  # EnergyScoreConfig overrides
+
     # === COMPUTATION OUTPUTS ===
     causal_graph: Optional[CausalGraphSpec]
     ate_estimate: Optional[float]
@@ -135,19 +144,26 @@ class CausalImpactState(TypedDict):
     refutation_results: Optional[RefutationResults]
     sensitivity_analysis: Optional[SensitivityAnalysis]
     cate_by_segment: Optional[Dict[str, Dict[str, float]]]
-    
+
+    # === V4.2: ENERGY SCORE OUTPUTS ===
+    selected_estimator: Optional[str]  # Which estimator was selected
+    energy_score: Optional[float]  # Final energy score of selected estimator
+    energy_score_components: Optional[Dict[str, float]]  # treatment_balance, outcome_fit, propensity_calibration
+    estimator_evaluations: Optional[List[Dict[str, Any]]]  # All estimator results for comparison
+    energy_score_gap: Optional[float]  # Gap between best and second-best
+
     # === INTERPRETATION OUTPUTS ===
     causal_narrative: Optional[str]
     assumption_warnings: Optional[List[str]]
     actionable_recommendations: Optional[List[str]]
     executive_summary: Optional[str]
-    
+
     # === EXECUTION METADATA ===
     computation_latency_ms: int
     interpretation_latency_ms: int
     model_used: str
     timestamp: str
-    
+
     # === ERROR HANDLING ===
     errors: Annotated[List[Dict[str, Any]], operator.add]
     warnings: Annotated[List[str], operator.add]
@@ -816,6 +832,23 @@ causal_impact_handoff:
     placebo_passed: <bool>
     subset_stable: <bool>
     sensitivity_e_value: <float>
+
+  # V4.2: Energy Score Enhancement
+  estimator_selection:
+    selected_estimator: <causal_forest|linear_dml|drlearner|ols>
+    selection_strategy: <first_success|best_energy|ensemble>
+    energy_score: <0.0-1.0>
+    energy_quality_tier: <excellent|good|acceptable|poor|unreliable>
+    energy_components:
+      treatment_balance: <score>
+      outcome_fit: <score>
+      propensity_calibration: <score>
+    alternatives_evaluated:
+      - estimator: <name>
+        energy_score: <score>
+        ate: <estimate>
+    energy_score_gap: <gap between best and second-best>
+
   narrative: <interpretation summary>
   recommendations:
     - action: <recommended action>
@@ -824,6 +857,239 @@ causal_impact_handoff:
   requires_further_analysis: <bool>
   suggested_next_agent: <heterogeneous_optimizer|experiment_designer>
 ```
+
+## V4.2: Energy Score Enhancement
+
+### Overview
+
+The Energy Score Enhancement replaces the legacy "first success" fallback strategy with a principled "best energy score" selection approach. Instead of using the first estimator that doesn't fail, the system now evaluates ALL estimators in the chain and selects the one with the lowest energy score.
+
+### Why Energy Score?
+
+The energy score provides a unified quality metric for causal effect estimates by measuring:
+
+1. **Treatment Balance (35%)** - Covariate balance after IPW adjustment
+2. **Outcome Fit (45%)** - Doubly robust residual fit quality
+3. **Propensity Calibration (20%)** - Propensity score calibration quality
+
+Lower energy scores indicate higher-quality causal estimates with better statistical properties.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    EstimatorSelector                             │
+│  ┌───────────┐   ┌───────────┐   ┌───────────┐   ┌───────────┐ │
+│  │ Causal    │   │ Linear    │   │ DR        │   │ OLS       │ │
+│  │ Forest    │──▶│ DML       │──▶│ Learner   │──▶│ Fallback  │ │
+│  └─────┬─────┘   └─────┬─────┘   └─────┬─────┘   └─────┬─────┘ │
+│        │               │               │               │        │
+│        ▼               ▼               ▼               ▼        │
+│  ┌─────────────────────────────────────────────────────────────┐│
+│  │              Energy Score Calculator                        ││
+│  │  Score each estimator → Select minimum → Return best       ││
+│  └─────────────────────────────────────────────────────────────┘│
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Selection Strategies
+
+| Strategy | Description | Use Case |
+|----------|-------------|----------|
+| `first_success` | Legacy: use first estimator that succeeds | Backward compatibility |
+| `best_energy` | **Default**: Select lowest energy score | Production recommended |
+| `ensemble` | Combine multiple estimators (future) | Advanced use cases |
+
+### Energy Score Thresholds
+
+| Quality Tier | Max Score | Interpretation |
+|--------------|-----------|----------------|
+| Excellent | 0.25 | High confidence in causal estimate |
+| Good | 0.45 | Reasonable confidence |
+| Acceptable | 0.65 | Use with caution |
+| Poor | 0.80 | Low confidence, consider alternatives |
+| Unreliable | 1.00 | Results likely unreliable |
+
+### Supported Estimators
+
+| Estimator | Library | Priority | Description |
+|-----------|---------|----------|-------------|
+| `causal_forest` | EconML | 1 | Non-parametric forest-based CATE |
+| `linear_dml` | EconML | 2 | DML with linear final stage |
+| `dml_learner` | EconML | 3 | General DML framework |
+| `drlearner` | EconML | 3 | Doubly robust learner |
+| `ortho_forest` | EconML | 4 | Orthogonalized random forest |
+| `s_learner` | CausalML | 5 | Single model approach |
+| `t_learner` | CausalML | 5 | Two separate models |
+| `x_learner` | CausalML | 5 | Cross-learner for imbalanced treatment |
+| `ols` | sklearn | 10 | Simple linear regression fallback |
+
+### Integration with Estimation Node
+
+```python
+# src/agents/causal_impact/nodes/estimation.py (with Energy Score)
+
+from ..energy_score.estimator_selection import EstimatorSelector, EstimatorSelectorConfig
+from ..energy_score.mlflow_integration import EnergyScoreMLflowTracker
+
+class CausalEstimationNode:
+    """Enhanced estimation node with energy score selection."""
+
+    def __init__(self, data_connector, mlflow_tracker: Optional[EnergyScoreMLflowTracker] = None):
+        self.data_connector = data_connector
+        self.mlflow_tracker = mlflow_tracker
+
+        # Configure estimator selector
+        self.selector_config = EstimatorSelectorConfig(
+            strategy=SelectionStrategy.BEST_ENERGY_SCORE,
+            max_acceptable_energy_score=0.65,
+            min_energy_score_gap=0.05,
+        )
+        self.selector = EstimatorSelector(self.selector_config)
+
+    async def execute(self, state: CausalImpactState) -> CausalImpactState:
+        # ... data fetch and DAG setup ...
+
+        # Use energy score-based selection
+        selection_result = self.selector.select(
+            treatment=treatment_array,
+            outcome=outcome_array,
+            covariates=covariate_df,
+        )
+
+        # Extract results
+        selected = selection_result.selected
+
+        return {
+            **state,
+            "ate_estimate": selected.ate,
+            "confidence_interval": (selected.ate_ci_lower, selected.ate_ci_upper),
+            "selected_estimator": selected.estimator_type.value,
+            "energy_score": selected.energy_score,
+            "energy_score_components": {
+                "treatment_balance": selected.energy_score_result.treatment_balance_score,
+                "outcome_fit": selected.energy_score_result.outcome_fit_score,
+                "propensity_calibration": selected.energy_score_result.propensity_calibration,
+            },
+            "estimator_evaluations": [r.to_dict() for r in selection_result.all_results],
+            "energy_score_gap": selection_result.energy_score_gap,
+            "status": "computing",
+        }
+```
+
+### MLflow Integration
+
+Energy score metrics are tracked via MLflow for experiment comparison:
+
+```python
+# Usage with MLflow tracker
+tracker = EnergyScoreMLflowTracker()
+
+with tracker.start_selection_run(
+    experiment_name="trigger_effectiveness",
+    brand="Remibrutinib",
+    kpi_name="trx_conversion",
+):
+    result = selector.select(treatment, outcome, covariates)
+    tracker.log_selection_result(result)
+```
+
+**Logged Metrics:**
+- `selected_energy_score` - Energy score of chosen estimator
+- `energy_score_{estimator}` - Score for each evaluated estimator
+- `energy_score_gap` - Gap between best and second-best
+- `n_estimators_evaluated` / `n_estimators_succeeded`
+- `total_selection_time_ms`
+
+### Database Schema (Migration 011)
+
+New table `estimator_evaluations` tracks all estimator runs:
+
+```sql
+CREATE TABLE estimator_evaluations (
+    evaluation_id UUID PRIMARY KEY,
+    experiment_id UUID REFERENCES ml_experiments(experiment_id),
+    estimator_type VARCHAR(50) NOT NULL,
+    success BOOLEAN NOT NULL,
+    ate DOUBLE PRECISION,
+    energy_score DOUBLE PRECISION,
+    treatment_balance_score DOUBLE PRECISION,
+    outcome_fit_score DOUBLE PRECISION,
+    propensity_calibration DOUBLE PRECISION,
+    was_selected BOOLEAN DEFAULT FALSE,
+    selection_reason TEXT,
+    estimation_time_ms DOUBLE PRECISION,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+**Analytical Views:**
+- `v_estimator_performance` - Aggregated performance metrics by estimator
+- `v_energy_score_trends` - Weekly trends in energy scores
+- `v_selection_comparison` - Compare energy vs legacy selection
+
+### Configuration
+
+```yaml
+# config/agents.yaml - Causal Impact Energy Score config
+
+causal_impact:
+  energy_score:
+    enabled: true
+    selection_strategy: best_energy  # first_success | best_energy | ensemble
+
+    estimators:
+      - type: causal_forest
+        enabled: true
+        priority: 1
+        params:
+          n_estimators: 100
+          min_samples_leaf: 10
+      - type: linear_dml
+        enabled: true
+        priority: 2
+      - type: drlearner
+        enabled: true
+        priority: 3
+      - type: ols
+        enabled: true
+        priority: 10
+
+    thresholds:
+      max_acceptable_energy_score: 0.65
+      min_gap_for_preference: 0.05
+      high_score_warning: 0.65
+
+    component_weights:
+      treatment_balance: 0.35
+      outcome_fit: 0.45
+      propensity_calibration: 0.20
+
+    mlflow_tracking:
+      enabled: true
+      experiment_prefix: e2i_causal
+      log_to_database: true
+```
+
+### Testing Requirements
+
+```
+tests/unit/test_agents/test_causal_impact/
+├── test_energy_score.py           # Core energy score calculation
+├── test_estimator_selection.py    # Selector with multiple estimators
+├── test_energy_mlflow.py          # MLflow integration
+└── test_energy_integration.py     # End-to-end with estimation node
+```
+
+**Test Cases:**
+1. Energy score correctly identifies best estimator
+2. Fallback to OLS when all advanced estimators fail
+3. High energy score triggers warning in interpretation
+4. MLflow logs all estimator evaluations
+5. Database records selection history
+6. Legacy `first_success` mode still works
+
+---
 
 ## DoWhy/EconML Integration Notes
 
