@@ -781,15 +781,117 @@ memory_event_types:
 
 
 # =============================================================================
+# SECTION 12: ENERGY SCORE ENHANCEMENT (V4.2.2)
+# =============================================================================
+
+estimator_types:
+  description: "Causal estimator types in the fallback chain"
+  values:
+    - id: causal_forest
+      label: "Causal Forest"
+      library: "EconML"
+      description: "Non-parametric forest-based CATE estimator"
+      default_priority: 1
+
+    - id: linear_dml
+      label: "Linear DML"
+      library: "EconML"
+      description: "Double/debiased machine learning with linear final stage"
+      default_priority: 2
+
+    - id: drlearner
+      label: "DR Learner"
+      library: "EconML"
+      description: "Doubly robust learner combining outcome and propensity models"
+      default_priority: 3
+
+    - id: ols
+      label: "OLS"
+      library: "sklearn"
+      description: "Simple linear regression fallback"
+      default_priority: 10
+
+selection_strategies:
+  description: "Strategies for selecting among causal estimators"
+  values:
+    - id: first_success
+      label: "First Success"
+      description: "Legacy: use first estimator that succeeds"
+
+    - id: best_energy
+      label: "Best Energy Score"
+      description: "Select estimator with lowest energy score"
+
+    - id: ensemble
+      label: "Ensemble"
+      description: "Combine multiple estimators (future)"
+
+energy_score_components:
+  description: "Components of the composite energy score"
+  values:
+    - id: treatment_balance
+      label: "Treatment Balance"
+      weight: 0.35
+      description: "Covariate balance after IPW adjustment"
+
+    - id: outcome_fit
+      label: "Outcome Fit"
+      weight: 0.45
+      description: "DR residual fit quality"
+
+    - id: propensity_calibration
+      label: "Propensity Calibration"
+      weight: 0.20
+      description: "Propensity score calibration quality"
+
+quality_tiers:
+  description: "Energy score quality tier thresholds"
+  values:
+    - id: excellent
+      max_score: 0.25
+      description: "High confidence in causal estimate"
+      badge_color: "#22c55e"
+
+    - id: good
+      max_score: 0.45
+      description: "Reasonable confidence"
+      badge_color: "#3b82f6"
+
+    - id: acceptable
+      max_score: 0.65
+      description: "Use with caution"
+      badge_color: "#f59e0b"
+
+    - id: poor
+      max_score: 0.80
+      description: "Low confidence, consider alternatives"
+      badge_color: "#ef4444"
+
+    - id: unreliable
+      max_score: 1.00
+      description: "Results likely unreliable"
+      badge_color: "#6b7280"
+
+
+# =============================================================================
 # METADATA
 # =============================================================================
 
 _metadata:
-  version: "4.2.1"
-  last_updated: "2024-12-19"
+  version: "4.2.2"
+  last_updated: "2024-12-26"
   maintainer: "E2I Platform Team"
 
   version_history:
+    - version: "4.2.2"
+      date: "2024-12-26"
+      changes:
+        - "Added Energy Score Enhancement section (SECTION 12)"
+        - "Added estimator_types vocabulary (causal_forest, linear_dml, drlearner, ols)"
+        - "Added selection_strategies (first_success, best_energy, ensemble)"
+        - "Added energy_score_components with weights"
+        - "Added quality_tiers with thresholds and badge colors"
+
     - version: "4.2.1"
       date: "2024-12-19"
       changes:
