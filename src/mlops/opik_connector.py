@@ -45,6 +45,8 @@ import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
+
+from uuid_utils import uuid7 as uuid7_func  # For Opik-compatible UUID v7
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -754,9 +756,9 @@ class OpikConnector:
                 result = await analyze()
                 span.set_output({"gaps": result})
         """
-        span_id = str(uuid.uuid4())
+        span_id = str(uuid7_func())  # Opik requires UUID v7
         is_new_trace = trace_id is None
-        trace_id = trace_id or str(uuid.uuid4())
+        trace_id = trace_id or str(uuid7_func())  # Opik requires UUID v7
         start_time = datetime.now(timezone.utc)
 
         # Create span context
@@ -932,8 +934,8 @@ class OpikConnector:
                     response.usage.output_tokens
                 )
         """
-        span_id = str(uuid.uuid4())
-        trace_id = trace_id or str(uuid.uuid4())
+        span_id = str(uuid7_func())  # Opik requires UUID v7
+        trace_id = trace_id or str(uuid7_func())  # Opik requires UUID v7
         start_time = datetime.now(timezone.utc)
 
         # Build metadata
