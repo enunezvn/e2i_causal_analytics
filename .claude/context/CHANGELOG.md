@@ -9,6 +9,40 @@
 
 ## [Unreleased]
 
+### Added - Energy Score-based Estimator Selection (V4.2)
+- **src/causal_engine/energy_score/**: New module for quality-based estimator selection
+  - `score_calculator.py`: EnergyScoreCalculator with 3 weighted components
+    - treatment_balance (35%): Covariate balance between treatment groups
+    - outcome_fit (45%): Model fit quality for outcome prediction
+    - propensity_calibration (20%): Propensity score calibration
+  - `estimator_selector.py`: EstimatorSelector supporting 4 estimators
+    - causal_forest, linear_dml, drlearner, ols
+    - Selection strategies: best_energy, first_success, ensemble
+  - `mlflow_tracker.py`: MLflow integration for energy score logging
+- **src/agents/causal_impact/nodes/estimation.py**: Enhanced with energy score selection
+  - `_select_estimator_with_energy_score()`: Multi-estimator evaluation
+  - `_get_quality_tier()`: Quality tier classification (excellent/good/acceptable/poor/unreliable)
+  - Backward compatible: explicit `method` parameter uses legacy path
+- **src/agents/causal_impact/state.py**: Extended state types
+  - `EnergyScoreData`: TypedDict for energy score components
+  - Extended `EstimationResult` with selection_strategy, selected_estimator, energy_score fields
+  - Extended `CausalImpactState` with energy_score_enabled, estimator_selection_result
+- **src/agents/causal_impact/graph.py**: MLflow tracking updates
+  - New metrics: energy_score, energy_score_gap, n_estimators_evaluated, per-estimator scores
+  - New tags: selection_strategy, selected_estimator, energy_score_quality_tier
+- **src/agents/causal_impact/dspy_integration.py**: DSPy training signal updates
+  - 7 new energy score fields in CausalAnalysisTrainingSignal
+  - `compute_reward()` updated with 5% energy score weight
+  - `update_energy_score()` method in CausalImpactSignalCollector
+- **database/ml/023_energy_score_tables.sql**: Database migration
+  - 3 ENUMs: estimator_type, selection_strategy, quality_tier
+  - Table: estimator_evaluations (tracks all estimator evaluations)
+  - Views: v_estimator_performance, v_energy_score_trends, v_selection_comparison
+  - Function: log_estimator_evaluation()
+- **tests/unit/test_agents/test_causal_impact/test_energy_score_selection.py**: 18 new tests
+  - Tests for energy score selection, legacy mode, quality tiers, backward compatibility
+- **.claude/plans/energy-score-integration-plan.md**: Implementation plan document
+
 ### Added - Self-Improvement & Evaluation (RAGAS-Opik Integration)
 - **database/ml/022_self_improvement_tables.sql**: 5 new tables for self-improvement loop
   - `evaluation_results`: Store rubric evaluation outcomes
@@ -338,6 +372,7 @@
 
 | Version | Component | Improvement | Impact |
 |---------|-----------|-------------|--------|
+| v4.2.0 | Causal Impact | Energy score-based estimator selection | Better causal estimate quality via multi-estimator evaluation |
 | v4.0.0 | MLOps | Added Feast feature store configuration | Faster feature retrieval (pending implementation) |
 | v3.0.0 | Database | Added ml_split_registry table | Prevents data leakage in train/test splits |
 | v3.0.0 | Orchestrator | Multi-tier agent coordination | Better query routing and response quality |
@@ -358,6 +393,7 @@
 - ❌ **Undocumented digital_twin module** → ✅ Resolved in v4.1.0 (documented in summary-v4.md)
 - ❌ **KPI dictionary incomplete (only ~20 of 46 KPIs)** → ✅ Resolved in v4.1.0 (all 46 KPIs documented)
 - ❌ **No self-improvement loop** → ✅ Resolved (RAGAS-Opik integration with rubric evaluator)
+- ❌ **Single estimator fallback in causal_impact** → ✅ Resolved in v4.2 (energy score-based selection)
 
 ---
 
