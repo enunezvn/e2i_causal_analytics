@@ -9,6 +9,46 @@
 
 ## [Unreleased]
 
+### Added - Self-Improvement & Evaluation (RAGAS-Opik Integration)
+- **database/ml/022_self_improvement_tables.sql**: 5 new tables for self-improvement loop
+  - `evaluation_results`: Store rubric evaluation outcomes
+  - `retrieval_configurations`: RAG retrieval settings
+  - `prompt_configurations`: Prompt version management
+  - `improvement_actions`: Track auto-updates and outcomes
+  - `experiment_knowledge_store`: DSPy experiment results cache
+  - 2 new ENUMs: `improvement_type`, `improvement_priority`
+- **src/agents/feedback_learner/evaluation/**: Rubric evaluator module
+  - `rubric_evaluator.py`: AI-as-judge evaluation with Claude API
+  - `criteria.py`: 5 weighted criteria (causal_validity, actionability, evidence_chain, regulatory_awareness, uncertainty_communication)
+  - `models.py`: Pydantic models (RubricEvaluation, CriterionScore, ImprovementDecision, PatternFlag)
+  - Dual-mode evaluation: LLM scoring + heuristic fallback
+- **src/agents/feedback_learner/nodes/rubric_node.py**: LangGraph node for rubric evaluation
+  - Integrates into 7-phase feedback_learner pipeline
+  - Conditional routing based on decision thresholds
+- **src/rag/opik_integration.py**: Opik tracing utilities
+  - `OpikEvaluationTracer`: Centralized tracing for evaluations
+  - `log_ragas_scores_to_opik()`: RAGAS metric logging
+  - `log_rubric_scores_to_opik()`: Rubric score logging
+  - `CombinedEvaluationResult`: Unified evaluation report
+  - Circuit breaker for Opik unavailability
+- **src/rag/evaluation.py**: Enhanced RAGASEvaluator
+  - `RAGASEvaluator`: RAGAS metrics (faithfulness, answer_relevancy, context_precision, context_recall)
+  - `RAGEvaluationPipeline`: Batch evaluation pipeline
+  - Opik trace integration
+- **config/self_improvement.yaml**: Self-improvement configuration
+  - Rubric criteria and weights
+  - Decision thresholds (acceptable >= 4.0, suggestion >= 3.0, auto_update >= 2.0)
+  - Safety controls (cooldowns, rate limits, north-star guardrails)
+  - Improvable components registry
+- **src/agents/feedback_learner/config/**: Configuration loader
+  - `loader.py`: Pydantic-validated YAML config loading with caching
+  - `SelfImprovementConfig`: Complete config model hierarchy
+- **Tests**: Comprehensive test coverage
+  - `tests/unit/test_agents/test_feedback_learner/test_rubric_evaluator.py`
+  - `tests/unit/test_agents/test_feedback_learner/test_rubric_node.py`
+  - `tests/integration/test_self_improvement_integration.py`
+  - 148 tests passing for feedback_learner module
+
 ### Added - Documentation
 - **tool-composer.md**: Complete specialist instructions for Tool Composer (.claude/specialists/tool-composer.md)
   - 4-phase pipeline documentation (decompose, plan, execute, synthesize)
@@ -317,6 +357,7 @@
 - ❌ **Undocumented tool_composer module** → ✅ Resolved in v4.1.0 (documented in summary-v4.md)
 - ❌ **Undocumented digital_twin module** → ✅ Resolved in v4.1.0 (documented in summary-v4.md)
 - ❌ **KPI dictionary incomplete (only ~20 of 46 KPIs)** → ✅ Resolved in v4.1.0 (all 46 KPIs documented)
+- ❌ **No self-improvement loop** → ✅ Resolved (RAGAS-Opik integration with rubric evaluator)
 
 ---
 
@@ -349,6 +390,6 @@ When adding entries to this changelog:
 
 ---
 
-**Last Updated**: 2025-12-18
+**Last Updated**: 2025-12-26
 **Maintained By**: E2I Development Team
-**Next Review**: 2026-01-18 (monthly cadence)
+**Next Review**: 2026-01-26 (monthly cadence)
