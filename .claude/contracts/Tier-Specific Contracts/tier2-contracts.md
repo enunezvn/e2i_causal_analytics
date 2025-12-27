@@ -36,9 +36,16 @@ class CausalImpactInput(BaseAgentInput):
         "frontdoor",
         "auto"
     ]] = "auto"
-    
+
     run_refutation: bool = True
     run_sensitivity: bool = True
+
+    # V4.2: Energy Score Configuration
+    selection_strategy: Literal["first_success", "best_energy", "ensemble"] = "best_energy"
+    energy_score_config: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Energy score configuration overrides: weights, n_bootstrap, etc."
+    )
     
     # Interpretation
     interpretation_depth: Literal["none", "minimal", "standard", "deep"] = "standard"
@@ -68,6 +75,32 @@ class SensitivityResult(BaseModel):
     confounder_strength_bound: float
     interpretation: str
 
+# V4.2: Energy Score Enhancement
+class EnergyScoreComponents(BaseModel):
+    """Components of the energy score"""
+    treatment_balance: float = Field(..., ge=0, le=1, description="Covariate balance score (35% weight)")
+    outcome_fit: float = Field(..., ge=0, le=1, description="DR residual fit score (45% weight)")
+    propensity_calibration: float = Field(..., ge=0, le=1, description="Propensity calibration (20% weight)")
+
+class EstimatorEvaluationResult(BaseModel):
+    """Result of evaluating a single estimator with energy score"""
+    estimator_type: Literal[
+        "causal_forest", "linear_dml", "dml_learner", "drlearner",
+        "ortho_forest", "s_learner", "t_learner", "x_learner", "ols"
+    ]
+    success: bool
+    ate: Optional[float] = None
+    ate_std: Optional[float] = None
+    ate_ci_lower: Optional[float] = None
+    ate_ci_upper: Optional[float] = None
+    energy_score: Optional[float] = Field(None, ge=0, le=1, description="Combined energy score (lower is better)")
+    energy_components: Optional[EnergyScoreComponents] = None
+    energy_ci_lower: Optional[float] = None
+    energy_ci_upper: Optional[float] = None
+    estimation_time_ms: float
+    error_message: Optional[str] = None
+    error_type: Optional[str] = None
+
 class CausalImpactOutput(BaseAgentOutput):
     """Output contract for Causal Impact Agent"""
     
@@ -92,6 +125,21 @@ class CausalImpactOutput(BaseAgentOutput):
     
     # Causal graph
     causal_graph_spec: Optional[Dict[str, Any]] = None
+
+    # V4.2: Energy Score Enhancement
+    selected_estimator: str = Field(..., description="Estimator type that was selected")
+    selection_strategy: Literal["first_success", "best_energy", "ensemble"]
+    energy_score: Optional[float] = Field(None, ge=0, le=1, description="Energy score of selected estimator")
+    energy_quality_tier: Optional[Literal["excellent", "good", "acceptable", "poor", "unreliable"]] = None
+    energy_components: Optional[EnergyScoreComponents] = None
+    estimator_evaluations: List[EstimatorEvaluationResult] = Field(
+        default_factory=list,
+        description="All estimator results for comparison"
+    )
+    energy_score_gap: Optional[float] = Field(
+        None,
+        description="Gap between best and second-best energy score"
+    )
 ```
 
 ### Handoff Format
@@ -100,25 +148,41 @@ class CausalImpactOutput(BaseAgentOutput):
 causal_impact_handoff:
   agent: causal_impact
   analysis_type: causal_effect_estimation
-  
+
   key_findings:
     - ate: <effect size>
     - ci: [<lower>, <upper>]
     - significant: <bool>
     - robust: <bool>
-  
+
   methodology:
     estimand: <identified estimand>
     method: <estimation method>
     confounders_controlled: [<list>]
-  
+
   robustness:
     refutations_passed: <count>/<total>
     e_value: <value>
-  
+
+  # V4.2: Energy Score Enhancement
+  estimator_selection:
+    selected_estimator: <causal_forest|linear_dml|drlearner|ols|...>
+    selection_strategy: <first_success|best_energy|ensemble>
+    energy_score: <0.0-1.0>
+    energy_quality_tier: <excellent|good|acceptable|poor|unreliable>
+    energy_components:
+      treatment_balance: <score>
+      outcome_fit: <score>
+      propensity_calibration: <score>
+    alternatives_evaluated:
+      - estimator: <name>
+        energy_score: <score>
+        ate: <estimate>
+    energy_score_gap: <gap between best and second-best>
+
   interpretation: <natural language summary>
   confidence_level: high|medium|low
-  
+
   requires_further_analysis: <bool>
   suggested_next_agent: heterogeneous_optimizer|explainer
 ```
@@ -499,6 +563,17 @@ class CausalAnalysisTrainingSignal:
     e_value: float = 0.0
     robust_to_confounding: bool = False
 
+    # === V4.2: Energy Score Selection Phase ===
+    selection_strategy: str = ""  # first_success, best_energy, ensemble
+    selected_estimator: str = ""  # causal_forest, linear_dml, etc.
+    estimators_evaluated: int = 0
+    estimators_succeeded: int = 0
+    energy_score: float = 0.0
+    energy_quality_tier: str = ""  # excellent, good, acceptable, poor, unreliable
+    energy_score_components: Dict[str, float] = field(default_factory=dict)  # treatment_balance, outcome_fit, propensity_calibration
+    energy_score_gap: float = 0.0  # Gap between best and second-best
+    selection_time_ms: float = 0.0
+
     # === Interpretation Phase ===
     interpretation_depth: str = ""  # none, minimal, standard, deep
     narrative_length: int = 0
@@ -514,10 +589,11 @@ class CausalAnalysisTrainingSignal:
         """
         Compute reward for MIPROv2 optimization.
 
-        Weighting:
-        - refutation_robustness: 0.30 (passed / total)
-        - estimation_quality: 0.25 (significance + CI width)
-        - interpretation_quality: 0.20 (depth + findings)
+        Weighting (V4.2 Updated):
+        - refutation_robustness: 0.25 (passed / total)
+        - estimation_quality: 0.20 (significance + CI width)
+        - energy_score_quality: 0.15 (1 - energy_score, inverted since lower is better)
+        - interpretation_quality: 0.15 (depth + findings)
         - efficiency: 0.15 (latency)
         - user_satisfaction: 0.10 (if available)
         """
@@ -724,6 +800,22 @@ class EvidenceSynthesisSignature(dspy.Signature):
     confidence_level: str = dspy.OutputField(desc="low, medium, or high")
     recommendations: list = dspy.OutputField(desc="Actionable recommendations")
     limitations: list = dspy.OutputField(desc="Important caveats and limitations")
+
+# V4.2: Energy Score Selection Signature
+class EstimatorSelectionSignature(dspy.Signature):
+    """Interpret estimator selection results and energy score quality."""
+
+    selection_strategy: str = dspy.InputField(desc="Selection strategy used: first_success, best_energy, ensemble")
+    selected_estimator: str = dspy.InputField(desc="Name of selected estimator")
+    estimator_evaluations: str = dspy.InputField(desc="JSON summary of all estimator results with energy scores")
+    energy_score: float = dspy.InputField(desc="Energy score of selected estimator (0-1, lower is better)")
+    energy_components: str = dspy.InputField(desc="Treatment balance, outcome fit, propensity calibration scores")
+
+    quality_tier: str = dspy.OutputField(desc="Quality tier: excellent, good, acceptable, poor, unreliable")
+    selection_rationale: str = dspy.OutputField(desc="Why this estimator was selected over alternatives")
+    energy_interpretation: str = dspy.OutputField(desc="Natural language interpretation of energy score components")
+    confidence_assessment: str = dspy.OutputField(desc="Assessment of causal estimate confidence based on energy score")
+    recommendations: list = dspy.OutputField(desc="Recommendations based on energy score quality")
 ```
 
 #### Gap Analyzer Signatures
@@ -813,6 +905,52 @@ signal_flow:
 
 | Date | Change |
 |------|--------|
+| 2025-12-26 | V4.2: Added Energy Score Enhancement contracts |
 | 2025-12-23 | V5: Added DSPy Sender role specification |
 | 2025-12-08 | V4: Added ROI calculation outputs |
 | 2025-12-04 | Initial creation for V3 |
+
+---
+
+## V4.2: Energy Score Enhancement Summary
+
+### New Contracts Added
+
+1. **EnergyScoreComponents** - Component scores (treatment_balance, outcome_fit, propensity_calibration)
+2. **EstimatorEvaluationResult** - Individual estimator evaluation with energy score
+3. **EstimatorSelectionSignature** - DSPy signature for interpreting selection results
+
+### Modified Contracts
+
+1. **CausalImpactInput** - Added `selection_strategy` and `energy_score_config` fields
+2. **CausalImpactOutput** - Added energy score outputs and estimator evaluation list
+3. **CausalAnalysisTrainingSignal** - Added energy score selection phase fields
+4. **Handoff Format** - Added `estimator_selection` block with energy score details
+
+### Quality Tiers
+
+| Tier | Max Score | Description |
+|------|-----------|-------------|
+| excellent | 0.25 | High confidence in causal estimate |
+| good | 0.45 | Reasonable confidence |
+| acceptable | 0.65 | Use with caution |
+| poor | 0.80 | Low confidence, consider alternatives |
+| unreliable | 1.00 | Results likely unreliable |
+
+### Supported Estimators
+
+- causal_forest (EconML)
+- linear_dml (EconML)
+- dml_learner (EconML)
+- drlearner (EconML)
+- ortho_forest (EconML)
+- s_learner (CausalML)
+- t_learner (CausalML)
+- x_learner (CausalML)
+- ols (sklearn fallback)
+
+### Selection Strategies
+
+- `first_success` - Legacy: use first estimator that succeeds
+- `best_energy` - Default: select estimator with lowest energy score
+- `ensemble` - Future: combine multiple estimators
