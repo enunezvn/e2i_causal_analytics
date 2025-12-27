@@ -21,6 +21,11 @@ Cognitive RAG (DSPy-enhanced):
 - CognitiveRAGWorkflow: 4-phase cognitive cycle with DSPy optimization
 - create_production_cognitive_workflow: Factory for production backends
 - Memory Adapters: Bridge real backends to DSPy workflow
+
+RAGAS Evaluation (Opik-integrated):
+- RAGASEvaluator: RAGAS metrics evaluation with Opik tracing
+- RAGEvaluationPipeline: Batch evaluation pipeline
+- OpikEvaluationTracer: Centralized Opik tracing
 """
 
 from src.rag.causal_rag import CausalRAG
@@ -35,6 +40,14 @@ from src.rag.cognitive_rag_dspy import (
 )
 from src.rag.config import RAGConfig
 from src.rag.entity_extractor import EntityExtractor
+
+# Evaluation exports
+from src.rag.evaluation import (
+    EvaluationResult,
+    EvaluationSample,
+    RAGASEvaluator,
+    RAGEvaluationPipeline,
+)
 from src.rag.health_monitor import HealthMonitor
 from src.rag.insight_enricher import InsightEnricher
 
@@ -46,6 +59,24 @@ from src.rag.memory_adapters import (
     SignalCollectorAdapter,
     create_memory_adapters,
 )
+
+# Opik integration (optional, with graceful fallback)
+try:
+    from src.rag.opik_integration import (
+        CombinedEvaluationResult,
+        OpikEvaluationTracer,
+        log_ragas_scores_to_opik,
+        log_rubric_scores_to_opik,
+    )
+    _OPIK_EXPORTS = [
+        "OpikEvaluationTracer",
+        "CombinedEvaluationResult",
+        "log_ragas_scores_to_opik",
+        "log_rubric_scores_to_opik",
+    ]
+except ImportError:
+    _OPIK_EXPORTS = []
+
 from src.rag.query_optimizer import QueryOptimizer
 from src.rag.reranker import CrossEncoderReranker
 from src.rag.retriever import HybridRetriever
@@ -93,4 +124,9 @@ __all__ = [
     "ProceduralMemoryAdapter",
     "SignalCollectorAdapter",
     "create_memory_adapters",
-]
+    # RAGAS Evaluation
+    "RAGASEvaluator",
+    "RAGEvaluationPipeline",
+    "EvaluationResult",
+    "EvaluationSample",
+] + _OPIK_EXPORTS

@@ -123,6 +123,16 @@ class FeedbackLearnerState(TypedDict):
     proposed_updates: Optional[List[KnowledgeUpdate]]
     applied_updates: Optional[List[str]]
 
+    # === RUBRIC EVALUATION ===
+    rubric_evaluation_context: Optional[Dict[str, Any]]
+    rubric_evaluation: Optional[Dict[str, Any]]
+    rubric_weighted_score: Optional[float]
+    rubric_decision: Optional[str]
+    rubric_pattern_flags: Optional[List[Dict[str, Any]]]
+    rubric_improvement_suggestion: Optional[str]
+    rubric_latency_ms: Optional[int]
+    rubric_error: Optional[str]
+
     # === SUMMARY ===
     learning_summary: Optional[str]
     metrics_before: Optional[Dict[str, float]]
