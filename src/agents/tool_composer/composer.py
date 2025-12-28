@@ -23,9 +23,15 @@ from src.tool_registry.registry import ToolRegistry
 
 from .decomposer import DecompositionError, QueryDecomposer
 from .executor import ExecutionError, PlanExecutor
+from .memory_hooks import (
+    ToolComposerMemoryHooks,
+    contribute_to_memory,
+    get_tool_composer_memory_hooks,
+)
 from .models.composition_models import (
     CompositionPhase,
     CompositionResult,
+    CompositionStatus,
     SynthesisInput,
 )
 from .planner import PlanningError, ToolPlanner
@@ -60,6 +66,8 @@ class ToolComposer:
         llm_client: Any,
         tool_registry: Optional[ToolRegistry] = None,
         config: Optional[Dict[str, Any]] = None,
+        memory_hooks: Optional[ToolComposerMemoryHooks] = None,
+        enable_memory_contribution: bool = True,
     ):
         """
         Initialize the Tool Composer.
@@ -68,10 +76,14 @@ class ToolComposer:
             llm_client: Anthropic client or compatible LLM client
             tool_registry: Optional custom tool registry (uses global if not provided)
             config: Optional configuration overrides
+            memory_hooks: Optional memory hooks instance (G1, G2 integration)
+            enable_memory_contribution: Whether to store compositions in memory
         """
         self.llm_client = llm_client
         self.registry = tool_registry or ToolRegistry()
         self.config = config or {}
+        self.memory_hooks = memory_hooks or get_tool_composer_memory_hooks()
+        self.enable_memory_contribution = enable_memory_contribution
 
         # Initialize phase handlers
         self._init_phase_handlers()
@@ -99,6 +111,8 @@ class ToolComposer:
             model=plan_config.get("model", "claude-sonnet-4-20250514"),
             temperature=plan_config.get("temperature", 0.2),
             max_tools_per_plan=plan_config.get("max_tools_per_plan", 8),
+            memory_hooks=self.memory_hooks,
+            use_episodic_memory=plan_config.get("use_episodic_memory", True),
         )
 
         self.executor = PlanExecutor(
@@ -202,6 +216,14 @@ class ToolComposer:
             completed_at = datetime.now(timezone.utc)
             total_duration = int((completed_at - started_at).total_seconds() * 1000)
 
+            # Determine contract-compliant status based on execution results
+            if execution_trace.tools_succeeded == execution_trace.tools_executed:
+                status = CompositionStatus.SUCCESS
+            elif execution_trace.tools_succeeded > 0:
+                status = CompositionStatus.PARTIAL
+            else:
+                status = CompositionStatus.FAILED
+
             result = CompositionResult(
                 query=query,
                 decomposition=decomposition,
@@ -210,12 +232,22 @@ class ToolComposer:
                 response=response,
                 total_duration_ms=total_duration,
                 phase_durations=phase_durations,
-                success=True,
+                # Contract-compliant status
+                status=status,
+                success=status == CompositionStatus.SUCCESS,
+                errors=[],  # No errors on successful path
                 started_at=started_at,
                 completed_at=completed_at,
             )
 
             logger.info(f"Composition complete in {total_duration}ms")
+
+            # ================================================================
+            # MEMORY CONTRIBUTION (G1, G2)
+            # ================================================================
+            if self.enable_memory_contribution:
+                await self._contribute_to_memory(result, context)
+
             return result
 
         except DecompositionError as e:
@@ -250,6 +282,50 @@ class ToolComposer:
     def _elapsed_ms(self, start: datetime) -> int:
         """Calculate elapsed milliseconds since start"""
         return int((datetime.now(timezone.utc) - start).total_seconds() * 1000)
+
+    async def _contribute_to_memory(
+        self,
+        result: CompositionResult,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """
+        Store composition results in memory systems (G1, G2).
+
+        Stores in:
+        - Working memory (Redis): Cache for quick retrieval
+        - Episodic memory (Supabase): Historical record for future lookups
+        - Procedural memory: Successful patterns for optimization
+
+        Args:
+            result: The composition result to store
+            context: Context containing session_id, brand, region, etc.
+        """
+        try:
+            context = context or {}
+            session_id = context.get("session_id")
+            brand = context.get("brand")
+            region = context.get("region")
+
+            # Convert result to dict for memory storage
+            result_dict = result.model_dump(mode="json")
+
+            counts = await contribute_to_memory(
+                result=result_dict,
+                session_id=session_id,
+                memory_hooks=self.memory_hooks,
+                brand=brand,
+                region=region,
+            )
+
+            logger.debug(
+                f"Memory contribution complete: "
+                f"episodic={counts['episodic_stored']}, "
+                f"procedural={counts['procedural_stored']}, "
+                f"cached={counts['working_cached']}"
+            )
+        except Exception as e:
+            # Don't fail composition if memory contribution fails
+            logger.warning(f"Failed to contribute to memory: {e}")
 
     def _create_error_result(
         self,
@@ -295,7 +371,10 @@ class ToolComposer:
             response=response,
             total_duration_ms=int((completed_at - started_at).total_seconds() * 1000),
             phase_durations=phase_durations,
+            # Contract-compliant status
+            status=CompositionStatus.FAILED,
             success=False,
+            errors=[error],
             error=error,
             started_at=started_at,
             completed_at=completed_at,

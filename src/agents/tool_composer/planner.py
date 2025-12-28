@@ -13,6 +13,8 @@ from typing import Any, Dict, List, Optional
 
 from src.tool_registry.registry import ToolRegistry
 
+from .cache import get_cache_manager
+from .memory_hooks import ToolComposerMemoryHooks, get_tool_composer_memory_hooks
 from .models.composition_models import (
     DecompositionResult,
     DependencyType,
@@ -98,6 +100,10 @@ class ToolPlanner:
     Maps sub-questions to tools and creates execution plans.
 
     This is Phase 2 of the Tool Composer pipeline.
+
+    Memory Integration (G1, G2):
+    - Uses episodic memory to find similar past compositions
+    - Leverages successful patterns to optimize tool selection
     """
 
     def __init__(
@@ -107,12 +113,21 @@ class ToolPlanner:
         model: str = "claude-sonnet-4-20250514",
         temperature: float = 0.2,
         max_tools_per_plan: int = 8,
+        memory_hooks: Optional[ToolComposerMemoryHooks] = None,
+        use_episodic_memory: bool = True,
+        enable_caching: bool = True,
     ):
         self.llm_client = llm_client
         self.registry = tool_registry or ToolRegistry()
         self.model = model
         self.temperature = temperature
         self.max_tools_per_plan = max_tools_per_plan
+        self.memory_hooks = memory_hooks or get_tool_composer_memory_hooks()
+        self.use_episodic_memory = use_episodic_memory
+        self.enable_caching = enable_caching
+
+        # G6: Initialize cache manager for plan similarity matching
+        self._cache_manager = get_cache_manager() if enable_caching else None
 
     async def plan(self, decomposition: DecompositionResult) -> ExecutionPlan:
         """
@@ -127,11 +142,31 @@ class ToolPlanner:
         logger.info(f"Planning execution for {decomposition.question_count} sub-questions")
 
         try:
+            # G6: Check for similar cached plan
+            if self._cache_manager:
+                cached_result = self._cache_manager.get_similar_plan(decomposition)
+                if cached_result:
+                    cached_plan, similarity = cached_result
+                    logger.info(
+                        f"Found similar cached plan (similarity: {similarity:.2f})"
+                    )
+                    # Adapt cached plan to current decomposition
+                    adapted_plan = self._adapt_cached_plan(cached_plan, decomposition)
+                    if adapted_plan:
+                        return adapted_plan
+
             # Get available tools for planning
             tools_description = self._format_tools_for_prompt()
 
-            # Call LLM for planning
-            response = await self._call_llm(decomposition, tools_description)
+            # G1/G2: Check episodic memory for similar past compositions
+            similar_compositions = await self._check_episodic_memory(
+                decomposition.original_query
+            )
+
+            # Call LLM for planning (with episodic context if available)
+            response = await self._call_llm(
+                decomposition, tools_description, similar_compositions
+            )
 
             # Parse response
             parsed = self._parse_response(response)
@@ -157,12 +192,87 @@ class ToolPlanner:
                 timestamp=datetime.now(timezone.utc),
             )
 
+            # G6: Cache the plan for future similarity matching
+            if self._cache_manager:
+                self._cache_manager.cache_plan(decomposition, plan)
+                logger.debug("Cached plan for future similarity matching")
+
             logger.info(f"Created plan with {len(execution_steps)} steps")
             return plan
 
         except Exception as e:
             logger.error(f"Planning failed: {e}")
             raise PlanningError(f"Failed to create execution plan: {e}") from e
+
+    def _adapt_cached_plan(
+        self, cached_plan: ExecutionPlan, decomposition: DecompositionResult
+    ) -> Optional[ExecutionPlan]:
+        """
+        Adapt a cached plan to a new decomposition if possible.
+
+        Returns None if adaptation is not feasible.
+        """
+        try:
+            # Check if sub-question counts match
+            if len(cached_plan.steps) != decomposition.question_count:
+                logger.debug("Cached plan step count doesn't match, skipping adaptation")
+                return None
+
+            # Create new plan with same structure but updated decomposition
+            # Only adapt if tool sequences match the intent patterns
+            new_plan = ExecutionPlan(
+                decomposition=decomposition,
+                steps=cached_plan.steps,  # Reuse steps structure
+                tool_mappings=cached_plan.tool_mappings,
+                estimated_duration_ms=cached_plan.estimated_duration_ms,
+                parallel_groups=cached_plan.parallel_groups,
+                planning_reasoning=f"Adapted from cached plan: {cached_plan.planning_reasoning}",
+                timestamp=datetime.now(timezone.utc),
+            )
+            return new_plan
+        except Exception as e:
+            logger.debug(f"Failed to adapt cached plan: {e}")
+            return None
+
+    async def _check_episodic_memory(
+        self, query: str, limit: int = 3
+    ) -> List[Dict[str, Any]]:
+        """
+        Check episodic memory for similar past compositions (G1, G2).
+
+        Uses vector search to find successful compositions that can inform
+        tool selection and execution planning.
+
+        Args:
+            query: The original query to find similar compositions for
+            limit: Maximum number of similar compositions to retrieve
+
+        Returns:
+            List of similar compositions with their tool sequences
+        """
+        if not self.use_episodic_memory or not self.memory_hooks:
+            return []
+
+        try:
+            similar = await self.memory_hooks.find_similar_compositions(
+                query=query, limit=limit
+            )
+
+            if similar:
+                logger.info(
+                    f"Found {len(similar)} similar compositions in episodic memory"
+                )
+                # Log the tool sequences for debugging
+                for comp in similar:
+                    raw = comp.get("raw_content", {})
+                    logger.debug(
+                        f"  Similar: tools={raw.get('tool_sequence', [])}, "
+                        f"confidence={raw.get('confidence', 0):.2f}"
+                    )
+            return similar
+        except Exception as e:
+            logger.warning(f"Failed to check episodic memory: {e}")
+            return []
 
     def _format_tools_for_prompt(self) -> str:
         """Format available tools for the planning prompt"""
@@ -182,8 +292,13 @@ class ToolPlanner:
 
         return "\n".join(lines)
 
-    async def _call_llm(self, decomposition: DecompositionResult, tools_description: str) -> str:
-        """Call the LLM for planning"""
+    async def _call_llm(
+        self,
+        decomposition: DecompositionResult,
+        tools_description: str,
+        similar_compositions: Optional[List[Dict[str, Any]]] = None,
+    ) -> str:
+        """Call the LLM for planning with optional episodic context."""
         # Format sub-questions
         sq_text = "\n".join(
             [
@@ -193,7 +308,15 @@ class ToolPlanner:
         )
 
         system_prompt = PLANNING_SYSTEM_PROMPT.format(tools_description=tools_description)
+
+        # G1/G2: Include similar compositions as context
+        episodic_context = ""
+        if similar_compositions:
+            episodic_context = self._format_episodic_context(similar_compositions)
+
         user_message = PLANNING_USER_TEMPLATE.format(sub_questions=sq_text)
+        if episodic_context:
+            user_message = f"{episodic_context}\n\n{user_message}"
 
         response = await self.llm_client.messages.create(
             model=self.model,
@@ -204,6 +327,34 @@ class ToolPlanner:
         )
 
         return response.content[0].text
+
+    def _format_episodic_context(
+        self, similar_compositions: List[Dict[str, Any]]
+    ) -> str:
+        """Format similar compositions as context for the LLM."""
+        if not similar_compositions:
+            return ""
+
+        lines = [
+            "## Similar Past Compositions (Use as Reference)",
+            "The following successful compositions may inform your planning:",
+            "",
+        ]
+
+        for i, comp in enumerate(similar_compositions, 1):
+            raw = comp.get("raw_content", {})
+            tool_seq = raw.get("tool_sequence", [])
+            confidence = raw.get("confidence", 0)
+            duration = raw.get("total_duration_ms", 0)
+
+            lines.append(f"### Reference {i}")
+            lines.append(f"- Tools used: {', '.join(tool_seq)}")
+            lines.append(f"- Success confidence: {confidence:.2f}")
+            lines.append(f"- Execution time: {duration}ms")
+            lines.append("")
+
+        lines.append("Consider similar tool sequences if they match the current query's intent.")
+        return "\n".join(lines)
 
     def _parse_response(self, response: str) -> Dict[str, Any]:
         """Parse JSON from LLM response"""

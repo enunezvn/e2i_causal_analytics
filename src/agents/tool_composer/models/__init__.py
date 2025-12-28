@@ -8,6 +8,8 @@ from .composition_models import (
     CompositionPhase,
     # Top-level
     CompositionResult,
+    # Contract-compliant status enum (V4.3)
+    CompositionStatus,
     DecompositionResult,
     DependencyType,
     ExecutionPlan,
@@ -28,6 +30,7 @@ from .composition_models import (
 
 __all__ = [
     "CompositionPhase",
+    "CompositionStatus",  # Contract-compliant status enum
     "ExecutionStatus",
     "DependencyType",
     "SubQuestion",
