@@ -1,0 +1,2334 @@
+# =============================================================================
+# E2I Causal Analytics - Domain Vocabulary
+# =============================================================================
+# Version: 5.0.0
+# Date: 2025-12-28
+# Description: Consolidated vocabulary from 6 files into single source of truth.
+#              Fixed entity vocabularies for NLP processing, agent routing,
+#              and system-wide standardization. NO medical NER required.
+#
+# Changelog:
+#   v5.0.0 - Consolidated 6 vocabulary files, eliminated duplicates
+#   v4.3.0 - Added GEPA Prompt Optimization vocabularies (Section 13)
+#   v4.2.2 - Added Energy Score Enhancement vocabularies (Section 12)
+#   v4.2.0 - Added Tool Composer & Orchestrator Classifier vocabularies
+#   v4.1.0 - Added causal validation ENUMs (v3.1.0 internal)
+#   v4.0.0 - Added ML Foundation and MLOps vocabularies
+#   v3.0.0 - Added KPI gap analysis vocabularies
+#   v2.0.0 - Initial causal analytics vocabularies
+#
+# Source Files Consolidated:
+#   - domain_vocabulary_v4.2.0.yaml (base, sections 1-13)
+#   - Feedback Loop domain vocabulary.yml (section 14)
+#   - Ragas-Opik Integration Domain Vocabulary.yml (section 15)
+#   - 003_memory_vocabulary.yaml (expanded section 6)
+#
+# Eliminated Duplicates:
+#   - brands: 22 lines (from feedback loop and memory files)
+#   - regions: 19 lines (from feedback loop and memory files)
+#   - agent_tiers: 9 lines (from memory file)
+#   - agents: 27 lines (outdated 11-agent list from memory file)
+#   Total reduction: 1,569 lines (37.5%)
+#
+# Usage:
+#   - NLP entity extraction uses these fixed vocabularies
+#   - Agent routing maps intents to agent capabilities
+#   - Database ENUMs mirror these definitions
+#   - Frontend dropdowns/filters use these values
+# =============================================================================
+
+
+# =============================================================================
+# SECTION 1: CORE BUSINESS ENTITIES
+# =============================================================================
+
+brands:
+  description: "Pharmaceutical brands tracked by E2I"
+  values:
+    - Remibrutinib   # BTK inhibitor
+    - Fabhalta       # Factor B inhibitor
+    - Kisqali        # CDK4/6 inhibitor
+
+regions:
+  description: "US geographic regions for territory analysis"
+  values:
+    - northeast
+    - south
+    - midwest
+    - west
+
+territories:
+  description: "Sales territory identifiers (pattern)"
+  pattern: "^[A-Z]{2}-[0-9]{3}$"  # e.g., NY-001, CA-042
+  examples:
+    - NY-001
+    - CA-042
+    - TX-015
+
+hcp_specialties:
+  description: "Healthcare provider specialties"
+  values:
+    - oncologist
+    - rheumatologist
+    - dermatologist
+    - nephrologist
+    - hematologist
+    - primary_care
+    - other
+
+hcp_segments:
+  description: "HCP segmentation categories"
+  values:
+    - high_volume
+    - medium_volume
+    - low_volume
+    - academic
+    - community
+    - key_opinion_leader
+
+patient_journey_stages:
+  description: "Patient journey milestones"
+  values:
+    - diagnosis
+    - treatment_naive
+    - first_line
+    - second_line
+    - maintenance
+    - discontinuation
+    - switch
+
+
+# =============================================================================
+# SECTION 2: AGENT ARCHITECTURE (18 Agents, 6 Tiers)
+# =============================================================================
+
+agent_tiers:
+  description: "Agent tier hierarchy"
+  values:
+    - tier_0_ml_foundation    # 7 agents - ML lifecycle
+    - tier_1_coordination     # 1 agent  - Orchestrator
+    - tier_2_causal           # 4 agents - Causal analytics
+    - tier_3_monitoring       # 2 agents - Drift & data quality
+    - tier_4_prediction       # 2 agents - ML predictions
+    - tier_5_self_improvement # 2 agents - Learning & feedback
+
+agents:
+  description: "All 18 agents with tier assignments"
+
+  # Tier 0: ML Foundation (7 agents)
+  tier_0_ml_foundation:
+    - scope_definer
+    - data_preparer
+    - model_selector
+    - model_trainer
+    - model_evaluator
+    - model_deployer
+    - model_monitor
+
+  # Tier 1: Coordination (1 agent)
+  tier_1_coordination:
+    - orchestrator
+
+  # Tier 2: Causal Analytics (4 agents)
+  tier_2_causal:
+    - causal_impact
+    - heterogeneous_optimizer
+    - gap_analyzer
+    - experiment_designer
+
+  # Tier 3: Monitoring (2 agents)
+  tier_3_monitoring:
+    - drift_monitor
+    - data_quality_monitor
+
+  # Tier 4: Prediction (2 agents)
+  tier_4_prediction:
+    - prediction_synthesizer
+    - risk_assessor
+
+  # Tier 5: Self-Improvement (2 agents)
+  tier_5_self_improvement:
+    - explainer
+    - feedback_learner
+
+agent_types:
+  description: "Agent behavioral categories"
+  values:
+    - standard    # Tool-heavy, SLA-bound (Orchestrator, Gap Analyzer)
+    - hybrid      # Computation + LLM interpretation (Causal Impact, Experiment Designer)
+    - deep        # Extended reasoning (Explainer, Feedback Learner)
+
+
+# =============================================================================
+# SECTION 3: TOOL COMPOSER & ORCHESTRATOR CLASSIFIER (V4.2 NEW)
+# =============================================================================
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Routing Patterns
+# ─────────────────────────────────────────────────────────────────────────────
+
+routing_patterns:
+  description: "Query routing patterns determined by Orchestrator classifier"
+  values:
+    - single_agent           # Route to single primary agent
+    - parallel_delegation    # Route to multiple independent agents
+    - tool_composer          # Use Tool Composer for dependent multi-domain
+    - clarification_needed   # Query too ambiguous, request clarification
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Query Domains
+# ─────────────────────────────────────────────────────────────────────────────
+
+query_domains:
+  description: "Agent capability domains for query classification"
+  values:
+    - causal_analysis     # Cause-effect relationships (Causal Impact)
+    - heterogeneity       # Segment variation (Heterogeneous Optimizer)
+    - gap_analysis        # Performance gaps (Gap Analyzer)
+    - experimentation     # Test design (Experiment Designer)
+    - prediction          # Future outcomes (Prediction Synthesizer)
+    - monitoring          # Data quality/drift (Drift Monitor)
+    - explanation         # Clarification requests (Explainer)
+
+domain_to_agent_mapping:
+  description: "Maps query domains to primary agents"
+  mapping:
+    causal_analysis: causal_impact
+    heterogeneity: heterogeneous_optimizer
+    gap_analysis: gap_analyzer
+    experimentation: experiment_designer
+    prediction: prediction_synthesizer
+    monitoring: drift_monitor
+    explanation: explainer
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Dependency Types
+# ─────────────────────────────────────────────────────────────────────────────
+
+dependency_types:
+  description: "Types of data dependencies between decomposed sub-questions"
+  values:
+    - reference_chain        # Pronoun/phrase references earlier result ("that", "those")
+    - conditional            # Conditional logic ("if X then Y")
+    - logical_sequence       # Natural ordering required (cause → effect → intervention)
+    - entity_transformation  # Entity filtered/transformed by earlier step
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tool Categories
+# ─────────────────────────────────────────────────────────────────────────────
+
+tool_categories:
+  description: "Tool capability categories mapping to agent domains"
+  values:
+    - causal        # Causal Impact Agent tools
+    - segmentation  # Heterogeneous Optimizer tools
+    - gap           # Gap Analyzer tools
+    - experiment    # Experiment Designer tools
+    - prediction    # Prediction Synthesizer tools
+    - monitoring    # Drift Monitor tools
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Composable Tools Registry
+# ─────────────────────────────────────────────────────────────────────────────
+
+composable_tools:
+  description: "Tools exposed by agents for Tool Composer"
+
+  causal_impact:
+    - causal_effect_estimator
+    - refutation_runner
+    - sensitivity_analyzer
+
+  heterogeneous_optimizer:
+    - cate_analyzer
+    - segment_ranker
+
+  gap_analyzer:
+    - gap_calculator
+    - roi_estimator
+
+  experiment_designer:
+    - power_calculator
+    - counterfactual_simulator
+
+  prediction_synthesizer:
+    - risk_scorer
+    - propensity_estimator
+
+  drift_monitor:
+    - psi_calculator
+    - distribution_comparator
+
+non_composable_agents:
+  description: "Agents that do not expose tools for composition"
+  values:
+    - orchestrator       # Router, not computation source
+    - explainer          # Pure LLM interpretation
+    - feedback_learner   # Writes to memory, no deterministic computation
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Composition Status
+# ─────────────────────────────────────────────────────────────────────────────
+
+composition_statuses:
+  description: "Status of a tool composition execution"
+  values:
+    - pending       # Composition queued
+    - decomposing   # Phase 1: Breaking down query
+    - planning      # Phase 2: Creating execution plan
+    - executing     # Phase 3: Running tools
+    - synthesizing  # Phase 4: Combining results
+    - completed     # Successfully finished
+    - failed        # Error during execution
+    - timeout       # Exceeded time limit
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Classification Features
+# ─────────────────────────────────────────────────────────────────────────────
+
+intent_keywords:
+  description: "Keywords used for query intent classification"
+
+  causal:
+    - impact
+    - effect
+    - caused
+    - drove
+    - attributed
+    - due to
+    - resulted in
+    - led to
+    - influenced
+    - affected
+
+  exploration:
+    - show
+    - list
+    - which
+    - what
+    - display
+    - find
+    - identify
+    - who
+    - where
+    - how many
+
+  prediction:
+    - predict
+    - forecast
+    - will
+    - would
+    - expect
+    - likelihood
+    - probability
+    - risk
+    - chance
+    - future
+
+  design:
+    - design
+    - create
+    - plan
+    - test
+    - experiment
+    - A/B
+    - trial
+    - validate
+    - hypothesis
+    - setup
+
+  explanation:
+    - explain
+    - why
+    - how
+    - clarify
+    - simplify
+    - summarize
+    - elaborate
+    - describe
+    - understand
+    - mean
+
+  monitoring:
+    - drift
+    - shift
+    - change
+    - anomaly
+    - data quality
+    - issue
+    - problem
+    - error
+    - missing
+    - outlier
+
+structural_markers:
+  description: "Structural patterns for query analysis"
+
+  conditional:
+    - if
+    - would
+    - what if
+    - assuming
+    - suppose
+    - hypothetically
+    - in case
+    - should we
+    - could we
+
+  comparison:
+    - vs
+    - versus
+    - compared to
+    - relative to
+    - against
+    - better than
+    - worse than
+    - difference between
+
+  sequence:
+    - then
+    - after
+    - next
+    - followed by
+    - subsequently
+    - first
+    - second
+    - finally
+    - before
+
+  connectors:
+    - and
+    - but
+    - also
+    - additionally
+    - moreover
+    - plus
+
+
+# =============================================================================
+# SECTION 4: CAUSAL VALIDATION (V4.1)
+# =============================================================================
+
+refutation_test_types:
+  description: "DoWhy refutation test types"
+  values:
+    - placebo_treatment     # Replace treatment with random
+    - random_common_cause   # Add random confounder
+    - data_subset           # Test on data subset
+    - bootstrap             # Bootstrap confidence
+    - sensitivity_e_value   # E-value sensitivity
+
+validation_statuses:
+  description: "Validation test outcome statuses"
+  values:
+    - passed
+    - failed
+    - warning
+    - skipped
+
+gate_decisions:
+  description: "Validation gate decisions for estimates"
+  values:
+    - proceed   # Estimate can be used
+    - review    # Requires expert review
+    - block     # Cannot use estimate
+
+expert_review_types:
+  description: "Types of expert reviews"
+  values:
+    - dag_approval
+    - methodology_review
+    - quarterly_audit
+    - ad_hoc_validation
+
+
+# =============================================================================
+# SECTION 5: ML FOUNDATION & MLOPS (V4.0)
+# =============================================================================
+
+model_stages:
+  description: "ML model lifecycle stages"
+  values:
+    - development
+    - staging
+    - shadow
+    - production
+    - deprecated
+    - archived
+
+mlops_tools:
+  description: "MLOps toolchain components"
+  values:
+    - mlflow              # Experiment tracking
+    - opik                # LLM observability
+    - great_expectations  # Data quality
+    - feature_store       # V4.2: Lightweight feature store (Supabase + Redis + MLflow)
+    - optuna              # Hyperparameter optimization
+    - shap                # Explainability
+    - bentoml             # Model serving
+
+split_types:
+  description: "ML data split types"
+  values:
+    - temporal            # Time-based splits
+    - patient_stratified  # Patient-level stratification
+    - geographic          # Region-based splits
+
+split_purposes:
+  description: "ML split usage purposes"
+  values:
+    - training
+    - validation
+    - testing
+    - holdout
+    - shadow
+
+# -----------------------------------------------------------------------------
+# Feature Store (V4.2)
+# -----------------------------------------------------------------------------
+
+feature_value_types:
+  description: "Feature value data types in feature store"
+  values:
+    - int64           # Integer values
+    - float64         # Float values
+    - string          # String values
+    - bool            # Boolean values
+    - timestamp       # Timestamp values
+    - array_int64     # Array of integers
+    - array_float64   # Array of floats
+    - array_string    # Array of strings
+
+feature_freshness_status:
+  description: "Feature freshness tracking statuses"
+  values:
+    - fresh    # Within SLA, safe to use
+    - stale    # Outside SLA but usable
+    - expired  # Too old, should not be used
+
+feature_store_providers:
+  description: "Feature store infrastructure providers"
+  values:
+    - supabase  # Offline storage (PostgreSQL)
+    - redis     # Online serving (cache)
+    - mlflow    # Feature tracking & versioning
+
+feature_groups:
+  description: "E2I feature group categories"
+  values:
+    - hcp_demographics      # HCP demographics (specialty, years_in_practice, etc.)
+    - hcp_targeting         # HCP targeting features (trx_30d, brand_affinity, etc.)
+    - brand_performance     # Brand metrics (nrx, market_share, growth_rate)
+    - causal_features       # Causal relationships (ATE, CATE by segment)
+    - patient_journey       # Patient journey features
+    - territory_performance # Territory-level features
+
+
+# =============================================================================
+# SECTION 6: MEMORY ARCHITECTURE (EXPANDED V5.0)
+# =============================================================================
+
+memory_types:
+  description: "Tri-memory architecture layers"
+  values:
+    - working     # Redis: Session state, active context
+    - episodic    # Supabase: Past queries, successful patterns
+    - procedural  # Supabase: Learned tool chains
+    - semantic    # FalkorDB: Entity graph, relationships
+
+memory_backends:
+  description: "Memory storage backends"
+  mapping:
+    working: redis
+    episodic: supabase_pgvector
+    procedural: supabase_pgvector
+    semantic: falkordb
+
+# -----------------------------------------------------------------------------
+# Semantic Graph Entity Types (V5.0 - from 003_memory_vocabulary.yaml)
+# -----------------------------------------------------------------------------
+
+semantic_graph_entity_types:
+  description: "Node types in the semantic graph for agentic memory"
+
+  # Core Business Entities
+  patient:
+    description: "Individual patient in healthcare journey"
+    id_field: "patient_id"
+    alternate_ids: ["patient_hash"]
+    key_attributes:
+      - journey_stage
+      - risk_score
+      - region
+      - age_group
+      - insurance_type
+    journey_stages:
+      - unaware
+      - aware
+      - considering
+      - trialing
+      - adopted
+      - adherent
+      - discontinued
+
+  hcp:
+    description: "Healthcare Professional (physician, NP, PA)"
+    id_field: "hcp_id"
+    alternate_ids: ["npi"]
+    display_field: "name"
+    key_attributes:
+      - specialty
+      - sub_specialty
+      - practice_type
+      - region
+      - priority_tier
+      - adoption_category
+    specialties:
+      # Oncology (Kisqali)
+      - oncology
+      - hematology_oncology
+      - breast_oncology
+      - gynecologic_oncology
+      # Hematology (Fabhalta)
+      - hematology
+      - blood_disorders
+      - transplant_hematology
+      # Immunology/Allergy (Remibrutinib)
+      - allergy_immunology
+      - dermatology
+      - rheumatology
+      # General
+      - internal_medicine
+      - primary_care
+      - other
+    adoption_categories:
+      - early_adopter
+      - early_majority
+      - late_majority
+      - laggard
+
+  brand:
+    description: "Drug brand in E2I portfolio"
+    id_field: "brand_id"
+    display_field: "brand_name"
+    note: "See SECTION 1 for brand values (Remibrutinib, Fabhalta, Kisqali)"
+    vocabulary_reference: "brands"
+
+  region:
+    description: "Geographic region in US"
+    id_field: "region_id"
+    note: "See SECTION 1 for region values (northeast, south, midwest, west)"
+    vocabulary_reference: "regions"
+
+  # Analytics Entities
+  kpi:
+    description: "Key Performance Indicator"
+    id_field: "kpi_id"
+    display_field: "kpi_name"
+    categories:
+      workstream_1:  # Data & Model
+        - patient_coverage_pct
+        - hcp_coverage_pct
+        - data_lag_days
+        - model_auc
+        - prediction_calibration
+        - feature_drift_psi
+      workstream_2:  # Triggers & Decisions
+        - trigger_precision
+        - trigger_acceptance_rate
+        - action_rate
+        - channel_effectiveness
+        - lead_time_accuracy
+      workstream_3:  # Impact & Value
+        - engagement_uplift_pct
+        - prescription_conversion_rate
+        - roi_per_trigger
+        - incremental_patients
+        - time_to_prescription_days
+
+  causal_path:
+    description: "Discovered causal relationship chain"
+    id_field: "path_id"
+    key_attributes:
+      - effect_size
+      - confidence
+      - method_used
+      - time_lag_days
+    methods:
+      - dowhy_backdoor
+      - dowhy_frontdoor
+      - econml_dml
+      - econml_causal_forest
+      - causalml_uplift
+      - causalml_metalearner
+
+  trigger:
+    description: "HCP engagement trigger"
+    id_field: "trigger_id"
+    types:
+      - alert
+      - recommendation
+      - insight
+      - next_best_action
+    priorities:
+      - critical
+      - high
+      - medium
+      - low
+    channels:
+      - email
+      - crm_alert
+      - mobile_app
+      - phone
+      - in_person
+
+  agent:
+    description: "E2I AI Agent"
+    id_field: "agent_name"
+    note: "See SECTION 2 for agent values (18-agent architecture)"
+    vocabulary_reference: "agents"
+
+# -----------------------------------------------------------------------------
+# Semantic Graph Relationship Types (V5.0)
+# -----------------------------------------------------------------------------
+
+semantic_graph_relationship_types:
+  description: "Edge types in the semantic graph for agentic memory"
+
+  # Patient Relationships
+  treated_by:
+    description: "Patient receives care from HCP"
+    source_type: patient
+    target_type: hcp
+    properties:
+      - first_visit_date
+      - last_visit_date
+      - visit_count
+      - is_primary_hcp
+
+  prescribed:
+    description: "Patient receives prescription for brand"
+    source_type: patient
+    target_type: brand
+    properties:
+      - prescription_date
+      - dosage
+      - duration_days
+      - is_first_line
+      - line_of_therapy
+
+  located_in:
+    description: "Patient resides in region"
+    source_type: patient
+    target_type: region
+
+  transitioned_to:
+    description: "Patient moved to new journey stage"
+    source_type: patient
+    target_type: patient  # Self-loop for state change
+    properties:
+      - from_stage
+      - to_stage
+      - transition_date
+      - trigger_event
+
+  # HCP Relationships
+  prescribes:
+    description: "HCP prescribes brand"
+    source_type: hcp
+    target_type: brand
+    properties:
+      - volume_monthly
+      - market_share
+      - adoption_date
+      - preference_rank
+
+  practices_in:
+    description: "HCP practices in region"
+    source_type: hcp
+    target_type: region
+    properties:
+      - is_primary_location
+
+  influences:
+    description: "HCP influences another HCP"
+    source_type: hcp
+    target_type: hcp
+    properties:
+      - influence_strength
+      - network_type  # referral, academic, social
+      - interaction_count
+
+  received:
+    description: "HCP received trigger"
+    source_type: hcp
+    target_type: trigger
+    properties:
+      - delivery_date
+      - channel
+      - accepted
+      - action_taken
+
+  # Causal Relationships
+  causes:
+    description: "Entity causes effect on another entity"
+    source_type: any
+    target_type: any
+    properties:
+      - effect_size
+      - confidence
+      - time_lag_days
+      - method_used
+      - confounders_controlled
+      - mediators
+
+  impacts:
+    description: "Causal path impacts KPI"
+    source_type: causal_path
+    target_type: kpi
+    properties:
+      - impact_magnitude
+      - direction  # positive, negative
+
+  # Agent Relationships
+  analyzes:
+    description: "Agent analyzes entity"
+    source_type: agent
+    target_type: any
+    properties:
+      - last_analysis_date
+      - analysis_count
+
+  discovered:
+    description: "Agent discovered causal path"
+    source_type: agent
+    target_type: causal_path
+    properties:
+      - discovery_date
+      - method_used
+
+  generated:
+    description: "Agent generated trigger"
+    source_type: agent
+    target_type: trigger
+
+# -----------------------------------------------------------------------------
+# Memory Event Types (V5.0)
+# -----------------------------------------------------------------------------
+
+memory_event_types:
+  description: "Event types for episodic memory storage"
+
+  user_events:
+    description: "Events triggered by user interaction"
+    types:
+      user_query:
+        description: "User asked a question via NLV"
+        subtypes:
+          - causal_query       # "Why did X happen?"
+          - trend_query        # "How has X changed?"
+          - comparison_query   # "Compare X to Y"
+          - prediction_query   # "What will happen if...?"
+          - exploration_query  # "Show me X"
+      user_feedback:
+        description: "User provided feedback on response"
+        subtypes:
+          - thumbs_up
+          - thumbs_down
+          - correction
+          - rating
+          - comment
+      user_action:
+        description: "User took action in system"
+        subtypes:
+          - filter_changed
+          - drill_down
+          - export_data
+          - share_insight
+          - save_view
+
+  agent_events:
+    description: "Events from AI agent actions"
+    types:
+      analysis_completed:
+        description: "Agent completed analysis"
+        agents: all
+      causal_path_discovered:
+        description: "New causal relationship found"
+        agents: [causal_impact, gap_analyzer]
+      trigger_generated:
+        description: "New engagement trigger created"
+        agents: [prediction_synthesizer, heterogeneous_optimizer]
+      drift_detected:
+        description: "Data or model drift identified"
+        agents: [drift_monitor]
+      experiment_designed:
+        description: "A/B test designed"
+        agents: [experiment_designer]
+      insight_synthesized:
+        description: "Narrative insight generated"
+        agents: [explainer, orchestrator]
+      procedure_learned:
+        description: "New tool sequence learned"
+        agents: [feedback_learner]
+
+  system_events:
+    description: "System-level events"
+    types:
+      data_refresh:
+        description: "Data source refreshed"
+        sources: [IQVIA, HealthVerity, Veeva, Komodo]
+      model_retrained:
+        description: "ML model retrained"
+      threshold_crossed:
+        description: "KPI crossed alert threshold"
+      error_occurred:
+        description: "System error"
+
+# -----------------------------------------------------------------------------
+# Intent Classification Vocabulary (V5.0)
+# -----------------------------------------------------------------------------
+
+memory_intent_vocabulary:
+  description: "Intent classification keywords for query routing to memory backend"
+
+  causal_intents:
+    description: "Queries about causation"
+    keywords:
+      - why
+      - cause
+      - because
+      - due to
+      - reason
+      - impact
+      - effect
+      - driver
+      - contributor
+      - lead to
+      - result in
+    route_to: causal_impact
+
+  trend_intents:
+    description: "Queries about changes over time"
+    keywords:
+      - trend
+      - change
+      - over time
+      - increase
+      - decrease
+      - growth
+      - decline
+      - trajectory
+      - forecast
+      - predict
+    route_to: drift_monitor
+
+  comparison_intents:
+    description: "Queries comparing entities"
+    keywords:
+      - compare
+      - versus
+      - vs
+      - difference
+      - better
+      - worse
+      - gap
+      - benchmark
+      - relative to
+    route_to: gap_analyzer
+
+  optimization_intents:
+    description: "Queries about improving outcomes"
+    keywords:
+      - optimize
+      - improve
+      - maximize
+      - best
+      - recommend
+      - target
+      - prioritize
+      - allocate
+    route_to: heterogeneous_optimizer
+
+  experiment_intents:
+    description: "Queries about testing hypotheses"
+    keywords:
+      - test
+      - experiment
+      - A/B
+      - hypothesis
+      - validate
+      - prove
+      - significance
+    route_to: experiment_designer
+
+# -----------------------------------------------------------------------------
+# Memory Templates (V5.0)
+# -----------------------------------------------------------------------------
+
+memory_templates:
+  description: "Standard patterns for storing common memory types"
+
+  episodic:
+    user_query_template:
+      event_type: "user_query"
+      description: "User asked: {query}"
+      entities:
+        brands: []
+        regions: []
+        kpis: []
+      outcome_type: null  # Set after response
+
+    agent_insight_template:
+      event_type: "agent_insight"
+      description: "{agent} discovered: {insight_summary}"
+      entities:
+        brands: []
+        regions: []
+      outcome_type: "success"
+
+  procedural:
+    tool_sequence_template:
+      procedure_name: "{intent}_analysis"
+      procedure_type: "tool_sequence"
+      tool_sequence: []  # Filled with actual calls
+      trigger_pattern: null  # Regex
+      intent_keywords: []
+
+  semantic:
+    triplet_template:
+      subject_type: null
+      subject_id: null
+      predicate: null
+      object_type: null
+      object_id: null
+      confidence: 1.0
+
+
+# =============================================================================
+# SECTION 7: VISUALIZATION & KPIs
+# =============================================================================
+
+chart_types:
+  description: "Supported visualization types"
+  values:
+    - line_chart
+    - bar_chart
+    - scatter_plot
+    - heatmap
+    - funnel_chart
+    - sankey_diagram
+    - dag_visualization
+    - forest_plot
+    - waterfall_chart
+
+kpi_categories:
+  description: "KPI classification categories"
+  values:
+    - patient_access
+    - hcp_engagement
+    - territory_performance
+    - causal_impact
+    - model_performance
+    - data_quality
+
+
+# =============================================================================
+# SECTION 8: TIME REFERENCES
+# =============================================================================
+
+time_periods:
+  description: "Standard time period references"
+  values:
+    - Q1
+    - Q2
+    - Q3
+    - Q4
+    - YTD
+    - MTD
+    - last_week
+    - last_month
+    - last_quarter
+    - last_year
+
+time_granularities:
+  description: "Time aggregation levels"
+  values:
+    - daily
+    - weekly
+    - monthly
+    - quarterly
+    - yearly
+
+
+# =============================================================================
+# SECTION 9: ENTITY PATTERNS (for NLP extraction)
+# =============================================================================
+
+entity_patterns:
+  description: "Regex patterns for entity extraction"
+
+  hcp:
+    patterns:
+      - "\\bHCP[s]?\\b"
+      - "\\bphysician[s]?\\b"
+      - "\\bdoctor[s]?\\b"
+      - "\\boncologist[s]?\\b"
+      - "\\brheumatologist[s]?\\b"
+
+  region:
+    patterns:
+      - "\\b(Northeast|Midwest|South|West|Southeast|Northwest)\\b"
+      - "\\bregion[s]?\\b"
+      - "\\bterritor(y|ies)\\b"
+
+  drug:
+    patterns:
+      - "\\b(Kisqali|Fabhalta|Remibrutinib)\\b"
+      - "\\bbrand[s]?\\b"
+
+  campaign:
+    patterns:
+      - "\\b(Q[1-4]\\s+)?campaign[s]?\\b"
+      - "\\bmessaging\\b"
+      - "\\bprogram[s]?\\b"
+      - "\\bintervention[s]?\\b"
+
+  segment:
+    patterns:
+      - "\\bsegment[s]?\\b"
+      - "\\bcohort[s]?\\b"
+      - "\\bgroup[s]?\\b"
+
+  time_period:
+    patterns:
+      - "\\bQ[1-4]\\b"
+      - "\\b20[0-9]{2}\\b"
+
+
+# =============================================================================
+# SECTION 10: ERROR HANDLING
+# =============================================================================
+
+error_categories:
+  description: "System error categories"
+  values:
+    - validation_error
+    - timeout_error
+    - rate_limit_error
+    - authentication_error
+    - data_not_found
+    - model_error
+    - tool_execution_error
+    - composition_error
+
+retry_strategies:
+  description: "Retry strategy configurations"
+  values:
+    - exponential_backoff
+    - linear_backoff
+    - immediate_retry
+    - no_retry
+
+fallback_chains:
+  description: "LLM fallback configurations"
+  default_chain:
+    - claude-sonnet-4-20250514
+    - claude-3-5-haiku-20241022
+    - template_response
+
+
+# =============================================================================
+# SECTION 11: DSPy INTEGRATION & MIPROV2 OPTIMIZATION
+# =============================================================================
+
+cognitive_phases:
+  description: "4-phase cognitive workflow phases from CognitiveRAG"
+  values:
+    - summarizer      # Phase 1: Context compression and evidence synthesis
+    - investigator    # Phase 2: Multi-hop retrieval across memory types
+    - agent           # Phase 3: Specialized agent execution
+    - reflector       # Phase 4: Learning and memory contribution
+
+dspy_optimization_phases:
+  description: "DSPy signature optimization targets for MIPROv2"
+  values:
+    - pattern_detection           # Feedback pattern identification
+    - recommendation_generation   # Improvement recommendation synthesis
+    - knowledge_update            # Knowledge base update decisions
+    - learning_summary            # Executive summary generation
+    - causal_impact               # Causal impact estimation
+    - gap_analysis                # KPI gap identification
+    - experiment_design           # Experiment parameter selection
+    - prediction_synthesis        # ML prediction aggregation
+
+training_signal_types:
+  description: "Types of training signals for DSPy optimization"
+  values:
+    - agent_training_signal    # Full agent execution context + outcomes
+    - learning_signal          # User feedback and corrections
+    - cognitive_context        # Enriched context from CognitiveRAG
+
+optimization_statuses:
+  description: "MIPROv2 optimization run statuses"
+  values:
+    - pending      # Queued for optimization
+    - running      # Optimization in progress
+    - completed    # Successfully optimized
+    - failed       # Optimization failed
+    - cancelled    # Manually cancelled
+
+quality_metrics:
+  description: "DSPy training signal quality dimensions"
+  feedback_learner:
+    - pattern_accuracy            # Validated accuracy of detected patterns
+    - recommendation_actionability # Percentage of recommendations implemented
+    - update_effectiveness        # Downstream metric improvement from updates
+  causal_impact:
+    - effect_accuracy             # Accuracy of effect estimation
+    - confidence_calibration      # Quality of confidence intervals
+    - counterfactual_validity     # Validity of counterfactual scenarios
+  experiment_designer:
+    - power_accuracy              # Accuracy of power calculations
+    - sample_size_efficiency      # Efficiency of sample size recommendations
+    - design_feasibility          # Practicality of experiment designs
+
+reward_weights:
+  description: "MIPROv2 reward computation weights by agent"
+  feedback_learner:
+    pattern_accuracy: 0.25
+    recommendation_actionability: 0.25
+    update_effectiveness: 0.25
+    efficiency: 0.15
+    coverage: 0.10
+  causal_impact:
+    effect_accuracy: 0.35
+    confidence_calibration: 0.25
+    counterfactual_validity: 0.20
+    latency_efficiency: 0.20
+
+dspy_signatures:
+  description: "DSPy signature definitions by agent"
+  feedback_learner:
+    - PatternDetectionSignature
+    - RecommendationGenerationSignature
+    - KnowledgeUpdateSignature
+    - LearningSummarySignature
+  causal_impact:
+    - CausalEffectSignature
+    - CounterfactualSignature
+    - ConfidenceIntervalSignature
+  experiment_designer:
+    - ExperimentDesignSignature
+    - PowerAnalysisSignature
+    - SampleSizeSignature
+
+cognitive_context_sources:
+  description: "Memory sources for cognitive context enrichment"
+  episodic:
+    description: "Long-term episodic experiences from Supabase pgvector"
+    ttl_days: 180
+    retrieval_method: "vector_similarity"
+  semantic:
+    description: "Knowledge graph from FalkorDB Graphity"
+    ttl_days: 365
+    retrieval_method: "graph_traversal"
+  procedural:
+    description: "Learned tool sequences and procedures"
+    ttl_days: 365
+    retrieval_method: "pattern_matching"
+  working:
+    description: "Current session context from Redis + LangGraph"
+    ttl_seconds: 3600
+    retrieval_method: "direct_access"
+
+
+# =============================================================================
+# SECTION 12: ENERGY SCORE ENHANCEMENT (V4.2.2)
+# =============================================================================
+
+estimator_types:
+  description: "Causal estimator types in the fallback chain"
+  values:
+    - id: causal_forest
+      label: "Causal Forest"
+      library: "EconML"
+      description: "Non-parametric forest-based CATE estimator"
+      default_priority: 1
+
+    - id: linear_dml
+      label: "Linear DML"
+      library: "EconML"
+      description: "Double/debiased machine learning with linear final stage"
+      default_priority: 2
+
+    - id: drlearner
+      label: "DR Learner"
+      library: "EconML"
+      description: "Doubly robust learner combining outcome and propensity models"
+      default_priority: 3
+
+    - id: ols
+      label: "OLS"
+      library: "sklearn"
+      description: "Simple linear regression fallback"
+      default_priority: 10
+
+selection_strategies:
+  description: "Strategies for selecting among causal estimators"
+  values:
+    - id: first_success
+      label: "First Success"
+      description: "Legacy: use first estimator that succeeds"
+
+    - id: best_energy
+      label: "Best Energy Score"
+      description: "Select estimator with lowest energy score"
+
+    - id: ensemble
+      label: "Ensemble"
+      description: "Combine multiple estimators (future)"
+
+energy_score_components:
+  description: "Components of the composite energy score"
+  values:
+    - id: treatment_balance
+      label: "Treatment Balance"
+      weight: 0.35
+      description: "Covariate balance after IPW adjustment"
+
+    - id: outcome_fit
+      label: "Outcome Fit"
+      weight: 0.45
+      description: "DR residual fit quality"
+
+    - id: propensity_calibration
+      label: "Propensity Calibration"
+      weight: 0.20
+      description: "Propensity score calibration quality"
+
+quality_tiers:
+  description: "Energy score quality tier thresholds"
+  values:
+    - id: excellent
+      max_score: 0.25
+      description: "High confidence in causal estimate"
+      badge_color: "#22c55e"
+
+    - id: good
+      max_score: 0.45
+      description: "Reasonable confidence"
+      badge_color: "#3b82f6"
+
+    - id: acceptable
+      max_score: 0.65
+      description: "Use with caution"
+      badge_color: "#f59e0b"
+
+    - id: poor
+      max_score: 0.80
+      description: "Low confidence, consider alternatives"
+      badge_color: "#ef4444"
+
+    - id: unreliable
+      max_score: 1.00
+      description: "Results likely unreliable"
+      badge_color: "#6b7280"
+
+
+# =============================================================================
+# SECTION 13: GEPA PROMPT OPTIMIZATION (V4.3.0)
+# =============================================================================
+# GEPA: Generative Evolutionary Prompting with AI
+# Replaces MIPROv2 as the default DSPy optimizer, providing:
+# - 10%+ performance improvement over MIPROv2
+# - Reflective evolution with rich textual feedback
+# - Joint tool optimization for DoWhy/EconML tools
+# - Pareto frontier for multi-objective KPI optimization
+
+optimizer_types:
+  description: "DSPy optimizer types for prompt optimization"
+  values:
+    - miprov2              # Previous DSPy optimizer (baseline)
+    - gepa                 # GEPA: Generative Evolutionary Prompting with AI
+    - bootstrap_fewshot    # DSPy BootstrapFewShot
+    - bootstrap_rs         # DSPy BootstrapRandomSearch
+    - copro                # DSPy COPRO (Collaborative Prompt Optimization)
+    - simba                # DSPy SIMBA
+    - labeled_fewshot      # DSPy LabeledFewShot
+    - knn_fewshot          # DSPy KNNFewShot
+    - manual               # Manual prompt engineering
+  default: gepa
+  added_in: "4.3.0"
+
+gepa_budget_presets:
+  description: "GEPA auto budget presets controlling optimization depth"
+  values:
+    - light                # Quick experimentation, ~500 metric calls
+    - medium               # Balanced optimization, ~2000 metric calls
+    - heavy                # Thorough optimization, ~4000+ metric calls
+    - custom               # User-defined max_metric_calls
+  default: medium
+  notes: |
+    - light: Best for rapid iteration, Standard agents (13 agents)
+    - medium: Recommended for Hybrid agents (causal_impact, experiment_designer, feature_analyzer)
+    - heavy: Recommended for Deep agents (explainer, feedback_learner)
+    - custom: When precise budget control needed
+  added_in: "4.3.0"
+
+ab_test_variants:
+  description: "A/B test variant identifiers for prompt optimization"
+  values:
+    - baseline             # MIPROv2 or manual baseline
+    - gepa                 # GEPA optimized version
+    - gepa_v2              # Second GEPA iteration
+    - gepa_v3              # Third GEPA iteration
+    - control              # Unoptimized control
+  default: baseline
+  added_in: "4.3.0"
+
+gepa_candidate_selection_strategies:
+  description: "GEPA candidate selection strategies for evolutionary optimization"
+  values:
+    - pareto               # Select from Pareto frontier (recommended)
+    - current_best         # Always select current best performer
+  default: pareto
+  notes: |
+    pareto maintains diversity and avoids local optima by sampling
+    candidates that excel on different validation instances.
+  added_in: "4.3.0"
+
+gepa_metric_components:
+  description: "Components of GEPA feedback metrics for different agent types"
+  causal_impact:
+    - refutation           # DoWhy refutation test pass rate (weight: 0.30)
+    - sensitivity          # E-value robustness (weight: 0.25)
+    - methodology          # DAG validity, method selection (weight: 0.25)
+    - business             # KPI attribution, actionability (weight: 0.20)
+  experiment_designer:
+    - power                # Power analysis validity (weight: 0.35)
+    - design               # Randomization, controls, blinding (weight: 0.30)
+    - learning             # ExperimentKnowledgeStore integration (weight: 0.20)
+    - preregistration      # Protocol completeness (weight: 0.15)
+  feedback_learner:
+    - extraction           # Learning extraction quality (weight: 0.40)
+    - storage              # Storage efficiency (weight: 0.20)
+    - application          # Downstream application success (weight: 0.40)
+  standard:
+    - sla                  # SLA compliance (weight: 0.40)
+    - accuracy             # Prediction accuracy (weight: 0.60)
+  added_in: "4.3.0"
+
+reflection_models:
+  description: "Recommended LLMs for GEPA reflection"
+  values:
+    - anthropic/claude-sonnet-4-20250514     # Recommended for most cases
+    - anthropic/claude-opus-4-5-20251101     # For complex deep reasoning
+    - openai/gpt-4o                          # Cost-effective alternative
+  default: anthropic/claude-sonnet-4-20250514
+  notes: |
+    Reflection LM is used by GEPA to reflect on execution traces
+    and propose improved instructions. Strong reasoning capability
+    is more important than speed for this role.
+  added_in: "4.3.0"
+
+gepa_agent_config:
+  description: "GEPA configuration by agent (augments agents section)"
+  priority_0:
+    description: "Optimize first - highest ROI Hybrid agents"
+    agents:
+      - causal_impact
+      - experiment_designer
+    config:
+      default_budget: medium
+      enable_tool_optimization: true
+  priority_1:
+    description: "Optimize second - Deep agents with extended reasoning"
+    agents:
+      - feedback_learner
+      - explainer
+      - feature_analyzer
+    config:
+      default_budget: heavy
+      enable_tool_optimization: false
+  priority_2:
+    description: "Optimize last - Standard agents with light optimization"
+    agents:
+      - orchestrator
+      - gap_analyzer
+      - heterogeneous_optimizer
+      - drift_monitor
+      - health_score
+      - prediction_synthesizer
+      - resource_optimizer
+      - scope_definer
+      - data_preparer
+      - model_selector
+      - model_trainer
+      - model_deployer
+      - observability_connector
+    config:
+      default_budget: light
+      enable_tool_optimization: false
+  added_in: "4.3.0"
+
+prompt_optimization_tables:
+  description: "Database tables for GEPA optimization tracking"
+  count: 5
+  tables:
+    - prompt_optimization_runs       # Tracks optimization runs
+    - optimized_instructions         # Stores optimized prompts
+    - optimized_tool_descriptions    # Stores optimized tool configs
+    - prompt_ab_tests                # A/B test definitions
+    - prompt_ab_test_observations    # A/B test observations
+  migration: "023_gepa_optimization_tables.sql"
+  added_in: "4.3.0"
+
+
+# =============================================================================
+# SECTION 14: FEEDBACK LOOP & CONCEPT DRIFT (V5.0 NEW)
+# =============================================================================
+# Source: Feedback Loop domain vocabulary.yml
+# Enables concept drift detection by assigning ground truth labels to ML
+# predictions after observation windows elapse. Integrates with drift_monitor
+# and feedback_learner agents.
+
+feedback_loop_core_concepts:
+
+  label_lag:
+    definition: "The inherent delay between when a prediction is made and when the actual outcome (ground truth) becomes observable"
+    synonyms:
+      - "outcome delay"
+      - "truth lag"
+      - "observation latency"
+    context: "The churn model has 90-day label lag because we need a full quarter to determine if an HCP actually stopped prescribing"
+    related:
+      - "observation_window"
+      - "data_source_lag"
+
+  observation_window:
+    definition: "The time period after a prediction during which we monitor for the actual outcome"
+    synonyms:
+      - "lookforward window"
+      - "outcome period"
+      - "attribution window"
+    unit: "days"
+    examples:
+      hcp_churn: "90 days"
+      script_conversion: "21 days"
+      treatment_response: "180 days"
+      market_share_impact: "90 days"
+      next_best_action: "30 days"
+    related:
+      - "label_lag"
+      - "min_observation_days"
+
+  ground_truth:
+    definition: "The verified actual outcome for a prediction, used to calculate model accuracy and detect concept drift"
+    synonyms:
+      - "actual outcome"
+      - "true label"
+      - "observed outcome"
+    storage: "ml_predictions.actual_outcome"
+    related:
+      - "truth_source"
+      - "truth_confidence"
+
+  concept_drift:
+    definition: "A change in the relationship between input features and target outcomes over time, causing model performance degradation even when feature distributions remain stable"
+    contrast: "Feature drift (input distribution changes) vs Concept drift (input-output relationship changes)"
+    detection: "Requires ground truth labels; cannot be detected with feature drift methods alone (PSI, KS test)"
+    metrics:
+      - "accuracy_over_time"
+      - "calibration_drift"
+      - "class_ratio_shift"
+    related:
+      - "feature_drift"
+      - "model_degradation"
+
+  feature_drift:
+    definition: "A change in the statistical distribution of input features over time"
+    synonyms:
+      - "data drift"
+      - "covariate shift"
+    detection_methods:
+      - "PSI"
+      - "KS test"
+      - "chi-square"
+      - "Jensen-Shannon divergence"
+    contrast: "Can be detected without ground truth labels"
+    related:
+      - "concept_drift"
+      - "psi_threshold"
+
+  truth_confidence:
+    definition: "A score (0.0-1.0) indicating how reliable the assigned ground truth label is"
+    storage: "ml_predictions.truth_confidence"
+    factors:
+      - "Data completeness (more prior activity = higher confidence)"
+      - "Source reliability (claims data > CRM data)"
+      - "Edge case presence (seasonal effects, market disruptions lower confidence)"
+    thresholds:
+      high: ">=0.90 (include in all analyses)"
+      medium: "0.70-0.89 (include with caveats)"
+      low: "<0.70 (flag for review, may exclude from drift calculations)"
+
+outcome_labels:
+  POSITIVE:
+    definition: "The predicted event occurred (e.g., HCP churned, script was written, patient persisted)"
+    numeric_value: 1.0
+    usage: "Binary classification positive class"
+
+  NEGATIVE:
+    definition: "The predicted event did not occur"
+    numeric_value: 0.0
+    usage: "Binary classification negative class"
+
+  INDETERMINATE:
+    definition: "Insufficient data to reliably determine the outcome"
+    numeric_value: null
+    causes:
+      - "New HCP with <3 prior scripts (no baseline for churn)"
+      - "Incomplete data coverage"
+      - "Conflicting signals from multiple data sources"
+    handling: "Excluded from accuracy calculations, tracked separately"
+
+  EXCLUDED:
+    definition: "Prediction deliberately removed from evaluation due to confounding factors"
+    numeric_value: null
+    causes:
+      - "Trigger not delivered (script conversion)"
+      - "Market disruption (competitor launch, recall)"
+      - "Clinical discontinuation (appropriate therapy stop)"
+      - "Therapy switch (patient changed brands, not true discontinuation)"
+    handling: "Tracked with exclusion_reason, separate reporting"
+
+  PENDING:
+    definition: "Observation window has not yet elapsed; outcome unknown"
+    numeric_value: null
+    default_state: "All new predictions start as PENDING"
+    transition: "Moves to POSITIVE/NEGATIVE/INDETERMINATE/EXCLUDED after feedback loop runs"
+
+truth_definitions:
+  hcp_churn_truth:
+    question_answered: "Did this HCP actually stop or significantly reduce prescribing?"
+    positive_condition: "Zero TRx in observation window with >=1 TRx in prior 90 days, OR TRx decline >70% vs prior period (with >=3 prior scripts)"
+    observation_window_days: 90
+    data_sources:
+      - "IQVIA APLD (primary)"
+      - "Komodo (secondary)"
+    edge_cases:
+      - "new_hcp"
+      - "seasonal_effects"
+
+  script_conversion_truth:
+    question_answered: "Did this HCP write a new script after receiving the trigger?"
+    positive_condition: ">=1 NRx within attribution window"
+    observation_window_days: 21
+    notes: "14-21 day optimal lead time"
+    data_sources:
+      - "IQVIA APLD"
+      - "HealthVerity"
+    edge_cases:
+      - "trigger_not_delivered"
+      - "multi_trigger"
+
+  treatment_response_truth:
+    question_answered: "Did the patient persist on therapy as predicted?"
+    positive_condition: "PDC (Proportion of Days Covered) >=0.80, OR Maximum gap between fills <=60 days"
+    observation_window_days: 180
+    data_sources:
+      - "HealthVerity (lab/EMR)"
+      - "IQVIA APLD (claims)"
+    edge_cases:
+      - "therapy_switch"
+      - "clinical_discontinuation"
+
+  market_share_impact_truth:
+    question_answered: "Did market share change as predicted?"
+    outcome_type: "Continuous (actual delta %)"
+    measurement: "outcome_share - baseline_share"
+    accuracy_threshold: "Within +/- 2 percentage points"
+    observation_window_days: 90
+    data_sources:
+      - "IQVIA LAAD"
+    edge_cases:
+      - "market_disruption"
+      - "regional_variance"
+
+  next_best_action_truth:
+    question_answered: "Was the recommended action effective?"
+    positive_condition: "Trigger accepted AND downstream outcome achieved"
+    observation_window_days: 30
+    data_sources:
+      - "Veeva (CRM)"
+      - "IQVIA APLD"
+    edge_cases:
+      - "trigger_not_generated"
+
+edge_case_taxonomy:
+  new_hcp:
+    applies_to: "HCP Churn"
+    description: "HCP with insufficient prior prescribing history (<3 scripts)"
+    problem: "Cannot establish reliable baseline for churn detection"
+    handling: "Label as INDETERMINATE, confidence = 0.50"
+    exclusion_reason: "Insufficient prior activity (<1 TRx)"
+
+  seasonal_effects:
+    applies_to: "HCP Churn"
+    description: "Temporary prescribing dips (Q4 holidays, summer slowdowns)"
+    problem: "May misclassify temporary reduction as churn"
+    handling: "Require 2 consecutive quarters for high-confidence churn label"
+    detection: "Compare to same-period prior year"
+
+  data_source_lag:
+    applies_to: "All models"
+    description: "Prediction made before data source lag period elapsed"
+    problem: "Cannot query outcomes that haven't arrived yet"
+    handling: "Defer labeling until lag_days + observation_window elapsed"
+    lag_values:
+      IQVIA_APLD: "12d"
+      IQVIA_LAAD: "14d"
+      HealthVerity: "7d"
+      Komodo: "10d"
+      Veeva: "0d"
+
+  trigger_not_delivered:
+    applies_to:
+      - "Script Conversion"
+      - "NBA"
+    description: "Trigger was generated but never delivered or viewed"
+    problem: "Cannot attribute conversion to a trigger that wasn't seen"
+    handling: "Label as EXCLUDED, track for trigger_acceptance analysis"
+    exclusion_reason: "Trigger not delivered"
+
+  multi_trigger:
+    applies_to: "Script Conversion"
+    description: "Multiple triggers fired within the same observation window"
+    problem: "Unclear which trigger caused the conversion"
+    handling: "Attribute to first trigger, set partial_attribution flag on subsequent"
+    analysis: "Separate multi-touch attribution study"
+
+  therapy_switch:
+    applies_to: "Treatment Response"
+    description: "Patient switched to different brand (not discontinuation)"
+    problem: "Not a persistence failure, but a brand loss"
+    handling: "Label as SWITCHED (separate category), exclude from non-persistence"
+    detection: "Check for fills of competitor brands"
+
+  clinical_discontinuation:
+    applies_to: "Treatment Response"
+    description: "MD-directed therapy stop (disease resolved, adverse event, contraindication)"
+    problem: "Appropriate clinical decision, not a persistence failure"
+    handling: "Label as APPROPRIATE_STOP, exclude from negative outcomes"
+    detection: "Check for discontinuation_reason in treatment_events"
+
+  market_disruption:
+    applies_to: "Market Share Impact"
+    description: "Major market event (competitor launch, recall, supply issue)"
+    problem: "Confounds market share predictions with external factors"
+    handling: "Label as CONFOUNDED, lower weight in drift detection"
+    detection: "External event calendar, competitor intelligence"
+
+  regional_variance:
+    applies_to: "Market Share Impact"
+    description: "Region-specific market dynamics"
+    problem: "National model may not capture regional heterogeneity"
+    handling: "Consider region-specific models or features"
+    detection: "PSI on regional features"
+
+feedback_loop_database_objects:
+  tables:
+    ml_predictions:
+      purpose: "Extended with ground truth columns"
+      key_columns:
+        - "actual_outcome"
+        - "outcome_recorded_at"
+        - "truth_source"
+        - "truth_confidence"
+        - "outcome_label"
+        - "exclusion_reason"
+
+    ml_feedback_loop_config:
+      purpose: "Configuration per model type"
+      key_columns:
+        - "prediction_type"
+        - "observation_window_days"
+        - "min_observation_days"
+        - "schedule_cron"
+
+    ml_feedback_loop_runs:
+      purpose: "Execution history"
+      key_columns:
+        - "prediction_type"
+        - "run_status"
+        - "predictions_evaluated"
+        - "predictions_labeled"
+
+  functions:
+    assign_truth_hcp_churn:
+      purpose: "Label churn predictions"
+      parameters:
+        - "observation_window_days"
+        - "decline_threshold"
+        - "min_prior_scripts"
+        - "batch_size"
+
+    assign_truth_script_conversion:
+      purpose: "Label conversion predictions"
+      parameters:
+        - "observation_window_days"
+        - "batch_size"
+
+    assign_truth_treatment_response:
+      purpose: "Label persistence predictions"
+      parameters:
+        - "observation_window_days"
+        - "pdc_threshold"
+        - "max_gap_days"
+        - "batch_size"
+
+    assign_truth_next_best_action:
+      purpose: "Label NBA predictions"
+      parameters:
+        - "observation_window_days"
+        - "batch_size"
+
+    assign_truth_market_share:
+      purpose: "Label market share predictions"
+      parameters:
+        - "observation_window_days"
+        - "accuracy_threshold"
+        - "batch_size"
+
+    run_feedback_loop:
+      purpose: "Master orchestrator"
+      parameters: "prediction_type (optional, NULL = all)"
+
+    get_pending_predictions_summary:
+      purpose: "Check labeling backlog"
+      parameters: null
+
+    cleanup_feedback_loop_logs:
+      purpose: "Purge old run logs"
+      parameters: "retention_days"
+
+  views:
+    v_concept_drift_metrics:
+      purpose: "Weekly drift analysis"
+      key_metrics:
+        - "accuracy"
+        - "calibration_error"
+        - "brier_score"
+        - "actual_positive_rate"
+
+    v_model_performance_tracking:
+      purpose: "Monthly performance summary"
+      key_metrics:
+        - "total_labeled"
+        - "true_positives"
+        - "avg_days_to_truth"
+
+    v_drift_alerts:
+      purpose: "Threshold-based alerting"
+      key_metrics:
+        - "accuracy_status"
+        - "calibration_status"
+        - "class_shift_status"
+
+feedback_loop_metrics_glossary:
+  accuracy_over_time:
+    definition: "Model accuracy calculated on rolling windows of labeled predictions"
+    formula: "(TP + TN) / Total"
+    alert_threshold: ">5% drop from 90-day baseline triggers ALERT"
+
+  calibration_error:
+    definition: "Difference between predicted probability and observed frequency"
+    formula: "|avg(prediction_value) - avg(actual_outcome)|"
+    ideal_value: 0
+    alert_threshold: ">10% increase from baseline triggers ALERT"
+
+  class_ratio_shift:
+    definition: "Change in the proportion of positive outcomes over time"
+    formula: "|current_positive_rate - baseline_positive_rate|"
+    alert_threshold: ">15% shift triggers ALERT"
+    interpretation: "May indicate concept drift OR external market changes"
+
+  brier_score:
+    definition: "Mean squared error of probabilistic predictions"
+    formula: "(1/N) * sum(predicted_prob - actual_outcome)^2"
+    range: "0-1 (lower is better)"
+    usage: "Single metric combining calibration and discrimination"
+
+  time_to_truth:
+    definition: "Average days from prediction to outcome label availability"
+    formula: "avg(outcome_recorded_at - prediction_timestamp)"
+    usage: "Monitor labeling pipeline health"
+
+  indeterminate_rate:
+    definition: "Proportion of predictions that cannot be reliably labeled"
+    formula: "count(INDETERMINATE) / count(total_evaluated)"
+    alert_threshold: ">20% triggers review"
+
+  exclusion_rate:
+    definition: "Proportion of predictions excluded due to confounding"
+    formula: "count(EXCLUDED) / count(total_evaluated)"
+    usage: "Track data quality and edge case frequency"
+
+feedback_loop_nlv_query_patterns:
+  - category: "Concept Drift Queries"
+    intent: "DRIFT_ANALYSIS"
+    agent: "drift_monitor"
+    routes:
+      - "v_concept_drift_metrics"
+      - "v_drift_alerts"
+    examples:
+      - "Is the churn model experiencing concept drift?"
+      - "Show me accuracy trends for the trigger model"
+      - "What's the calibration error for market share predictions?"
+      - "Are there any drift alerts this week?"
+
+  - category: "Feedback Loop Status Queries"
+    intent: "SYSTEM_STATUS"
+    agent:
+      - "health_score"
+      - "observability"
+    routes:
+      - "get_pending_predictions_summary()"
+      - "ml_feedback_loop_runs"
+    examples:
+      - "How many predictions are pending labels?"
+      - "When was the last feedback loop run?"
+      - "What's the labeling backlog for treatment response?"
+      - "Show me the feedback loop history"
+
+  - category: "Ground Truth Queries"
+    intent: "MODEL_PERFORMANCE"
+    agent: "feedback_learner"
+    routes:
+      - "v_model_performance_tracking"
+      - "ml_predictions (labeled)"
+    examples:
+      - "What's the actual churn rate vs predicted?"
+      - "Show me conversion truth by region"
+      - "What percentage of churn predictions were accurate?"
+      - "Compare predicted vs actual market share"
+
+  - category: "Edge Case Queries"
+    intent: "DATA_QUALITY"
+    agent:
+      - "data_preparer"
+      - "health_score"
+    routes:
+      - "ml_predictions (exclusion_reason)"
+      - "v_model_performance_tracking"
+    examples:
+      - "How many predictions were excluded?"
+      - "What are the main exclusion reasons?"
+      - "Show me indeterminate rate trends"
+      - "Which edge cases are most common for churn?"
+
+feedback_loop_agent_integration:
+  drift_monitor:
+    tier: 3
+    existing_capabilities: "Feature drift via PSI, KS test, chi-square, Jensen-Shannon"
+    extended_capabilities: "Concept drift via accuracy_over_time, calibration_drift, class_ratio_shift"
+    input: "v_concept_drift_metrics"
+    output: "DriftAlert to orchestrator"
+
+  feedback_learner:
+    tier: 5
+    input: "Labeled predictions with actual_outcome"
+    processing: "Analyze prediction errors, identify systematic failures"
+    output: "Retraining signals, experiment recommendations to ExperimentKnowledgeStore"
+
+  experiment_monitor:
+    tier: 3
+    status: "New"
+    purpose: "Orchestrate feedback loop execution"
+    schedule: "Cron-based per model type"
+    input: "ml_feedback_loop_config"
+    output: "Ground truth labels in ml_predictions"
+
+  health_score:
+    tier: 3
+    extended_capabilities: "Include feedback loop health in system health composite"
+    metrics:
+      - "pending_backlog"
+      - "run_success_rate"
+      - "avg_time_to_truth"
+      - "indeterminate_rate"
+
+feedback_loop_synonyms_and_aliases:
+  actual_outcome:
+    - "ground truth"
+    - "true label"
+    - "observed outcome"
+    - "real outcome"
+  observation_window:
+    - "lookforward window"
+    - "attribution window"
+    - "outcome period"
+  label_lag:
+    - "outcome delay"
+    - "truth lag"
+    - "feedback delay"
+  concept_drift:
+    - "relationship drift"
+    - "target drift"
+    - "posterior drift"
+  feature_drift:
+    - "data drift"
+    - "covariate shift"
+    - "input drift"
+  truth_confidence:
+    - "label confidence"
+    - "outcome reliability"
+  feedback_loop:
+    - "labeling pipeline"
+    - "truth assignment"
+    - "outcome collection"
+  INDETERMINATE:
+    - "unknown"
+    - "uncertain"
+    - "insufficient data"
+  EXCLUDED:
+    - "confounded"
+    - "removed"
+    - "filtered out"
+  calibration_error:
+    - "miscalibration"
+    - "probability error"
+
+
+# =============================================================================
+# SECTION 15: AGENT EVALUATION & OBSERVABILITY (V5.0 NEW)
+# =============================================================================
+# Source: Ragas-Opik Integration Domain Vocabulary.yml
+# Standardizes terminology for agent evaluation via Ragas metrics and
+# observability via Opik tracing. Used by all agents for quality assessment.
+
+evaluation_core_concepts:
+  fundamental_distinction:
+    - term: "THE WHAT"
+      definition: "Quantitative assessment of agent performance via metrics"
+      role: "Ragas provides this"
+    - term: "THE WHY"
+      definition: "Qualitative understanding of agent behavior via traces"
+      role: "Opik provides this"
+
+ragas_domain_terms:
+  evaluation_concepts:
+    - term: "Metric"
+      definition: "A quantifiable measure of a specific quality aspect"
+      example: "faithfulness, answer_relevancy"
+    - term: "Score"
+      definition: "Numeric result of a metric computation (0.0 - 1.0)"
+      example: "faithfulness_score = 0.85"
+    - term: "Ground Truth"
+      definition: "The expected/correct answer for reference-based evaluation"
+      example: "Human-annotated answer"
+    - term: "Sample"
+      definition: "A single evaluation unit containing question, answer, contexts"
+      example: "One Q&A pair with retrieved docs"
+    - term: "Dataset"
+      definition: "Collection of samples for batch evaluation"
+      example: "Golden test set"
+    - term: "Threshold"
+      definition: "Minimum acceptable score for a metric"
+      example: "faithfulness >= 0.7"
+
+  metric_categories:
+    - category: "Retrieval Metrics"
+      definition: "Evaluate quality of document retrieval"
+      metrics_included: "context_precision, context_recall, context_entity_recall"
+    - category: "Generation Metrics"
+      definition: "Evaluate quality of LLM-generated responses"
+      metrics_included: "faithfulness, answer_relevancy, answer_similarity"
+    - category: "Combined Metrics"
+      definition: "Evaluate overall system performance"
+      metrics_included: "answer_correctness, summarization_score"
+
+  specific_metrics:
+    - metric: "faithfulness"
+      definition: "Degree to which answer is grounded in provided context"
+      measures: "Hallucination prevention"
+    - metric: "answer_relevancy"
+      definition: "How well the answer addresses the original question"
+      measures: "Response appropriateness"
+    - metric: "context_precision"
+      definition: "Whether relevant items rank higher than irrelevant ones"
+      measures: "Retrieval ranking quality"
+    - metric: "context_recall"
+      definition: "Coverage of ground truth information in retrieved context"
+      measures: "Retrieval completeness"
+    - metric: "context_entity_recall"
+      definition: "Presence of key entities from ground truth in context"
+      measures: "Entity coverage"
+    - metric: "answer_similarity"
+      definition: "Semantic similarity between answer and ground truth"
+      measures: "Response accuracy"
+    - metric: "answer_correctness"
+      definition: "Overall correctness combining similarity and factual accuracy"
+      measures: "Holistic quality"
+
+  data_fields:
+    - field: "question"
+      definition: "User's input query (also: user_input)"
+      used_by: "All metrics"
+    - field: "answer"
+      definition: "Agent's generated response (also: response)"
+      used_by: "Generation metrics"
+    - field: "contexts"
+      definition: "List of retrieved document texts (also: retrieved_contexts)"
+      used_by: "All RAG metrics"
+    - field: "ground_truth"
+      definition: "Expected correct answer (also: reference)"
+      used_by: "Reference-based metrics"
+
+opik_domain_terms:
+  tracing_concepts:
+    - term: "Trace"
+      definition: "Complete record of a single agent invocation"
+      example: "One user query → response cycle"
+    - term: "Span"
+      definition: "Individual operation within a trace"
+      example: "Retrieval step, LLM call"
+    - term: "Parent Span"
+      definition: "Span that contains child spans"
+      example: "Agent orchestration span"
+    - term: "Child Span"
+      definition: "Span nested within a parent"
+      example: "Individual tool call"
+    - term: "Trace ID"
+      definition: "Unique identifier for a trace"
+      example: "trace_abc123xyz"
+    - term: "Span ID"
+      definition: "Unique identifier for a span"
+      example: "span_def456uvw"
+
+  trace_attributes:
+    - attribute: "Input"
+      definition: "Data sent to the traced operation"
+      example: '{"question": "What is ML?"}'
+    - attribute: "Output"
+      definition: "Data returned from the traced operation"
+      example: '{"answer": "ML is..."}'
+    - attribute: "Metadata"
+      definition: "Additional contextual information"
+      example: '{"model": "gpt-4", "temperature": 0.1}'
+    - attribute: "Tags"
+      definition: "Labels for filtering and organization"
+      example: '["production", "rag", "v2"]'
+    - attribute: "Duration"
+      definition: "Time taken for operation (milliseconds)"
+      example: "1250"
+    - attribute: "Timestamp"
+      definition: "When the operation occurred"
+      example: "2024-01-15T10:30:00Z"
+
+  feedback_and_scoring:
+    - term: "Feedback Score"
+      definition: "Numeric evaluation attached to trace/span"
+      example: '{"name": "faithfulness", "value": 0.85}'
+    - term: "Annotation"
+      definition: "Human-provided feedback on a trace"
+      example: "Thumbs up/down, quality rating"
+    - term: "Category"
+      definition: "Grouping for feedback scores"
+      example: "ragas_evaluation, human_review"
+
+  observability_concepts:
+    - term: "Project"
+      definition: "Container for related traces"
+      purpose: "Organize by application/environment"
+    - term: "Workspace"
+      definition: "Top-level organizational unit"
+      purpose: "Team/organization isolation"
+    - term: "Experiment"
+      definition: "Named collection of evaluation runs"
+      purpose: "A/B testing, version comparison"
+    - term: "Dashboard"
+      definition: "Visual aggregation of trace metrics"
+      purpose: "Monitoring and reporting"
+    - term: "Alert"
+      definition: "Notification triggered by metric conditions"
+      purpose: "Performance degradation warning"
+
+  integration_points:
+    - term: "@track Decorator"
+      definition: "Python decorator to auto-trace functions"
+      usage: '@track(name="my_agent")'
+    - term: "OpikTracer"
+      definition: "Callback for framework integrations"
+      usage: "LangChain, Ragas callbacks"
+    - term: "track_openai"
+      definition: "Wrapper for OpenAI client tracing"
+      usage: "Token usage capture"
+
+evaluation_integration_terms:
+  combined_concepts:
+    - term: "Evaluation Report"
+      definition: "Complete assessment combining scores and traces"
+      components: "Ragas scores + Opik trace data"
+    - term: "Root Cause Analysis"
+      definition: "Process of using traces to explain low scores"
+      components: "Score → Trace → Issue identification"
+    - term: "Issue Detection"
+      definition: "Automated identification of performance problems"
+      components: "Threshold violations"
+    - term: "Recommendation"
+      definition: "Suggested fix based on analysis"
+      components: '"Improve retrieval k parameter"'
+
+  workflow_terms:
+    - term: "Online Evaluation"
+      definition: "Real-time scoring of production traffic"
+      stage: "Runtime"
+    - term: "Offline Evaluation"
+      definition: "Batch evaluation of test datasets"
+      stage: "Development/CI"
+    - term: "Sampling"
+      definition: "Evaluating subset of traffic for efficiency"
+      stage: "Production monitoring"
+    - term: "Golden Set"
+      definition: "Curated test cases with ground truth"
+      stage: "Regression testing"
+
+  score_interpretation:
+    - score_range: "0.8 - 1.0"
+      interpretation: "Excellent"
+      action: "No action needed"
+    - score_range: "0.7 - 0.8"
+      interpretation: "Good"
+      action: "Monitor for trends"
+    - score_range: "0.5 - 0.7"
+      interpretation: "Warning"
+      action: "Investigate and improve"
+    - score_range: "0.0 - 0.5"
+      interpretation: "Critical"
+      action: "Immediate attention required"
+
+rag_pipeline_terms:
+  components:
+    - term: "Retriever"
+      definition: "Component that fetches relevant documents"
+      traced_as: "retrieval span"
+    - term: "Generator"
+      definition: "LLM that produces responses"
+      traced_as: "generation span"
+    - term: "Reranker"
+      definition: "Model that reorders retrieved documents"
+      traced_as: "reranking span"
+    - term: "Embedder"
+      definition: "Model that creates vector representations"
+      traced_as: "embedding span"
+
+  data_artifacts:
+    - term: "Query Embedding"
+      definition: "Vector representation of user question"
+      format: "float[768] or float[1536]"
+    - term: "Document Embedding"
+      definition: "Vector representation of document chunk"
+      format: "float[768] or float[1536]"
+    - term: "Similarity Score"
+      definition: "Cosine/dot product between embeddings"
+      format: "0.0 - 1.0"
+    - term: "Context Window"
+      definition: "Text provided to LLM for generation"
+      format: "Concatenated retrieved docs"
+    - term: "Prompt"
+      definition: "Full input to LLM including instructions"
+      format: "System + context + question"
+
+
+# =============================================================================
+# METADATA
+# =============================================================================
+
+_metadata:
+  version: "5.0.0"
+  last_updated: "2025-12-28"
+  maintainer: "E2I Platform Team"
+
+  version_history:
+    - version: "5.0.0"
+      date: "2025-12-28"
+      changes:
+        - "Consolidated 6 vocabulary files into single source of truth"
+        - "Added SECTION 14: Feedback Loop & Concept Drift (from Feedback Loop domain vocabulary.yml)"
+        - "Added SECTION 15: Agent Evaluation & Observability (from Ragas-Opik Integration Domain Vocabulary.yml)"
+        - "Expanded SECTION 6: Memory Architecture with semantic graph entity types, relationship types, event types, intent vocabulary, and memory templates (from 003_memory_vocabulary.yaml)"
+        - "Eliminated 1,569 lines of duplicate content (37.5% reduction)"
+        - "Removed duplicate brands vocabulary (22 lines from feedback loop and memory files)"
+        - "Removed duplicate regions vocabulary (19 lines from feedback loop and memory files)"
+        - "Removed outdated 11-agent list from memory file (27 lines)"
+        - "File count reduced: 6 files → 1 file"
+        - "Total lines: ~2,610 (down from ~4,179)"
+
+    - version: "4.3.0"
+      date: "2024-12-27"
+      changes:
+        - "Added GEPA Prompt Optimization section (SECTION 13)"
+        - "Added optimizer_types vocabulary (miprov2, gepa, bootstrap_fewshot, etc.)"
+        - "Added gepa_budget_presets (light, medium, heavy, custom)"
+        - "Added ab_test_variants for A/B testing"
+        - "Added gepa_candidate_selection_strategies (pareto, current_best)"
+        - "Added gepa_metric_components with weights by agent type"
+        - "Added reflection_models for GEPA reflection LLM configuration"
+        - "Added gepa_agent_config for per-agent GEPA configuration"
+        - "Added prompt_optimization_tables for database tracking"
+
+    - version: "4.2.2"
+      date: "2024-12-26"
+      changes:
+        - "Added Energy Score Enhancement section (SECTION 12)"
+        - "Added estimator_types vocabulary (causal_forest, linear_dml, drlearner, ols)"
+        - "Added selection_strategies (first_success, best_energy, ensemble)"
+        - "Added energy_score_components with weights"
+        - "Added quality_tiers with thresholds and badge colors"
+
+    - version: "4.2.1"
+      date: "2024-12-19"
+      changes:
+        - "Added DSPy Integration section (SECTION 11)"
+        - "Added cognitive_phases for 4-phase cognitive workflow"
+        - "Added dspy_optimization_phases for MIPROv2 targets"
+        - "Added training_signal_types and optimization_statuses"
+        - "Added quality_metrics and reward_weights by agent"
+        - "Added dspy_signatures registry"
+        - "Added cognitive_context_sources for memory enrichment"
+        - "Added memory_event_types for episodic storage"
+
+    - version: "4.2.0"
+      date: "2024-12-17"
+      changes:
+        - "Added Tool Composer vocabularies (routing_patterns, dependency_types, tool_categories)"
+        - "Added composable_tools registry by agent"
+        - "Added composition_statuses for execution tracking"
+        - "Added intent_keywords for classification"
+        - "Added structural_markers for query analysis"
+        - "Added query_domains and domain_to_agent_mapping"
+
+    - version: "4.1.0"
+      date: "2024-12-01"
+      changes:
+        - "Added refutation_test_types"
+        - "Added validation_statuses"
+        - "Added gate_decisions"
+        - "Added expert_review_types"
+
+    - version: "4.0.0"
+      date: "2024-11-15"
+      changes:
+        - "Added ML Foundation agent tier"
+        - "Added MLOps tools vocabulary"
+        - "Added model_stages"
+        - "Added split_types and split_purposes"
+
+    - version: "3.0.0"
+      date: "2024-10-01"
+      changes:
+        - "Initial 18-agent architecture"
+        - "Added memory_types"
+        - "Added KPI vocabularies"

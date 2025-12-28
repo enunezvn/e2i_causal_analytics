@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# DOMAIN DATA - From domain_vocabulary_v4.2.0.yaml and kpi_definitions.yaml
+# DOMAIN DATA - From domain_vocabulary.yaml and kpi_definitions.yaml
 # =============================================================================
 
 BRANDS = [

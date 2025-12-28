@@ -1,0 +1,156 @@
+# Domain Vocabulary Updates for Energy Score Enhancement
+# Add to config/domain_vocabulary.yaml (V3.2.0)
+# ============================================================================
+
+# Append to existing file after validation_statuses section
+
+# -----------------------------------------------------------------------------
+# V4.2: Energy Score Enhancement
+# -----------------------------------------------------------------------------
+
+estimator_types:
+  description: "Causal estimator types in the fallback chain"
+  values:
+    - id: causal_forest
+      label: "Causal Forest"
+      library: "EconML"
+      description: "Non-parametric forest-based CATE estimator"
+      default_priority: 1
+      
+    - id: linear_dml
+      label: "Linear DML"
+      library: "EconML"
+      description: "Double/debiased machine learning with linear final stage"
+      default_priority: 2
+      
+    - id: dml_learner
+      label: "DML Learner"
+      library: "EconML"
+      description: "General DML framework with flexible final stage"
+      default_priority: 3
+      
+    - id: drlearner
+      label: "DR Learner"
+      library: "EconML"
+      description: "Doubly robust learner combining outcome and propensity models"
+      default_priority: 3
+      
+    - id: ortho_forest
+      label: "Orthogonal Forest"
+      library: "EconML"
+      description: "Orthogonalized random forest for CATE"
+      default_priority: 4
+      
+    - id: s_learner
+      label: "S-Learner"
+      library: "CausalML"
+      description: "Single model approach with treatment as feature"
+      default_priority: 5
+      
+    - id: t_learner
+      label: "T-Learner"
+      library: "CausalML"
+      description: "Two separate models for treatment and control"
+      default_priority: 5
+      
+    - id: x_learner
+      label: "X-Learner"
+      library: "CausalML"
+      description: "Cross-learner for imbalanced treatment"
+      default_priority: 5
+      
+    - id: ols
+      label: "OLS"
+      library: "sklearn"
+      description: "Simple linear regression fallback"
+      default_priority: 10
+
+selection_strategies:
+  description: "Strategies for selecting among causal estimators"
+  values:
+    - id: first_success
+      label: "First Success"
+      description: "Legacy: use first estimator that succeeds"
+      
+    - id: best_energy
+      label: "Best Energy Score"
+      description: "Select estimator with lowest energy score"
+      
+    - id: ensemble
+      label: "Ensemble"
+      description: "Combine multiple estimators (future)"
+
+energy_score_variants:
+  description: "Variants of energy score computation"
+  values:
+    - id: standard
+      label: "Standard"
+      description: "Classic energy distance"
+      
+    - id: weighted
+      label: "Weighted"
+      description: "IPW-weighted energy distance"
+      
+    - id: doubly_robust
+      label: "Doubly Robust"
+      description: "DR-adjusted energy distance (recommended)"
+
+energy_score_components:
+  description: "Components of the composite energy score"
+  values:
+    - id: treatment_balance
+      label: "Treatment Balance"
+      weight: 0.35
+      description: "Covariate balance after IPW adjustment"
+      
+    - id: outcome_fit
+      label: "Outcome Fit"
+      weight: 0.45
+      description: "DR residual fit quality"
+      
+    - id: propensity_calibration
+      label: "Propensity Calibration"
+      weight: 0.20
+      description: "Propensity score calibration quality"
+
+# -----------------------------------------------------------------------------
+# Energy Score Thresholds
+# Add to config/thresholds.yaml
+# -----------------------------------------------------------------------------
+
+energy_score_thresholds:
+  description: "Thresholds for energy score evaluation"
+  
+  quality_tiers:
+    excellent:
+      max_score: 0.25
+      description: "High confidence in causal estimate"
+      badge_color: "#22c55e"  # green
+      
+    good:
+      max_score: 0.45
+      description: "Reasonable confidence"
+      badge_color: "#3b82f6"  # blue
+      
+    acceptable:
+      max_score: 0.65
+      description: "Use with caution"
+      badge_color: "#f59e0b"  # amber
+      
+    poor:
+      max_score: 0.80
+      description: "Low confidence, consider alternatives"
+      badge_color: "#ef4444"  # red
+      
+    unreliable:
+      max_score: 1.00
+      description: "Results likely unreliable"
+      badge_color: "#6b7280"  # gray
+  
+  alerts:
+    high_score_warning: 0.65
+    max_acceptable: 0.80
+    
+  selection:
+    min_gap_for_preference: 0.05
+    require_bootstrap_ci: false

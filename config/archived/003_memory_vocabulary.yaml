@@ -1,0 +1,527 @@
+# ============================================================================
+# E2I AGENTIC MEMORY VOCABULARY
+# Domain-Specific Entity Types, Relationships, and Event Categories
+# Version: 1.0
+# ============================================================================
+
+schema_version: "1.0"
+created_date: "2025-12-02"
+purpose: "Define vocabulary for E2I Agentic Memory semantic graph and event classification"
+
+# ============================================================================
+# ENTITY TYPES
+# These are the node types in the semantic graph
+# ============================================================================
+
+entity_types:
+  
+  # --- Core Business Entities ---
+  
+  patient:
+    description: "Individual patient in healthcare journey"
+    id_field: "patient_id"
+    alternate_ids: ["patient_hash"]
+    key_attributes:
+      - journey_stage
+      - risk_score
+      - region
+      - age_group
+      - insurance_type
+    journey_stages:
+      - unaware
+      - aware
+      - considering
+      - trialing
+      - adopted
+      - adherent
+      - discontinued
+      
+  hcp:
+    description: "Healthcare Professional (physician, NP, PA)"
+    id_field: "hcp_id"
+    alternate_ids: ["npi"]
+    display_field: "name"
+    key_attributes:
+      - specialty
+      - sub_specialty
+      - practice_type
+      - region
+      - priority_tier
+      - adoption_category
+    specialties:
+      # Oncology (Kisqali)
+      - oncology
+      - hematology_oncology
+      - breast_oncology
+      - gynecologic_oncology
+      # Hematology (Fabhalta)
+      - hematology
+      - blood_disorders
+      - transplant_hematology
+      # Immunology/Allergy (Remibrutinib)
+      - allergy_immunology
+      - dermatology
+      - rheumatology
+      # General
+      - internal_medicine
+      - primary_care
+      - other
+    adoption_categories:
+      - early_adopter
+      - early_majority
+      - late_majority
+      - laggard
+      
+  brand:
+    description: "Drug brand in E2I portfolio"
+    id_field: "brand_id"
+    display_field: "brand_name"
+    vocabulary:  # Fixed 3-brand vocabulary
+      remibrutinib:
+        brand_name: "Remibrutinib"
+        drug_class: "BTK Inhibitor"
+        therapeutic_area: "Immunology"
+        indications:
+          - "Chronic Spontaneous Urticaria (CSU)"
+          - "Allergic Rhinitis"
+        aliases: ["remi", "rem"]
+      fabhalta:
+        brand_name: "Fabhalta"
+        drug_class: "Factor B Inhibitor"
+        therapeutic_area: "Hematology"
+        indications:
+          - "Paroxysmal Nocturnal Hemoglobinuria (PNH)"
+          - "C3 Glomerulopathy (C3G)"
+        aliases: ["fab", "iptacopan"]
+      kisqali:
+        brand_name: "Kisqali"
+        drug_class: "CDK4/6 Inhibitor"
+        therapeutic_area: "Oncology"
+        indications:
+          - "HR+/HER2- Breast Cancer"
+          - "Metastatic Breast Cancer"
+        aliases: ["kisq", "ribociclib"]
+        
+  region:
+    description: "Geographic region in US"
+    id_field: "region_id"
+    vocabulary:  # Fixed 4-region vocabulary
+      northeast:
+        display_name: "Northeast"
+        states: ["CT", "ME", "MA", "NH", "NJ", "NY", "PA", "RI", "VT"]
+      south:
+        display_name: "South"
+        states: ["AL", "AR", "DE", "FL", "GA", "KY", "LA", "MD", "MS", 
+                 "NC", "OK", "SC", "TN", "TX", "VA", "WV", "DC"]
+      midwest:
+        display_name: "Midwest"
+        states: ["IL", "IN", "IA", "KS", "MI", "MN", "MO", "NE", 
+                 "ND", "OH", "SD", "WI"]
+      west:
+        display_name: "West"
+        states: ["AK", "AZ", "CA", "CO", "HI", "ID", "MT", "NV", 
+                 "NM", "OR", "UT", "WA", "WY"]
+
+  # --- Analytics Entities ---
+  
+  kpi:
+    description: "Key Performance Indicator"
+    id_field: "kpi_id"
+    display_field: "kpi_name"
+    categories:
+      workstream_1:  # Data & Model
+        - patient_coverage_pct
+        - hcp_coverage_pct
+        - data_lag_days
+        - model_auc
+        - prediction_calibration
+        - feature_drift_psi
+      workstream_2:  # Triggers & Decisions
+        - trigger_precision
+        - trigger_acceptance_rate
+        - action_rate
+        - channel_effectiveness
+        - lead_time_accuracy
+      workstream_3:  # Impact & Value
+        - engagement_uplift_pct
+        - prescription_conversion_rate
+        - roi_per_trigger
+        - incremental_patients
+        - time_to_prescription_days
+        
+  causal_path:
+    description: "Discovered causal relationship chain"
+    id_field: "path_id"
+    key_attributes:
+      - effect_size
+      - confidence
+      - method_used
+      - time_lag_days
+    methods:
+      - dowhy_backdoor
+      - dowhy_frontdoor
+      - econml_dml
+      - econml_causal_forest
+      - causalml_uplift
+      - causalml_metalearner
+      
+  trigger:
+    description: "HCP engagement trigger"
+    id_field: "trigger_id"
+    types:
+      - alert
+      - recommendation
+      - insight
+      - next_best_action
+    priorities:
+      - critical
+      - high
+      - medium
+      - low
+    channels:
+      - email
+      - crm_alert
+      - mobile_app
+      - phone
+      - in_person
+      
+  # --- Agent Entities ---
+  
+  agent:
+    description: "E2I AI Agent"
+    id_field: "agent_name"
+    vocabulary:  # 11-agent architecture
+      tier_1_coordination:
+        - orchestrator
+      tier_2_causal:
+        - causal_impact
+        - gap_analyzer
+        - heterogeneous_optimizer
+      tier_3_monitoring:
+        - drift_monitor
+        - experiment_designer
+        - health_score
+      tier_4_ml:
+        - prediction_synthesizer
+        - resource_optimizer
+      tier_5_self_improvement:
+        - explainer
+        - feedback_learner
+
+# ============================================================================
+# RELATIONSHIP TYPES
+# These are the edge types in the semantic graph
+# ============================================================================
+
+relationship_types:
+  
+  # --- Patient Relationships ---
+  
+  treated_by:
+    description: "Patient receives care from HCP"
+    source_type: patient
+    target_type: hcp
+    properties:
+      - first_visit_date
+      - last_visit_date
+      - visit_count
+      - is_primary_hcp
+      
+  prescribed:
+    description: "Patient receives prescription for brand"
+    source_type: patient
+    target_type: brand
+    properties:
+      - prescription_date
+      - dosage
+      - duration_days
+      - is_first_line
+      - line_of_therapy
+      
+  located_in:
+    description: "Patient resides in region"
+    source_type: patient
+    target_type: region
+    
+  transitioned_to:
+    description: "Patient moved to new journey stage"
+    source_type: patient
+    target_type: patient  # Self-loop for state change
+    properties:
+      - from_stage
+      - to_stage
+      - transition_date
+      - trigger_event
+      
+  # --- HCP Relationships ---
+  
+  prescribes:
+    description: "HCP prescribes brand"
+    source_type: hcp
+    target_type: brand
+    properties:
+      - volume_monthly
+      - market_share
+      - adoption_date
+      - preference_rank
+      
+  practices_in:
+    description: "HCP practices in region"
+    source_type: hcp
+    target_type: region
+    properties:
+      - is_primary_location
+      
+  influences:
+    description: "HCP influences another HCP"
+    source_type: hcp
+    target_type: hcp
+    properties:
+      - influence_strength
+      - network_type  # referral, academic, social
+      - interaction_count
+      
+  received:
+    description: "HCP received trigger"
+    source_type: hcp
+    target_type: trigger
+    properties:
+      - delivery_date
+      - channel
+      - accepted
+      - action_taken
+      
+  # --- Causal Relationships ---
+  
+  causes:
+    description: "Entity causes effect on another entity"
+    source_type: any
+    target_type: any
+    properties:
+      - effect_size
+      - confidence
+      - time_lag_days
+      - method_used
+      - confounders_controlled
+      - mediators
+      
+  impacts:
+    description: "Causal path impacts KPI"
+    source_type: causal_path
+    target_type: kpi
+    properties:
+      - impact_magnitude
+      - direction  # positive, negative
+      
+  # --- Agent Relationships ---
+  
+  analyzes:
+    description: "Agent analyzes entity"
+    source_type: agent
+    target_type: any
+    properties:
+      - last_analysis_date
+      - analysis_count
+      
+  discovered:
+    description: "Agent discovered causal path"
+    source_type: agent
+    target_type: causal_path
+    properties:
+      - discovery_date
+      - method_used
+      
+  generated:
+    description: "Agent generated trigger"
+    source_type: agent
+    target_type: trigger
+
+# ============================================================================
+# EVENT TYPES (for Episodic Memory)
+# ============================================================================
+
+event_types:
+  
+  user_events:
+    description: "Events triggered by user interaction"
+    types:
+      user_query:
+        description: "User asked a question via NLV"
+        subtypes:
+          - causal_query       # "Why did X happen?"
+          - trend_query        # "How has X changed?"
+          - comparison_query   # "Compare X to Y"
+          - prediction_query   # "What will happen if...?"
+          - exploration_query  # "Show me X"
+      user_feedback:
+        description: "User provided feedback on response"
+        subtypes:
+          - thumbs_up
+          - thumbs_down
+          - correction
+          - rating
+          - comment
+      user_action:
+        description: "User took action in system"
+        subtypes:
+          - filter_changed
+          - drill_down
+          - export_data
+          - share_insight
+          - save_view
+          
+  agent_events:
+    description: "Events from AI agent actions"
+    types:
+      analysis_completed:
+        description: "Agent completed analysis"
+        agents: all
+      causal_path_discovered:
+        description: "New causal relationship found"
+        agents: [causal_impact, gap_analyzer]
+      trigger_generated:
+        description: "New engagement trigger created"
+        agents: [prediction_synthesizer, heterogeneous_optimizer]
+      drift_detected:
+        description: "Data or model drift identified"
+        agents: [drift_monitor]
+      experiment_designed:
+        description: "A/B test designed"
+        agents: [experiment_designer]
+      insight_synthesized:
+        description: "Narrative insight generated"
+        agents: [explainer, orchestrator]
+      procedure_learned:
+        description: "New tool sequence learned"
+        agents: [feedback_learner]
+        
+  system_events:
+    description: "System-level events"
+    types:
+      data_refresh:
+        description: "Data source refreshed"
+        sources: [IQVIA, HealthVerity, Veeva, Komodo]
+      model_retrained:
+        description: "ML model retrained"
+      threshold_crossed:
+        description: "KPI crossed alert threshold"
+      error_occurred:
+        description: "System error"
+
+# ============================================================================
+# INTENT CLASSIFICATION (for Query Routing)
+# ============================================================================
+
+intent_vocabulary:
+  
+  causal_intents:
+    description: "Queries about causation"
+    keywords:
+      - why
+      - cause
+      - because
+      - due to
+      - reason
+      - impact
+      - effect
+      - driver
+      - contributor
+      - lead to
+      - result in
+    route_to: causal_impact
+    
+  trend_intents:
+    description: "Queries about changes over time"
+    keywords:
+      - trend
+      - change
+      - over time
+      - increase
+      - decrease
+      - growth
+      - decline
+      - trajectory
+      - forecast
+      - predict
+    route_to: drift_monitor
+    
+  comparison_intents:
+    description: "Queries comparing entities"
+    keywords:
+      - compare
+      - versus
+      - vs
+      - difference
+      - better
+      - worse
+      - gap
+      - benchmark
+      - relative to
+    route_to: gap_analyzer
+    
+  optimization_intents:
+    description: "Queries about improving outcomes"
+    keywords:
+      - optimize
+      - improve
+      - maximize
+      - best
+      - recommend
+      - target
+      - prioritize
+      - allocate
+    route_to: heterogeneous_optimizer
+    
+  experiment_intents:
+    description: "Queries about testing hypotheses"
+    keywords:
+      - test
+      - experiment
+      - A/B
+      - hypothesis
+      - validate
+      - prove
+      - significance
+    route_to: experiment_designer
+
+# ============================================================================
+# MEMORY TEMPLATES
+# Standard patterns for storing common memory types
+# ============================================================================
+
+memory_templates:
+  
+  episodic:
+    user_query_template:
+      event_type: "user_query"
+      description: "User asked: {query}"
+      entities:
+        brands: []
+        regions: []
+        kpis: []
+      outcome_type: null  # Set after response
+      
+    agent_insight_template:
+      event_type: "agent_insight"
+      description: "{agent} discovered: {insight_summary}"
+      entities:
+        brands: []
+        regions: []
+      outcome_type: "success"
+      
+  procedural:
+    tool_sequence_template:
+      procedure_name: "{intent}_analysis"
+      procedure_type: "tool_sequence"
+      tool_sequence: []  # Filled with actual calls
+      trigger_pattern: null  # Regex
+      intent_keywords: []
+      
+  semantic:
+    triplet_template:
+      subject_type: null
+      subject_id: null
+      predicate: null
+      object_type: null
+      object_id: null
+      confidence: 1.0
