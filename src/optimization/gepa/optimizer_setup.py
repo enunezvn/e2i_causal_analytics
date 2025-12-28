@@ -20,6 +20,7 @@ from src.optimization.gepa.metrics import (
     ExperimentDesignerGEPAMetric,
     FeedbackLearnerGEPAMetric,
     StandardAgentGEPAMetric,
+    ToolComposerGEPAMetric,
     get_metric_for_agent,
 )
 
@@ -45,6 +46,8 @@ BUDGET_PRESETS = {
 
 # Agent type to budget mapping
 AGENT_BUDGETS = {
+    # Tier 1: Orchestration (medium budget - complex 4-phase pipeline)
+    "tool_composer": "medium",
     # Tier 2: Hybrid agents (medium budget)
     "causal_impact": "medium",
     "gap_analyzer": "medium",
@@ -106,16 +109,18 @@ def create_gepa_optimizer(
     )
 
     # Build GEPA optimizer
+    # Note: enable_tool_optimization is not yet supported by GEPA
+    # This is reserved for future tool description optimization
+    # Note: use_mlflow=False to avoid logging errors with prompt text as metrics
     gepa = GEPA(
         metric=metric,
         auto=auto,
         reflection_lm=reflection_lm,
-        enable_tool_optimization=enable_tool_optimization,
         candidate_selection_strategy="pareto",
         use_merge=True,
         max_merge_invocations=5,
         track_stats=True,
-        use_mlflow=True,
+        use_mlflow=False,  # Disabled due to GEPA prompt logging issues
         log_dir=log_dir,
         seed=seed,
         **kwargs,
@@ -332,6 +337,44 @@ def optimize_standard_agent(
     )
 
 
+def optimize_tool_composer_agent(
+    student_module,
+    trainset: list[Example],
+    valset: Optional[list[Example]] = None,
+    log_dir: str = "./gepa_logs/tool_composer",
+):
+    """Optimize Tool Composer agent with GEPA.
+
+    Convenience function for Tier 1 Tool Composer with 4-phase pipeline.
+    Optimizes decomposition, planning, execution, and synthesis.
+
+    Args:
+        student_module: DSPy module to optimize
+        trainset: Training examples
+        valset: Validation examples
+        log_dir: Directory for GEPA logs
+
+    Returns:
+        Optimized DSPy module
+    """
+    metric = ToolComposerGEPAMetric()
+
+    gepa = create_gepa_optimizer(
+        metric=metric,
+        trainset=trainset,
+        valset=valset,
+        auto="medium",
+        enable_tool_optimization=False,  # Tool Composer composes tools, doesn't use DoWhy/EconML
+        log_dir=log_dir,
+    )
+
+    return gepa.compile(
+        student=student_module,
+        trainset=trainset,
+        valset=valset or trainset,
+    )
+
+
 __all__ = [
     # Main factory
     "create_gepa_optimizer",
@@ -341,6 +384,7 @@ __all__ = [
     "optimize_experiment_designer_agent",
     "optimize_feedback_learner_agent",
     "optimize_standard_agent",
+    "optimize_tool_composer_agent",
     # Constants
     "BUDGET_PRESETS",
     "AGENT_BUDGETS",

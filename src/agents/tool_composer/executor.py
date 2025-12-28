@@ -1,18 +1,27 @@
 """
 E2I Tool Composer - Phase 3: Executor
-Version: 4.2
+Version: 4.3
 Purpose: Execute tool chains according to the execution plan
+
+Implements:
+- Exponential backoff retry strategy
+- Circuit breaker pattern for failing tools
+- Per-tool failure tracking
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import time
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from src.tool_registry.registry import ToolRegistry
 
+from .cache import get_cache_manager
 from .models.composition_models import (
     ExecutionPlan,
     ExecutionStatus,
@@ -24,6 +33,290 @@ from .models.composition_models import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# EXPONENTIAL BACKOFF
+# ============================================================================
+
+
+@dataclass
+class ExponentialBackoff:
+    """
+    Exponential backoff strategy for retries.
+
+    Delay calculation: min(max_delay, base_delay * (factor ** attempt))
+    With optional jitter to prevent thundering herd.
+    """
+
+    base_delay: float = 1.0  # seconds
+    max_delay: float = 30.0  # seconds
+    factor: float = 2.0
+    jitter: float = 0.1  # Random variation factor (0-1)
+
+    def get_delay(self, attempt: int) -> float:
+        """Calculate delay for given attempt (0-indexed)."""
+        import random
+
+        delay = min(self.max_delay, self.base_delay * (self.factor ** attempt))
+
+        # Add jitter to prevent thundering herd
+        if self.jitter > 0:
+            jitter_range = delay * self.jitter
+            delay += random.uniform(-jitter_range, jitter_range)
+
+        return max(0, delay)  # Never negative
+
+
+# ============================================================================
+# CIRCUIT BREAKER
+# ============================================================================
+
+
+class CircuitState(str, Enum):
+    """State of the circuit breaker."""
+
+    CLOSED = "closed"       # Normal operation, requests allowed
+    OPEN = "open"           # Failing, requests blocked
+    HALF_OPEN = "half_open"  # Testing if service recovered
+
+
+@dataclass
+class CircuitBreaker:
+    """
+    Circuit breaker pattern to prevent cascading failures.
+
+    When a tool fails repeatedly, the circuit opens and blocks further
+    calls until a reset timeout has passed, at which point it enters
+    half-open state to test recovery.
+    """
+
+    failure_threshold: int = 3      # Failures before opening
+    reset_timeout: float = 60.0     # Seconds before half-open
+    half_open_max_calls: int = 1    # Max calls in half-open state
+
+    # Internal state
+    state: CircuitState = field(default=CircuitState.CLOSED)
+    failure_count: int = field(default=0)
+    success_count: int = field(default=0)
+    last_failure_time: Optional[float] = field(default=None)
+    half_open_calls: int = field(default=0)
+
+    def can_execute(self) -> bool:
+        """Check if the circuit allows execution."""
+        if self.state == CircuitState.CLOSED:
+            return True
+
+        if self.state == CircuitState.OPEN:
+            # Check if reset timeout has passed
+            if self.last_failure_time is not None:
+                elapsed = time.time() - self.last_failure_time
+                if elapsed >= self.reset_timeout:
+                    # Transition to half-open
+                    self.state = CircuitState.HALF_OPEN
+                    self.half_open_calls = 0
+                    logger.info(f"Circuit breaker entering HALF_OPEN state after {elapsed:.1f}s")
+                    return True
+            return False
+
+        # Half-open: allow limited calls to test recovery
+        return self.half_open_calls < self.half_open_max_calls
+
+    def record_success(self) -> None:
+        """Record a successful execution."""
+        self.success_count += 1
+
+        if self.state == CircuitState.HALF_OPEN:
+            # Service recovered, close the circuit
+            self.state = CircuitState.CLOSED
+            self.failure_count = 0
+            self.half_open_calls = 0
+            logger.info("Circuit breaker CLOSED - service recovered")
+        elif self.state == CircuitState.CLOSED:
+            # Reset failure count on success (sliding window would be better for prod)
+            self.failure_count = 0
+
+    def record_failure(self) -> None:
+        """Record a failed execution."""
+        self.failure_count += 1
+        self.last_failure_time = time.time()
+
+        if self.state == CircuitState.HALF_OPEN:
+            # Failed during recovery test, reopen circuit
+            self.state = CircuitState.OPEN
+            logger.warning("Circuit breaker re-OPENED - recovery test failed")
+        elif self.state == CircuitState.CLOSED:
+            if self.failure_count >= self.failure_threshold:
+                self.state = CircuitState.OPEN
+                logger.warning(
+                    f"Circuit breaker OPENED after {self.failure_count} failures"
+                )
+
+    def get_state_info(self) -> Dict[str, Any]:
+        """Get current circuit breaker state for observability."""
+        return {
+            "state": self.state.value,
+            "failure_count": self.failure_count,
+            "success_count": self.success_count,
+            "last_failure_time": self.last_failure_time,
+        }
+
+
+# ============================================================================
+# TOOL FAILURE TRACKER
+# ============================================================================
+
+
+@dataclass
+class ToolFailureStats:
+    """
+    Statistics for a single tool's execution history.
+
+    Implements:
+    - Exponential moving average (EMA) for latency tracking (G8)
+    - Sliding window for recent success rate calculation (G8)
+    """
+
+    total_calls: int = 0
+    total_failures: int = 0
+    total_successes: int = 0
+    total_latency_ms: int = 0
+    last_failure_reason: Optional[str] = None
+    last_success_time: Optional[float] = None
+    circuit_breaker: CircuitBreaker = field(default_factory=CircuitBreaker)
+
+    # G8: Exponential moving average for latency
+    ema_latency_ms: float = 0.0
+    ema_alpha: float = 0.2  # Weight for new observations (0.2 = responsive)
+
+    # G8: Sliding window for recent success rate
+    recent_results: List[bool] = field(default_factory=list)
+    sliding_window_size: int = 50  # Track last 50 calls
+
+    @property
+    def success_rate(self) -> float:
+        """Calculate overall success rate as a percentage."""
+        if self.total_calls == 0:
+            return 1.0  # Assume success if never called
+        return self.total_successes / self.total_calls
+
+    @property
+    def recent_success_rate(self) -> float:
+        """Calculate success rate for recent calls in sliding window (G8)."""
+        if not self.recent_results:
+            return 1.0  # Assume success if no recent calls
+        return sum(1 for r in self.recent_results if r) / len(self.recent_results)
+
+    @property
+    def avg_latency_ms(self) -> float:
+        """Calculate simple average latency in milliseconds."""
+        if self.total_successes == 0:
+            return 0.0
+        return self.total_latency_ms / self.total_successes
+
+    def update_ema_latency(self, latency_ms: int) -> None:
+        """Update exponential moving average latency (G8)."""
+        if self.ema_latency_ms == 0.0:
+            # First observation
+            self.ema_latency_ms = float(latency_ms)
+        else:
+            # EMA formula: new_ema = alpha * new_value + (1 - alpha) * old_ema
+            self.ema_latency_ms = (
+                self.ema_alpha * latency_ms + (1 - self.ema_alpha) * self.ema_latency_ms
+            )
+
+    def record_result(self, success: bool) -> None:
+        """Record a result in the sliding window (G8)."""
+        self.recent_results.append(success)
+        # Trim to window size
+        if len(self.recent_results) > self.sliding_window_size:
+            self.recent_results = self.recent_results[-self.sliding_window_size:]
+
+
+class ToolFailureTracker:
+    """
+    Tracks failure statistics and circuit breaker state per tool.
+
+    Provides centralized tracking for:
+    - Per-tool circuit breakers
+    - Failure/success rates
+    - Latency statistics
+    """
+
+    def __init__(
+        self,
+        failure_threshold: int = 3,
+        reset_timeout: float = 60.0,
+    ):
+        self.failure_threshold = failure_threshold
+        self.reset_timeout = reset_timeout
+        self._stats: Dict[str, ToolFailureStats] = {}
+
+    def _get_or_create_stats(self, tool_name: str) -> ToolFailureStats:
+        """Get or create stats for a tool."""
+        if tool_name not in self._stats:
+            self._stats[tool_name] = ToolFailureStats(
+                circuit_breaker=CircuitBreaker(
+                    failure_threshold=self.failure_threshold,
+                    reset_timeout=self.reset_timeout,
+                )
+            )
+        return self._stats[tool_name]
+
+    def can_execute(self, tool_name: str) -> bool:
+        """Check if tool's circuit breaker allows execution."""
+        stats = self._get_or_create_stats(tool_name)
+        return stats.circuit_breaker.can_execute()
+
+    def record_success(self, tool_name: str, latency_ms: int) -> None:
+        """Record a successful tool execution."""
+        stats = self._get_or_create_stats(tool_name)
+        stats.total_calls += 1
+        stats.total_successes += 1
+        stats.total_latency_ms += latency_ms
+        stats.last_success_time = time.time()
+        stats.circuit_breaker.record_success()
+
+        # G8: Update performance learning metrics
+        stats.update_ema_latency(latency_ms)
+        stats.record_result(success=True)
+
+    def record_failure(self, tool_name: str, reason: str) -> None:
+        """Record a failed tool execution."""
+        stats = self._get_or_create_stats(tool_name)
+        stats.total_calls += 1
+        stats.total_failures += 1
+        stats.last_failure_reason = reason
+        stats.circuit_breaker.record_failure()
+
+        # G8: Update sliding window for recent success rate
+        stats.record_result(success=False)
+
+    def get_stats(self, tool_name: str) -> Optional[ToolFailureStats]:
+        """Get stats for a specific tool."""
+        return self._stats.get(tool_name)
+
+    def get_all_stats(self) -> Dict[str, Dict[str, Any]]:
+        """Get stats for all tracked tools."""
+        return {
+            name: {
+                "total_calls": stats.total_calls,
+                "success_rate": stats.success_rate,
+                "avg_latency_ms": stats.avg_latency_ms,
+                # G8: Include performance learning metrics
+                "ema_latency_ms": stats.ema_latency_ms,
+                "recent_success_rate": stats.recent_success_rate,
+                "circuit_breaker": stats.circuit_breaker.get_state_info(),
+            }
+            for name, stats in self._stats.items()
+        }
+
+    def reset(self, tool_name: Optional[str] = None) -> None:
+        """Reset stats for a tool or all tools."""
+        if tool_name:
+            self._stats.pop(tool_name, None)
+        else:
+            self._stats.clear()
 
 
 # ============================================================================
@@ -41,7 +334,9 @@ class PlanExecutor:
     - Executes tools in dependency order
     - Supports parallel execution of independent tools
     - Passes outputs from prior steps as inputs to dependent steps
-    - Handles retries and failures gracefully
+    - Handles retries with exponential backoff
+    - Circuit breaker pattern for failing tools
+    - Per-tool failure tracking and statistics
     """
 
     def __init__(
@@ -50,11 +345,37 @@ class PlanExecutor:
         max_parallel: int = 3,
         max_retries: int = 2,
         timeout_seconds: int = 120,
+        # Exponential backoff configuration
+        backoff_base_delay: float = 1.0,
+        backoff_max_delay: float = 30.0,
+        backoff_factor: float = 2.0,
+        # Circuit breaker configuration
+        circuit_failure_threshold: int = 3,
+        circuit_reset_timeout: float = 60.0,
+        # Caching configuration
+        enable_caching: bool = True,
     ):
         self.registry = tool_registry or ToolRegistry()
         self.max_parallel = max_parallel
         self.max_retries = max_retries
         self.timeout_seconds = timeout_seconds
+        self.enable_caching = enable_caching
+
+        # Initialize exponential backoff strategy
+        self.backoff = ExponentialBackoff(
+            base_delay=backoff_base_delay,
+            max_delay=backoff_max_delay,
+            factor=backoff_factor,
+        )
+
+        # Initialize per-tool failure tracker with circuit breakers
+        self.failure_tracker = ToolFailureTracker(
+            failure_threshold=circuit_failure_threshold,
+            reset_timeout=circuit_reset_timeout,
+        )
+
+        # Initialize cache manager for deterministic tool output caching (G6)
+        self._cache_manager = get_cache_manager() if enable_caching else None
 
     async def execute(
         self, plan: ExecutionPlan, context: Optional[Dict[str, Any]] = None
@@ -125,7 +446,7 @@ class PlanExecutor:
     async def _execute_step(
         self, step: ExecutionStep, prior_outputs: Dict[str, Any], context: Dict[str, Any]
     ) -> StepResult:
-        """Execute a single step"""
+        """Execute a single step with circuit breaker and exponential backoff."""
         started_at = datetime.now(timezone.utc)
 
         logger.debug(f"Executing step {step.step_id}: {step.tool_name}")
@@ -137,10 +458,37 @@ class PlanExecutor:
             tool_name=step.tool_name, parameters=resolved_inputs, context=context
         )
 
-        # Get the tool callable
-        tool_callable = self.registry.get_callable(step.tool_name)
+        # G6: Check cache for deterministic tool outputs
+        if self._cache_manager:
+            cached_output = self._cache_manager.get_tool_output(
+                step.tool_name, resolved_inputs
+            )
+            if cached_output is not None:
+                logger.debug(f"Cache hit for tool '{step.tool_name}'")
+                completed_at = datetime.now(timezone.utc)
+                duration_ms = int((completed_at - started_at).total_seconds() * 1000)
+                return StepResult(
+                    step_id=step.step_id,
+                    sub_question_id=step.sub_question_id,
+                    tool_name=step.tool_name,
+                    input=tool_input,
+                    output=ToolOutput(
+                        tool_name=step.tool_name,
+                        success=True,
+                        result=cached_output,
+                        execution_time_ms=duration_ms,
+                    ),
+                    status=ExecutionStatus.COMPLETED,
+                    started_at=started_at,
+                    completed_at=completed_at,
+                    duration_ms=duration_ms,
+                )
 
-        if not tool_callable:
+        # Check circuit breaker before attempting execution
+        if not self.failure_tracker.can_execute(step.tool_name):
+            logger.warning(
+                f"Circuit breaker OPEN for tool '{step.tool_name}', skipping execution"
+            )
             return StepResult(
                 step_id=step.step_id,
                 sub_question_id=step.sub_question_id,
@@ -149,14 +497,35 @@ class PlanExecutor:
                 output=ToolOutput(
                     tool_name=step.tool_name,
                     success=False,
-                    error=f"Tool '{step.tool_name}' not found in registry",
+                    error=f"Circuit breaker open for tool '{step.tool_name}'",
+                ),
+                status=ExecutionStatus.SKIPPED,
+                started_at=started_at,
+                completed_at=datetime.now(timezone.utc),
+            )
+
+        # Get the tool callable
+        tool_callable = self.registry.get_callable(step.tool_name)
+
+        if not tool_callable:
+            error_msg = f"Tool '{step.tool_name}' not found in registry"
+            self.failure_tracker.record_failure(step.tool_name, error_msg)
+            return StepResult(
+                step_id=step.step_id,
+                sub_question_id=step.sub_question_id,
+                tool_name=step.tool_name,
+                input=tool_input,
+                output=ToolOutput(
+                    tool_name=step.tool_name,
+                    success=False,
+                    error=error_msg,
                 ),
                 status=ExecutionStatus.FAILED,
                 started_at=started_at,
                 completed_at=datetime.now(timezone.utc),
             )
 
-        # Execute with retries
+        # Execute with retries and exponential backoff
         last_error = None
         for attempt in range(self.max_retries + 1):
             try:
@@ -183,6 +552,15 @@ class PlanExecutor:
                 else:
                     result_dict = {"value": result}
 
+                # Record success with the failure tracker
+                self.failure_tracker.record_success(step.tool_name, duration_ms)
+
+                # G6: Cache result for deterministic tools
+                if self._cache_manager:
+                    self._cache_manager.cache_tool_output(
+                        step.tool_name, resolved_inputs, result_dict
+                    )
+
                 return StepResult(
                     step_id=step.step_id,
                     sub_question_id=step.sub_question_id,
@@ -204,9 +582,14 @@ class PlanExecutor:
                 last_error = str(e)
                 logger.warning(f"Step {step.step_id} attempt {attempt + 1} failed: {e}")
                 if attempt < self.max_retries:
-                    await asyncio.sleep(0.5 * (attempt + 1))  # Exponential backoff
+                    # Use exponential backoff with jitter
+                    delay = self.backoff.get_delay(attempt)
+                    logger.debug(f"Retrying in {delay:.2f}s (attempt {attempt + 2})")
+                    await asyncio.sleep(delay)
 
-        # All retries exhausted
+        # All retries exhausted - record failure
+        self.failure_tracker.record_failure(step.tool_name, last_error or "Unknown error")
+
         completed_at = datetime.now(timezone.utc)
         return StepResult(
             step_id=step.step_id,
@@ -310,6 +693,94 @@ class PlanExecutor:
                 return None
 
         return current
+
+    def get_tool_stats(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Get execution statistics for all tools.
+
+        Returns a dictionary with per-tool stats including:
+        - total_calls: Number of executions
+        - success_rate: Success percentage (0.0 - 1.0)
+        - avg_latency_ms: Average execution time
+        - circuit_breaker: Current circuit breaker state
+        """
+        return self.failure_tracker.get_all_stats()
+
+    def reset_tool_stats(self, tool_name: Optional[str] = None) -> None:
+        """
+        Reset tool statistics.
+
+        Args:
+            tool_name: Specific tool to reset, or None to reset all
+        """
+        self.failure_tracker.reset(tool_name)
+
+    def update_tool_performance(
+        self,
+        tool_name: Optional[str] = None,
+        min_calls: int = 10,
+    ) -> Dict[str, bool]:
+        """
+        Sync learned performance metrics back to the tool registry (G8).
+
+        Updates the registry's avg_execution_ms for tools that have been
+        executed enough times to provide reliable EMA latency estimates.
+
+        Args:
+            tool_name: Specific tool to update, or None to update all
+            min_calls: Minimum number of calls required before updating
+
+        Returns:
+            Dictionary mapping tool names to update success status
+        """
+        results: Dict[str, bool] = {}
+
+        # Get tools to update
+        if tool_name:
+            tools_to_update = [tool_name] if tool_name in self.failure_tracker._stats else []
+        else:
+            tools_to_update = list(self.failure_tracker._stats.keys())
+
+        for name in tools_to_update:
+            stats = self.failure_tracker.get_stats(name)
+            if not stats:
+                results[name] = False
+                continue
+
+            # Only update if we have enough observations
+            if stats.total_calls < min_calls:
+                logger.debug(
+                    f"Skipping {name}: only {stats.total_calls} calls (need {min_calls})"
+                )
+                results[name] = False
+                continue
+
+            # Only update if we have a valid EMA latency
+            if stats.ema_latency_ms <= 0:
+                logger.debug(f"Skipping {name}: no valid EMA latency")
+                results[name] = False
+                continue
+
+            # Get the registered tool and update its schema
+            registered = self.registry.get(name)
+            if not registered:
+                logger.warning(f"Tool {name} not found in registry")
+                results[name] = False
+                continue
+
+            # Update the schema's avg_execution_ms with learned EMA
+            old_latency = registered.schema.avg_execution_ms
+            new_latency = int(round(stats.ema_latency_ms))
+            registered.schema.avg_execution_ms = new_latency
+
+            logger.info(
+                f"G8: Updated {name} latency: {old_latency}ms → {new_latency}ms "
+                f"(EMA from {stats.total_calls} calls, "
+                f"recent success rate: {stats.recent_success_rate:.1%})"
+            )
+            results[name] = True
+
+        return results
 
 
 # ============================================================================

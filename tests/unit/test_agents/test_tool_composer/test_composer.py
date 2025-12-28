@@ -5,7 +5,7 @@ Integration tests for the full 4-phase tool composition pipeline.
 """
 
 import json
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -432,3 +432,181 @@ class TestRegistryInteraction:
         """Test that composer creates default registry if not provided"""
         composer = ToolComposer(llm_client=mock_llm_client)
         assert composer.registry is not None
+
+
+class TestMemoryContribution:
+    """Tests for memory contribution after composition (G1, G2)"""
+
+    @pytest.mark.asyncio
+    async def test_memory_contribution_enabled_by_default(
+        self, mock_llm_client, mock_tool_registry
+    ):
+        """Test that memory contribution is enabled by default"""
+        composer = ToolComposer(
+            llm_client=mock_llm_client,
+            tool_registry=mock_tool_registry,
+        )
+        assert composer.enable_memory_contribution is True
+
+    @pytest.mark.asyncio
+    async def test_memory_contribution_can_be_disabled(
+        self, mock_llm_client, mock_tool_registry
+    ):
+        """Test that memory contribution can be disabled"""
+        composer = ToolComposer(
+            llm_client=mock_llm_client,
+            tool_registry=mock_tool_registry,
+            enable_memory_contribution=False,
+        )
+        assert composer.enable_memory_contribution is False
+
+    @pytest.mark.asyncio
+    async def test_memory_hooks_initialized(
+        self, mock_llm_client, mock_tool_registry
+    ):
+        """Test that memory hooks are initialized"""
+        composer = ToolComposer(
+            llm_client=mock_llm_client,
+            tool_registry=mock_tool_registry,
+        )
+        # Should have memory_hooks attribute (even if None from factory)
+        assert hasattr(composer, "memory_hooks")
+
+    @pytest.mark.asyncio
+    async def test_custom_memory_hooks_accepted(
+        self, mock_llm_client, mock_tool_registry
+    ):
+        """Test that custom memory hooks can be provided"""
+        mock_memory_hooks = AsyncMock()
+
+        composer = ToolComposer(
+            llm_client=mock_llm_client,
+            tool_registry=mock_tool_registry,
+            memory_hooks=mock_memory_hooks,
+        )
+
+        assert composer.memory_hooks == mock_memory_hooks
+
+    @pytest.mark.asyncio
+    async def test_contribute_to_memory_called_on_success(
+        self, mock_llm_client, mock_tool_registry, sample_query
+    ):
+        """Test that memory contribution is called after successful composition"""
+        mock_memory_hooks = AsyncMock()
+
+        composer = ToolComposer(
+            llm_client=mock_llm_client,
+            tool_registry=mock_tool_registry,
+            memory_hooks=mock_memory_hooks,
+            enable_memory_contribution=True,
+        )
+
+        # Patch the contribute_to_memory function
+        with patch(
+            "src.agents.tool_composer.composer.contribute_to_memory",
+            new_callable=AsyncMock,
+            return_value={"episodic_stored": 1, "procedural_stored": 1, "working_cached": 1},
+        ) as mock_contribute:
+            await composer.compose(sample_query)
+
+            # Verify contribute was called
+            mock_contribute.assert_called_once()
+            call_kwargs = mock_contribute.call_args.kwargs
+            assert "result" in call_kwargs
+            assert call_kwargs["memory_hooks"] == mock_memory_hooks
+
+    @pytest.mark.asyncio
+    async def test_contribute_to_memory_not_called_when_disabled(
+        self, mock_llm_client, mock_tool_registry, sample_query
+    ):
+        """Test that memory contribution is not called when disabled"""
+        mock_memory_hooks = AsyncMock()
+
+        composer = ToolComposer(
+            llm_client=mock_llm_client,
+            tool_registry=mock_tool_registry,
+            memory_hooks=mock_memory_hooks,
+            enable_memory_contribution=False,  # Disabled
+        )
+
+        with patch(
+            "src.agents.tool_composer.composer.contribute_to_memory",
+            new_callable=AsyncMock,
+        ) as mock_contribute:
+            await composer.compose(sample_query)
+
+            # Should NOT be called when disabled
+            mock_contribute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_contribute_to_memory_error_does_not_fail_composition(
+        self, mock_llm_client, mock_tool_registry, sample_query
+    ):
+        """Test that memory contribution errors don't fail the composition"""
+        mock_memory_hooks = AsyncMock()
+
+        composer = ToolComposer(
+            llm_client=mock_llm_client,
+            tool_registry=mock_tool_registry,
+            memory_hooks=mock_memory_hooks,
+            enable_memory_contribution=True,
+        )
+
+        with patch(
+            "src.agents.tool_composer.composer.contribute_to_memory",
+            new_callable=AsyncMock,
+            side_effect=Exception("Memory write failed"),
+        ):
+            # Should still complete successfully
+            result = await composer.compose(sample_query)
+
+            assert result.success is True
+
+    @pytest.mark.asyncio
+    async def test_contribute_to_memory_receives_context(
+        self, mock_llm_client, mock_tool_registry, sample_query
+    ):
+        """Test that memory contribution receives context from compose call"""
+        mock_memory_hooks = AsyncMock()
+
+        composer = ToolComposer(
+            llm_client=mock_llm_client,
+            tool_registry=mock_tool_registry,
+            memory_hooks=mock_memory_hooks,
+            enable_memory_contribution=True,
+        )
+
+        context = {
+            "session_id": "test-session-123",
+            "brand": "Kisqali",
+            "region": "Northeast",
+        }
+
+        with patch(
+            "src.agents.tool_composer.composer.contribute_to_memory",
+            new_callable=AsyncMock,
+            return_value={"episodic_stored": 1, "procedural_stored": 1, "working_cached": 1},
+        ) as mock_contribute:
+            await composer.compose(sample_query, context=context)
+
+            call_kwargs = mock_contribute.call_args.kwargs
+            assert call_kwargs["session_id"] == "test-session-123"
+            assert call_kwargs["brand"] == "Kisqali"
+            assert call_kwargs["region"] == "Northeast"
+
+    @pytest.mark.asyncio
+    async def test_memory_hooks_passed_to_planner(
+        self, mock_llm_client, mock_tool_registry
+    ):
+        """Test that memory hooks are passed to planner for episodic lookup"""
+        mock_memory_hooks = AsyncMock()
+
+        composer = ToolComposer(
+            llm_client=mock_llm_client,
+            tool_registry=mock_tool_registry,
+            memory_hooks=mock_memory_hooks,
+        )
+
+        # Verify planner has memory hooks
+        assert composer.planner.memory_hooks == mock_memory_hooks
+        assert composer.planner.use_episodic_memory is True
