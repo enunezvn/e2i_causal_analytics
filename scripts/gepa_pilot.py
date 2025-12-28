@@ -102,55 +102,87 @@ async def load_training_data(
     return trainset, valset
 
 
-def _generate_synthetic_examples(agent_name: str, count: int) -> list[dict[str, Any]]:
-    """Generate synthetic training examples for testing.
+def _generate_synthetic_examples(agent_name: str, count: int) -> list:
+    """Generate synthetic training examples for GEPA optimization.
+
+    Creates dspy.Example objects with fields matching the agent's DSPy Signature.
+    For causal_impact, this matches EvidenceSynthesisSignature inputs/outputs.
 
     Args:
         agent_name: Name of the agent
         count: Number of examples to generate
 
     Returns:
-        List of synthetic training examples
+        List of dspy.Example objects for training
     """
+    from dspy import Example
+    import random
+
     examples = []
 
     if agent_name == "causal_impact":
-        templates = [
-            {
-                "question": "What is the causal impact of {treatment} on {outcome}?",
-                "treatment": ["email campaigns", "sales calls", "webinars", "samples"],
-                "outcome": ["TRx", "NRx", "market share", "conversion rate"],
-            },
-            {
-                "question": "How did {intervention} affect {metric} in {region}?",
-                "intervention": ["Q1 campaign", "new messaging", "digital outreach"],
-                "metric": ["prescriptions", "HCP engagement", "brand awareness"],
-                "region": ["Northeast", "South", "Midwest", "West"],
-            },
-        ]
-
-        import random
+        # Templates for generating realistic causal impact scenarios
+        treatments = ["email campaigns", "sales calls", "webinars", "samples", "digital ads"]
+        outcomes = ["TRx", "NRx", "market share", "conversion rate", "HCP engagement"]
+        brands = ["Remibrutinib", "Fabhalta", "Kisqali"]
+        expertise_levels = ["novice", "intermediate", "expert"]
 
         for i in range(count):
-            template = random.choice(templates)
-            question = template["question"]
-            for key, values in template.items():
-                if key != "question":
-                    question = question.replace(f"{{{key}}}", random.choice(values))
+            treatment = random.choice(treatments)
+            outcome = random.choice(outcomes)
+            brand = random.choice(brands)
+            ate = round(random.uniform(0.05, 0.25), 3)
+            ci_lower = round(ate - random.uniform(0.02, 0.05), 3)
+            ci_upper = round(ate + random.uniform(0.02, 0.05), 3)
+            p_value = round(random.uniform(0.001, 0.05), 4)
+            refutation_passed = random.random() > 0.2
+            e_value = round(random.uniform(1.5, 4.0), 2)
 
-            examples.append(
-                {
-                    "question": question,
-                    "context": {
-                        "brand": random.choice(["Remibrutinib", "Fabhalta", "Kisqali"]),
-                        "time_period": random.choice(["Q1", "Q2", "Q3", "Q4"]),
-                    },
-                    "ground_truth": {
-                        "ate": round(random.uniform(0.05, 0.25), 3),
-                        "confidence": round(random.uniform(0.8, 0.99), 2),
-                    },
-                }
-            )
+            # Create example matching EvidenceSynthesisSignature fields
+            example = Example(
+                # Input fields
+                estimation_result=(
+                    f"ATE: {ate} (95% CI: [{ci_lower}, {ci_upper}]), p-value: {p_value}. "
+                    f"The effect of {treatment} on {outcome} for {brand} is statistically significant."
+                ),
+                refutation_summary=(
+                    f"Refutation tests: {'PASSED' if refutation_passed else 'MIXED'}. "
+                    f"Placebo treatment: passed, Random cause: passed, "
+                    f"Subset data: {'passed' if refutation_passed else 'marginal'}."
+                ),
+                sensitivity_summary=(
+                    f"E-value: {e_value}. The effect is {'robust' if e_value > 2.0 else 'sensitive'} "
+                    f"to unmeasured confounding. A confounder would need to be associated with both "
+                    f"treatment and outcome by a factor of {e_value} to explain away the effect."
+                ),
+                user_expertise=random.choice(expertise_levels),
+                # Output fields (ground truth for training)
+                narrative=(
+                    f"Our causal analysis reveals that {treatment} has a "
+                    f"{'positive' if ate > 0 else 'negative'} causal effect on {outcome} "
+                    f"for {brand}. The average treatment effect is {ate}, meaning a unit increase "
+                    f"in {treatment} leads to a {abs(ate)*100:.1f}% change in {outcome}."
+                ),
+                key_findings=[
+                    f"Causal effect magnitude: {ate} ({('small' if abs(ate) < 0.1 else 'medium' if abs(ate) < 0.2 else 'large')})",
+                    f"Statistical significance: p = {p_value}",
+                    f"Refutation robustness: {'All tests passed' if refutation_passed else 'Some concerns'}",
+                    f"Sensitivity to confounding: E-value = {e_value}",
+                ],
+                confidence_level="high" if refutation_passed and e_value > 2.0 else "medium",
+                recommendations=[
+                    f"{'Scale up' if ate > 0.1 else 'Maintain'} {treatment} investment for {brand}",
+                    f"Monitor {outcome} metrics weekly to validate causal relationship",
+                    "Consider A/B testing to confirm effect in controlled setting",
+                ],
+                limitations=[
+                    "Analysis based on observational data; RCT would provide stronger evidence",
+                    "Effect estimates may vary across different HCP segments",
+                    "Temporal dynamics not fully captured in this cross-sectional analysis",
+                ],
+            ).with_inputs("estimation_result", "refutation_summary", "sensitivity_summary", "user_expertise")
+
+            examples.append(example)
 
     return examples
 
@@ -217,12 +249,25 @@ async def run_pilot(
             return results
 
         # Full optimization run
+        import dspy
         from src.optimization.gepa import (
             create_gepa_optimizer,
             get_metric_for_agent,
             save_optimized_module,
         )
         from src.optimization.gepa.integration import GEPAMLflowCallback, GEPAOpikTracer
+
+        # Configure DSPy with LM (required for GEPA optimization)
+        # Use Claude for optimization - can be overridden via environment variable
+        import os
+        lm_model = os.getenv("DSPY_LM_MODEL", "anthropic/claude-sonnet-4-20250514")
+        logger.info(f"Configuring DSPy with LM: {lm_model}")
+        lm = dspy.LM(
+            model=lm_model,
+            temperature=0.7,
+            max_tokens=4096,
+        )
+        dspy.configure(lm=lm)
 
         # Get the agent's DSPy module
         from src.agents.causal_impact.dspy_integration import get_causal_impact_module
@@ -237,8 +282,7 @@ async def run_pilot(
             metric=metric,
             trainset=trainset,
             valset=valset,
-            budget=budget,
-            enable_tool_optimization=True,
+            auto=budget,  # 'auto' is the GEPA budget preset parameter
             seed=seed,
         )
 
@@ -276,7 +320,6 @@ async def run_pilot(
             async with opik_tracer.trace_run(
                 agent_name=agent_name,
                 budget=budget,
-                enable_tool_optimization=True,
             ):
                 optimized = optimizer.compile(
                     student,

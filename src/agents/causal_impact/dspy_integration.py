@@ -283,6 +283,71 @@ try:
             desc="What this means in practice"
         )
 
+    class CausalImpactModule(dspy.Module):
+        """
+        DSPy Module for Causal Impact agent optimization.
+
+        Wraps the EvidenceSynthesisSignature for GEPA optimization,
+        enabling prompt tuning for improved causal interpretation quality.
+        """
+
+        def __init__(self):
+            super().__init__()
+            self.evidence_synthesis = dspy.ChainOfThought(EvidenceSynthesisSignature)
+            self.causal_interpretation = dspy.ChainOfThought(CausalInterpretationSignature)
+
+        def forward(
+            self,
+            estimation_result: str,
+            refutation_summary: str,
+            sensitivity_summary: str,
+            user_expertise: str = "intermediate",
+            treatment_var: str = "",
+            outcome_var: str = "",
+            ate_estimate: float = 0.0,
+            effect_size: str = "medium",
+            refutation_passed: bool = True,
+        ) -> dspy.Prediction:
+            """
+            Generate causal interpretation from analysis results.
+
+            Args:
+                estimation_result: ATE estimate with CI and significance
+                refutation_summary: Summary of refutation test results
+                sensitivity_summary: E-value and sensitivity interpretation
+                user_expertise: User expertise level (novice, intermediate, expert)
+                treatment_var: Treatment variable name (for deep interpretation)
+                outcome_var: Outcome variable name (for deep interpretation)
+                ate_estimate: Point estimate of causal effect
+                effect_size: Effect magnitude category
+                refutation_passed: Whether refutation tests passed
+
+            Returns:
+                DSPy Prediction with narrative, findings, recommendations
+            """
+            # Primary synthesis using ChainOfThought
+            synthesis = self.evidence_synthesis(
+                estimation_result=estimation_result,
+                refutation_summary=refutation_summary,
+                sensitivity_summary=sensitivity_summary,
+                user_expertise=user_expertise,
+            )
+
+            # Add deep interpretation for experts if context provided
+            if user_expertise == "expert" and treatment_var and outcome_var:
+                interpretation = self.causal_interpretation(
+                    treatment_var=treatment_var,
+                    outcome_var=outcome_var,
+                    ate_estimate=ate_estimate,
+                    effect_size=effect_size,
+                    refutation_passed=refutation_passed,
+                )
+                synthesis.mechanism_explanation = interpretation.mechanism_explanation
+                synthesis.assumption_warnings = interpretation.assumption_warnings
+                synthesis.practical_significance = interpretation.practical_significance
+
+            return synthesis
+
     DSPY_AVAILABLE = True
     logger.info("DSPy signatures loaded for Causal Impact agent")
 
@@ -292,6 +357,34 @@ except ImportError:
     CausalGraphSignature = None
     EvidenceSynthesisSignature = None
     CausalInterpretationSignature = None
+    CausalImpactModule = None
+
+
+# Module singleton for optimization
+_causal_impact_module: Optional["CausalImpactModule"] = None
+
+
+def get_causal_impact_module() -> "CausalImpactModule":
+    """
+    Get or create CausalImpactModule singleton for GEPA optimization.
+
+    Returns:
+        CausalImpactModule instance ready for optimization
+
+    Raises:
+        RuntimeError: If DSPy is not available
+    """
+    global _causal_impact_module
+
+    if not DSPY_AVAILABLE:
+        raise RuntimeError(
+            "DSPy is not available. Install with: pip install dspy-ai"
+        )
+
+    if _causal_impact_module is None:
+        _causal_impact_module = CausalImpactModule()
+
+    return _causal_impact_module
 
 
 # =============================================================================
@@ -492,8 +585,9 @@ def get_causal_impact_signal_collector() -> CausalImpactSignalCollector:
 
 def reset_dspy_integration() -> None:
     """Reset singletons (for testing)."""
-    global _signal_collector
+    global _signal_collector, _causal_impact_module
     _signal_collector = None
+    _causal_impact_module = None
 
 
 # =============================================================================
@@ -503,14 +597,16 @@ def reset_dspy_integration() -> None:
 __all__ = [
     # Training Signals
     "CausalAnalysisTrainingSignal",
-    # DSPy Signatures
+    # DSPy Signatures & Module
     "CausalGraphSignature",
     "EvidenceSynthesisSignature",
     "CausalInterpretationSignature",
+    "CausalImpactModule",
     "DSPY_AVAILABLE",
     # Collectors
     "CausalImpactSignalCollector",
     # Access
     "get_causal_impact_signal_collector",
+    "get_causal_impact_module",
     "reset_dspy_integration",
 ]

@@ -63,8 +63,15 @@ class CausalImpactGEPAMetric:
         trace: Optional[DSPyTrace] = None,
         pred_name: Optional[str] = None,
         pred_trace: Optional[DSPyTrace] = None,
-    ) -> ScoreWithFeedback:
-        """Compute score and feedback for causal impact estimation.
+    ) -> float:
+        """Compute score for causal impact estimation.
+
+        GEPA requires metrics to return a float score for aggregation.
+        The score is a weighted combination of:
+        - Refutation test pass rate (30%)
+        - Sensitivity analysis robustness (25%)
+        - Methodology validity (25%)
+        - Business relevance (20%)
 
         Args:
             gold: Ground truth Example with expected outputs
@@ -74,26 +81,21 @@ class CausalImpactGEPAMetric:
             pred_trace: Execution trace for this specific predictor (optional)
 
         Returns:
-            Dict with 'score' (float 0-1) and 'feedback' (str) for GEPA reflection
+            Float score between 0.0 and 1.0
         """
-        feedback_parts = []
         scores = {}
 
         # Component 1: Refutation Tests (Node 3)
-        scores["refutation"], fb = self._score_refutation(pred)
-        feedback_parts.append(f"[Refutation] {fb}")
+        scores["refutation"], _ = self._score_refutation(pred)
 
         # Component 2: Sensitivity Analysis (Node 4)
-        scores["sensitivity"], fb = self._score_sensitivity(pred)
-        feedback_parts.append(f"[Sensitivity] {fb}")
+        scores["sensitivity"], _ = self._score_sensitivity(pred)
 
         # Component 3: Methodology
-        scores["methodology"], fb = self._score_methodology(pred, gold, trace)
-        feedback_parts.append(f"[Methodology] {fb}")
+        scores["methodology"], _ = self._score_methodology(pred, gold, trace)
 
         # Component 4: Business Relevance
-        scores["business"], fb = self._score_business(pred, gold)
-        feedback_parts.append(f"[Business] {fb}")
+        scores["business"], _ = self._score_business(pred, gold)
 
         # Aggregate weighted score
         total_score = (
@@ -103,10 +105,7 @@ class CausalImpactGEPAMetric:
             + self.business_weight * scores["business"]
         )
 
-        # Build feedback string
-        feedback = self._build_feedback(total_score, scores, feedback_parts, pred_name)
-
-        return {"score": total_score, "feedback": feedback}
+        return total_score
 
     def _score_refutation(self, pred: Prediction) -> tuple[float, str]:
         """Score refutation test results from DoWhy suite.
