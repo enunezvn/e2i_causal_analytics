@@ -181,7 +181,7 @@ async def extract_entities(query: str) -> Dict[str, List[str]]:
     import yaml
 
     # Load vocabulary
-    vocab_path = Path(__file__).parent / "003_memory_vocabulary.yaml"
+    vocab_path = Path(__file__).parent.parent.parent / "config" / "domain_vocabulary.yaml"
     with open(vocab_path) as f:
         vocab = yaml.safe_load(f)
 
@@ -221,7 +221,7 @@ async def detect_intent(query: str) -> str:
 
     import yaml
 
-    vocab_path = Path(__file__).parent / "003_memory_vocabulary.yaml"
+    vocab_path = Path(__file__).parent.parent.parent / "config" / "domain_vocabulary.yaml"
     with open(vocab_path) as f:
         vocab = yaml.safe_load(f)
 

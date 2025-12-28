@@ -434,14 +434,14 @@ class GEPAIntegrationTests:
 
     def test_vocabulary_file_exists(self) -> bool:
         """Test domain vocabulary file exists."""
-        vocab_path = project_root / "config" / "domain_vocabulary_v4.2.0.yaml"
+        vocab_path = project_root / "config" / "domain_vocabulary.yaml"
         return vocab_path.exists()
 
     def test_vocabulary_gepa_section(self) -> bool:
         """Test GEPA section in vocabulary."""
         import yaml
 
-        vocab_path = project_root / "config" / "domain_vocabulary_v4.2.0.yaml"
+        vocab_path = project_root / "config" / "domain_vocabulary.yaml"
         with open(vocab_path) as f:
             vocab = yaml.safe_load(f)
 
@@ -460,15 +460,15 @@ class GEPAIntegrationTests:
         return True
 
     def test_vocabulary_version(self) -> bool:
-        """Test vocabulary version is 4.3.0."""
+        """Test vocabulary version is 5.0.0."""
         import yaml
 
-        vocab_path = project_root / "config" / "domain_vocabulary_v4.2.0.yaml"
+        vocab_path = project_root / "config" / "domain_vocabulary.yaml"
         with open(vocab_path) as f:
             vocab = yaml.safe_load(f)
 
         metadata = vocab.get("_metadata", {})
-        return metadata.get("version") == "4.3.0"
+        return metadata.get("version") == "5.0.0"
 
     # =========================================================================
     # Run Tests
