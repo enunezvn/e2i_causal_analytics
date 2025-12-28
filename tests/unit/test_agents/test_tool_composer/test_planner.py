@@ -482,3 +482,190 @@ class TestErrorHandling:
             await planner.plan(sample_decomposition)
 
         assert "LLM error" in str(exc_info.value)
+
+
+class TestMemoryIntegration:
+    """Tests for episodic memory integration (G1, G2)"""
+
+    @pytest.mark.asyncio
+    async def test_check_episodic_memory_returns_similar(
+        self, mock_llm_client, mock_tool_registry, sample_decomposition
+    ):
+        """Test that episodic memory lookup returns similar compositions"""
+        # Create mock memory hooks
+        mock_memory_hooks = AsyncMock()
+        mock_memory_hooks.find_similar_compositions = AsyncMock(
+            return_value=[
+                {
+                    "raw_content": {
+                        "tool_sequence": ["causal_effect_estimator", "cate_analyzer"],
+                        "confidence": 0.9,
+                        "total_duration_ms": 500,
+                    }
+                },
+                {
+                    "raw_content": {
+                        "tool_sequence": ["gap_calculator"],
+                        "confidence": 0.85,
+                        "total_duration_ms": 300,
+                    }
+                },
+            ]
+        )
+
+        planner = ToolPlanner(
+            llm_client=mock_llm_client,
+            tool_registry=mock_tool_registry,
+            memory_hooks=mock_memory_hooks,
+            use_episodic_memory=True,
+        )
+
+        # Call the internal method directly
+        similar = await planner._check_episodic_memory("Test query")
+
+        assert len(similar) == 2
+        assert similar[0]["raw_content"]["confidence"] == 0.9
+        mock_memory_hooks.find_similar_compositions.assert_called_once_with(
+            query="Test query", limit=3
+        )
+
+    @pytest.mark.asyncio
+    async def test_check_episodic_memory_disabled(
+        self, mock_llm_client, mock_tool_registry
+    ):
+        """Test that episodic memory can be disabled"""
+        mock_memory_hooks = AsyncMock()
+
+        planner = ToolPlanner(
+            llm_client=mock_llm_client,
+            tool_registry=mock_tool_registry,
+            memory_hooks=mock_memory_hooks,
+            use_episodic_memory=False,  # Disabled
+        )
+
+        similar = await planner._check_episodic_memory("Test query")
+
+        assert similar == []
+        mock_memory_hooks.find_similar_compositions.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_check_episodic_memory_handles_errors(
+        self, mock_llm_client, mock_tool_registry
+    ):
+        """Test that episodic memory errors are handled gracefully"""
+        mock_memory_hooks = AsyncMock()
+        mock_memory_hooks.find_similar_compositions = AsyncMock(
+            side_effect=Exception("Memory error")
+        )
+
+        planner = ToolPlanner(
+            llm_client=mock_llm_client,
+            tool_registry=mock_tool_registry,
+            memory_hooks=mock_memory_hooks,
+            use_episodic_memory=True,
+        )
+
+        # Should not raise, returns empty list
+        similar = await planner._check_episodic_memory("Test query")
+        assert similar == []
+
+    @pytest.mark.asyncio
+    async def test_check_episodic_memory_no_hooks(
+        self, mock_llm_client, mock_tool_registry
+    ):
+        """Test that episodic memory returns empty when hooks are None"""
+        planner = ToolPlanner(
+            llm_client=mock_llm_client,
+            tool_registry=mock_tool_registry,
+            memory_hooks=None,  # No hooks
+            use_episodic_memory=True,
+        )
+        # Set memory_hooks to None manually to test the check
+        planner.memory_hooks = None
+
+        similar = await planner._check_episodic_memory("Test query")
+        assert similar == []
+
+    def test_format_episodic_context_with_compositions(
+        self, mock_llm_client, mock_tool_registry
+    ):
+        """Test formatting of episodic context for LLM prompt"""
+        planner = ToolPlanner(
+            llm_client=mock_llm_client,
+            tool_registry=mock_tool_registry,
+        )
+
+        similar_compositions = [
+            {
+                "raw_content": {
+                    "tool_sequence": ["causal_effect_estimator", "cate_analyzer"],
+                    "confidence": 0.92,
+                    "total_duration_ms": 450,
+                }
+            },
+            {
+                "raw_content": {
+                    "tool_sequence": ["gap_calculator"],
+                    "confidence": 0.88,
+                    "total_duration_ms": 200,
+                }
+            },
+        ]
+
+        context = planner._format_episodic_context(similar_compositions)
+
+        assert "Similar Past Compositions" in context
+        assert "Reference 1" in context
+        assert "Reference 2" in context
+        assert "causal_effect_estimator, cate_analyzer" in context
+        assert "0.92" in context
+        assert "450ms" in context
+
+    def test_format_episodic_context_empty(self, mock_llm_client, mock_tool_registry):
+        """Test that empty compositions return empty string"""
+        planner = ToolPlanner(
+            llm_client=mock_llm_client,
+            tool_registry=mock_tool_registry,
+        )
+
+        context = planner._format_episodic_context([])
+        assert context == ""
+
+        context = planner._format_episodic_context(None)
+        assert context == ""
+
+    @pytest.mark.asyncio
+    async def test_plan_uses_episodic_context(
+        self, mock_llm_client, mock_tool_registry, sample_decomposition
+    ):
+        """Test that planning includes episodic context in LLM call"""
+        mock_memory_hooks = AsyncMock()
+        mock_memory_hooks.find_similar_compositions = AsyncMock(
+            return_value=[
+                {
+                    "raw_content": {
+                        "tool_sequence": ["causal_effect_estimator"],
+                        "confidence": 0.95,
+                        "total_duration_ms": 300,
+                    }
+                }
+            ]
+        )
+
+        planner = ToolPlanner(
+            llm_client=mock_llm_client,
+            tool_registry=mock_tool_registry,
+            memory_hooks=mock_memory_hooks,
+            use_episodic_memory=True,
+        )
+
+        await planner.plan(sample_decomposition)
+
+        # Verify memory was checked
+        mock_memory_hooks.find_similar_compositions.assert_called_once()
+
+        # Verify LLM was called with episodic context (uses call_history, not call_args)
+        assert len(mock_llm_client.call_history) > 0
+        last_call = mock_llm_client.call_history[-1]
+        user_message = last_call["messages"][0]["content"]
+        assert "Similar Past Compositions" in user_message

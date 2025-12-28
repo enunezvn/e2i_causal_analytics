@@ -12,6 +12,7 @@ from src.agents.tool_composer.models.composition_models import (
     ComposedResponse,
     CompositionPhase,
     CompositionResult,
+    CompositionStatus,  # Contract-compliant status enum
     DecompositionResult,
     DependencyType,
     ExecutionPlan,
@@ -50,6 +51,14 @@ class TestEnums:
         assert DependencyType.SEQUENTIAL.value == "sequential"
         assert DependencyType.PARALLEL.value == "parallel"
         assert DependencyType.CONDITIONAL.value == "conditional"
+
+    def test_composition_status_values(self):
+        """Verify CompositionStatus enum values (contract-compliant)"""
+        assert CompositionStatus.SUCCESS.value == "success"
+        assert CompositionStatus.PARTIAL.value == "partial"
+        assert CompositionStatus.FAILED.value == "failed"
+        assert CompositionStatus.TIMEOUT.value == "timeout"
+        assert CompositionStatus.BLOCKED.value == "blocked"
 
 
 class TestSubQuestion:
@@ -394,3 +403,114 @@ class TestCompositionResult:
         assert "sub_questions" in summary
         assert "tools_executed" in summary
         assert "success" in summary
+
+    def test_contract_compliant_fields(
+        self, sample_decomposition, sample_execution_plan, sample_execution_trace
+    ):
+        """Test contract-compliant fields (AgentDispatchResponse compatibility)"""
+        response = ComposedResponse(answer="Test answer", confidence=0.85)
+        result = CompositionResult(
+            query="Test query",
+            session_id="sess_123",
+            query_id="query_456",
+            decomposition=sample_decomposition,
+            plan=sample_execution_plan,
+            execution=sample_execution_trace,
+            response=response,
+            status=CompositionStatus.SUCCESS,
+            errors=[],
+            span_id="span_789",
+            trace_id="trace_abc",
+            training_signals=[{"signal": "test"}],
+        )
+        # Verify contract-compliant fields
+        assert result.session_id == "sess_123"
+        assert result.query_id == "query_456"
+        assert result.agent_name == "tool_composer"
+        assert result.status == CompositionStatus.SUCCESS
+        assert result.errors == []
+        assert result.span_id == "span_789"
+        assert result.trace_id == "trace_abc"
+        assert result.training_signals == [{"signal": "test"}]
+
+    def test_status_partial(
+        self, sample_decomposition, sample_execution_plan, sample_execution_trace
+    ):
+        """Test partial status for mixed success/failure"""
+        response = ComposedResponse(answer="Partial answer", confidence=0.60)
+        result = CompositionResult(
+            query="Test query",
+            decomposition=sample_decomposition,
+            plan=sample_execution_plan,
+            execution=sample_execution_trace,
+            response=response,
+            status=CompositionStatus.PARTIAL,
+            success=False,  # Legacy field
+            errors=["Tool A failed", "Tool B timeout"],
+            error="Some tools failed",  # Legacy field
+        )
+        assert result.status == CompositionStatus.PARTIAL
+        assert result.status.value == "partial"
+        assert len(result.errors) == 2
+        # Backwards compatibility
+        assert result.success is False
+        assert result.error == "Some tools failed"
+
+    def test_to_dispatch_response(
+        self, sample_decomposition, sample_execution_plan, sample_execution_trace
+    ):
+        """Test to_dispatch_response method for contract compliance"""
+        response = ComposedResponse(answer="Test answer", confidence=0.85)
+        result = CompositionResult(
+            query="Test query",
+            session_id="sess_123",
+            query_id="query_456",
+            decomposition=sample_decomposition,
+            plan=sample_execution_plan,
+            execution=sample_execution_trace,
+            response=response,
+            total_duration_ms=1500,
+            phase_durations={"decompose": 100, "plan": 200, "execute": 1000, "synthesize": 200},
+            status=CompositionStatus.SUCCESS,
+            span_id="span_789",
+            trace_id="trace_abc",
+        )
+        dispatch_response = result.to_dispatch_response()
+
+        # Verify AgentDispatchResponse structure
+        assert dispatch_response["dispatch_id"] == result.composition_id
+        assert dispatch_response["session_id"] == "sess_123"
+        assert dispatch_response["query_id"] == "query_456"
+        assert dispatch_response["agent_name"] == "tool_composer"
+        assert dispatch_response["status"] == "success"
+        assert dispatch_response["confidence"] == 0.85
+        assert dispatch_response["latency_ms"] == 1500
+        assert dispatch_response["span_id"] == "span_789"
+        assert dispatch_response["trace_id"] == "trace_abc"
+        assert "agent_result" in dispatch_response
+        assert dispatch_response["agent_result"]["answer"] == "Test answer"
+
+    def test_to_summary_includes_contract_fields(
+        self, sample_decomposition, sample_execution_plan, sample_execution_trace
+    ):
+        """Test that to_summary includes contract-compliant fields"""
+        response = ComposedResponse(answer="Test", confidence=0.85)
+        result = CompositionResult(
+            query="Test query",
+            session_id="sess_123",
+            query_id="query_456",
+            decomposition=sample_decomposition,
+            plan=sample_execution_plan,
+            execution=sample_execution_trace,
+            response=response,
+            status=CompositionStatus.PARTIAL,
+            span_id="span_789",
+            trace_id="trace_abc",
+        )
+        summary = result.to_summary()
+        assert summary["session_id"] == "sess_123"
+        assert summary["query_id"] == "query_456"
+        assert summary["agent_name"] == "tool_composer"
+        assert summary["status"] == "partial"
+        assert summary["span_id"] == "span_789"
+        assert summary["trace_id"] == "trace_abc"

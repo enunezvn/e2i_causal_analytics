@@ -37,6 +37,16 @@ class ExecutionStatus(str, Enum):
     SKIPPED = "skipped"
 
 
+class CompositionStatus(str, Enum):
+    """Contract-compliant status for AgentDispatchResponse compatibility"""
+
+    SUCCESS = "success"
+    PARTIAL = "partial"  # Some tools succeeded, some failed
+    FAILED = "failed"
+    TIMEOUT = "timeout"
+    BLOCKED = "blocked"  # Blocked by dependency or circuit breaker
+
+
 class DependencyType(str, Enum):
     """Type of dependency between execution steps"""
 
@@ -320,9 +330,24 @@ class ComposedResponse(BaseModel):
 
 
 class CompositionResult(BaseModel):
-    """Complete result of a tool composition operation"""
+    """Complete result of a tool composition operation.
+
+    Contract-compliant with AgentDispatchResponse (orchestrator-contracts.md).
+    Maintains backwards compatibility with existing `success` and `error` fields.
+    """
 
     composition_id: str = Field(default_factory=lambda: f"comp_{uuid4().hex[:8]}")
+
+    # Contract-compliant identifiers (AgentDispatchResponse fields)
+    session_id: Optional[str] = Field(
+        default=None, description="Session identifier from dispatch request"
+    )
+    query_id: Optional[str] = Field(
+        default=None, description="Query identifier from dispatch request"
+    )
+    agent_name: str = Field(
+        default="tool_composer", description="Agent identifier for contract compliance"
+    )
 
     # Original query
     query: str
@@ -337,9 +362,33 @@ class CompositionResult(BaseModel):
     total_duration_ms: int = 0
     phase_durations: Dict[str, int] = Field(default_factory=dict)
 
-    # Status
+    # Contract-compliant status (AgentDispatchResponse.status enum)
+    status: CompositionStatus = Field(
+        default=CompositionStatus.SUCCESS,
+        description="Contract-compliant status enum",
+    )
+    # Legacy status field for backwards compatibility
     success: bool = True
+    # Contract-compliant errors list (AgentDispatchResponse.errors)
+    errors: List[str] = Field(
+        default_factory=list, description="List of errors for contract compliance"
+    )
+    # Legacy error field for backwards compatibility
     error: Optional[str] = None
+
+    # Observability fields (Gap G5 - Opik integration)
+    span_id: Optional[str] = Field(
+        default=None, description="Opik span ID for tracing"
+    )
+    trace_id: Optional[str] = Field(
+        default=None, description="Opik trace ID for tracing"
+    )
+
+    # DSPy/GEPA training signals (Gap G4)
+    training_signals: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Training signals for DSPy/GEPA optimization",
+    )
 
     # Timestamps
     started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -349,11 +398,52 @@ class CompositionResult(BaseModel):
         """Generate a summary for logging/observability"""
         return {
             "composition_id": self.composition_id,
+            "session_id": self.session_id,
+            "query_id": self.query_id,
+            "agent_name": self.agent_name,
             "query_length": len(self.query),
             "sub_questions": self.decomposition.question_count,
             "tools_executed": self.execution.tools_executed,
             "tools_succeeded": self.execution.tools_succeeded,
             "total_duration_ms": self.total_duration_ms,
+            "status": self.status.value,
             "success": self.success,
             "confidence": self.response.confidence,
+            "span_id": self.span_id,
+            "trace_id": self.trace_id,
+        }
+
+    def to_dispatch_response(self) -> Dict[str, Any]:
+        """Convert to AgentDispatchResponse-compatible format.
+
+        Maps CompositionResult fields to the contract-defined AgentDispatchResponse
+        structure as specified in orchestrator-contracts.md.
+        """
+        return {
+            "dispatch_id": self.composition_id,
+            "session_id": self.session_id,
+            "query_id": self.query_id,
+            "agent_name": self.agent_name,
+            "status": self.status.value,
+            "agent_result": {
+                "query": self.query,
+                "answer": self.response.answer,
+                "confidence": self.response.confidence,
+                "sub_questions": self.decomposition.question_count,
+                "tools_executed": self.execution.tools_executed,
+                "tools_succeeded": self.execution.tools_succeeded,
+                "phase_durations": self.phase_durations,
+            },
+            "confidence": self.response.confidence,
+            "latency_ms": self.total_duration_ms,
+            "errors": self.errors,
+            "span_id": self.span_id,
+            "trace_id": self.trace_id,
+            "training_signals": self.training_signals,
+            "metadata": {
+                "started_at": self.started_at.isoformat() if self.started_at else None,
+                "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+                "legacy_success": self.success,
+                "legacy_error": self.error,
+            },
         }

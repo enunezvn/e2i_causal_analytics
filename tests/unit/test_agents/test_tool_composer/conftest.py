@@ -13,6 +13,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from src.agents.tool_composer.cache import ToolComposerCacheManager
 from src.agents.tool_composer.models.composition_models import (
     DecompositionResult,
     DependencyType,
@@ -32,6 +33,27 @@ from src.tool_registry.registry import (
     ToolRegistry,
     ToolSchema,
 )
+
+# ============================================================================
+# CACHE RESET FIXTURE (Auto-use to prevent singleton pollution)
+# ============================================================================
+
+
+@pytest.fixture(autouse=True)
+def reset_cache_singleton():
+    """
+    Reset the ToolComposerCacheManager singleton before each test.
+
+    This prevents cache state pollution between parallel tests, which can
+    cause tests expecting errors (like invalid JSON) to instead get cached
+    results from other tests.
+    """
+    # Reset singleton before test
+    ToolComposerCacheManager._instance = None
+    yield
+    # Reset singleton after test (cleanup)
+    ToolComposerCacheManager._instance = None
+
 
 # ============================================================================
 # MOCK LLM CLIENT
