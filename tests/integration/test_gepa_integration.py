@@ -419,7 +419,7 @@ class TestGEPAVocabulary:
         vocab_path = (
             Path(__file__).parent.parent.parent
             / "config"
-            / "domain_vocabulary_v4.2.0.yaml"
+            / "domain_vocabulary.yaml"
         )
 
         if not vocab_path.exists():
