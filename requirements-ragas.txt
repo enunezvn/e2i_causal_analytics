@@ -6,6 +6,7 @@ ragas>=0.2.0
 langchain>=0.3.0
 langchain-openai>=0.3.0
 openai>=1.50.0
+dspy>=2.5.0
 
 # Testing
 pytest>=8.0.0
@@ -17,3 +18,4 @@ numpy>=1.24.0
 # Utilities
 pydantic>=2.0.0
 python-dotenv>=1.0.0
+supabase>=2.0.0
