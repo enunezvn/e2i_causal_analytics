@@ -103,6 +103,30 @@ from src.repositories.drift_monitoring import (
     RetrainingHistoryRepository,
 )
 
+# BentoML Service Tracking (Migration 024)
+from src.repositories.bentoml_service import (
+    BentoMLMetricsRepository,
+    BentoMLService,
+    BentoMLServiceRepository,
+    BentoMLServingMetrics,
+    ServiceHealthStatus,
+    ServiceStatus,
+)
+
+# Feast Feature Store Tracking (Migration 025)
+from src.repositories.feast_tracking import (
+    FeastFeatureFreshness,
+    FeastFeatureView,
+    FeastFeatureViewRepository,
+    FeastFreshnessRepository,
+    FeastMaterializationJob,
+    FeastMaterializationRepository,
+    FreshnessStatus,
+    MaterializationJobType,
+    MaterializationStatus,
+    SourceType,
+)
+
 # Re-export get_supabase_client for convenience
 from src.memory.services.factories import get_supabase_client
 
@@ -167,6 +191,24 @@ __all__ = [
     "PerformanceMetricRepository",
     "RetrainingHistoryRecord",
     "RetrainingHistoryRepository",
+    # BentoML Service Tracking (Migration 024)
+    "BentoMLMetricsRepository",
+    "BentoMLService",
+    "BentoMLServiceRepository",
+    "BentoMLServingMetrics",
+    "ServiceHealthStatus",
+    "ServiceStatus",
+    # Feast Feature Store Tracking (Migration 025)
+    "FeastFeatureFreshness",
+    "FeastFeatureView",
+    "FeastFeatureViewRepository",
+    "FeastFreshnessRepository",
+    "FeastMaterializationJob",
+    "FeastMaterializationRepository",
+    "FreshnessStatus",
+    "MaterializationJobType",
+    "MaterializationStatus",
+    "SourceType",
     # Utilities
     "get_supabase_client",
 ]

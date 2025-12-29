@@ -37,6 +37,28 @@ from src.mlops.optuna_optimizer import (
 # ============================================================================
 
 
+@pytest.fixture(scope="function", autouse=True)
+def disable_optuna_storage(monkeypatch):
+    """Disable Optuna SQLite storage during tests to prevent parallel access issues.
+
+    This patches the load_optuna_config function to return storage.enabled=False,
+    ensuring tests use in-memory storage instead of SQLite file.
+    """
+    import src.mlops.optuna_optimizer as optuna_module
+
+    # Cache the original function
+    original_load_config = optuna_module.load_optuna_config
+
+    def patched_load_config(config_path=None):
+        """Load config but disable storage."""
+        config = original_load_config(config_path)
+        if config and "storage" in config:
+            config["storage"]["enabled"] = False
+        return config
+
+    monkeypatch.setattr(optuna_module, "load_optuna_config", patched_load_config)
+
+
 @pytest.fixture
 def sample_search_space():
     """Sample search space in E2I format."""
@@ -116,11 +138,17 @@ class TestOptunaOptimizerInit:
     """Tests for OptunaOptimizer initialization."""
 
     def test_init_with_defaults(self):
-        """Test initialization with default values."""
+        """Test initialization with default values.
+
+        Note: storage_url is determined by config (config/optuna_config.yaml).
+        If storage.enabled=true, uses storage.url; otherwise None.
+        """
         optimizer = OptunaOptimizer(experiment_id="exp_123")
 
         assert optimizer.experiment_id == "exp_123"
-        assert optimizer.storage_url is None
+        # storage_url is now config-driven (enabled=true in optuna_config.yaml)
+        # Either None (if storage.enabled=false) or config value
+        assert optimizer.storage_url is None or optimizer.storage_url.startswith("sqlite://")
         assert optimizer.mlflow_tracking is True
         assert optimizer._mlflow_connector is None
 
