@@ -3,19 +3,22 @@
 This module provides a unified interface for hyperparameter optimization
 using Optuna with MLflow integration and database storage.
 
-Version: 1.0.0
+Version: 1.1.0
 """
 
 import asyncio
 import logging
+import os
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import optuna
-from optuna.pruners import MedianPruner, SuccessiveHalvingPruner
-from optuna.samplers import TPESampler
+import yaml
+from optuna.pruners import HyperbandPruner, MedianPruner, SuccessiveHalvingPruner
+from optuna.samplers import CmaEsSampler, GridSampler, RandomSampler, TPESampler
 from sklearn.metrics import (
     accuracy_score,
     f1_score,
@@ -29,6 +32,78 @@ from sklearn.metrics import (
 from sklearn.model_selection import cross_val_score
 
 logger = logging.getLogger(__name__)
+
+# Default config path
+DEFAULT_CONFIG_PATH = Path(__file__).parent.parent.parent / "config" / "optuna_config.yaml"
+
+
+def load_optuna_config(config_path: Optional[Path] = None) -> Dict[str, Any]:
+    """Load Optuna configuration from YAML file.
+
+    Args:
+        config_path: Path to config file. If None, uses default path.
+
+    Returns:
+        Configuration dictionary with defaults for missing values.
+    """
+    path = config_path or DEFAULT_CONFIG_PATH
+
+    # Default configuration
+    defaults = {
+        "storage": {"enabled": False, "url": None},
+        "sampler": {
+            "type": "tpe",
+            "tpe": {"seed": 42, "n_startup_trials": 10, "multivariate": True},
+        },
+        "pruner": {
+            "type": "median",
+            "median": {"n_startup_trials": 5, "n_warmup_steps": 10, "interval_steps": 1},
+        },
+        "optimization": {"default_n_trials": 50, "default_timeout": None, "n_jobs": 1},
+        "warmstart": {"enabled": True, "min_similarity": 0.7},
+        "mlflow": {"enabled": True},
+        "opik": {"enabled": True},
+    }
+
+    if path.exists():
+        try:
+            with open(path) as f:
+                config = yaml.safe_load(f) or {}
+
+            # Expand environment variables in storage URL
+            if "storage" in config and "url" in config["storage"]:
+                url = config["storage"]["url"]
+                if url and "${" in url:
+                    # Handle ${VAR:-default} syntax
+                    import re
+
+                    def expand_env(match):
+                        var_expr = match.group(1)
+                        if ":-" in var_expr:
+                            var_name, default = var_expr.split(":-", 1)
+                            return os.environ.get(var_name, default)
+                        return os.environ.get(var_expr, "")
+
+                    config["storage"]["url"] = re.sub(r"\$\{([^}]+)\}", expand_env, url)
+
+            # Merge with defaults
+            for key, value in defaults.items():
+                if key not in config:
+                    config[key] = value
+                elif isinstance(value, dict):
+                    for subkey, subvalue in value.items():
+                        if subkey not in config[key]:
+                            config[key][subkey] = subvalue
+
+            logger.info(f"Loaded Optuna config from {path}")
+            return config
+
+        except Exception as e:
+            logger.warning(f"Failed to load config from {path}: {e}, using defaults")
+            return defaults
+    else:
+        logger.debug(f"Config file not found at {path}, using defaults")
+        return defaults
 
 
 class OptunaOptimizer:
@@ -56,20 +131,45 @@ class OptunaOptimizer:
         self,
         experiment_id: str,
         storage_url: Optional[str] = None,
-        mlflow_tracking: bool = True,
+        mlflow_tracking: Optional[bool] = None,
+        config_path: Optional[Path] = None,
+        use_config: bool = True,
     ):
         """Initialize OptunaOptimizer.
 
         Args:
             experiment_id: E2I experiment ID for tracking
             storage_url: Optuna storage URL (e.g., "sqlite:///optuna.db")
-                        If None, uses in-memory storage
-            mlflow_tracking: Whether to log trials to MLflow
+                        If None, uses config or in-memory storage
+            mlflow_tracking: Whether to log trials to MLflow. If None, uses config.
+            config_path: Path to configuration file. If None, uses default.
+            use_config: Whether to load settings from config file.
         """
         self.experiment_id = experiment_id
-        self.storage_url = storage_url
-        self.mlflow_tracking = mlflow_tracking
+
+        # Load configuration
+        self._config = load_optuna_config(config_path) if use_config else {}
+
+        # Resolve storage URL (explicit > config > None)
+        if storage_url is not None:
+            self.storage_url = storage_url
+        elif self._config.get("storage", {}).get("enabled", False):
+            self.storage_url = self._config.get("storage", {}).get("url")
+        else:
+            self.storage_url = None
+
+        # Resolve MLflow tracking (explicit > config > True)
+        if mlflow_tracking is not None:
+            self.mlflow_tracking = mlflow_tracking
+        else:
+            self.mlflow_tracking = self._config.get("mlflow", {}).get("enabled", True)
+
         self._mlflow_connector = None
+
+    @property
+    def config(self) -> Dict[str, Any]:
+        """Return the loaded configuration."""
+        return self._config
 
     @property
     def mlflow_connector(self):
@@ -84,6 +184,58 @@ class OptunaOptimizer:
                 self.mlflow_tracking = False
         return self._mlflow_connector
 
+    def _create_sampler_from_config(self) -> optuna.samplers.BaseSampler:
+        """Create sampler based on configuration."""
+        sampler_config = self._config.get("sampler", {})
+        sampler_type = sampler_config.get("type", "tpe").lower()
+
+        if sampler_type == "tpe":
+            tpe_config = sampler_config.get("tpe", {})
+            return TPESampler(
+                seed=tpe_config.get("seed", 42),
+                n_startup_trials=tpe_config.get("n_startup_trials", 10),
+                multivariate=tpe_config.get("multivariate", True),
+            )
+        elif sampler_type == "random":
+            return RandomSampler(seed=sampler_config.get("seed", 42))
+        elif sampler_type == "cmaes":
+            return CmaEsSampler(seed=sampler_config.get("seed", 42))
+        else:
+            logger.warning(f"Unknown sampler type '{sampler_type}', using TPESampler")
+            return TPESampler(seed=42, n_startup_trials=10, multivariate=True)
+
+    def _create_pruner_from_config(self) -> optuna.pruners.BasePruner:
+        """Create pruner based on configuration."""
+        pruner_config = self._config.get("pruner", {})
+        pruner_type = pruner_config.get("type", "median").lower()
+
+        if pruner_type == "median":
+            median_config = pruner_config.get("median", {})
+            return MedianPruner(
+                n_startup_trials=median_config.get("n_startup_trials", 5),
+                n_warmup_steps=median_config.get("n_warmup_steps", 10),
+                interval_steps=median_config.get("interval_steps", 1),
+            )
+        elif pruner_type == "successive_halving":
+            sh_config = pruner_config.get("successive_halving", {})
+            return SuccessiveHalvingPruner(
+                min_resource=sh_config.get("min_resource", 1),
+                reduction_factor=sh_config.get("reduction_factor", 3),
+                min_early_stopping_rate=sh_config.get("min_early_stopping_rate", 0),
+            )
+        elif pruner_type == "hyperband":
+            hb_config = pruner_config.get("hyperband", {})
+            return HyperbandPruner(
+                min_resource=hb_config.get("min_resource", 1),
+                max_resource=hb_config.get("max_resource", 100),
+                reduction_factor=hb_config.get("reduction_factor", 3),
+            )
+        elif pruner_type == "none":
+            return optuna.pruners.NopPruner()
+        else:
+            logger.warning(f"Unknown pruner type '{pruner_type}', using MedianPruner")
+            return MedianPruner(n_startup_trials=5, n_warmup_steps=10, interval_steps=1)
+
     async def create_study(
         self,
         study_name: str,
@@ -97,28 +249,20 @@ class OptunaOptimizer:
         Args:
             study_name: Unique study identifier
             direction: "minimize" or "maximize"
-            sampler: Optuna sampler (default: TPESampler)
-            pruner: Optuna pruner (default: MedianPruner)
+            sampler: Optuna sampler (default: from config or TPESampler)
+            pruner: Optuna pruner (default: from config or MedianPruner)
             load_if_exists: Load existing study if it exists
 
         Returns:
             Optuna Study object
         """
-        # Default sampler: Tree-structured Parzen Estimator
+        # Create sampler from config if not provided
         if sampler is None:
-            sampler = TPESampler(
-                seed=42,
-                n_startup_trials=10,
-                multivariate=True,
-            )
+            sampler = self._create_sampler_from_config()
 
-        # Default pruner: Median pruner for early stopping
+        # Create pruner from config if not provided
         if pruner is None:
-            pruner = MedianPruner(
-                n_startup_trials=5,
-                n_warmup_steps=10,
-                interval_steps=1,
-            )
+            pruner = self._create_pruner_from_config()
 
         # Build full study name with experiment context
         full_study_name = f"e2i_{self.experiment_id}_{study_name}"

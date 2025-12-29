@@ -23,16 +23,31 @@ import asyncio
 import logging
 import os
 from datetime import datetime, timedelta
+from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 import pandas as pd
+import yaml
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
 # Feature repo path - relative to project root
 FEATURE_REPO_PATH = Path(__file__).parent.parent.parent / "feature_repo"
+
+# Config path
+FEAST_CONFIG_PATH = Path(__file__).parent.parent.parent / "config" / "feast_materialization.yaml"
+
+
+class FreshnessStatus(str, Enum):
+    """Feature freshness status levels."""
+
+    FRESH = "fresh"
+    WARNING = "warning"
+    STALE = "stale"
+    EXPIRED = "expired"
+    UNKNOWN = "unknown"
 
 
 class FeastConfig(BaseModel):
@@ -57,6 +72,51 @@ class FeatureStatistics(BaseModel):
     mean_value: Optional[float] = None
     stddev_value: Optional[float] = None
     last_updated: datetime
+
+
+class FeatureFreshness(BaseModel):
+    """Feature freshness information for a feature view."""
+
+    feature_view: str
+    last_materialized: Optional[datetime] = None
+    freshness_status: FreshnessStatus = FreshnessStatus.UNKNOWN
+    age_hours: Optional[float] = None
+    ttl_hours: Optional[float] = None
+    max_staleness_hours: float = 24.0
+    warning_threshold_hours: Optional[float] = None
+    is_fresh: bool = False
+    message: Optional[str] = None
+
+
+def load_feast_config(config_path: Optional[Path] = None) -> Dict[str, Any]:
+    """Load Feast materialization configuration from YAML file.
+
+    Args:
+        config_path: Path to config file. Uses default if not provided.
+
+    Returns:
+        Dictionary with Feast configuration.
+    """
+    path = config_path or FEAST_CONFIG_PATH
+
+    if not path.exists():
+        logger.warning(f"Feast config not found at {path}. Using defaults.")
+        return {
+            "materialization": {
+                "max_staleness_hours": 24.0,
+            },
+            "feature_views": {},
+            "alerting": {"enabled": True},
+        }
+
+    try:
+        with open(path) as f:
+            config = yaml.safe_load(f)
+            logger.debug(f"Loaded Feast config from {path}")
+            return config or {}
+    except Exception as e:
+        logger.error(f"Error loading Feast config: {e}")
+        return {}
 
 
 class FeastClient:
@@ -84,11 +144,16 @@ class FeastClient:
         )
     """
 
-    def __init__(self, config: Optional[FeastConfig] = None):
+    def __init__(
+        self,
+        config: Optional[FeastConfig] = None,
+        materialization_config_path: Optional[Path] = None,
+    ):
         """Initialize Feast client.
 
         Args:
             config: Optional configuration. Uses defaults if not provided.
+            materialization_config_path: Optional path to materialization config.
         """
         self.config = config or FeastConfig()
         self._store = None
@@ -96,6 +161,12 @@ class FeastClient:
         self._custom_store = None  # Fallback custom store
         self._stats_cache: Dict[str, FeatureStatistics] = {}
         self._stats_cache_time: Dict[str, datetime] = {}
+
+        # Load materialization config for freshness thresholds
+        self._materialization_config = load_feast_config(materialization_config_path)
+
+        # Track last materialization timestamps per feature view
+        self._materialization_timestamps: Dict[str, datetime] = {}
 
     async def initialize(self) -> None:
         """Initialize Feast store connection.
@@ -398,8 +469,13 @@ class FeastClient:
                 f"Views: {feature_views or 'all'}"
             )
 
+            # Track materialization timestamps
+            materialized_views = feature_views or self._get_all_feature_view_names()
+            for view_name in materialized_views:
+                self._materialization_timestamps[view_name] = datetime.now()
+
             return {
-                "feature_views": feature_views or ["all"],
+                "feature_views": materialized_views,
                 "start_date": start_date.isoformat(),
                 "end_date": end_date.isoformat(),
                 "duration_seconds": duration,
@@ -450,8 +526,13 @@ class FeastClient:
 
             duration = (datetime.now() - start_time).total_seconds()
 
+            # Track materialization timestamps
+            materialized_views = feature_views or self._get_all_feature_view_names()
+            for view_name in materialized_views:
+                self._materialization_timestamps[view_name] = datetime.now()
+
             return {
-                "feature_views": feature_views or ["all"],
+                "feature_views": materialized_views,
                 "end_date": end_date.isoformat(),
                 "duration_seconds": duration,
                 "status": "completed",
@@ -461,6 +542,53 @@ class FeastClient:
         except Exception as e:
             logger.error(f"Incremental materialization failed: {e}")
             return {"status": "failed", "error": str(e)}
+
+    def _get_all_feature_view_names(self) -> List[str]:
+        """Get all registered feature view names from config or store."""
+        # First check config
+        feature_views_config = self._materialization_config.get("feature_views", {})
+        if feature_views_config:
+            return list(feature_views_config.keys())
+
+        # Fall back to store
+        if self._store:
+            try:
+                return [fv.name for fv in self._store.list_feature_views()]
+            except Exception:
+                pass
+
+        return []
+
+    def _get_freshness_thresholds(
+        self, feature_view: str
+    ) -> tuple[float, float]:
+        """Get freshness thresholds for a feature view.
+
+        Args:
+            feature_view: Name of the feature view.
+
+        Returns:
+            Tuple of (max_staleness_hours, warning_threshold_hours).
+        """
+        # Check for view-specific config
+        view_config = self._materialization_config.get("feature_views", {}).get(
+            feature_view, {}
+        )
+        global_config = self._materialization_config.get("materialization", {})
+
+        # Get max staleness (view-specific or global default)
+        max_staleness = view_config.get(
+            "max_staleness_hours",
+            global_config.get("max_staleness_hours", 24.0),
+        )
+
+        # Warning threshold is typically 50% of max staleness
+        warning_threshold = view_config.get(
+            "warning_threshold_hours",
+            max_staleness * 0.5,
+        )
+
+        return float(max_staleness), float(warning_threshold)
 
     async def get_feature_statistics(
         self,
@@ -577,30 +705,117 @@ class FeastClient:
     async def get_feature_freshness(
         self,
         feature_view: str,
-    ) -> Dict[str, Any]:
+    ) -> FeatureFreshness:
         """Check feature freshness for a feature view.
+
+        Determines freshness based on:
+        1. Time since last materialization
+        2. Configured staleness thresholds
+
+        Status levels:
+        - FRESH: Within warning threshold
+        - WARNING: Between warning and max staleness
+        - STALE: Beyond max staleness but within 2x
+        - EXPIRED: Beyond 2x max staleness
+        - UNKNOWN: No materialization record
 
         Args:
             feature_view: Name of the feature view.
 
         Returns:
-            Dictionary with freshness information:
-            - feature_view: Name
-            - last_materialized: Timestamp of last materialization
-            - freshness_status: 'fresh', 'stale', or 'expired'
-            - ttl_seconds: TTL in seconds
+            FeatureFreshness object with status and timing info.
         """
         await self.initialize()
         self._ensure_initialized()
 
-        # This would require tracking materialization timestamps
-        # For now, return placeholder
-        return {
-            "feature_view": feature_view,
-            "last_materialized": None,
-            "freshness_status": "unknown",
-            "ttl_seconds": None,
-        }
+        # Get thresholds from config
+        max_staleness_hours, warning_threshold_hours = self._get_freshness_thresholds(
+            feature_view
+        )
+
+        # Get last materialization time
+        last_materialized = self._materialization_timestamps.get(feature_view)
+
+        # Calculate age and determine status
+        if last_materialized is None:
+            return FeatureFreshness(
+                feature_view=feature_view,
+                last_materialized=None,
+                freshness_status=FreshnessStatus.UNKNOWN,
+                age_hours=None,
+                max_staleness_hours=max_staleness_hours,
+                warning_threshold_hours=warning_threshold_hours,
+                is_fresh=False,
+                message="No materialization record found",
+            )
+
+        # Calculate age in hours
+        age_seconds = (datetime.now() - last_materialized).total_seconds()
+        age_hours = age_seconds / 3600.0
+
+        # Determine status
+        if age_hours <= warning_threshold_hours:
+            status = FreshnessStatus.FRESH
+            is_fresh = True
+            message = f"Features are fresh (age: {age_hours:.1f}h)"
+        elif age_hours <= max_staleness_hours:
+            status = FreshnessStatus.WARNING
+            is_fresh = True
+            message = f"Features approaching staleness (age: {age_hours:.1f}h, max: {max_staleness_hours:.1f}h)"
+        elif age_hours <= max_staleness_hours * 2:
+            status = FreshnessStatus.STALE
+            is_fresh = False
+            message = f"Features are stale (age: {age_hours:.1f}h, max: {max_staleness_hours:.1f}h)"
+        else:
+            status = FreshnessStatus.EXPIRED
+            is_fresh = False
+            message = f"Features are expired (age: {age_hours:.1f}h, max: {max_staleness_hours:.1f}h)"
+
+        return FeatureFreshness(
+            feature_view=feature_view,
+            last_materialized=last_materialized,
+            freshness_status=status,
+            age_hours=age_hours,
+            max_staleness_hours=max_staleness_hours,
+            warning_threshold_hours=warning_threshold_hours,
+            is_fresh=is_fresh,
+            message=message,
+        )
+
+    async def get_all_freshness(self) -> Dict[str, FeatureFreshness]:
+        """Get freshness status for all tracked feature views.
+
+        Returns:
+            Dictionary mapping feature view names to freshness status.
+        """
+        await self.initialize()
+
+        result = {}
+
+        # Get all known feature views
+        feature_views = self._get_all_feature_view_names()
+
+        # Also include any views we've tracked materialization for
+        for view_name in set(list(feature_views) + list(self._materialization_timestamps.keys())):
+            result[view_name] = await self.get_feature_freshness(view_name)
+
+        return result
+
+    def record_materialization(
+        self,
+        feature_view: str,
+        timestamp: Optional[datetime] = None,
+    ) -> None:
+        """Manually record a materialization timestamp.
+
+        Useful for external materialization tracking or testing.
+
+        Args:
+            feature_view: Name of the feature view.
+            timestamp: Materialization timestamp (defaults to now).
+        """
+        self._materialization_timestamps[feature_view] = timestamp or datetime.now()
+        logger.debug(f"Recorded materialization for {feature_view}")
 
     async def apply(self) -> bool:
         """Apply feature definitions to the registry.
@@ -631,6 +846,7 @@ class FeastClient:
         self._initialized = False
         self._stats_cache.clear()
         self._stats_cache_time.clear()
+        self._materialization_timestamps.clear()
         logger.info("Feast client closed")
 
 
