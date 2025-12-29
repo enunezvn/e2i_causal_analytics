@@ -61,6 +61,27 @@ class IntentClassification(TypedDict, total=False):
     requires_multi_agent: bool
 
 
+class LibraryRoutingDecision(TypedDict, total=False):
+    """Multi-library routing decision from pipeline router.
+
+    B7.4: Multi-Library Support
+    Routes causal queries to appropriate library based on question type.
+    """
+
+    primary_library: Literal["networkx", "dowhy", "econml", "causalml"]
+    secondary_libraries: List[str]
+    execution_mode: Literal["sequential", "parallel"]
+    routing_confidence: float
+    question_type: Literal[
+        "causal_relationship",  # "Does X cause Y?" → DoWhy
+        "effect_heterogeneity",  # "How does effect vary?" → EconML
+        "targeting",  # "Who should we target?" → CausalML
+        "system_analysis",  # "How does impact flow?" → NetworkX
+        "comprehensive",  # All four libraries
+    ]
+    routing_rationale: str
+
+
 class AgentDispatch(TypedDict, total=False):
     """Agent dispatch specification."""
 
@@ -144,6 +165,16 @@ class OrchestratorState(TypedDict, total=False):
 
     # Timing
     routing_latency_ms: int
+
+    # ========================================================================
+    # NODE 2.5 OUTPUT: Library Routing (B7.4 Multi-Library Support)
+    # ========================================================================
+
+    # Library routing for causal queries
+    library_routing: Optional[LibraryRoutingDecision]
+    libraries_to_execute: Optional[List[str]]  # Ordered library execution plan
+    library_execution_mode: Optional[Literal["sequential", "parallel"]]
+    library_routing_latency_ms: int
 
     # ========================================================================
     # NODE 3 OUTPUT: Dispatching

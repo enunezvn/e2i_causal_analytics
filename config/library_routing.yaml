@@ -1,0 +1,140 @@
+# Library Routing Configuration
+# Reference: docs/E2I Causal Analytics KPI Framework.html
+# Reference: docs/Data Architecture & Integration.html
+
+# Library Selection Decision Matrix
+library_selection:
+  # "Does X cause Y?" → DoWhy
+  causal_relationship:
+    primary: dowhy
+    secondary: [networkx]
+    capabilities:
+      - causal_identification
+      - effect_estimation
+      - refutation_testing
+    use_cases:
+      - "Validating causal relationships"
+      - "Controlling for confounders"
+      - "Sensitivity analysis"
+
+  # "How much does effect vary?" → EconML
+  effect_heterogeneity:
+    primary: econml
+    secondary: [causalml]
+    capabilities:
+      - cate_estimation
+      - heterogeneity_analysis
+      - policy_learning
+    use_cases:
+      - "Heterogeneous treatment effects"
+      - "Segment optimization"
+      - "CATE estimation"
+
+  # "Who should we target?" → CausalML
+  targeting_optimization:
+    primary: causalml
+    secondary: [econml]
+    capabilities:
+      - uplift_modeling
+      - targeting_optimization
+      - segment_ranking
+    use_cases:
+      - "Marketing optimization"
+      - "Uplift modeling"
+      - "Engagement targeting"
+
+  # "How does impact flow?" → NetworkX
+  impact_flow:
+    primary: networkx
+    secondary: [dowhy]
+    capabilities:
+      - graph_construction
+      - path_analysis
+      - centrality_metrics
+    use_cases:
+      - "System dependencies"
+      - "Multiplier effects"
+      - "Bottleneck identification"
+
+# Data Flow Integration Patterns
+integration_patterns:
+  # Pattern 1: Sequential Pipeline
+  sequential:
+    name: "End-to-End Optimization"
+    flow: [networkx, dowhy, econml, causalml]
+    description: "Full causal analysis pipeline"
+    use_case: "Comprehensive analysis from graph discovery to targeting"
+
+  # Pattern 2: Parallel Analysis
+  parallel:
+    name: "Parallel Analysis"
+    libraries: [networkx, dowhy, econml, causalml]
+    description: "All libraries run simultaneously"
+    use_case: "Quick comprehensive insights with consensus"
+    aggregation: "confidence_weighted"
+
+  # Pattern 3: Validation Loop
+  validation_loop:
+    name: "Validated Experiments"
+    libraries: [dowhy, causalml]
+    description: "Cross-validation between libraries"
+    use_case: "Ensure causal estimates are robust"
+    min_agreement: 0.85
+
+  # Pattern 4: Hierarchical Nesting
+  hierarchical:
+    name: "Hierarchical Nesting"
+    outer: causalml
+    inner: econml
+    description: "EconML CATE within CausalML segments"
+    use_case: "Granular effects within targeting segments"
+
+# Multi-Library Synergy Patterns
+synergy_patterns:
+  end_to_end:
+    name: "End-to-End Optimization"
+    libraries: [networkx, dowhy, econml, causalml]
+    mode: sequential
+    description: "Full pipeline for comprehensive analysis"
+
+  fairness_aware:
+    name: "Fairness-Aware Targeting"
+    libraries: [econml, causalml]
+    mode: parallel
+    description: "Combine CATE with uplift for fair targeting"
+
+  validated_experiments:
+    name: "Validated Experiments"
+    libraries: [dowhy, causalml]
+    mode: validation_loop
+    description: "Cross-validate causal estimates with uplift"
+
+  bottleneck_analysis:
+    name: "System Bottleneck Analysis"
+    libraries: [networkx, dowhy]
+    mode: sequential
+    description: "Graph analysis followed by causal validation"
+
+# Execution Settings
+execution:
+  # Timeouts (milliseconds)
+  stage_timeout_ms: 30000
+  total_timeout_ms: 120000
+
+  # Parallel execution
+  max_parallel_libraries: 4
+  fail_fast: false
+
+  # Validation settings
+  cross_validate_default: true
+  min_agreement_threshold: 0.85
+
+  # Caching
+  cache_results: true
+  cache_ttl_seconds: 3600
+
+# Logging
+logging:
+  log_routing_decisions: true
+  log_library_results: true
+  log_aggregation: true

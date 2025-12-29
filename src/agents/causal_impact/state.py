@@ -209,6 +209,44 @@ class CausalImpactState(TypedDict):
     best_energy_score: NotRequired[float]  # Best estimator's energy score
     energy_score_quality_tier: NotRequired[Literal["excellent", "good", "acceptable", "poor", "unreliable"]]
 
+    # ========================================================================
+    # B7.4: Multi-Library Support (NetworkX → DoWhy → EconML → CausalML)
+    # ========================================================================
+
+    # Library execution plan
+    library_execution_plan: NotRequired[List[str]]  # Ordered libraries: ["networkx", "dowhy", "econml", "causalml"]
+    library_execution_mode: NotRequired[Literal["sequential", "parallel"]]  # How to execute libraries
+    primary_library: NotRequired[Literal["networkx", "dowhy", "econml", "causalml"]]  # Main library for question type
+    libraries_executed: NotRequired[List[str]]  # Actually executed libraries
+    libraries_skipped: NotRequired[List[str]]  # Skipped due to validation or errors
+
+    # NetworkX integration (graph structure analysis)
+    networkx_graph_result: NotRequired[Dict[str, Any]]  # Graph analysis from NetworkX
+    networkx_latency_ms: NotRequired[float]
+    networkx_enabled: NotRequired[bool]  # Whether to use NetworkX for graph analysis
+
+    # CausalML validation loop capability
+    causalml_validation_enabled: NotRequired[bool]  # Enable DoWhy ↔ CausalML cross-validation
+    causalml_uplift_result: NotRequired[Dict[str, Any]]  # Uplift model results from CausalML
+    causalml_latency_ms: NotRequired[float]
+    causalml_validation_agreement: NotRequired[float]  # Agreement between DoWhy and CausalML (0-1)
+
+    # Cross-library validation
+    cross_library_validation: NotRequired[Dict[str, Any]]  # Validation results between libraries
+    library_agreement_score: NotRequired[float]  # Overall agreement between libraries (0-1)
+    library_consensus_effect: NotRequired[float]  # Confidence-weighted consensus effect estimate
+
+    # Multi-library routing metadata
+    question_type: NotRequired[Literal[
+        "causal_relationship",  # "Does X cause Y?" → DoWhy primary
+        "effect_heterogeneity",  # "How does effect vary?" → EconML primary
+        "targeting",  # "Who should we target?" → CausalML primary
+        "system_analysis",  # "How does impact flow?" → NetworkX primary
+        "comprehensive",  # All four libraries
+    ]]
+    routing_confidence: NotRequired[float]  # Confidence in library routing decision
+    routing_rationale: NotRequired[str]  # Why this library routing was chosen
+
     # Refutation outputs
     refutation_results: NotRequired[RefutationResults]
     refutation_latency_ms: NotRequired[float]
@@ -341,6 +379,15 @@ class CausalImpactOutput(TypedDict):
     n_estimators_evaluated: NotRequired[int]  # Number of estimators tried
     n_estimators_succeeded: NotRequired[int]  # Number that succeeded
     energy_score_latency_ms: NotRequired[float]  # Energy score computation time
+
+    # B7.4: Multi-Library Support Output
+    libraries_used: NotRequired[List[str]]  # Libraries that were executed
+    library_execution_mode: NotRequired[Literal["sequential", "parallel"]]  # How libraries were executed
+    primary_library: NotRequired[str]  # Main library used for the question type
+    library_agreement_score: NotRequired[float]  # Agreement between libraries (0-1)
+    library_consensus_effect: NotRequired[float]  # Confidence-weighted consensus effect
+    cross_library_validation: NotRequired[Dict[str, Any]]  # Cross-library validation results
+    question_type: NotRequired[str]  # Type of question that determined routing
 
     # Visualizations (optional)
     visualizations: NotRequired[List[Dict[str, Any]]]

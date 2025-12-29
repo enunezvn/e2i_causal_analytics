@@ -15,6 +15,7 @@ Available Routes:
 - experiments: A/B testing execution & monitoring (Phase 15)
 - digital_twin: Digital Twin pre-screening & fidelity tracking (Phase 15)
 - predictions: BentoML model prediction endpoints
+- kpi: KPI calculation and management endpoints (Phase A5)
 
 Author: E2I Causal Analytics Team
 """

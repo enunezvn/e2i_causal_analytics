@@ -540,11 +540,409 @@ class OLSWrapper(BaseEstimatorWrapper):
             )
 
 
+class SLearnerWrapper(BaseEstimatorWrapper):
+    """
+    S-Learner (Single-model Learner) for heterogeneous treatment effects.
+
+    Trains a single model on both treatment and control groups,
+    including treatment as a feature. CATE is estimated as the
+    difference in predictions when treatment is set to 1 vs 0.
+
+    Pros: Simple, works with any base learner
+    Cons: May underestimate treatment effect heterogeneity
+    """
+
+    def __init__(self, config: EstimatorConfig):
+        self.config = config
+
+    @property
+    def estimator_type(self) -> EstimatorType:
+        return EstimatorType.S_LEARNER
+
+    def fit(
+        self,
+        treatment: NDArray[np.int_],
+        outcome: NDArray[np.float64],
+        covariates: pd.DataFrame,
+        **kwargs
+    ) -> EstimatorResult:
+        import time
+        start = time.perf_counter()
+
+        try:
+            from sklearn.ensemble import GradientBoostingRegressor
+
+            X = covariates.values
+            # Include treatment as feature
+            X_with_treatment = np.column_stack([treatment, X])
+
+            # Train single model
+            base_learner = self.config.params.get("base_learner", None)
+            if base_learner is None:
+                base_learner = GradientBoostingRegressor(
+                    n_estimators=self.config.params.get("n_estimators", 100),
+                    max_depth=self.config.params.get("max_depth", 5),
+                    random_state=self.config.params.get("random_state", 42),
+                )
+
+            base_learner.fit(X_with_treatment, outcome)
+
+            # Estimate CATE: E[Y|X, T=1] - E[Y|X, T=0]
+            X_treat_1 = np.column_stack([np.ones(len(X)), X])
+            X_treat_0 = np.column_stack([np.zeros(len(X)), X])
+            cate = base_learner.predict(X_treat_1) - base_learner.predict(X_treat_0)
+
+            ate = float(np.mean(cate))
+            ate_std = float(np.std(cate) / np.sqrt(len(cate)))
+            ate_ci_lower = ate - 1.96 * ate_std
+            ate_ci_upper = ate + 1.96 * ate_std
+
+            # Propensity scores
+            from sklearn.linear_model import LogisticRegressionCV
+            ps_model = LogisticRegressionCV(cv=3, max_iter=500)
+            ps_model.fit(X, treatment)
+            propensity_scores = ps_model.predict_proba(X)[:, 1]
+
+            elapsed = (time.perf_counter() - start) * 1000
+
+            return EstimatorResult(
+                estimator_type=self.estimator_type,
+                success=True,
+                ate=ate,
+                cate=cate,
+                ate_std=ate_std,
+                ate_ci_lower=ate_ci_lower,
+                ate_ci_upper=ate_ci_upper,
+                propensity_scores=propensity_scores,
+                estimation_time_ms=elapsed,
+                raw_estimate=base_learner,
+            )
+
+        except Exception as e:
+            elapsed = (time.perf_counter() - start) * 1000
+            logger.warning(f"S-Learner failed: {e}")
+            return EstimatorResult(
+                estimator_type=self.estimator_type,
+                success=False,
+                error_message=str(e),
+                error_type=type(e).__name__,
+                estimation_time_ms=elapsed,
+            )
+
+
+class TLearnerWrapper(BaseEstimatorWrapper):
+    """
+    T-Learner (Two-model Learner) for heterogeneous treatment effects.
+
+    Trains separate models for treatment and control groups.
+    CATE is estimated as the difference in predictions.
+
+    Pros: Captures heterogeneity well when treatment effects vary
+    Cons: May have high variance with small sample sizes
+    """
+
+    def __init__(self, config: EstimatorConfig):
+        self.config = config
+
+    @property
+    def estimator_type(self) -> EstimatorType:
+        return EstimatorType.T_LEARNER
+
+    def fit(
+        self,
+        treatment: NDArray[np.int_],
+        outcome: NDArray[np.float64],
+        covariates: pd.DataFrame,
+        **kwargs
+    ) -> EstimatorResult:
+        import time
+        start = time.perf_counter()
+
+        try:
+            from sklearn.ensemble import GradientBoostingRegressor
+
+            X = covariates.values
+
+            # Split by treatment
+            X_1 = X[treatment == 1]
+            X_0 = X[treatment == 0]
+            Y_1 = outcome[treatment == 1]
+            Y_0 = outcome[treatment == 0]
+
+            # Base learner configuration
+            base_params = {
+                "n_estimators": self.config.params.get("n_estimators", 100),
+                "max_depth": self.config.params.get("max_depth", 5),
+                "random_state": self.config.params.get("random_state", 42),
+            }
+
+            # Train separate models
+            model_1 = GradientBoostingRegressor(**base_params)
+            model_0 = GradientBoostingRegressor(**base_params)
+            model_1.fit(X_1, Y_1)
+            model_0.fit(X_0, Y_0)
+
+            # Estimate CATE: μ1(X) - μ0(X)
+            cate = model_1.predict(X) - model_0.predict(X)
+
+            ate = float(np.mean(cate))
+            ate_std = float(np.std(cate) / np.sqrt(len(cate)))
+            ate_ci_lower = ate - 1.96 * ate_std
+            ate_ci_upper = ate + 1.96 * ate_std
+
+            # Propensity scores
+            from sklearn.linear_model import LogisticRegressionCV
+            ps_model = LogisticRegressionCV(cv=3, max_iter=500)
+            ps_model.fit(X, treatment)
+            propensity_scores = ps_model.predict_proba(X)[:, 1]
+
+            elapsed = (time.perf_counter() - start) * 1000
+
+            return EstimatorResult(
+                estimator_type=self.estimator_type,
+                success=True,
+                ate=ate,
+                cate=cate,
+                ate_std=ate_std,
+                ate_ci_lower=ate_ci_lower,
+                ate_ci_upper=ate_ci_upper,
+                propensity_scores=propensity_scores,
+                estimation_time_ms=elapsed,
+                raw_estimate={"model_1": model_1, "model_0": model_0},
+            )
+
+        except Exception as e:
+            elapsed = (time.perf_counter() - start) * 1000
+            logger.warning(f"T-Learner failed: {e}")
+            return EstimatorResult(
+                estimator_type=self.estimator_type,
+                success=False,
+                error_message=str(e),
+                error_type=type(e).__name__,
+                estimation_time_ms=elapsed,
+            )
+
+
+class XLearnerWrapper(BaseEstimatorWrapper):
+    """
+    X-Learner for heterogeneous treatment effects.
+
+    A two-stage meta-learner that:
+    1. Fits T-learner models to get initial CATE estimates
+    2. Uses imputed treatment effects to train second-stage models
+    3. Combines using propensity-weighted average
+
+    Pros: Performs well with unbalanced treatment groups
+    Cons: More complex, requires propensity score estimation
+
+    Reference: Künzel et al. (2019) "Metalearners for Estimating
+    Heterogeneous Treatment Effects using Machine Learning"
+    """
+
+    def __init__(self, config: EstimatorConfig):
+        self.config = config
+
+    @property
+    def estimator_type(self) -> EstimatorType:
+        return EstimatorType.X_LEARNER
+
+    def fit(
+        self,
+        treatment: NDArray[np.int_],
+        outcome: NDArray[np.float64],
+        covariates: pd.DataFrame,
+        **kwargs
+    ) -> EstimatorResult:
+        import time
+        start = time.perf_counter()
+
+        try:
+            from sklearn.ensemble import GradientBoostingRegressor
+            from sklearn.linear_model import LogisticRegressionCV
+
+            X = covariates.values
+
+            # Split by treatment
+            X_1 = X[treatment == 1]
+            X_0 = X[treatment == 0]
+            Y_1 = outcome[treatment == 1]
+            Y_0 = outcome[treatment == 0]
+
+            # Base learner configuration
+            base_params = {
+                "n_estimators": self.config.params.get("n_estimators", 100),
+                "max_depth": self.config.params.get("max_depth", 5),
+                "random_state": self.config.params.get("random_state", 42),
+            }
+
+            # Stage 1: Fit response models (like T-learner)
+            model_1 = GradientBoostingRegressor(**base_params)
+            model_0 = GradientBoostingRegressor(**base_params)
+            model_1.fit(X_1, Y_1)
+            model_0.fit(X_0, Y_0)
+
+            # Stage 2: Compute imputed treatment effects
+            # For treated: τ̃1 = Y1 - μ0(X1)
+            tau_1 = Y_1 - model_0.predict(X_1)
+            # For control: τ̃0 = μ1(X0) - Y0
+            tau_0 = model_1.predict(X_0) - Y_0
+
+            # Fit second-stage models on imputed effects
+            model_tau_1 = GradientBoostingRegressor(**base_params)
+            model_tau_0 = GradientBoostingRegressor(**base_params)
+            model_tau_1.fit(X_1, tau_1)
+            model_tau_0.fit(X_0, tau_0)
+
+            # Propensity scores for weighting
+            ps_model = LogisticRegressionCV(cv=3, max_iter=500)
+            ps_model.fit(X, treatment)
+            propensity_scores = ps_model.predict_proba(X)[:, 1]
+
+            # Combine using propensity-weighted average:
+            # τ̂(x) = e(x) * τ̂0(x) + (1 - e(x)) * τ̂1(x)
+            tau_hat_1 = model_tau_1.predict(X)
+            tau_hat_0 = model_tau_0.predict(X)
+            cate = propensity_scores * tau_hat_0 + (1 - propensity_scores) * tau_hat_1
+
+            ate = float(np.mean(cate))
+            ate_std = float(np.std(cate) / np.sqrt(len(cate)))
+            ate_ci_lower = ate - 1.96 * ate_std
+            ate_ci_upper = ate + 1.96 * ate_std
+
+            elapsed = (time.perf_counter() - start) * 1000
+
+            return EstimatorResult(
+                estimator_type=self.estimator_type,
+                success=True,
+                ate=ate,
+                cate=cate,
+                ate_std=ate_std,
+                ate_ci_lower=ate_ci_lower,
+                ate_ci_upper=ate_ci_upper,
+                propensity_scores=propensity_scores,
+                estimation_time_ms=elapsed,
+                raw_estimate={
+                    "model_1": model_1,
+                    "model_0": model_0,
+                    "model_tau_1": model_tau_1,
+                    "model_tau_0": model_tau_0,
+                    "ps_model": ps_model,
+                },
+            )
+
+        except Exception as e:
+            elapsed = (time.perf_counter() - start) * 1000
+            logger.warning(f"X-Learner failed: {e}")
+            return EstimatorResult(
+                estimator_type=self.estimator_type,
+                success=False,
+                error_message=str(e),
+                error_type=type(e).__name__,
+                estimation_time_ms=elapsed,
+            )
+
+
+class OrthoForestWrapper(BaseEstimatorWrapper):
+    """
+    Orthogonal Random Forest (OrthoForest) for high-dimensional CATE.
+
+    Uses double machine learning with random forest splitting.
+    Provides valid confidence intervals even in high dimensions.
+
+    Reference: Oprescu et al. (2019) "Orthogonal Random Forest
+    for Causal Inference"
+    """
+
+    def __init__(self, config: EstimatorConfig):
+        self.config = config
+
+    @property
+    def estimator_type(self) -> EstimatorType:
+        return EstimatorType.ORTHO_FOREST
+
+    def fit(
+        self,
+        treatment: NDArray[np.int_],
+        outcome: NDArray[np.float64],
+        covariates: pd.DataFrame,
+        **kwargs
+    ) -> EstimatorResult:
+        import time
+        start = time.perf_counter()
+
+        try:
+            from econml.orf import DMLOrthoForest
+
+            X = covariates.values
+
+            # Configure OrthoForest
+            params = {
+                "n_trees": self.config.params.get("n_trees", 100),
+                "min_leaf_size": self.config.params.get("min_leaf_size", 10),
+                "max_depth": self.config.params.get("max_depth", None),
+                "random_state": self.config.params.get("random_state", 42),
+            }
+
+            # Fit model
+            model = DMLOrthoForest(**params)
+            model.fit(outcome, treatment, X=X, W=X)
+
+            # Get estimates
+            cate = model.effect(X)
+            ate = float(np.mean(cate))
+            ate_std = float(np.std(cate) / np.sqrt(len(cate)))
+
+            # Confidence intervals from OrthoForest
+            try:
+                cate_inf = model.effect_inference(X)
+                ci = cate_inf.conf_int_mean()
+                ate_ci_lower, ate_ci_upper = float(ci[0]), float(ci[1])
+            except Exception:
+                ate_ci_lower = ate - 1.96 * ate_std
+                ate_ci_upper = ate + 1.96 * ate_std
+
+            # Propensity scores
+            from sklearn.linear_model import LogisticRegressionCV
+            ps_model = LogisticRegressionCV(cv=3, max_iter=500)
+            ps_model.fit(X, treatment)
+            propensity_scores = ps_model.predict_proba(X)[:, 1]
+
+            elapsed = (time.perf_counter() - start) * 1000
+
+            return EstimatorResult(
+                estimator_type=self.estimator_type,
+                success=True,
+                ate=ate,
+                cate=cate,
+                ate_std=ate_std,
+                ate_ci_lower=ate_ci_lower,
+                ate_ci_upper=ate_ci_upper,
+                propensity_scores=propensity_scores,
+                estimation_time_ms=elapsed,
+                raw_estimate=model,
+            )
+
+        except Exception as e:
+            elapsed = (time.perf_counter() - start) * 1000
+            logger.warning(f"OrthoForest failed: {e}")
+            return EstimatorResult(
+                estimator_type=self.estimator_type,
+                success=False,
+                error_message=str(e),
+                error_type=type(e).__name__,
+                estimation_time_ms=elapsed,
+            )
+
+
 # Estimator factory
 ESTIMATOR_WRAPPERS: dict[EstimatorType, type[BaseEstimatorWrapper]] = {
     EstimatorType.CAUSAL_FOREST: CausalForestWrapper,
     EstimatorType.LINEAR_DML: LinearDMLWrapper,
     EstimatorType.DRLEARNER: DRLearnerWrapper,
+    EstimatorType.S_LEARNER: SLearnerWrapper,
+    EstimatorType.T_LEARNER: TLearnerWrapper,
+    EstimatorType.X_LEARNER: XLearnerWrapper,
+    EstimatorType.ORTHO_FOREST: OrthoForestWrapper,
     EstimatorType.OLS: OLSWrapper,
 }
 
