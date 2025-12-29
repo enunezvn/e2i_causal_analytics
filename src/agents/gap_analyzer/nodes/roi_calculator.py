@@ -4,10 +4,11 @@ This node calculates ROI estimates for closing performance gaps using
 pharmaceutical-specific economics from ROICalculationService.
 
 Implements the full ROI methodology from docs/roi_methodology.md:
-- 6 Value Drivers (TRx Lift, Patient ID, Action Rate, ITP, Data Quality, Drift)
+- 7 Value Drivers (TRx Lift, Patient ID, Action Rate, ITP, Data Quality, Drift, Uplift)
 - Bootstrap Monte Carlo simulations (1,000) for confidence intervals
 - Attribution Framework (Full/Partial/Shared/Minimal)
 - Risk Adjustment (Technical/Organizational/Data/Timeline factors)
+- CausalML Uplift Integration for targeting optimization (Phase B6)
 
 Reference: docs/roi_methodology.md, src/services/roi_calculation.py
 """
@@ -61,6 +62,8 @@ class ROICalculatorNode:
         "data_quality": ValueDriverType.DATA_QUALITY,
         "model_accuracy": ValueDriverType.DRIFT_PREVENTION,
         "market_share": ValueDriverType.TRX_LIFT,  # Translates to TRx impact
+        "targeting_efficiency": ValueDriverType.UPLIFT_TARGETING,  # From uplift models
+        "uplift_score": ValueDriverType.UPLIFT_TARGETING,
     }
 
     # Default cost category for gap initiatives
@@ -108,11 +111,14 @@ class ROICalculatorNode:
                     "status": "prioritizing",
                 }
 
+            # Extract uplift context if available (from heterogeneous_optimizer)
+            uplift_context = self._extract_uplift_context(state)
+
             # Calculate ROI for each gap using ROICalculationService
             roi_estimates: List[ROIEstimate] = []
 
             for gap in gaps_detected:
-                roi_estimate = self._calculate_roi(gap)
+                roi_estimate = self._calculate_roi(gap, uplift_context=uplift_context)
                 roi_estimates.append(roi_estimate)
 
             # Calculate total addressable value (attributed value)
@@ -120,8 +126,9 @@ class ROICalculatorNode:
 
             roi_latency_ms = int((time.time() - start_time) * 1000)
 
+            uplift_msg = " (with uplift targeting boost)" if uplift_context else ""
             logger.info(
-                f"ROI calculated for {len(roi_estimates)} gaps, "
+                f"ROI calculated for {len(roi_estimates)} gaps{uplift_msg}, "
                 f"total addressable value: ${total_addressable_value:,.0f}"
             )
 
@@ -147,7 +154,33 @@ class ROICalculatorNode:
                 "status": "failed",
             }
 
-    def _calculate_roi(self, gap: PerformanceGap) -> ROIEstimate:
+    def _extract_uplift_context(self, state: GapAnalyzerState) -> Optional[Dict[str, Any]]:
+        """Extract uplift context from state if available.
+
+        Args:
+            state: Gap analyzer state potentially containing uplift data
+
+        Returns:
+            Uplift context dict or None if not available
+        """
+        auuc = state.get("uplift_auuc")
+        qini = state.get("uplift_qini")
+        efficiency = state.get("uplift_targeting_efficiency")
+
+        if auuc is not None or efficiency is not None:
+            return {
+                "auuc": auuc or 0.5,
+                "qini_coefficient": qini,
+                "targeting_efficiency": efficiency or 0.5,
+                "uplift_by_segment": state.get("uplift_by_segment"),
+            }
+        return None
+
+    def _calculate_roi(
+        self,
+        gap: PerformanceGap,
+        uplift_context: Optional[Dict[str, Any]] = None,
+    ) -> ROIEstimate:
         """Calculate ROI estimate for a single gap using ROICalculationService.
 
         Implements full ROI methodology:
@@ -156,9 +189,11 @@ class ROICalculatorNode:
         3. Determine attribution level from gap type
         4. Apply risk adjustment
         5. Run bootstrap simulations for confidence interval
+        6. Add uplift targeting value if context available (Phase B6)
 
         Args:
             gap: Performance gap to analyze
+            uplift_context: Optional uplift context from heterogeneous_optimizer
 
         Returns:
             ROI estimate with confidence interval, attribution, risk adjustment
@@ -173,6 +208,15 @@ class ROICalculatorNode:
         # Create value driver input
         value_driver = self._create_value_driver_input(driver_type, gap_size, gap)
 
+        # Build list of value drivers (may include uplift)
+        value_drivers = [value_driver]
+
+        # Add uplift targeting value driver if context available
+        if uplift_context:
+            uplift_driver = self._create_uplift_value_driver(gap, uplift_context)
+            if uplift_driver:
+                value_drivers.append(uplift_driver)
+
         # Estimate costs for closing the gap
         cost_input = self._estimate_intervention_costs(metric, gap_size)
 
@@ -184,7 +228,7 @@ class ROICalculatorNode:
 
         # Calculate ROI using the full service
         roi_result: ROIResult = self.roi_service.calculate_roi(
-            value_drivers=[value_driver],
+            value_drivers=value_drivers,
             cost_input=cost_input,
             attribution_level=attribution,
             risk_assessment=risk_assessment,
@@ -286,6 +330,58 @@ class ROICalculatorNode:
             baseline_model_value=(
                 gap_size * 850 if driver_type == ValueDriverType.DRIFT_PREVENTION else None
             ),
+        )
+
+    def _create_uplift_value_driver(
+        self,
+        gap: PerformanceGap,
+        uplift_context: Dict[str, Any],
+    ) -> Optional[ValueDriverInput]:
+        """Create uplift targeting value driver from uplift context.
+
+        This adds incremental value from using CausalML uplift models for
+        optimized targeting when closing performance gaps.
+
+        Args:
+            gap: Performance gap being analyzed
+            uplift_context: Uplift context with AUUC, Qini, efficiency
+
+        Returns:
+            ValueDriverInput for uplift targeting, or None if not applicable
+        """
+        # Only add uplift value for metrics that benefit from targeting
+        targeting_metrics = {
+            "trx", "nrx", "patient_count", "patient_identification",
+            "trigger_acceptance", "conversion_rate", "hcp_engagement_score",
+        }
+
+        if gap["metric"] not in targeting_metrics:
+            return None
+
+        gap_size = abs(gap["gap_size"])
+
+        # Get segment-specific uplift if available
+        segment_uplift = None
+        if uplift_context.get("uplift_by_segment"):
+            segment_key = gap["segment_value"]
+            segment_data = uplift_context["uplift_by_segment"].get(segment_key, [])
+            if segment_data:
+                # Get average uplift score for segment
+                scores = [s.get("mean_uplift_score", 0) for s in segment_data]
+                segment_uplift = sum(scores) / len(scores) if scores else None
+
+        # Calculate baseline treatment value from gap size
+        # Assume $850/unit (TRx equivalent)
+        baseline_value = gap_size * 850
+
+        return ValueDriverInput(
+            driver_type=ValueDriverType.UPLIFT_TARGETING,
+            quantity=gap_size,
+            auuc=uplift_context.get("auuc", 0.5),
+            qini_coefficient=uplift_context.get("qini_coefficient"),
+            targeting_efficiency=uplift_context.get("targeting_efficiency", 0.5),
+            baseline_treatment_value=baseline_value,
+            targeted_population_size=int(gap_size) if gap_size > 0 else 100,
         )
 
     def _estimate_intervention_costs(

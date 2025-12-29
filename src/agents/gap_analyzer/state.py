@@ -114,6 +114,13 @@ class GapAnalyzerState(TypedDict):
     min_gap_threshold: float  # Minimum gap % to report (e.g., 5.0)
     max_opportunities: int  # Maximum opportunities to return (e.g., 10)
 
+    # === UPLIFT CONTEXT (from heterogeneous_optimizer, optional) ===
+    # When uplift analysis is available, it enhances ROI calculations
+    uplift_auuc: Optional[float]  # Area Under Uplift Curve (0-1)
+    uplift_qini: Optional[float]  # Qini coefficient
+    uplift_targeting_efficiency: Optional[float]  # Targeting efficiency (0-1)
+    uplift_by_segment: Optional[Dict[str, Any]]  # Segment-level uplift scores
+
     # === DETECTION OUTPUTS (from gap_detector node) ===
     gaps_detected: Optional[List[PerformanceGap]]  # All gaps above threshold
     gaps_by_segment: Optional[Dict[str, List[PerformanceGap]]]  # Gaps grouped by segment
@@ -143,6 +150,55 @@ class GapAnalyzerState(TypedDict):
     warnings: Annotated[List[str], operator.add]  # Accumulated warnings
     status: Literal["pending", "detecting", "calculating", "prioritizing", "completed", "failed"]
 
+    # ========================================================================
+    # B7.4: Multi-Library Support (Pipeline-Aware ROI & Confidence)
+    # ========================================================================
+
+    # Library execution plan
+    library_execution_plan: Optional[List[str]]  # e.g., ["networkx", "dowhy", "econml", "causalml"]
+    library_execution_mode: Optional[Literal["sequential", "parallel"]]
+    libraries_executed: Optional[List[str]]  # Actually executed libraries
+    libraries_skipped: Optional[List[str]]  # Skipped due to validation or errors
+
+    # Multi-library confidence scoring
+    library_confidence_scores: Optional[Dict[str, float]]  # Per-library confidence (0-1)
+    library_agreement_score: Optional[float]  # Overall agreement between libraries (0-1)
+    library_consensus_effect: Optional[float]  # Confidence-weighted consensus effect
+    effect_estimate_variance: Optional[float]  # Variance across library effect estimates
+
+    # Pipeline-aware ROI estimates
+    pipeline_roi_adjustment: Optional[float]  # ROI adjustment factor from pipeline confidence
+    cross_validated_roi: Optional[bool]  # Whether ROI was cross-validated across libraries
+    roi_confidence_source: Optional[Literal[
+        "single_library",  # ROI from single library
+        "multi_library_consensus",  # ROI from consensus of multiple libraries
+        "cross_validated",  # ROI cross-validated (DoWhy ↔ CausalML)
+        "pipeline_orchestrated",  # Full pipeline orchestration
+    ]]
+
+    # Causal library results feeding into ROI
+    dowhy_effect_estimate: Optional[float]  # ATE from DoWhy
+    dowhy_effect_confidence: Optional[float]  # Confidence from DoWhy (0-1)
+    econml_cate_estimate: Optional[float]  # CATE from EconML
+    econml_cate_confidence: Optional[float]  # Confidence from EconML (0-1)
+    causalml_uplift_estimate: Optional[float]  # Uplift from CausalML
+    causalml_uplift_confidence: Optional[float]  # Confidence from CausalML (0-1)
+    networkx_graph_confidence: Optional[float]  # Graph structure confidence from NetworkX (0-1)
+
+    # Cross-library validation
+    cross_library_validation: Optional[Dict[str, Any]]  # Validation results between libraries
+    validation_passed: Optional[bool]  # Whether cross-validation passed thresholds
+
+    # Multi-library routing metadata
+    question_type: Optional[Literal[
+        "performance_gap",  # Gap analysis → DoWhy/EconML primary
+        "roi_optimization",  # ROI focus → CausalML primary
+        "system_analysis",  # Impact flow → NetworkX primary
+        "comprehensive",  # All libraries
+    ]]
+    routing_confidence: Optional[float]  # Confidence in library routing decision
+    routing_rationale: Optional[str]  # Why this library routing was chosen
+
 
 # Type aliases for output contract compliance
 GapAnalyzerOutput = TypedDict(
@@ -163,5 +219,12 @@ GapAnalyzerOutput = TypedDict(
         "warnings": List[str],
         "requires_further_analysis": bool,
         "suggested_next_agent": Optional[str],
+        # B7.4: Multi-Library Support Output
+        "libraries_used": Optional[List[str]],
+        "library_agreement_score": Optional[float],
+        "library_consensus_effect": Optional[float],
+        "cross_validated_roi": Optional[bool],
+        "roi_confidence_source": Optional[str],
+        "question_type": Optional[str],
     },
 )

@@ -592,3 +592,301 @@ class TestROICalculatorIntegration:
 
         for field in required_fields:
             assert field in roi, f"Missing field: {field}"
+
+
+class TestROICalculatorUpliftIntegration:
+    """Tests for ROI calculator uplift integration (Phase B6).
+
+    Tests the integration of CausalML uplift models with ROI calculations,
+    enabling targeting optimization value to be included in ROI estimates.
+    """
+
+    def _create_test_gap(
+        self, metric: str = "trx", gap_size: float = 100.0, gap_percentage: float = 20.0
+    ) -> PerformanceGap:
+        """Create test performance gap."""
+        return {
+            "gap_id": f"region_Northeast_{metric}_vs_target",
+            "metric": metric,
+            "segment": "region",
+            "segment_value": "Northeast",
+            "current_value": 400.0,
+            "target_value": 500.0,
+            "gap_size": gap_size,
+            "gap_percentage": gap_percentage,
+            "gap_type": "vs_target",
+        }
+
+    def _create_test_state_with_uplift(
+        self,
+        gaps: list,
+        auuc: float = 0.7,
+        qini: float = 0.65,
+        efficiency: float = 0.8,
+    ) -> GapAnalyzerState:
+        """Create test state with uplift context fields."""
+        return {
+            "query": "test",
+            "metrics": ["trx"],
+            "segments": ["region"],
+            "brand": "kisqali",
+            "time_period": "current_quarter",
+            "filters": None,
+            "gap_type": "vs_target",
+            "min_gap_threshold": 5.0,
+            "max_opportunities": 10,
+            # Uplift context fields
+            "uplift_auuc": auuc,
+            "uplift_qini": qini,
+            "uplift_targeting_efficiency": efficiency,
+            "uplift_by_segment": {
+                "Northeast": [{"segment_value": "Northeast", "mean_uplift_score": 0.75}]
+            },
+            # Gap detection
+            "gaps_detected": gaps,
+            "gaps_by_segment": None,
+            "total_gap_value": None,
+            "roi_estimates": None,
+            "total_addressable_value": None,
+            "prioritized_opportunities": None,
+            "quick_wins": None,
+            "strategic_bets": None,
+            "executive_summary": None,
+            "key_insights": None,
+            "detection_latency_ms": 100,
+            "roi_latency_ms": 0,
+            "total_latency_ms": 0,
+            "segments_analyzed": 1,
+            "errors": [],
+            "warnings": [],
+            "status": "calculating",
+        }
+
+    def test_extract_uplift_context_with_data(self):
+        """Test extracting uplift context from state with full data."""
+        service = ROICalculationService(n_simulations=50, seed=42)
+        node = ROICalculatorNode(roi_service=service)
+        state = self._create_test_state_with_uplift(
+            gaps=[],
+            auuc=0.75,
+            qini=0.70,
+            efficiency=0.85,
+        )
+
+        context = node._extract_uplift_context(state)
+
+        assert context is not None
+        assert context["auuc"] == 0.75
+        assert context["qini_coefficient"] == 0.70
+        assert context["targeting_efficiency"] == 0.85
+        assert context["uplift_by_segment"] is not None
+
+    def test_extract_uplift_context_none_when_missing(self):
+        """Test uplift context returns None when no uplift data in state."""
+        service = ROICalculationService(n_simulations=50, seed=42)
+        node = ROICalculatorNode(roi_service=service)
+        # State without uplift fields
+        state: GapAnalyzerState = {
+            "query": "test",
+            "metrics": ["trx"],
+            "segments": ["region"],
+            "brand": "kisqali",
+            "time_period": "current_quarter",
+            "filters": None,
+            "gap_type": "vs_target",
+            "min_gap_threshold": 5.0,
+            "max_opportunities": 10,
+            "gaps_detected": [],
+            "gaps_by_segment": None,
+            "total_gap_value": None,
+            "roi_estimates": None,
+            "total_addressable_value": None,
+            "prioritized_opportunities": None,
+            "quick_wins": None,
+            "strategic_bets": None,
+            "executive_summary": None,
+            "key_insights": None,
+            "detection_latency_ms": 100,
+            "roi_latency_ms": 0,
+            "total_latency_ms": 0,
+            "segments_analyzed": 1,
+            "errors": [],
+            "warnings": [],
+            "status": "calculating",
+        }
+
+        context = node._extract_uplift_context(state)
+
+        assert context is None
+
+    def test_extract_uplift_context_defaults(self):
+        """Test uplift context fills defaults when partially available."""
+        service = ROICalculationService(n_simulations=50, seed=42)
+        node = ROICalculatorNode(roi_service=service)
+        # State with only AUUC (no qini or efficiency)
+        state = self._create_test_state_with_uplift(gaps=[])
+        state["uplift_auuc"] = 0.65
+        state["uplift_qini"] = None
+        state["uplift_targeting_efficiency"] = None
+
+        context = node._extract_uplift_context(state)
+
+        assert context is not None
+        assert context["auuc"] == 0.65
+        assert context["qini_coefficient"] is None
+        assert context["targeting_efficiency"] == 0.5  # Default
+
+    def test_create_uplift_value_driver_for_targeting_metric(self):
+        """Test creating uplift value driver for metrics that benefit from targeting."""
+        service = ROICalculationService(n_simulations=50, seed=42)
+        node = ROICalculatorNode(roi_service=service)
+        gap = self._create_test_gap(metric="trx", gap_size=100.0)
+        uplift_context = {
+            "auuc": 0.7,
+            "qini_coefficient": 0.65,
+            "targeting_efficiency": 0.8,
+            "uplift_by_segment": None,
+        }
+
+        driver = node._create_uplift_value_driver(gap, uplift_context)
+
+        assert driver is not None
+        assert driver.driver_type == ValueDriverType.UPLIFT_TARGETING
+        assert driver.auuc == 0.7
+        assert driver.targeting_efficiency == 0.8
+        assert driver.baseline_treatment_value == 85000.0  # 100 * 850
+        assert driver.targeted_population_size == 100
+
+    def test_create_uplift_value_driver_none_for_non_targeting_metric(self):
+        """Test uplift value driver returns None for metrics that don't benefit."""
+        service = ROICalculationService(n_simulations=50, seed=42)
+        node = ROICalculatorNode(roi_service=service)
+        # data_quality doesn't benefit from targeting
+        gap = self._create_test_gap(metric="data_quality", gap_size=100.0)
+        uplift_context = {
+            "auuc": 0.7,
+            "qini_coefficient": 0.65,
+            "targeting_efficiency": 0.8,
+            "uplift_by_segment": None,
+        }
+
+        driver = node._create_uplift_value_driver(gap, uplift_context)
+
+        assert driver is None
+
+    def test_value_driver_mapping_targeting_metrics(self):
+        """Test targeting efficiency and uplift score map to UPLIFT_TARGETING."""
+        service = ROICalculationService(n_simulations=50, seed=42)
+        node = ROICalculatorNode(roi_service=service)
+
+        assert node._get_value_driver("targeting_efficiency") == ValueDriverType.UPLIFT_TARGETING
+        assert node._get_value_driver("uplift_score") == ValueDriverType.UPLIFT_TARGETING
+
+    @pytest.mark.asyncio
+    async def test_roi_calculation_with_uplift_context(self):
+        """Test that ROI calculation includes uplift value when context available."""
+        service = ROICalculationService(n_simulations=50, seed=42)
+        node = ROICalculatorNode(roi_service=service)
+        gap = self._create_test_gap(metric="trx", gap_size=100.0)
+
+        # Calculate ROI without uplift context
+        roi_without_uplift = node._calculate_roi(gap, uplift_context=None)
+
+        # Calculate ROI with uplift context
+        uplift_context = {
+            "auuc": 0.7,
+            "qini_coefficient": 0.65,
+            "targeting_efficiency": 0.8,
+            "uplift_by_segment": None,
+        }
+        roi_with_uplift = node._calculate_roi(gap, uplift_context=uplift_context)
+
+        # With uplift context, revenue impact should be higher
+        assert roi_with_uplift["estimated_revenue_impact"] >= roi_without_uplift["estimated_revenue_impact"]
+
+    @pytest.mark.asyncio
+    async def test_execute_with_uplift_state(self):
+        """Test full execute workflow with uplift context in state."""
+        service = ROICalculationService(n_simulations=50, seed=42)
+        node = ROICalculatorNode(roi_service=service)
+        gap = self._create_test_gap(metric="trx", gap_size=100.0)
+        state = self._create_test_state_with_uplift(
+            gaps=[gap],
+            auuc=0.7,
+            qini=0.65,
+            efficiency=0.8,
+        )
+
+        result = await node.execute(state)
+
+        assert "roi_estimates" in result
+        assert len(result["roi_estimates"]) == 1
+        assert result["roi_estimates"][0]["estimated_revenue_impact"] > 0
+        assert result["total_addressable_value"] > 0
+
+    @pytest.mark.asyncio
+    async def test_execute_without_uplift_state(self):
+        """Test execute workflow still works without uplift context."""
+        service = ROICalculationService(n_simulations=50, seed=42)
+        node = ROICalculatorNode(roi_service=service)
+        gap = self._create_test_gap(metric="trx", gap_size=100.0)
+        # State without uplift fields
+        state: GapAnalyzerState = {
+            "query": "test",
+            "metrics": ["trx"],
+            "segments": ["region"],
+            "brand": "kisqali",
+            "time_period": "current_quarter",
+            "filters": None,
+            "gap_type": "vs_target",
+            "min_gap_threshold": 5.0,
+            "max_opportunities": 10,
+            "gaps_detected": [gap],
+            "gaps_by_segment": None,
+            "total_gap_value": None,
+            "roi_estimates": None,
+            "total_addressable_value": None,
+            "prioritized_opportunities": None,
+            "quick_wins": None,
+            "strategic_bets": None,
+            "executive_summary": None,
+            "key_insights": None,
+            "detection_latency_ms": 100,
+            "roi_latency_ms": 0,
+            "total_latency_ms": 0,
+            "segments_analyzed": 1,
+            "errors": [],
+            "warnings": [],
+            "status": "calculating",
+        }
+
+        result = await node.execute(state)
+
+        assert "roi_estimates" in result
+        assert len(result["roi_estimates"]) == 1
+        assert result["roi_estimates"][0]["estimated_revenue_impact"] == 85000.0  # Base TRx only
+
+    @pytest.mark.asyncio
+    async def test_multiple_gaps_with_uplift_context(self):
+        """Test multiple gaps all receive uplift context benefit."""
+        service = ROICalculationService(n_simulations=50, seed=42)
+        node = ROICalculatorNode(roi_service=service)
+        gaps = [
+            self._create_test_gap(metric="trx", gap_size=100.0),
+            self._create_test_gap(metric="patient_count", gap_size=50.0),
+            self._create_test_gap(metric="data_quality", gap_size=20.0),  # Won't get uplift
+        ]
+        state = self._create_test_state_with_uplift(
+            gaps=gaps,
+            auuc=0.7,
+            qini=0.65,
+            efficiency=0.8,
+        )
+
+        result = await node.execute(state)
+
+        assert len(result["roi_estimates"]) == 3
+        # All gaps should have valid ROI estimates
+        for roi in result["roi_estimates"]:
+            assert roi["estimated_revenue_impact"] >= 0
+            assert roi["estimated_cost_to_close"] > 0

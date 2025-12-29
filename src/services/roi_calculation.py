@@ -33,6 +33,7 @@ class ValueDriverType(str, Enum):
     INTENT_TO_PRESCRIBE = "intent_to_prescribe"  # $320/HCP/pp
     DATA_QUALITY = "data_quality"  # $200/FP, $650/FN
     DRIFT_PREVENTION = "drift_prevention"  # 2x multiplier
+    UPLIFT_TARGETING = "uplift_targeting"  # Targeting efficiency from uplift models
 
 
 class AttributionLevel(str, Enum):
@@ -82,6 +83,13 @@ class ValueDriverInput:
     fn_reduction: Optional[int] = None  # For data quality
     auc_drop_prevented: Optional[float] = None  # For drift prevention
     baseline_model_value: Optional[float] = None  # For drift prevention
+
+    # Uplift targeting parameters (from CausalML integration)
+    auuc: Optional[float] = None  # Area Under Uplift Curve (0-1)
+    qini_coefficient: Optional[float] = None  # Qini coefficient
+    targeting_efficiency: Optional[float] = None  # Targeting efficiency (0-1)
+    baseline_treatment_value: Optional[float] = None  # Value before targeting optimization
+    targeted_population_size: Optional[int] = None  # Number of individuals targeted
 
     # Bootstrap distribution parameters
     uncertainty_std: Optional[float] = None  # Std dev as fraction of mean (default 0.15)
@@ -333,6 +341,74 @@ class DriftPreventionCalculator:
             Dollar value of drift prevention
         """
         return auc_drop_prevented * baseline_model_value * self.MULTIPLIER
+
+
+class UpliftTargetingCalculator:
+    """Calculate value from uplift-based targeting optimization.
+
+    Uses CausalML uplift models to identify high/low responders and
+    optimize treatment allocation for maximum ROI.
+
+    Value formula:
+    - Base: AUUC × Baseline treatment value × Targeting efficiency
+    - Additional: Top-decile lift × Population × Per-unit value
+
+    Reference: src/causal_engine/uplift/ for CausalML integration
+    """
+
+    # Base per-capita value from optimal targeting
+    VALUE_PER_TARGETED_INDIVIDUAL = 125.0  # $125 per optimally targeted individual
+
+    # AUUC multiplier (higher AUUC = better targeting)
+    AUUC_MULTIPLIER = 2.5
+
+    def calculate(
+        self,
+        auuc: float,
+        targeting_efficiency: float,
+        baseline_treatment_value: Optional[float] = None,
+        targeted_population_size: Optional[int] = None,
+        qini_coefficient: Optional[float] = None,
+    ) -> float:
+        """
+        Calculate uplift targeting optimization value.
+
+        Value represents the incremental benefit from using uplift models
+        to target treatments to individuals most likely to respond.
+
+        Args:
+            auuc: Area Under Uplift Curve (0-1), measures model's ability
+                  to rank individuals by treatment effect
+            targeting_efficiency: Fraction of value captured vs random (0-1)
+            baseline_treatment_value: Current value from treatment (default: $50,000)
+            targeted_population_size: Number of individuals in target population
+            qini_coefficient: Qini coefficient (optional, for validation)
+
+        Returns:
+            Dollar value of uplift-based targeting optimization
+        """
+        # Default baseline value if not provided
+        if baseline_treatment_value is None:
+            baseline_treatment_value = 50000.0
+
+        # Default population size if not provided
+        if targeted_population_size is None:
+            targeted_population_size = 1000
+
+        # Component 1: Value from improved targeting (AUUC-based)
+        # Higher AUUC means better discrimination between responders/non-responders
+        auuc_value = auuc * baseline_treatment_value * self.AUUC_MULTIPLIER
+
+        # Component 2: Per-capita value from targeting efficiency
+        # More efficient targeting = more value captured per person
+        efficiency_value = (
+            targeting_efficiency * targeted_population_size * self.VALUE_PER_TARGETED_INDIVIDUAL
+        )
+
+        # Total uplift targeting value
+        total_value = auuc_value + efficiency_value
+
+        return total_value
 
 
 # =============================================================================
@@ -707,6 +783,7 @@ class ROICalculationService:
         self.itp_lift = IntentToPrescribeCalculator()
         self.data_quality = DataQualityCalculator()
         self.drift_prevention = DriftPreventionCalculator()
+        self.uplift_targeting = UpliftTargetingCalculator()
 
         # Other calculators
         self.bootstrap = BootstrapSimulator(n_simulations=n_simulations, seed=seed)
@@ -749,6 +826,17 @@ class ROICalculationService:
             auc_drop = driver.auc_drop_prevented or 0
             baseline = driver.baseline_model_value or 0
             return self.drift_prevention.calculate(auc_drop, baseline)
+
+        elif driver.driver_type == ValueDriverType.UPLIFT_TARGETING:
+            auuc = driver.auuc or 0.5
+            efficiency = driver.targeting_efficiency or 0.5
+            return self.uplift_targeting.calculate(
+                auuc=auuc,
+                targeting_efficiency=efficiency,
+                baseline_treatment_value=driver.baseline_treatment_value,
+                targeted_population_size=driver.targeted_population_size,
+                qini_coefficient=driver.qini_coefficient,
+            )
 
         else:
             raise ValueError(f"Unknown driver type: {driver.driver_type}")
