@@ -1,21 +1,28 @@
 # RAGAS Evaluation Workflow
+#
+# TEMPORARILY DISABLED: Automatic triggers disabled due to dependency conflicts.
+# - graphiti-core requires tenacity>=9
+# - feast requires tenacity<9
+# These cannot coexist until upstream packages resolve the conflict.
+#
 # Required Secret: OPENAI_API_KEY must be configured in repository settings → Secrets and variables → Actions.
 
 name: RAGAS Evaluation
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'src/rag/**'
-      - 'scripts/run_ragas_eval.py'
-      - '.github/workflows/ragas-evaluation.yml'
-  pull_request:
-    branches: [main]
-    paths:
-      - 'src/rag/**'
-      - 'scripts/run_ragas_eval.py'
-  workflow_dispatch:  # Allow manual trigger
+  # Automatic triggers disabled until dependency conflicts resolved
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - 'src/rag/**'
+  #     - 'scripts/run_ragas_eval.py'
+  #     - '.github/workflows/ragas-evaluation.yml'
+  # pull_request:
+  #   branches: [main]
+  #   paths:
+  #     - 'src/rag/**'
+  #     - 'scripts/run_ragas_eval.py'
+  workflow_dispatch:  # Manual trigger only for now
 
 jobs:
   ragas-evaluation:
