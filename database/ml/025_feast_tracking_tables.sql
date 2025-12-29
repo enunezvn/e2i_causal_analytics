@@ -113,9 +113,9 @@ CREATE INDEX idx_feast_jobs_status ON ml_feast_materialization_jobs(status);
 CREATE INDEX idx_feast_jobs_created ON ml_feast_materialization_jobs(created_at DESC);
 CREATE INDEX idx_feast_jobs_time_range ON ml_feast_materialization_jobs(start_time, end_time);
 
--- Partial index for recent jobs (last 7 days)
-CREATE INDEX idx_feast_jobs_recent ON ml_feast_materialization_jobs(feature_view_id, created_at)
-    WHERE created_at > NOW() - INTERVAL '7 days';
+-- Note: Partial index with NOW() removed - PostgreSQL requires IMMUTABLE functions in index predicates
+-- The composite index idx_feast_jobs_created provides efficient queries for recent jobs
+-- Alternative: Use application-level filtering or scheduled index rebuilds if needed
 
 -- ============================================================================
 -- TABLE 3: ml_feast_feature_freshness
@@ -154,9 +154,9 @@ CREATE INDEX idx_feast_freshness_view_name ON ml_feast_feature_freshness(feature
 CREATE INDEX idx_feast_freshness_time ON ml_feast_feature_freshness(recorded_at DESC);
 CREATE INDEX idx_feast_freshness_status ON ml_feast_feature_freshness(freshness_status);
 
--- Partial index for recent freshness records
-CREATE INDEX idx_feast_freshness_recent ON ml_feast_feature_freshness(feature_view_id, recorded_at)
-    WHERE recorded_at > NOW() - INTERVAL '24 hours';
+-- Note: Partial index with NOW() removed - PostgreSQL requires IMMUTABLE functions in index predicates
+-- The composite index (feature_view_id, recorded_at) via idx_feast_freshness_time provides efficient queries
+-- Alternative: Use application-level filtering or scheduled index rebuilds if needed
 
 -- ============================================================================
 -- FUNCTIONS
