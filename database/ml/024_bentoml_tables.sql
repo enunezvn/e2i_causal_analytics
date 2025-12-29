@@ -121,9 +121,9 @@ CREATE INDEX idx_bentoml_metrics_service ON ml_bentoml_serving_metrics(service_i
 CREATE INDEX idx_bentoml_metrics_time ON ml_bentoml_serving_metrics(recorded_at DESC);
 CREATE INDEX idx_bentoml_metrics_service_time ON ml_bentoml_serving_metrics(service_id, recorded_at DESC);
 
--- Partial index for recent metrics (last 24 hours)
-CREATE INDEX idx_bentoml_metrics_recent ON ml_bentoml_serving_metrics(service_id, recorded_at)
-    WHERE recorded_at > NOW() - INTERVAL '24 hours';
+-- Note: Partial index with NOW() removed - PostgreSQL requires IMMUTABLE functions in index predicates
+-- The composite index idx_bentoml_metrics_service_time provides efficient queries for recent metrics
+-- Alternative: Use application-level filtering or scheduled index rebuilds if needed
 
 -- ============================================================================
 -- FUNCTIONS
