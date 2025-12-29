@@ -33,6 +33,7 @@ from src.services.roi_calculation import (
     # Main service
     ROICalculationService,
     TRxLiftCalculator,
+    UpliftTargetingCalculator,
     # Data classes
     ValueDriverInput,
     # Enums
@@ -196,6 +197,137 @@ class TestDriftPreventionCalculator:
         calc = DriftPreventionCalculator()
         result = calc.calculate(auc_drop_prevented=0, baseline_model_value=1_000_000)
         assert result == 0.0
+
+
+class TestUpliftTargetingCalculator:
+    """Tests for uplift-based targeting optimization value calculation.
+
+    Validates the CausalML uplift integration for ROI calculations.
+    """
+
+    def test_constants(self):
+        """Verify correct constants from methodology."""
+        calc = UpliftTargetingCalculator()
+        assert calc.VALUE_PER_TARGETED_INDIVIDUAL == 125.0
+        assert calc.AUUC_MULTIPLIER == 2.5
+
+    def test_basic_calculation(self):
+        """Test basic uplift targeting calculation with all parameters."""
+        calc = UpliftTargetingCalculator()
+        result = calc.calculate(
+            auuc=0.7,  # Good AUUC score
+            targeting_efficiency=0.8,  # High targeting efficiency
+            baseline_treatment_value=100_000,  # $100k baseline value
+            targeted_population_size=500,  # 500 individuals targeted
+        )
+
+        # Component 1: AUUC value = 0.7 * 100000 * 2.5 = $175,000
+        # Component 2: Efficiency value = 0.8 * 500 * $125 = $50,000
+        # Total = $225,000
+        assert result == pytest.approx(225_000.0)
+
+    def test_calculation_with_defaults(self):
+        """Test calculation with default values."""
+        calc = UpliftTargetingCalculator()
+        result = calc.calculate(
+            auuc=0.6,
+            targeting_efficiency=0.7,
+        )
+
+        # With defaults: baseline=50000, population=1000
+        # AUUC value = 0.6 * 50000 * 2.5 = 75000
+        # Efficiency value = 0.7 * 1000 * 125 = 87500
+        # Total = 162500
+        assert result == pytest.approx(162_500.0)
+
+    def test_perfect_auuc(self):
+        """Test with perfect AUUC score (1.0)."""
+        calc = UpliftTargetingCalculator()
+        result = calc.calculate(
+            auuc=1.0,
+            targeting_efficiency=1.0,
+            baseline_treatment_value=100_000,
+            targeted_population_size=1000,
+        )
+
+        # AUUC value = 1.0 * 100000 * 2.5 = 250000
+        # Efficiency value = 1.0 * 1000 * 125 = 125000
+        # Total = 375000
+        assert result == pytest.approx(375_000.0)
+
+    def test_zero_auuc(self):
+        """Test with zero AUUC (random model)."""
+        calc = UpliftTargetingCalculator()
+        result = calc.calculate(
+            auuc=0.0,
+            targeting_efficiency=0.5,
+            baseline_treatment_value=100_000,
+            targeted_population_size=1000,
+        )
+
+        # AUUC value = 0.0 * 100000 * 2.5 = 0
+        # Efficiency value = 0.5 * 1000 * 125 = 62500
+        # Total = 62500
+        assert result == pytest.approx(62_500.0)
+
+    def test_zero_efficiency(self):
+        """Test with zero targeting efficiency."""
+        calc = UpliftTargetingCalculator()
+        result = calc.calculate(
+            auuc=0.8,
+            targeting_efficiency=0.0,
+            baseline_treatment_value=100_000,
+            targeted_population_size=1000,
+        )
+
+        # AUUC value = 0.8 * 100000 * 2.5 = 200000
+        # Efficiency value = 0.0 * 1000 * 125 = 0
+        # Total = 200000
+        assert result == pytest.approx(200_000.0)
+
+    def test_qini_coefficient_passed(self):
+        """Test that Qini coefficient is accepted (for validation, not used in calc)."""
+        calc = UpliftTargetingCalculator()
+        # Should not raise error with qini_coefficient
+        result = calc.calculate(
+            auuc=0.7,
+            targeting_efficiency=0.8,
+            baseline_treatment_value=100_000,
+            targeted_population_size=500,
+            qini_coefficient=0.65,  # For validation/logging
+        )
+        # Qini doesn't affect calculation, same as without it
+        assert result == pytest.approx(225_000.0)
+
+    def test_small_population(self):
+        """Test with small targeted population."""
+        calc = UpliftTargetingCalculator()
+        result = calc.calculate(
+            auuc=0.6,
+            targeting_efficiency=0.7,
+            baseline_treatment_value=10_000,
+            targeted_population_size=10,
+        )
+
+        # AUUC value = 0.6 * 10000 * 2.5 = 15000
+        # Efficiency value = 0.7 * 10 * 125 = 875
+        # Total = 15875
+        assert result == pytest.approx(15_875.0)
+
+    def test_large_population(self):
+        """Test with large targeted population."""
+        calc = UpliftTargetingCalculator()
+        result = calc.calculate(
+            auuc=0.8,
+            targeting_efficiency=0.9,
+            baseline_treatment_value=500_000,
+            targeted_population_size=10_000,
+        )
+
+        # AUUC value = 0.8 * 500000 * 2.5 = 1000000
+        # Efficiency value = 0.9 * 10000 * 125 = 1125000
+        # Total = 2125000
+        assert result == pytest.approx(2_125_000.0)
 
 
 # =============================================================================
@@ -685,6 +817,44 @@ class TestROICalculationService:
         value = service.calculate_value_driver(driver)
 
         assert value == 100_000.0
+
+    def test_calculate_value_driver_uplift_targeting(self):
+        """Test uplift targeting value driver (CausalML integration)."""
+        service = ROICalculationService()
+        driver = ValueDriverInput(
+            driver_type=ValueDriverType.UPLIFT_TARGETING,
+            quantity=0,  # Not used
+            auuc=0.7,
+            targeting_efficiency=0.8,
+            baseline_treatment_value=100_000,
+            targeted_population_size=500,
+        )
+
+        value = service.calculate_value_driver(driver)
+
+        # AUUC value = 0.7 * 100000 * 2.5 = $175,000
+        # Efficiency value = 0.8 * 500 * $125 = $50,000
+        # Total = $225,000
+        assert value == pytest.approx(225_000.0)
+
+    def test_calculate_value_driver_uplift_targeting_uses_defaults(self):
+        """Test uplift targeting uses default values when auuc/efficiency missing."""
+        service = ROICalculationService()
+        driver = ValueDriverInput(
+            driver_type=ValueDriverType.UPLIFT_TARGETING,
+            quantity=0,
+            # auuc and targeting_efficiency not provided - should use defaults (0.5)
+            baseline_treatment_value=50_000,
+            targeted_population_size=1000,
+        )
+
+        value = service.calculate_value_driver(driver)
+
+        # With defaults: auuc=0.5, efficiency=0.5
+        # AUUC value = 0.5 * 50000 * 2.5 = $62,500
+        # Efficiency value = 0.5 * 1000 * $125 = $62,500
+        # Total = $125,000
+        assert value == pytest.approx(125_000.0)
 
     def test_calculate_roi_basic(self):
         """Test basic ROI calculation."""

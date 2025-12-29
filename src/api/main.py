@@ -25,8 +25,10 @@ from fastapi import FastAPI, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from src.api.routes.causal import router as causal_router
 from src.api.routes.cognitive import router as cognitive_router
 from src.api.routes.digital_twin import router as digital_twin_router
+from src.api.routes.kpi import router as kpi_router
 
 # Import dependencies
 from src.api.dependencies.bentoml_client import (
@@ -299,9 +301,14 @@ app.include_router(digital_twin_router)
 # Model prediction endpoints (BentoML integration)
 app.include_router(predictions_router)
 
+# KPI endpoints (Phase A5)
+app.include_router(kpi_router)
+
+# Causal inference endpoints (Phase B10)
+app.include_router(causal_router)
+
 # TODO: Add additional routers as they're developed:
 # - Agent orchestration: /api/agents
-# - Causal inference: /api/causal
 # - Feature engineering: /api/features
 # - Model training: /api/models
 
