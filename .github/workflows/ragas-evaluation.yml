@@ -78,22 +78,24 @@ jobs:
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "| Metric | Score | Threshold |" >> $GITHUB_STEP_SUMMARY
             echo "|--------|-------|-----------|" >> $GITHUB_STEP_SUMMARY
-            python -c "
-import json
-with open('ragas-results/evaluation-report.json') as f:
-    report = json.load(f)
-thresholds = {'faithfulness': 0.80, 'answer_relevancy': 0.85, 'context_precision': 0.80, 'context_recall': 0.70}
-for metric, threshold in thresholds.items():
-    score = report.get(f'avg_{metric}', 'N/A')
-    if isinstance(score, float):
-        status = '✅' if score >= threshold else '❌'
-        print(f'| {metric.replace(\"_\", \" \").title()} | {score:.3f} {status} | {threshold} |')
-    else:
-        print(f'| {metric.replace(\"_\", \" \").title()} | {score} | {threshold} |')
-print(f'| **Overall Score** | **{report.get(\"overall_score\", \"N/A\"):.3f}** | 0.80 |')
-" >> $GITHUB_STEP_SUMMARY
+            python3 << 'PYEOF' >> $GITHUB_STEP_SUMMARY
+          import json
+          with open('ragas-results/evaluation-report.json') as f:
+              report = json.load(f)
+          thresholds = {'faithfulness': 0.80, 'answer_relevancy': 0.85, 'context_precision': 0.80, 'context_recall': 0.70}
+          for metric, threshold in thresholds.items():
+              score = report.get(f'avg_{metric}', 'N/A')
+              if isinstance(score, float):
+                  status = '✅' if score >= threshold else '❌'
+                  print(f'| {metric.replace("_", " ").title()} | {score:.3f} {status} | {threshold} |')
+              else:
+                  print(f'| {metric.replace("_", " ").title()} | {score} | {threshold} |')
+          print(f'| **Overall Score** | **{report.get("overall_score", "N/A"):.3f}** | 0.80 |')
+          PYEOF
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "**Samples**: ${report.get('total_samples', 'N/A')} total, ${report.get('passed_samples', 'N/A')} passed" >> $GITHUB_STEP_SUMMARY
+            # Extract sample counts from JSON
+            samples_info=$(python3 -c "import json; r=json.load(open('ragas-results/evaluation-report.json')); print(f\"{r.get('total_samples', 'N/A')} total, {r.get('passed_samples', 'N/A')} passed\")" 2>/dev/null || echo "N/A")
+            echo "**Samples**: $samples_info" >> $GITHUB_STEP_SUMMARY
           else
             echo "⚠️ Evaluation report not found" >> $GITHUB_STEP_SUMMARY
           fi
@@ -115,34 +117,34 @@ print(f'| **Overall Score** | **{report.get(\"overall_score\", \"N/A\"):.3f}** |
         run: |
           echo "Checking for RAG quality regression..."
           if [ -f ragas-results/evaluation-report.json ]; then
-            python -c "
-import json
-import sys
+            python3 << 'PYEOF'
+          import json
+          import sys
 
-with open('ragas-results/evaluation-report.json') as f:
-    report = json.load(f)
+          with open('ragas-results/evaluation-report.json') as f:
+              report = json.load(f)
 
-thresholds = {
-    'faithfulness': 0.80,
-    'answer_relevancy': 0.85,
-    'context_precision': 0.80,
-    'context_recall': 0.70,
-}
+          thresholds = {
+              'faithfulness': 0.80,
+              'answer_relevancy': 0.85,
+              'context_precision': 0.80,
+              'context_recall': 0.70,
+          }
 
-failed = []
-for metric, threshold in thresholds.items():
-    score = report.get(f'avg_{metric}')
-    if score is not None and score < threshold:
-        failed.append(f'{metric}: {score:.3f} < {threshold}')
+          failed = []
+          for metric, threshold in thresholds.items():
+              score = report.get(f'avg_{metric}')
+              if score is not None and score < threshold:
+                  failed.append(f'{metric}: {score:.3f} < {threshold}')
 
-if failed:
-    print('::error::RAG quality regression detected!')
-    for f in failed:
-        print(f'  - {f}')
-    sys.exit(1)
-else:
-    print('::notice::All RAG quality thresholds passed')
-"
+          if failed:
+              print('::error::RAG quality regression detected!')
+              for f in failed:
+                  print(f'  - {f}')
+              sys.exit(1)
+          else:
+              print('::notice::All RAG quality thresholds passed')
+          PYEOF
           else
             echo "::warning::Evaluation report not found, skipping regression check"
           fi
