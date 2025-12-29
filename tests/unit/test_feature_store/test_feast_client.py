@@ -16,8 +16,11 @@ import pandas as pd
 from src.feature_store.feast_client import (
     FeastClient,
     FeastConfig,
+    FeatureFreshness,
     FeatureStatistics,
+    FreshnessStatus,
     get_feast_client,
+    load_feast_config,
 )
 
 
@@ -416,3 +419,341 @@ class TestSingletonClient:
 
             # Should be the same instance
             assert client1 is client2
+
+
+class TestConfigLoading:
+    """Test configuration loading functionality."""
+
+    def test_load_feast_config_default_path(self):
+        """Test loading config from default path."""
+        config = load_feast_config()
+
+        # Should return a dict (either from file or defaults)
+        assert isinstance(config, dict)
+
+    def test_load_feast_config_missing_file(self, tmp_path):
+        """Test loading config when file doesn't exist returns defaults."""
+        missing_path = tmp_path / "nonexistent.yaml"
+        config = load_feast_config(missing_path)
+
+        # Should return default config
+        assert "materialization" in config
+        assert config["materialization"]["max_staleness_hours"] == 24.0
+
+    def test_load_feast_config_custom_file(self, tmp_path):
+        """Test loading config from custom YAML file."""
+        config_path = tmp_path / "test_feast.yaml"
+        config_path.write_text("""
+materialization:
+  max_staleness_hours: 48.0
+  warning_threshold_hours: 12.0
+feature_views:
+  hcp_features:
+    max_staleness_hours: 6.0
+""")
+        config = load_feast_config(config_path)
+
+        assert config["materialization"]["max_staleness_hours"] == 48.0
+        assert config["materialization"]["warning_threshold_hours"] == 12.0
+        assert "hcp_features" in config["feature_views"]
+
+    def test_client_loads_materialization_config(self):
+        """Test that FeastClient loads materialization config on init."""
+        client = FeastClient()
+
+        # Should have materialization config loaded
+        assert hasattr(client, "_materialization_config")
+        assert isinstance(client._materialization_config, dict)
+
+    def test_client_initializes_timestamp_tracking(self):
+        """Test that FeastClient initializes timestamp tracking."""
+        client = FeastClient()
+
+        # Should have empty timestamp dict
+        assert hasattr(client, "_materialization_timestamps")
+        assert isinstance(client._materialization_timestamps, dict)
+        assert len(client._materialization_timestamps) == 0
+
+
+class TestFeatureFreshness:
+    """Test feature freshness functionality."""
+
+    def test_freshness_status_enum_values(self):
+        """Test FreshnessStatus enum has expected values."""
+        assert FreshnessStatus.FRESH == "fresh"
+        assert FreshnessStatus.WARNING == "warning"
+        assert FreshnessStatus.STALE == "stale"
+        assert FreshnessStatus.EXPIRED == "expired"
+        assert FreshnessStatus.UNKNOWN == "unknown"
+
+    def test_feature_freshness_model_defaults(self):
+        """Test FeatureFreshness model default values."""
+        freshness = FeatureFreshness(feature_view="test_view")
+
+        assert freshness.feature_view == "test_view"
+        assert freshness.last_materialized is None
+        assert freshness.freshness_status == FreshnessStatus.UNKNOWN
+        assert freshness.is_fresh is False
+        assert freshness.max_staleness_hours == 24.0
+
+    def test_feature_freshness_model_with_values(self):
+        """Test FeatureFreshness model with custom values."""
+        now = datetime.now()
+        freshness = FeatureFreshness(
+            feature_view="hcp_features",
+            last_materialized=now,
+            freshness_status=FreshnessStatus.FRESH,
+            age_hours=0.5,
+            ttl_hours=24.0,
+            max_staleness_hours=24.0,
+            warning_threshold_hours=12.0,
+            is_fresh=True,
+            message="Features are fresh",
+        )
+
+        assert freshness.feature_view == "hcp_features"
+        assert freshness.last_materialized == now
+        assert freshness.freshness_status == FreshnessStatus.FRESH
+        assert freshness.age_hours == 0.5
+        assert freshness.is_fresh is True
+
+    @pytest.mark.asyncio
+    async def test_get_feature_freshness_unknown_no_materialization(self):
+        """Test freshness is UNKNOWN when no materialization recorded."""
+        client = FeastClient()
+        client._initialized = True
+
+        freshness = await client.get_feature_freshness("unknown_view")
+
+        assert freshness.feature_view == "unknown_view"
+        assert freshness.freshness_status == FreshnessStatus.UNKNOWN
+        assert freshness.last_materialized is None
+        assert freshness.is_fresh is False
+
+    @pytest.mark.asyncio
+    async def test_get_feature_freshness_fresh_status(self):
+        """Test freshness is FRESH when recently materialized."""
+        client = FeastClient()
+        client._initialized = True
+        # Record materialization 30 minutes ago
+        client._materialization_timestamps["hcp_features"] = datetime.now() - timedelta(minutes=30)
+
+        freshness = await client.get_feature_freshness("hcp_features")
+
+        assert freshness.feature_view == "hcp_features"
+        assert freshness.freshness_status == FreshnessStatus.FRESH
+        assert freshness.is_fresh is True
+        assert freshness.age_hours < 1.0
+
+    @pytest.mark.asyncio
+    async def test_get_feature_freshness_warning_status(self):
+        """Test freshness is WARNING when approaching staleness."""
+        client = FeastClient()
+        client._initialized = True
+        # Configure warning threshold at 12 hours, staleness at 24 hours
+        client._materialization_config = {
+            "materialization": {"max_staleness_hours": 24.0, "warning_threshold_hours": 12.0},
+            "feature_views": {},
+        }
+        # Record materialization 14 hours ago (past warning, before staleness)
+        client._materialization_timestamps["hcp_features"] = datetime.now() - timedelta(hours=14)
+
+        freshness = await client.get_feature_freshness("hcp_features")
+
+        assert freshness.freshness_status == FreshnessStatus.WARNING
+        # WARNING means approaching staleness but still technically fresh/usable
+        assert freshness.is_fresh is True
+
+    @pytest.mark.asyncio
+    async def test_get_feature_freshness_stale_status(self):
+        """Test freshness is STALE when past staleness threshold."""
+        client = FeastClient()
+        client._initialized = True
+        client._materialization_config = {
+            "materialization": {"max_staleness_hours": 24.0},
+            "feature_views": {},
+        }
+        # Record materialization 30 hours ago (past staleness, before expiry)
+        client._materialization_timestamps["hcp_features"] = datetime.now() - timedelta(hours=30)
+
+        freshness = await client.get_feature_freshness("hcp_features")
+
+        assert freshness.freshness_status == FreshnessStatus.STALE
+        assert freshness.is_fresh is False
+
+    @pytest.mark.asyncio
+    async def test_get_feature_freshness_expired_status(self):
+        """Test freshness is EXPIRED when very old."""
+        client = FeastClient()
+        client._initialized = True
+        client._materialization_config = {
+            "materialization": {"max_staleness_hours": 24.0},
+            "feature_views": {},
+        }
+        # Record materialization 50 hours ago (past 2x staleness)
+        client._materialization_timestamps["hcp_features"] = datetime.now() - timedelta(hours=50)
+
+        freshness = await client.get_feature_freshness("hcp_features")
+
+        assert freshness.freshness_status == FreshnessStatus.EXPIRED
+        assert freshness.is_fresh is False
+
+    @pytest.mark.asyncio
+    async def test_get_all_freshness(self):
+        """Test getting freshness for all feature views."""
+        client = FeastClient()
+        client._initialized = True
+        # Clear config to use mock store instead
+        client._materialization_config = {"materialization": {}, "feature_views": {}}
+
+        # Setup mock store with feature views
+        mock_fv1 = MagicMock()
+        mock_fv1.name = "hcp_features"
+        mock_fv2 = MagicMock()
+        mock_fv2.name = "brand_features"
+        mock_store = MagicMock()
+        mock_store.list_feature_views.return_value = [mock_fv1, mock_fv2]
+        client._store = mock_store
+
+        # Record one materialization
+        client._materialization_timestamps["hcp_features"] = datetime.now()
+
+        result = await client.get_all_freshness()
+
+        assert isinstance(result, dict)
+        assert "hcp_features" in result
+        assert "brand_features" in result
+        assert result["hcp_features"].freshness_status == FreshnessStatus.FRESH
+        assert result["brand_features"].freshness_status == FreshnessStatus.UNKNOWN
+
+    def test_record_materialization_with_timestamp(self):
+        """Test recording materialization with custom timestamp."""
+        client = FeastClient()
+        past_time = datetime(2024, 1, 15, 12, 0, 0)
+
+        client.record_materialization("hcp_features", timestamp=past_time)
+
+        assert "hcp_features" in client._materialization_timestamps
+        assert client._materialization_timestamps["hcp_features"] == past_time
+
+    def test_record_materialization_default_now(self):
+        """Test recording materialization defaults to current time."""
+        client = FeastClient()
+        before = datetime.now()
+
+        client.record_materialization("hcp_features")
+
+        after = datetime.now()
+        recorded = client._materialization_timestamps["hcp_features"]
+        assert before <= recorded <= after
+
+
+class TestFreshnessThresholds:
+    """Test freshness threshold configuration."""
+
+    def test_get_freshness_thresholds_defaults(self):
+        """Test default thresholds when no config."""
+        client = FeastClient()
+        client._materialization_config = {"materialization": {}, "feature_views": {}}
+
+        max_stale, warning = client._get_freshness_thresholds("any_view")
+
+        assert max_stale == 24.0  # default
+        assert warning == max_stale / 2  # default is half of staleness
+
+    def test_get_freshness_thresholds_global_config(self):
+        """Test thresholds from global materialization config."""
+        client = FeastClient()
+        client._materialization_config = {
+            "materialization": {"max_staleness_hours": 48.0, "warning_threshold_hours": 24.0},
+            "feature_views": {},
+        }
+
+        max_stale, warning = client._get_freshness_thresholds("any_view")
+
+        assert max_stale == 48.0
+        assert warning == 24.0
+
+    def test_get_freshness_thresholds_feature_view_override(self):
+        """Test per-feature-view threshold override."""
+        client = FeastClient()
+        client._materialization_config = {
+            "materialization": {"max_staleness_hours": 24.0, "warning_threshold_hours": 12.0},
+            "feature_views": {
+                "hcp_features": {
+                    "max_staleness_hours": 6.0,
+                    "warning_threshold_hours": 3.0,
+                }
+            },
+        }
+
+        # Feature view with override
+        max_stale, warning = client._get_freshness_thresholds("hcp_features")
+        assert max_stale == 6.0
+        assert warning == 3.0
+
+        # Feature view without override uses global
+        max_stale, warning = client._get_freshness_thresholds("other_view")
+        assert max_stale == 24.0
+        assert warning == 12.0
+
+    @pytest.mark.asyncio
+    async def test_close_clears_timestamps(self):
+        """Test that closing client clears materialization timestamps."""
+        client = FeastClient()
+        client._initialized = True
+        client._materialization_timestamps = {"hcp_features": datetime.now()}
+
+        await client.close()
+
+        assert len(client._materialization_timestamps) == 0
+
+
+class TestMaterializationTimestampTracking:
+    """Test that materialization methods track timestamps."""
+
+    @pytest.mark.asyncio
+    async def test_materialize_tracks_timestamp(self):
+        """Test that materialize() records timestamps for feature views."""
+        client = FeastClient()
+        client._initialized = True
+        mock_store = MagicMock()
+        mock_store.materialize.return_value = None
+        client._store = mock_store
+
+        before = datetime.now()
+        await client.materialize(
+            start_date=datetime.now() - timedelta(days=1),
+            end_date=datetime.now(),
+            feature_views=["hcp_features", "brand_features"],
+        )
+        after = datetime.now()
+
+        # Both feature views should have timestamps recorded
+        assert "hcp_features" in client._materialization_timestamps
+        assert "brand_features" in client._materialization_timestamps
+        assert before <= client._materialization_timestamps["hcp_features"] <= after
+
+    @pytest.mark.asyncio
+    async def test_materialize_incremental_tracks_timestamp(self):
+        """Test that materialize_incremental() records timestamps."""
+        client = FeastClient()
+        client._initialized = True
+        # Clear config to use mock store instead
+        client._materialization_config = {"materialization": {}, "feature_views": {}}
+
+        mock_store = MagicMock()
+        mock_store.materialize_incremental.return_value = None
+        # Mock list_feature_views for getting all view names
+        mock_fv = MagicMock()
+        mock_fv.name = "hcp_features"
+        mock_store.list_feature_views.return_value = [mock_fv]
+        client._store = mock_store
+
+        before = datetime.now()
+        await client.materialize_incremental(end_date=datetime.now())
+        after = datetime.now()
+
+        # Feature view should have timestamp recorded
+        assert "hcp_features" in client._materialization_timestamps
+        assert before <= client._materialization_timestamps["hcp_features"] <= after
