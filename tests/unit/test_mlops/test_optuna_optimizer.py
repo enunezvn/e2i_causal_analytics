@@ -1300,3 +1300,243 @@ class TestOptunaOptimizerIntegration:
         # May or may not have pruned trials depending on performance
         assert results["n_trials"] == 10
         assert results["n_completed"] + results["n_pruned"] <= results["n_trials"]
+
+
+# ============================================================================
+# CONFIG LOADING TESTS
+# ============================================================================
+
+
+class TestLoadOptunaConfig:
+    """Tests for load_optuna_config function."""
+
+    def test_load_config_from_default_path(self):
+        """Test loading config from default path."""
+        from src.mlops.optuna_optimizer import load_optuna_config
+
+        config = load_optuna_config()
+
+        # Should load successfully
+        assert config is not None
+        assert "storage" in config
+        assert "sampler" in config
+        assert "pruner" in config
+
+    def test_load_config_returns_defaults_for_missing_file(self, tmp_path):
+        """Test that missing config file returns defaults."""
+        from src.mlops.optuna_optimizer import load_optuna_config
+
+        nonexistent_path = tmp_path / "nonexistent.yaml"
+        config = load_optuna_config(nonexistent_path)
+
+        # Should return defaults
+        assert config["storage"]["enabled"] is False
+        assert config["sampler"]["type"] == "tpe"
+        assert config["pruner"]["type"] == "median"
+
+    def test_config_has_expected_sections(self):
+        """Test that loaded config has all expected sections."""
+        from src.mlops.optuna_optimizer import load_optuna_config
+
+        config = load_optuna_config()
+
+        expected_sections = ["storage", "sampler", "pruner", "optimization", "warmstart", "mlflow"]
+        for section in expected_sections:
+            assert section in config, f"Missing section: {section}"
+
+
+class TestOptunaOptimizerConfigIntegration:
+    """Tests for OptunaOptimizer config integration."""
+
+    def test_init_loads_config_by_default(self):
+        """Test that config is loaded by default."""
+        optimizer = OptunaOptimizer(experiment_id="test_config")
+
+        assert optimizer._config is not None
+        assert "sampler" in optimizer._config
+
+    def test_init_respects_use_config_false(self):
+        """Test that use_config=False skips config loading."""
+        optimizer = OptunaOptimizer(experiment_id="test_no_config", use_config=False)
+
+        assert optimizer._config == {}
+
+    def test_explicit_storage_url_overrides_config(self):
+        """Test that explicit storage_url takes precedence over config."""
+        optimizer = OptunaOptimizer(
+            experiment_id="test_explicit",
+            storage_url="sqlite:///explicit.db",
+        )
+
+        assert optimizer.storage_url == "sqlite:///explicit.db"
+
+    def test_explicit_mlflow_tracking_overrides_config(self):
+        """Test that explicit mlflow_tracking takes precedence over config."""
+        optimizer = OptunaOptimizer(
+            experiment_id="test_explicit_mlflow",
+            mlflow_tracking=False,
+        )
+
+        assert optimizer.mlflow_tracking is False
+
+    def test_config_property_returns_loaded_config(self):
+        """Test that config property returns the loaded configuration."""
+        optimizer = OptunaOptimizer(experiment_id="test_property")
+
+        config = optimizer.config
+
+        assert config is optimizer._config
+        assert "sampler" in config
+
+
+class TestConfigBasedSamplerCreation:
+    """Tests for config-based sampler creation."""
+
+    def test_creates_tpe_sampler_from_config(self):
+        """Test TPE sampler creation from config."""
+        optimizer = OptunaOptimizer(experiment_id="test_tpe")
+
+        sampler = optimizer._create_sampler_from_config()
+
+        assert isinstance(sampler, optuna.samplers.TPESampler)
+
+    def test_creates_random_sampler_when_configured(self):
+        """Test Random sampler creation when config specifies random."""
+        optimizer = OptunaOptimizer(experiment_id="test_random", use_config=False)
+        optimizer._config = {"sampler": {"type": "random", "seed": 123}}
+
+        sampler = optimizer._create_sampler_from_config()
+
+        assert isinstance(sampler, optuna.samplers.RandomSampler)
+
+    def test_creates_cmaes_sampler_when_configured(self):
+        """Test CMA-ES sampler creation when config specifies cmaes."""
+        optimizer = OptunaOptimizer(experiment_id="test_cmaes", use_config=False)
+        optimizer._config = {"sampler": {"type": "cmaes", "seed": 42}}
+
+        sampler = optimizer._create_sampler_from_config()
+
+        assert isinstance(sampler, optuna.samplers.CmaEsSampler)
+
+    def test_falls_back_to_tpe_for_unknown_sampler(self):
+        """Test fallback to TPE for unknown sampler type."""
+        optimizer = OptunaOptimizer(experiment_id="test_unknown", use_config=False)
+        optimizer._config = {"sampler": {"type": "unknown_sampler"}}
+
+        sampler = optimizer._create_sampler_from_config()
+
+        assert isinstance(sampler, optuna.samplers.TPESampler)
+
+
+class TestConfigBasedPrunerCreation:
+    """Tests for config-based pruner creation."""
+
+    def test_creates_median_pruner_from_config(self):
+        """Test Median pruner creation from config."""
+        optimizer = OptunaOptimizer(experiment_id="test_median")
+
+        pruner = optimizer._create_pruner_from_config()
+
+        assert isinstance(pruner, optuna.pruners.MedianPruner)
+
+    def test_creates_successive_halving_when_configured(self):
+        """Test Successive Halving pruner creation."""
+        optimizer = OptunaOptimizer(experiment_id="test_sh", use_config=False)
+        optimizer._config = {
+            "pruner": {
+                "type": "successive_halving",
+                "successive_halving": {"min_resource": 1, "reduction_factor": 3},
+            }
+        }
+
+        pruner = optimizer._create_pruner_from_config()
+
+        assert isinstance(pruner, optuna.pruners.SuccessiveHalvingPruner)
+
+    def test_creates_hyperband_when_configured(self):
+        """Test Hyperband pruner creation."""
+        optimizer = OptunaOptimizer(experiment_id="test_hb", use_config=False)
+        optimizer._config = {
+            "pruner": {
+                "type": "hyperband",
+                "hyperband": {"min_resource": 1, "max_resource": 100},
+            }
+        }
+
+        pruner = optimizer._create_pruner_from_config()
+
+        assert isinstance(pruner, optuna.pruners.HyperbandPruner)
+
+    def test_creates_nop_pruner_when_none_configured(self):
+        """Test NopPruner creation when type is none."""
+        optimizer = OptunaOptimizer(experiment_id="test_nop", use_config=False)
+        optimizer._config = {"pruner": {"type": "none"}}
+
+        pruner = optimizer._create_pruner_from_config()
+
+        assert isinstance(pruner, optuna.pruners.NopPruner)
+
+    def test_falls_back_to_median_for_unknown_pruner(self):
+        """Test fallback to MedianPruner for unknown type."""
+        optimizer = OptunaOptimizer(experiment_id="test_unknown_p", use_config=False)
+        optimizer._config = {"pruner": {"type": "unknown_pruner"}}
+
+        pruner = optimizer._create_pruner_from_config()
+
+        assert isinstance(pruner, optuna.pruners.MedianPruner)
+
+
+class TestCreateStudyWithConfig:
+    """Tests for create_study with config-based defaults."""
+
+    @pytest.mark.asyncio
+    async def test_create_study_uses_config_sampler(self):
+        """Test that create_study uses config-based sampler when none provided."""
+        optimizer = OptunaOptimizer(experiment_id="test_cfg_study")
+
+        study = await optimizer.create_study(
+            study_name="config_sampler_test",
+            direction="maximize",
+        )
+
+        # Should use TPE sampler from config
+        assert isinstance(study.sampler, optuna.samplers.TPESampler)
+
+    @pytest.mark.asyncio
+    async def test_create_study_uses_config_pruner(self):
+        """Test that create_study uses config-based pruner when none provided."""
+        optimizer = OptunaOptimizer(experiment_id="test_cfg_study")
+
+        study = await optimizer.create_study(
+            study_name="config_pruner_test",
+            direction="maximize",
+        )
+
+        # Should use Median pruner from config
+        assert isinstance(study.pruner, optuna.pruners.MedianPruner)
+
+    @pytest.mark.asyncio
+    async def test_explicit_sampler_overrides_config(self):
+        """Test that explicit sampler parameter overrides config."""
+        optimizer = OptunaOptimizer(experiment_id="test_explicit_sampler")
+        explicit_sampler = SamplerFactory.random_sampler(seed=999)
+
+        study = await optimizer.create_study(
+            study_name="explicit_sampler_test",
+            sampler=explicit_sampler,
+        )
+
+        assert isinstance(study.sampler, optuna.samplers.RandomSampler)
+
+    @pytest.mark.asyncio
+    async def test_explicit_pruner_overrides_config(self):
+        """Test that explicit pruner parameter overrides config."""
+        optimizer = OptunaOptimizer(experiment_id="test_explicit_pruner")
+        explicit_pruner = PrunerFactory.no_pruner()
+
+        study = await optimizer.create_study(
+            study_name="explicit_pruner_test",
+            pruner=explicit_pruner,
+        )
+
+        assert isinstance(study.pruner, optuna.pruners.NopPruner)
