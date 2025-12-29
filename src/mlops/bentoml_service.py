@@ -755,6 +755,10 @@ async def deploy_model(
     deployment_name: str,
     replicas: int = 1,
     resources: Optional[Dict[str, str]] = None,
+    environment: str = "staging",
+    model_registry_id: Optional[str] = None,
+    deployed_by: Optional[str] = None,
+    supabase_client=None,
 ) -> Dict[str, Any]:
     """Deploy a registered model to production.
 
@@ -763,6 +767,10 @@ async def deploy_model(
         deployment_name: Name for the deployment
         replicas: Number of replicas
         resources: Resource limits
+        environment: Deployment environment (staging, production)
+        model_registry_id: UUID of model in ml_model_registry
+        deployed_by: Username of deployer
+        supabase_client: Optional Supabase client for DB persistence
 
     Returns:
         Deployment status dictionary
@@ -792,14 +800,34 @@ async def deploy_model(
         # Build container
         image_tag = packager.containerize(bento_tag)
 
-        return {
+        result = {
             "deployment_status": "success",
             "bento_tag": bento_tag,
             "image_tag": image_tag,
             "deployment_name": deployment_name,
             "replicas": replicas,
             "resources": resources,
+            "environment": environment,
         }
+
+        # Persist deployment record to database
+        deployment_record = await _persist_deployment(
+            deployment_name=deployment_name,
+            model_registry_id=model_registry_id,
+            environment=environment,
+            deployed_by=deployed_by,
+            deployment_config={
+                "bento_tag": bento_tag,
+                "image_tag": image_tag,
+                "replicas": replicas,
+                "resources": resources,
+            },
+            supabase_client=supabase_client,
+        )
+        if deployment_record:
+            result["deployment_id"] = str(deployment_record.id)
+
+        return result
 
     except Exception as e:
         logger.error(f"Failed to deploy model: {e}")
@@ -807,6 +835,59 @@ async def deploy_model(
             "deployment_status": "failed",
             "error": str(e),
         }
+
+
+async def _persist_deployment(
+    deployment_name: str,
+    model_registry_id: Optional[str] = None,
+    environment: str = "staging",
+    deployed_by: Optional[str] = None,
+    deployment_config: Optional[Dict[str, Any]] = None,
+    supabase_client=None,
+) -> Optional[Any]:
+    """Persist deployment record to ml_deployments table.
+
+    Args:
+        deployment_name: Name of the deployment
+        model_registry_id: UUID of model in ml_model_registry
+        environment: Deployment environment
+        deployed_by: Username of deployer
+        deployment_config: Configuration details
+        supabase_client: Supabase client
+
+    Returns:
+        MLDeployment record or None if persistence failed
+    """
+    try:
+        from uuid import UUID
+        from src.repositories.deployment import (
+            MLDeploymentRepository,
+            DeploymentStatus,
+        )
+
+        repo = MLDeploymentRepository(supabase_client)
+
+        # Convert model_registry_id if provided
+        registry_uuid = UUID(model_registry_id) if model_registry_id else None
+
+        deployment = await repo.create_deployment(
+            model_registry_id=registry_uuid,
+            deployment_name=deployment_name,
+            environment=environment,
+            deployed_by=deployed_by,
+            deployment_config=deployment_config or {},
+        )
+
+        # Update status to active
+        if deployment and deployment.id:
+            await repo.update_status(deployment.id, DeploymentStatus.ACTIVE)
+            logger.info(f"Persisted deployment: {deployment_name} (ID: {deployment.id})")
+
+        return deployment
+
+    except Exception as e:
+        logger.warning(f"Failed to persist deployment record: {e}")
+        return None
 
 
 def get_model_serving_status(model_tag: str) -> Dict[str, Any]:

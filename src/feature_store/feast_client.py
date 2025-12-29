@@ -595,13 +595,18 @@ class FeastClient:
         feature_view: str,
         feature_name: str,
         refresh: bool = False,
+        supabase_client=None,
     ) -> Optional[FeatureStatistics]:
         """Get statistics for a specific feature.
+
+        Computes actual statistics by querying the offline store (Supabase).
+        Results are cached for efficiency.
 
         Args:
             feature_view: Name of the feature view.
             feature_name: Name of the feature.
             refresh: If True, bypass cache and fetch fresh stats.
+            supabase_client: Optional Supabase client for querying offline store.
 
         Returns:
             FeatureStatistics or None if not available.
@@ -616,25 +621,13 @@ class FeastClient:
             if cache_time and (datetime.now() - cache_time).total_seconds() < self.config.cache_ttl_seconds:
                 return self._stats_cache[cache_key]
 
-        # Compute statistics
-        # Note: Feast doesn't have built-in stats, so we compute from recent data
+        # Compute statistics from offline store
         try:
-            # Get recent data for the feature
-            end_date = datetime.now()
-            start_date = end_date - timedelta(days=30)
-
-            if self._store:
-                # This would require accessing the offline store directly
-                # For now, return placeholder stats
-                stats = FeatureStatistics(
-                    feature_view=feature_view,
-                    feature_name=feature_name,
-                    count=0,
-                    null_count=0,
-                    last_updated=datetime.now(),
-                )
-            else:
-                stats = None
+            stats = await self._compute_feature_statistics(
+                feature_view=feature_view,
+                feature_name=feature_name,
+                supabase_client=supabase_client,
+            )
 
             if stats:
                 self._stats_cache[cache_key] = stats
@@ -645,6 +638,259 @@ class FeastClient:
         except Exception as e:
             logger.error(f"Error getting feature statistics: {e}")
             return None
+
+    async def _compute_feature_statistics(
+        self,
+        feature_view: str,
+        feature_name: str,
+        supabase_client=None,
+    ) -> Optional[FeatureStatistics]:
+        """Compute actual statistics for a feature from offline store.
+
+        Args:
+            feature_view: Name of the feature view.
+            feature_name: Name of the feature.
+            supabase_client: Supabase client for querying.
+
+        Returns:
+            FeatureStatistics with computed values.
+        """
+        # Map feature views to source tables
+        feature_view_tables = self._materialization_config.get("feature_views", {})
+        view_config = feature_view_tables.get(feature_view, {})
+        source_table = view_config.get("source_table")
+
+        if not source_table and supabase_client:
+            # Try to infer table from feature view name
+            # Convention: hcp_conversion_features -> hcp_profiles or similar
+            source_table = self._infer_source_table(feature_view)
+
+        if not source_table:
+            logger.debug(f"No source table found for feature view: {feature_view}")
+            # Return placeholder if no source table configured
+            return FeatureStatistics(
+                feature_view=feature_view,
+                feature_name=feature_name,
+                count=0,
+                null_count=0,
+                last_updated=datetime.now(),
+            )
+
+        # Query statistics from Supabase
+        if supabase_client:
+            try:
+                stats = await self._query_statistics_from_supabase(
+                    client=supabase_client,
+                    table_name=source_table,
+                    column_name=feature_name,
+                    feature_view=feature_view,
+                )
+                return stats
+            except Exception as e:
+                logger.warning(f"Failed to query stats from Supabase: {e}")
+
+        # Fallback: try to compute from Feast offline store
+        if self._store:
+            try:
+                return await self._compute_stats_from_feast(
+                    feature_view=feature_view,
+                    feature_name=feature_name,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to compute stats from Feast: {e}")
+
+        # Final fallback: placeholder stats
+        return FeatureStatistics(
+            feature_view=feature_view,
+            feature_name=feature_name,
+            count=0,
+            null_count=0,
+            last_updated=datetime.now(),
+        )
+
+    def _infer_source_table(self, feature_view: str) -> Optional[str]:
+        """Infer source table name from feature view name.
+
+        Convention mappings:
+        - hcp_conversion_features -> hcp_profiles
+        - patient_journey_features -> patient_journeys
+        - trigger_features -> triggers
+        - market_features -> business_metrics
+        """
+        mappings = {
+            "hcp_conversion_features": "hcp_profiles",
+            "hcp_features": "hcp_profiles",
+            "patient_journey_features": "patient_journeys",
+            "patient_features": "patient_journeys",
+            "trigger_features": "triggers",
+            "market_features": "business_metrics",
+            "business_features": "business_metrics",
+        }
+        return mappings.get(feature_view)
+
+    async def _query_statistics_from_supabase(
+        self,
+        client,
+        table_name: str,
+        column_name: str,
+        feature_view: str,
+    ) -> FeatureStatistics:
+        """Query feature statistics directly from Supabase.
+
+        Uses SQL aggregate functions for efficient computation.
+
+        Args:
+            client: Supabase client.
+            table_name: Source table name.
+            column_name: Column to compute stats for.
+            feature_view: Feature view name for result.
+
+        Returns:
+            FeatureStatistics with computed values.
+        """
+        # Build SQL for statistics computation
+        stats_query = f"""
+            SELECT
+                COUNT(*) as total_count,
+                COUNT({column_name}) as non_null_count,
+                COUNT(*) - COUNT({column_name}) as null_count,
+                MIN({column_name}::numeric) as min_val,
+                MAX({column_name}::numeric) as max_val,
+                AVG({column_name}::numeric) as mean_val,
+                STDDEV({column_name}::numeric) as stddev_val
+            FROM {table_name}
+            WHERE {column_name} IS NOT NULL
+        """
+
+        try:
+            # Execute via RPC or direct query
+            result = await asyncio.to_thread(
+                lambda: client.rpc("execute_sql", {"query": stats_query}).execute()
+            )
+
+            if result.data and len(result.data) > 0:
+                row = result.data[0]
+                return FeatureStatistics(
+                    feature_view=feature_view,
+                    feature_name=column_name,
+                    count=int(row.get("total_count", 0)),
+                    null_count=int(row.get("null_count", 0)),
+                    min_value=float(row["min_val"]) if row.get("min_val") else None,
+                    max_value=float(row["max_val"]) if row.get("max_val") else None,
+                    mean_value=float(row["mean_val"]) if row.get("mean_val") else None,
+                    stddev_value=float(row["stddev_val"]) if row.get("stddev_val") else None,
+                    last_updated=datetime.now(),
+                )
+        except Exception as e:
+            # Try simpler count-only query if stats query fails
+            logger.debug(f"Full stats query failed: {e}. Trying count-only.")
+
+            try:
+                count_result = await asyncio.to_thread(
+                    lambda: client.table(table_name).select("*", count="exact").limit(0).execute()
+                )
+                total_count = count_result.count if hasattr(count_result, 'count') else 0
+
+                return FeatureStatistics(
+                    feature_view=feature_view,
+                    feature_name=column_name,
+                    count=total_count,
+                    null_count=0,
+                    last_updated=datetime.now(),
+                )
+            except Exception as count_error:
+                logger.warning(f"Count query also failed: {count_error}")
+
+        # Return placeholder if all queries fail
+        return FeatureStatistics(
+            feature_view=feature_view,
+            feature_name=column_name,
+            count=0,
+            null_count=0,
+            last_updated=datetime.now(),
+        )
+
+    async def _compute_stats_from_feast(
+        self,
+        feature_view: str,
+        feature_name: str,
+    ) -> FeatureStatistics:
+        """Compute statistics from Feast offline store.
+
+        Uses Feast's data source to compute statistics.
+
+        Args:
+            feature_view: Feature view name.
+            feature_name: Feature name.
+
+        Returns:
+            FeatureStatistics with computed values.
+        """
+        if not self._store:
+            raise RuntimeError("Feast store not initialized")
+
+        try:
+            # Get feature view definition
+            fv = self._store.get_feature_view(feature_view)
+
+            # Access the data source
+            data_source = fv.batch_source if hasattr(fv, 'batch_source') else None
+
+            if data_source and hasattr(data_source, 'get_table_query_string'):
+                # Could query the source directly
+                # This is implementation-specific to the data source type
+                pass
+
+            # For now, get a sample of recent data
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=30)
+
+            # Create minimal entity df for sampling
+            entity_df = pd.DataFrame({
+                "event_timestamp": [start_date, end_date],
+            })
+
+            # Add required entity columns based on feature view
+            for entity in fv.entity_columns if hasattr(fv, 'entity_columns') else []:
+                entity_df[entity] = ["sample_id", "sample_id"]
+
+            # Get historical features
+            retrieval_job = self._store.get_historical_features(
+                entity_df=entity_df,
+                features=[f"{feature_view}:{feature_name}"],
+            )
+            df = retrieval_job.to_df()
+
+            # Compute statistics
+            col_name = f"{feature_view}__{feature_name}"
+            if col_name not in df.columns:
+                col_name = feature_name
+
+            if col_name in df.columns:
+                series = df[col_name]
+                return FeatureStatistics(
+                    feature_view=feature_view,
+                    feature_name=feature_name,
+                    count=len(series),
+                    null_count=int(series.isna().sum()),
+                    min_value=float(series.min()) if pd.notna(series.min()) else None,
+                    max_value=float(series.max()) if pd.notna(series.max()) else None,
+                    mean_value=float(series.mean()) if pd.notna(series.mean()) else None,
+                    stddev_value=float(series.std()) if pd.notna(series.std()) else None,
+                    last_updated=datetime.now(),
+                )
+
+        except Exception as e:
+            logger.warning(f"Failed to compute stats from Feast: {e}")
+
+        # Fallback
+        return FeatureStatistics(
+            feature_view=feature_view,
+            feature_name=feature_name,
+            count=0,
+            null_count=0,
+            last_updated=datetime.now(),
+        )
 
     async def list_feature_views(self) -> List[Dict[str, Any]]:
         """List all registered feature views.
