@@ -28,39 +28,107 @@ RAGAS Evaluation (Opik-integrated):
 - OpikEvaluationTracer: Centralized Opik tracing
 """
 
-from src.rag.causal_rag import CausalRAG
-from src.rag.chunk_processor import ChunkProcessor
+import logging
 
-# Cognitive RAG exports
-from src.rag.cognitive_rag_dspy import (
-    CognitiveRAGOptimizer,
-    CognitiveState,
-    create_dspy_cognitive_workflow,
-    create_production_cognitive_workflow,
+_logger = logging.getLogger(__name__)
+
+# =============================================================================
+# Core Types (always available - minimal dependencies)
+# =============================================================================
+from src.rag.types import (
+    BackendHealth,
+    BackendStatus,
+    ExtractedEntities,
+    GraphPath,
+    RetrievalResult,
+    RetrievalSource,
+    SearchStats,
 )
-from src.rag.config import RAGConfig
-from src.rag.entity_extractor import EntityExtractor
 
-# Evaluation exports
+from src.rag.config import RAGConfig
+
+# =============================================================================
+# Evaluation (minimal dependencies - needed for CI workflows)
+# =============================================================================
 from src.rag.evaluation import (
     EvaluationResult,
     EvaluationSample,
     RAGASEvaluator,
     RAGEvaluationPipeline,
 )
-from src.rag.health_monitor import HealthMonitor
-from src.rag.insight_enricher import InsightEnricher
+
+# =============================================================================
+# Optional Components (may require additional dependencies)
+# These are wrapped in try/except to allow minimal imports for CI workflows
+# =============================================================================
+
+# Core RAG components (require anthropic, networkx, etc.)
+_CORE_RAG_EXPORTS: list[str] = []
+try:
+    from src.rag.causal_rag import CausalRAG
+    from src.rag.chunk_processor import ChunkProcessor
+    from src.rag.entity_extractor import EntityExtractor
+    from src.rag.health_monitor import HealthMonitor
+    from src.rag.insight_enricher import InsightEnricher
+    from src.rag.query_optimizer import QueryOptimizer
+    from src.rag.reranker import CrossEncoderReranker
+    from src.rag.retriever import HybridRetriever
+    from src.rag.search_logger import SearchLogger
+
+    _CORE_RAG_EXPORTS = [
+        "CausalRAG",
+        "HybridRetriever",
+        "CrossEncoderReranker",
+        "QueryOptimizer",
+        "InsightEnricher",
+        "ChunkProcessor",
+        "EntityExtractor",
+        "HealthMonitor",
+        "SearchLogger",
+    ]
+except ImportError as e:
+    _logger.debug(f"Core RAG components not available: {e}")
+
+# Cognitive RAG exports (require dspy, langchain, etc.)
+_COGNITIVE_EXPORTS: list[str] = []
+try:
+    from src.rag.cognitive_rag_dspy import (
+        CognitiveRAGOptimizer,
+        CognitiveState,
+        create_dspy_cognitive_workflow,
+        create_production_cognitive_workflow,
+    )
+    _COGNITIVE_EXPORTS = [
+        "CognitiveState",
+        "create_dspy_cognitive_workflow",
+        "create_production_cognitive_workflow",
+        "CognitiveRAGOptimizer",
+    ]
+except ImportError as e:
+    _logger.debug(f"Cognitive RAG components not available: {e}")
 
 # Memory adapters for DSPy integration
-from src.rag.memory_adapters import (
-    EpisodicMemoryAdapter,
-    ProceduralMemoryAdapter,
-    SemanticMemoryAdapter,
-    SignalCollectorAdapter,
-    create_memory_adapters,
-)
+_MEMORY_EXPORTS: list[str] = []
+try:
+    from src.rag.memory_adapters import (
+        EpisodicMemoryAdapter,
+        ProceduralMemoryAdapter,
+        SemanticMemoryAdapter,
+        SignalCollectorAdapter,
+        create_memory_adapters,
+    )
+    _MEMORY_EXPORTS = [
+        "EpisodicMemoryAdapter",
+        "SemanticMemoryAdapter",
+        "ProceduralMemoryAdapter",
+        "SignalCollectorAdapter",
+        "create_memory_adapters",
+    ]
+except ImportError as e:
+    _logger.debug(f"Memory adapters not available: {e}")
 
 # Opik integration (optional, with graceful fallback)
+_OPIK_EXPORTS: list[str] = []
 try:
     from src.rag.opik_integration import (
         CombinedEvaluationResult,
@@ -74,38 +142,11 @@ try:
         "log_ragas_scores_to_opik",
         "log_rubric_scores_to_opik",
     ]
-except ImportError:
-    _OPIK_EXPORTS = []
-
-from src.rag.query_optimizer import QueryOptimizer
-from src.rag.reranker import CrossEncoderReranker
-from src.rag.retriever import HybridRetriever
-from src.rag.search_logger import SearchLogger
-
-# Types
-from src.rag.types import (
-    BackendHealth,
-    BackendStatus,
-    ExtractedEntities,
-    GraphPath,
-    RetrievalResult,
-    RetrievalSource,
-    SearchStats,
-)
+except ImportError as e:
+    _logger.debug(f"Opik integration not available: {e}")
 
 __all__ = [
-    # Core RAG
-    "CausalRAG",
-    "HybridRetriever",
-    "CrossEncoderReranker",
-    "QueryOptimizer",
-    "InsightEnricher",
-    "ChunkProcessor",
-    "EntityExtractor",
-    "HealthMonitor",
-    "SearchLogger",
-    "RAGConfig",
-    # Types
+    # Types (always available)
     "RetrievalResult",
     "RetrievalSource",
     "ExtractedEntities",
@@ -113,20 +154,10 @@ __all__ = [
     "BackendHealth",
     "SearchStats",
     "GraphPath",
-    # Cognitive RAG
-    "CognitiveState",
-    "create_dspy_cognitive_workflow",
-    "create_production_cognitive_workflow",
-    "CognitiveRAGOptimizer",
-    # Memory Adapters
-    "EpisodicMemoryAdapter",
-    "SemanticMemoryAdapter",
-    "ProceduralMemoryAdapter",
-    "SignalCollectorAdapter",
-    "create_memory_adapters",
-    # RAGAS Evaluation
+    "RAGConfig",
+    # RAGAS Evaluation (always available - needed for CI)
     "RAGASEvaluator",
     "RAGEvaluationPipeline",
     "EvaluationResult",
     "EvaluationSample",
-] + _OPIK_EXPORTS
+] + _CORE_RAG_EXPORTS + _COGNITIVE_EXPORTS + _MEMORY_EXPORTS + _OPIK_EXPORTS
