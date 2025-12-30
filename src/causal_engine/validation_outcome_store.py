@@ -17,6 +17,7 @@ Reference: docs/E2I_Causal_Validation_Protocol.html
 from __future__ import annotations
 
 import logging
+import os
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from dataclasses import dataclass
@@ -24,6 +25,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .validation_outcome import (
     FailureCategory,
+    ValidationFailurePattern,
     ValidationOutcome,
     ValidationOutcomeType,
 )
@@ -305,6 +307,332 @@ class InMemoryValidationOutcomeStore(ValidationOutcomeStoreBase):
 
 
 # ============================================================================
+# SUPABASE IMPLEMENTATION (FOR PRODUCTION)
+# ============================================================================
+
+
+class SupabaseValidationOutcomeStore(ValidationOutcomeStoreBase):
+    """Supabase-backed implementation of ValidationOutcomeStore.
+
+    Uses the validation_outcomes table for persistent storage.
+    Falls back to InMemoryValidationOutcomeStore if Supabase is unavailable.
+    """
+
+    def __init__(self):
+        """Initialize Supabase store with lazy client loading."""
+        self._client = None
+        self._fallback_store: Optional[InMemoryValidationOutcomeStore] = None
+
+    def _get_client(self):
+        """Get Supabase client (lazy initialization)."""
+        if self._client is None:
+            try:
+                from src.memory.services.factories import get_supabase_client
+
+                self._client = get_supabase_client()
+            except Exception as e:
+                logger.warning(f"Could not initialize Supabase client: {e}")
+                self._client = None
+        return self._client
+
+    def _get_fallback(self) -> InMemoryValidationOutcomeStore:
+        """Get fallback in-memory store."""
+        if self._fallback_store is None:
+            self._fallback_store = InMemoryValidationOutcomeStore()
+        return self._fallback_store
+
+    def _outcome_to_row(self, outcome: ValidationOutcome) -> Dict[str, Any]:
+        """Convert ValidationOutcome to database row."""
+        return {
+            "outcome_id": outcome.outcome_id,
+            "estimate_id": outcome.estimate_id,
+            "outcome_type": outcome.outcome_type.value,
+            "treatment_variable": outcome.treatment_variable,
+            "outcome_variable": outcome.outcome_variable,
+            "brand": outcome.brand,
+            "sample_size": outcome.sample_size,
+            "effect_size": float(outcome.effect_size) if outcome.effect_size else None,
+            "gate_decision": outcome.gate_decision,
+            "confidence_score": outcome.confidence_score,
+            "tests_passed": outcome.tests_passed,
+            "tests_failed": outcome.tests_failed,
+            "tests_total": outcome.tests_total,
+            "failure_patterns": [
+                {
+                    "category": p.category.value,
+                    "test_name": p.test_name,
+                    "description": p.description,
+                    "severity": p.severity,
+                    "original_effect": p.original_effect,
+                    "refuted_effect": p.refuted_effect,
+                    "delta_percent": p.delta_percent,
+                    "recommendation": p.recommendation,
+                }
+                for p in outcome.failure_patterns
+            ],
+            "raw_suite": outcome.raw_suite or {},
+            "agent_context": outcome.agent_context or {},
+            "dag_hash": outcome.dag_hash,
+            "timestamp": outcome.timestamp,
+        }
+
+    def _row_to_outcome(self, row: Dict[str, Any]) -> ValidationOutcome:
+        """Convert database row to ValidationOutcome."""
+        patterns = []
+        for p in row.get("failure_patterns", []):
+            patterns.append(
+                ValidationFailurePattern(
+                    category=FailureCategory(p.get("category", "unknown")),
+                    test_name=p.get("test_name", ""),
+                    description=p.get("description", ""),
+                    severity=p.get("severity", "medium"),
+                    original_effect=p.get("original_effect", 0.0),
+                    refuted_effect=p.get("refuted_effect", 0.0),
+                    delta_percent=p.get("delta_percent", 0.0),
+                    recommendation=p.get("recommendation", ""),
+                )
+            )
+
+        return ValidationOutcome(
+            outcome_id=row.get("outcome_id", ""),
+            estimate_id=row.get("estimate_id"),
+            outcome_type=ValidationOutcomeType(row.get("outcome_type", "passed")),
+            treatment_variable=row.get("treatment_variable"),
+            outcome_variable=row.get("outcome_variable"),
+            brand=row.get("brand"),
+            sample_size=row.get("sample_size"),
+            effect_size=row.get("effect_size"),
+            gate_decision=row.get("gate_decision", "unknown"),
+            confidence_score=row.get("confidence_score", 0.0),
+            tests_passed=row.get("tests_passed", 0),
+            tests_failed=row.get("tests_failed", 0),
+            tests_total=row.get("tests_total", 0),
+            failure_patterns=patterns,
+            raw_suite=row.get("raw_suite", {}),
+            agent_context=row.get("agent_context", {}),
+            dag_hash=row.get("dag_hash"),
+            timestamp=row.get("timestamp", ""),
+        )
+
+    async def store(self, outcome: ValidationOutcome) -> str:
+        """Store a validation outcome."""
+        client = self._get_client()
+        if not client:
+            logger.warning("Supabase unavailable, using in-memory fallback")
+            return await self._get_fallback().store(outcome)
+
+        try:
+            row = self._outcome_to_row(outcome)
+            result = client.table("validation_outcomes").insert(row).execute()
+
+            if result.data:
+                logger.info(
+                    f"Stored validation outcome {outcome.outcome_id}: "
+                    f"{outcome.outcome_type.value}"
+                )
+                return outcome.outcome_id
+            else:
+                raise Exception("Insert returned no data")
+
+        except Exception as e:
+            logger.error(f"Failed to store outcome in Supabase: {e}")
+            # Fall back to in-memory
+            return await self._get_fallback().store(outcome)
+
+    async def get(self, outcome_id: str) -> Optional[ValidationOutcome]:
+        """Retrieve a validation outcome by ID."""
+        client = self._get_client()
+        if not client:
+            return await self._get_fallback().get(outcome_id)
+
+        try:
+            result = (
+                client.table("validation_outcomes")
+                .select("*")
+                .eq("outcome_id", outcome_id)
+                .execute()
+            )
+
+            if result.data and len(result.data) > 0:
+                return self._row_to_outcome(result.data[0])
+            return None
+
+        except Exception as e:
+            logger.error(f"Failed to get outcome from Supabase: {e}")
+            return await self._get_fallback().get(outcome_id)
+
+    async def query_failures(
+        self,
+        limit: int = 10,
+        treatment_variable: Optional[str] = None,
+        outcome_variable: Optional[str] = None,
+        brand: Optional[str] = None,
+        failure_category: Optional[FailureCategory] = None,
+        since: Optional[str] = None,
+    ) -> List[ValidationOutcome]:
+        """Query validation failures for learning."""
+        client = self._get_client()
+        if not client:
+            return await self._get_fallback().query_failures(
+                limit=limit,
+                treatment_variable=treatment_variable,
+                outcome_variable=outcome_variable,
+                brand=brand,
+                failure_category=failure_category,
+                since=since,
+            )
+
+        try:
+            query = client.table("validation_outcomes").select("*")
+
+            # Exclude passed outcomes
+            query = query.neq("outcome_type", "passed")
+
+            # Apply filters
+            if treatment_variable:
+                query = query.eq("treatment_variable", treatment_variable)
+            if outcome_variable:
+                query = query.eq("outcome_variable", outcome_variable)
+            if brand:
+                query = query.eq("brand", brand)
+            if since:
+                query = query.gte("timestamp", since)
+
+            # Order by timestamp (most recent first) and limit
+            query = query.order("timestamp", desc=True).limit(limit)
+
+            result = query.execute()
+
+            outcomes = [self._row_to_outcome(row) for row in result.data]
+
+            # Post-filter by failure category if specified (needs JSONB containment)
+            if failure_category:
+                outcomes = [
+                    o for o in outcomes
+                    if any(p.category == failure_category for p in o.failure_patterns)
+                ]
+
+            return outcomes
+
+        except Exception as e:
+            logger.error(f"Failed to query failures from Supabase: {e}")
+            return await self._get_fallback().query_failures(
+                limit=limit,
+                treatment_variable=treatment_variable,
+                outcome_variable=outcome_variable,
+                brand=brand,
+                failure_category=failure_category,
+                since=since,
+            )
+
+    async def get_failure_patterns(
+        self,
+        limit: int = 10,
+        category: Optional[FailureCategory] = None,
+    ) -> List[Dict[str, Any]]:
+        """Get aggregated failure patterns for learning."""
+        client = self._get_client()
+        if not client:
+            return await self._get_fallback().get_failure_patterns(
+                limit=limit, category=category
+            )
+
+        try:
+            # Use the v_validation_failure_patterns view
+            query = client.table("v_validation_failure_patterns").select("*")
+
+            if category:
+                query = query.eq("category", category.value)
+
+            query = query.limit(limit)
+            result = query.execute()
+
+            patterns = []
+            for row in result.data:
+                patterns.append({
+                    "category": row.get("category", "unknown"),
+                    "test_name": row.get("test_name", ""),
+                    "count": row.get("failure_count", 0),
+                    "avg_delta_percent": float(row.get("avg_delta_percent", 0) or 0),
+                    "recommendations": row.get("recommendations", []),
+                })
+
+            return patterns
+
+        except Exception as e:
+            logger.error(f"Failed to get failure patterns from Supabase: {e}")
+            return await self._get_fallback().get_failure_patterns(
+                limit=limit, category=category
+            )
+
+    async def get_similar_failures(
+        self,
+        treatment_variable: str,
+        outcome_variable: str,
+        limit: int = 5,
+    ) -> List[ValidationOutcome]:
+        """Get similar past validation failures."""
+        client = self._get_client()
+        if not client:
+            return await self._get_fallback().get_similar_failures(
+                treatment_variable=treatment_variable,
+                outcome_variable=outcome_variable,
+                limit=limit,
+            )
+
+        try:
+            # Use the query_similar_validation_failures function
+            result = client.rpc(
+                "query_similar_validation_failures",
+                {
+                    "p_treatment_variable": treatment_variable,
+                    "p_outcome_variable": outcome_variable,
+                    "p_limit": limit,
+                },
+            ).execute()
+
+            outcomes = []
+            for row in result.data:
+                # Convert RPC result to ValidationOutcome
+                patterns = []
+                for p in row.get("failure_patterns", []):
+                    patterns.append(
+                        ValidationFailurePattern(
+                            category=FailureCategory(p.get("category", "unknown")),
+                            test_name=p.get("test_name", ""),
+                            description=p.get("description", ""),
+                            severity=p.get("severity", "medium"),
+                            original_effect=p.get("original_effect", 0.0),
+                            refuted_effect=p.get("refuted_effect", 0.0),
+                            delta_percent=p.get("delta_percent", 0.0),
+                            recommendation=p.get("recommendation", ""),
+                        )
+                    )
+
+                outcomes.append(
+                    ValidationOutcome(
+                        outcome_id=row.get("outcome_id", ""),
+                        outcome_type=ValidationOutcomeType(row.get("outcome_type", "passed")),
+                        treatment_variable=row.get("treatment_variable"),
+                        outcome_variable=row.get("outcome_variable"),
+                        effect_size=row.get("effect_size"),
+                        failure_patterns=patterns,
+                        timestamp=row.get("timestamp", ""),
+                    )
+                )
+
+            return outcomes
+
+        except Exception as e:
+            logger.error(f"Failed to get similar failures from Supabase: {e}")
+            return await self._get_fallback().get_similar_failures(
+                treatment_variable=treatment_variable,
+                outcome_variable=outcome_variable,
+                limit=limit,
+            )
+
+
+# ============================================================================
 # EXPERIMENT KNOWLEDGE STORE INTERFACE
 # ============================================================================
 
@@ -530,20 +858,52 @@ class ExperimentKnowledgeStore:
 # GLOBAL INSTANCE (SINGLETON PATTERN)
 # ============================================================================
 
-_global_outcome_store: Optional[InMemoryValidationOutcomeStore] = None
+_global_outcome_store: Optional[ValidationOutcomeStoreBase] = None
 _global_knowledge_store: Optional[ExperimentKnowledgeStore] = None
 
 
-def get_validation_outcome_store() -> InMemoryValidationOutcomeStore:
+def get_validation_outcome_store(
+    use_supabase: bool = True,
+) -> ValidationOutcomeStoreBase:
     """Get the global validation outcome store instance.
 
+    Args:
+        use_supabase: If True, use Supabase backend (falls back to in-memory
+                     if Supabase is unavailable). If False, use in-memory.
+
     Returns:
-        InMemoryValidationOutcomeStore instance
+        ValidationOutcomeStoreBase instance (Supabase or InMemory)
     """
     global _global_outcome_store
+
+    # Check if we need to create/recreate the store
     if _global_outcome_store is None:
-        _global_outcome_store = InMemoryValidationOutcomeStore()
+        if use_supabase:
+            # Check if Supabase is configured
+            supabase_url = os.getenv("SUPABASE_URL")
+            if supabase_url:
+                logger.info("Using Supabase validation outcome store")
+                _global_outcome_store = SupabaseValidationOutcomeStore()
+            else:
+                logger.info(
+                    "SUPABASE_URL not set, using in-memory validation outcome store"
+                )
+                _global_outcome_store = InMemoryValidationOutcomeStore()
+        else:
+            logger.info("Using in-memory validation outcome store (requested)")
+            _global_outcome_store = InMemoryValidationOutcomeStore()
+
     return _global_outcome_store
+
+
+def reset_validation_outcome_store():
+    """Reset the global validation outcome store.
+
+    Used for testing to ensure a fresh store.
+    """
+    global _global_outcome_store, _global_knowledge_store
+    _global_outcome_store = None
+    _global_knowledge_store = None
 
 
 def get_experiment_knowledge_store() -> ExperimentKnowledgeStore:

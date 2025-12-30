@@ -658,3 +658,146 @@ async def route_drift_alerts(
         return []
 
     return await router.route_batch(alerts)
+
+
+async def route_concept_drift_alerts(
+    drift_results: List[Dict[str, Any]],
+    alerts: List[Dict[str, Any]],
+    baseline_days: int = 90,
+    current_days: int = 30,
+) -> List[Dict[str, Any]]:
+    """Route concept drift detection alerts from feedback loop tasks.
+
+    Called from Celery tasks after feedback loop processing detects concept drift.
+    The task has already determined which alerts to trigger based on thresholds.
+
+    Args:
+        drift_results: List of drift results from v_drift_alerts view, each containing:
+            - prediction_type: str
+            - accuracy_drop: float (e.g., 0.08 = 8% drop)
+            - calibration_error: float
+            - accuracy_status: 'OK', 'WARNING', 'ALERT'
+            - calibration_status: 'OK', 'WARNING', 'ALERT'
+            - baseline_accuracy: float
+            - current_accuracy: float
+            - predictions_count: int
+        alerts: List of alert definitions from the task, each containing:
+            - type: 'accuracy_degradation' or 'calibration_drift'
+            - prediction_type: str
+            - severity: 'critical', 'high', 'medium', 'low'
+            - metric: str
+            - value: float
+            - threshold: float
+            - message: str
+        baseline_days: Baseline comparison window in days
+        current_days: Current comparison window in days
+
+    Returns:
+        List of routing results for each processed alert
+
+    Reference: .claude/plans/feedback-loop-concept-drift-audit.md (Phase 4)
+    """
+    if not alerts:
+        return []
+
+    router = get_alert_router()
+
+    # Build a lookup for drift results by prediction type
+    drift_by_type = {
+        r.get("prediction_type"): r
+        for r in drift_results
+        if r.get("prediction_type")
+    }
+
+    alert_payloads = []
+    for alert_def in alerts:
+        prediction_type = alert_def.get("prediction_type", "unknown")
+        alert_type = alert_def.get("type", "concept_drift")
+        severity = alert_def.get("severity", "medium")
+        message = alert_def.get("message", "Concept drift detected")
+
+        # Skip low-severity alerts unless explicitly configured
+        if severity == "low":
+            logger.debug(
+                f"Skipping low-severity concept drift alert for {prediction_type}"
+            )
+            continue
+
+        # Get drift details for this prediction type
+        drift_details = drift_by_type.get(prediction_type, {})
+        accuracy_drop = drift_details.get("accuracy_drop", 0.0)
+        accuracy_status = drift_details.get("accuracy_status", "OK")
+        calibration_status = drift_details.get("calibration_status", "OK")
+        calibration_error = drift_details.get("calibration_error", 0.0)
+        baseline_accuracy = drift_details.get("baseline_accuracy", 0.0)
+        current_accuracy = drift_details.get("current_accuracy", 0.0)
+        predictions_count = drift_details.get("predictions_count", 0)
+
+        # Build recommended actions based on alert type
+        recommended_actions = []
+        if alert_type == "accuracy_degradation":
+            recommended_actions.append(
+                f"Investigate accuracy degradation: {current_accuracy:.1%} "
+                f"(baseline: {baseline_accuracy:.1%})"
+            )
+            recommended_actions.append("Review recent prediction outcomes for patterns")
+            recommended_actions.append("Consider model retraining with recent data")
+        elif alert_type == "calibration_drift":
+            recommended_actions.append(
+                f"Calibration error of {calibration_error:.1%} exceeds threshold"
+            )
+            recommended_actions.append("Check for class distribution shift in inputs")
+            recommended_actions.append("Validate truth labeling pipeline")
+        else:
+            recommended_actions = [
+                "Review drift monitoring dashboard",
+                "Check feedback loop data quality",
+            ]
+
+        # Build description
+        description = (
+            f"{message}\n\n"
+            f"**Current Accuracy**: {current_accuracy:.1%} "
+            f"(dropped {accuracy_drop:.1%} from baseline)\n"
+            f"**Calibration Error**: {calibration_error:.1%}\n"
+            f"**Predictions Analyzed**: {predictions_count:,}\n"
+            f"**Comparison Window**: {current_days} days vs {baseline_days} day baseline"
+        )
+
+        alert_payload = AlertPayload(
+            alert_id=f"concept-drift-{prediction_type}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M')}",
+            model_id=f"{prediction_type}_model",
+            alert_type="concept_drift",
+            severity=severity,
+            title=f"Concept Drift Alert: {prediction_type} ({severity.upper()})",
+            description=description,
+            triggered_at=datetime.now(timezone.utc),
+            drift_score=accuracy_drop,
+            features_affected=[prediction_type],
+            recommended_actions=recommended_actions,
+            metadata={
+                "prediction_type": prediction_type,
+                "alert_type": alert_type,
+                "accuracy_status": accuracy_status,
+                "calibration_status": calibration_status,
+                "accuracy_drop": accuracy_drop,
+                "calibration_error": calibration_error,
+                "baseline_accuracy": baseline_accuracy,
+                "current_accuracy": current_accuracy,
+                "predictions_count": predictions_count,
+                "baseline_days": baseline_days,
+                "current_days": current_days,
+                "source": "feedback_loop",
+            },
+        )
+        alert_payloads.append(alert_payload)
+
+        logger.info(
+            f"Routing concept drift alert for {prediction_type}: "
+            f"severity={severity}, type={alert_type}"
+        )
+
+    if not alert_payloads:
+        return []
+
+    return await router.route_batch(alert_payloads)
