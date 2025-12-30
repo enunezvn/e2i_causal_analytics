@@ -345,6 +345,45 @@ feast:
 
 ---
 
+## Dependency Conflicts
+
+### Feast vs graphiti-core (tenacity)
+
+**Status**: Known conflict - managed via separate CI requirements files
+
+**Root Cause**:
+- `feast 0.58.0` requires `tenacity>=7,<9`
+- `graphiti-core>=0.4.0` requires `tenacity>=9.0.0`
+- These requirements are fundamentally incompatible
+
+**Impact**:
+- `pip check` reports: `feast 0.58.0 has requirement tenacity<9,>=7, but you have tenacity 9.1.2`
+- Runtime may show deprecation warnings from feast
+
+**Workarounds**:
+1. **CI Workflows**: Use isolated requirements files:
+   - `requirements-synthetic.txt` - For synthetic benchmarks (no graphiti-core)
+   - `requirements-ragas.txt` - For RAGAS evaluation (no graphiti-core)
+
+2. **Lazy Import Isolation**: Feast and graphiti-core code paths are typically separate:
+   - Feast: Used in Tier 0 ML Foundation agents (data_preparer, model_trainer)
+   - graphiti-core: Used in RAG/knowledge graph components
+
+**Monitoring**: Track feast repo for tenacity 9 support updates.
+
+### Feast vs multiprocess (dill)
+
+**Status**: Resolved via version pinning
+
+**Root Cause**:
+- `multiprocess>=0.70.18` requires `dill>=0.4.0`
+- `feast 0.58.0` requires `dill~=0.3.0` (i.e., <0.4.0)
+
+**Solution**: Pin `multiprocess>=0.70.16,<0.70.18` in pyproject.toml
+- multiprocess 0.70.17 accepts `dill>=0.3.9` which satisfies feast
+
+---
+
 ## Support
 
 For additional help:
