@@ -271,7 +271,17 @@ class TestRAGASEvaluator:
         """Test evaluator initialization."""
         evaluator = RAGASEvaluator(config=sample_evaluation_config)
         assert evaluator.config == sample_evaluation_config
+        # Provider depends on which API keys are available in environment
+        # Implementation prefers OpenAI over Anthropic when both are set
+        assert evaluator.llm_provider in ("openai", "anthropic", "none")
+
+    def test_evaluator_explicit_provider(self, sample_evaluation_config):
+        """Test evaluator with explicit provider selection."""
+        evaluator = RAGASEvaluator(config=sample_evaluation_config, llm_provider="anthropic")
         assert evaluator.llm_provider == "anthropic"
+
+        evaluator_openai = RAGASEvaluator(config=sample_evaluation_config, llm_provider="openai")
+        assert evaluator_openai.llm_provider == "openai"
 
     def test_evaluator_ragas_check(self):
         """Test RAGAS availability check."""
