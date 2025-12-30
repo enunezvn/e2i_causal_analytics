@@ -491,7 +491,8 @@ class CognitiveService:
         """
         try:
             # Only remember high-value interactions
-            if confidence < 0.5:
+            # Threshold aligned with config: min_confidence_for_learning: 0.6
+            if confidence < 0.6:
                 logger.debug(f"Skipping reflection for low-confidence cycle: {cycle_id}")
                 return
 
