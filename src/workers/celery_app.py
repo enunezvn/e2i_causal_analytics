@@ -163,6 +163,12 @@ celery_app.conf.task_routes = {
     "src.tasks.fidelity_tracking_update": {"queue": "twins"},
     # Cleanup
     "src.tasks.cleanup_old_ab_results": {"queue": "quick"},
+    # -------------------------------------------------------------------------
+    # Feedback Loop Tasks (Concept Drift Detection)
+    # -------------------------------------------------------------------------
+    "src.tasks.run_feedback_loop_*": {"queue": "analytics"},
+    "src.tasks.analyze_concept_drift_*": {"queue": "analytics"},
+    "src.tasks.run_full_feedback_loop": {"queue": "analytics"},
 }
 
 # =============================================================================
@@ -243,6 +249,33 @@ celery_app.conf.beat_schedule = {
         "task": "src.tasks.cleanup_old_ab_results",
         "schedule": 604800.0,  # 7 days
         "options": {"queue": "quick"},
+    },
+    # -------------------------------------------------------------------------
+    # Feedback Loop Tasks (Concept Drift Detection)
+    # -------------------------------------------------------------------------
+    # Short-window feedback loop every 4 hours (trigger, next_best_action)
+    "feedback-loop-short-window": {
+        "task": "src.tasks.run_feedback_loop_short_window",
+        "schedule": 14400.0,  # 4 hours
+        "options": {"queue": "analytics"},
+    },
+    # Medium-window feedback loop daily at 2 AM (churn)
+    "feedback-loop-medium-window": {
+        "task": "src.tasks.run_feedback_loop_medium_window",
+        "schedule": 86400.0,  # 24 hours
+        "options": {"queue": "analytics"},
+    },
+    # Long-window feedback loop weekly on Sundays (market_share_impact, risk)
+    "feedback-loop-long-window": {
+        "task": "src.tasks.run_feedback_loop_long_window",
+        "schedule": 604800.0,  # 7 days
+        "options": {"queue": "analytics"},
+    },
+    # Concept drift analysis after feedback loop (daily at 3 AM)
+    "feedback-loop-drift-analysis": {
+        "task": "src.tasks.analyze_concept_drift_from_truth",
+        "schedule": 86400.0,  # 24 hours
+        "options": {"queue": "analytics"},
     },
 }
 
