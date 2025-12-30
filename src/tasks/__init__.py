@@ -41,6 +41,15 @@ from src.tasks.ab_testing_tasks import (
     cleanup_old_ab_results,
 )
 
+# Feedback Loop Tasks (Concept Drift Detection)
+from src.tasks.feedback_loop_tasks import (
+    run_feedback_loop_short_window,
+    run_feedback_loop_medium_window,
+    run_feedback_loop_long_window,
+    analyze_concept_drift_from_truth,
+    run_full_feedback_loop,
+)
+
 __all__ = [
     # Feature Store
     "materialize_features",
@@ -66,4 +75,10 @@ __all__ = [
     "fidelity_tracking_update",
     "check_all_active_experiments",
     "cleanup_old_ab_results",
+    # Feedback Loop (Concept Drift Detection)
+    "run_feedback_loop_short_window",
+    "run_feedback_loop_medium_window",
+    "run_feedback_loop_long_window",
+    "analyze_concept_drift_from_truth",
+    "run_full_feedback_loop",
 ]
