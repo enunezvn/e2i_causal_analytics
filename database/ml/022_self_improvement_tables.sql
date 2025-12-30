@@ -468,9 +468,10 @@ COMMENT ON VIEW v_improvement_summary IS 'Weekly summary of self-improvement act
 
 
 -- Learning Signal Quality Distribution View
+-- NOTE: Uses rated_agent (enum) cast to text, aliased as agent_name for compatibility
 CREATE OR REPLACE VIEW v_learning_signal_distribution AS
 SELECT
-    agent_name,
+    rated_agent::text AS agent_name,
     improvement_type,
     improvement_priority,
     COUNT(*) AS signal_count,
@@ -481,7 +482,7 @@ SELECT
     COUNT(*) FILTER (WHERE improvement_applied = FALSE AND improvement_type != 'none') AS pending_count
 FROM learning_signals
 WHERE created_at >= CURRENT_DATE - INTERVAL '30 days'
-GROUP BY agent_name, improvement_type, improvement_priority
+GROUP BY rated_agent, improvement_type, improvement_priority
 ORDER BY signal_count DESC;
 
 COMMENT ON VIEW v_learning_signal_distribution IS 'Distribution of learning signals by agent and improvement type';
