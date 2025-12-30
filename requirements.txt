@@ -157,7 +157,7 @@ mmh3==5.2.0
 momentchi2==0.1.8
 mpmath==1.3.0
 multidict==6.7.0
-multiprocess==0.70.18
+multiprocess==0.70.17  # Pinned: 0.70.18 requires dill>=0.4.0 which conflicts with feast's dill~=0.3.0
 mypy==1.19.1
 mypy-boto3-bedrock-runtime==1.42.3
 mypy_extensions==1.1.0
