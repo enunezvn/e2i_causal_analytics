@@ -8,6 +8,7 @@ This module implements the Causal Validation Protocol's primary validation tier:
 - Configurable thresholds for pass/fail criteria
 - Gate decision logic (proceed, review, block)
 - Database persistence integration
+- Opik tracing for per-test observability
 
 Reference: docs/E2I_Causal_Validation_Protocol.html
 """
@@ -22,6 +23,9 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import numpy as np
+
+# Opik tracing for causal validation observability
+from src.mlops.opik_connector import get_opik_connector
 
 # Conditional DoWhy import for graceful degradation
 try:
@@ -365,8 +369,9 @@ class RefutationRunner:
         outcome: Optional[str] = None,
         brand: Optional[str] = None,
         estimate_id: Optional[str] = None,
+        trace_id: Optional[str] = None,
     ) -> RefutationSuite:
-        """Run all enabled refutation tests.
+        """Run all enabled refutation tests with Opik tracing.
 
         Args:
             original_effect: The ATE to validate
@@ -379,6 +384,7 @@ class RefutationRunner:
             outcome: Outcome variable name
             brand: Brand context for logging
             estimate_id: UUID for database linking
+            trace_id: Opik trace ID for correlation (optional)
 
         Returns:
             RefutationSuite with all test results and gate decision
@@ -402,9 +408,17 @@ class RefutationRunner:
                 "Running refutation tests in mock mode (DoWhy not available or model not provided)"
             )
 
-        # Run each enabled test
+        # Get Opik connector for tracing
+        opik = get_opik_connector()
+
+        # Run each enabled test with Opik tracing
         if self.config["placebo_treatment"]["enabled"]:
-            test_result = self._run_placebo_test(
+            test_result = self._run_test_with_tracing(
+                test_name="placebo_treatment",
+                test_func=self._run_placebo_test,
+                opik=opik,
+                trace_id=trace_id,
+                estimate_id=estimate_id,
                 original_effect=original_effect,
                 causal_model=causal_model,
                 identified_estimand=identified_estimand,
@@ -414,7 +428,12 @@ class RefutationRunner:
             tests.append(test_result)
 
         if self.config["random_common_cause"]["enabled"]:
-            test_result = self._run_random_common_cause_test(
+            test_result = self._run_test_with_tracing(
+                test_name="random_common_cause",
+                test_func=self._run_random_common_cause_test,
+                opik=opik,
+                trace_id=trace_id,
+                estimate_id=estimate_id,
                 original_effect=original_effect,
                 causal_model=causal_model,
                 identified_estimand=identified_estimand,
@@ -424,7 +443,12 @@ class RefutationRunner:
             tests.append(test_result)
 
         if self.config["data_subset"]["enabled"]:
-            test_result = self._run_data_subset_test(
+            test_result = self._run_test_with_tracing(
+                test_name="data_subset",
+                test_func=self._run_data_subset_test,
+                opik=opik,
+                trace_id=trace_id,
+                estimate_id=estimate_id,
                 original_effect=original_effect,
                 original_ci=original_ci,
                 causal_model=causal_model,
@@ -435,7 +459,12 @@ class RefutationRunner:
             tests.append(test_result)
 
         if self.config["bootstrap"]["enabled"]:
-            test_result = self._run_bootstrap_test(
+            test_result = self._run_test_with_tracing(
+                test_name="bootstrap",
+                test_func=self._run_bootstrap_test,
+                opik=opik,
+                trace_id=trace_id,
+                estimate_id=estimate_id,
                 original_effect=original_effect,
                 original_ci=original_ci,
                 causal_model=causal_model,
@@ -446,7 +475,12 @@ class RefutationRunner:
             tests.append(test_result)
 
         if self.config["sensitivity_e_value"]["enabled"]:
-            test_result = self._run_sensitivity_test(
+            test_result = self._run_test_with_tracing(
+                test_name="sensitivity_e_value",
+                test_func=self._run_sensitivity_test,
+                opik=opik,
+                trace_id=trace_id,
+                estimate_id=estimate_id,
                 original_effect=original_effect,
                 original_ci=original_ci,
             )
@@ -471,12 +505,114 @@ class RefutationRunner:
             brand=brand,
         )
 
+        # Log suite-level metrics to Opik
+        try:
+            opik.log_metric(
+                name="refutation_confidence_score",
+                value=confidence_score,
+                metadata={
+                    "gate_decision": gate_decision.value,
+                    "tests_passed": suite.tests_passed,
+                    "tests_total": suite.total_tests,
+                    "treatment": treatment,
+                    "outcome": outcome,
+                    "brand": brand,
+                    "estimate_id": estimate_id,
+                },
+            )
+        except Exception as metric_error:
+            logger.debug(f"Failed to log Opik metric: {metric_error}")
+
         logger.info(
             f"Refutation suite completed: {suite.tests_passed}/{suite.total_tests} passed, "
             f"confidence={confidence_score:.2f}, gate={gate_decision.value}"
         )
 
         return suite
+
+    def _run_test_with_tracing(
+        self,
+        test_name: str,
+        test_func,
+        opik,
+        trace_id: Optional[str] = None,
+        estimate_id: Optional[str] = None,
+        **kwargs,
+    ) -> RefutationResult:
+        """Run a single refutation test with Opik span tracing.
+
+        Args:
+            test_name: Name of the test (e.g., "placebo_treatment")
+            test_func: The test function to execute
+            opik: OpikConnector instance
+            trace_id: Parent trace ID for correlation
+            estimate_id: Estimate ID for logging
+            **kwargs: Arguments to pass to the test function
+
+        Returns:
+            RefutationResult from the test
+        """
+        import time
+
+        span_start = time.time()
+
+        try:
+            # Execute the test
+            result = test_func(**kwargs)
+
+            # Log span to Opik
+            span_duration_ms = (time.time() - span_start) * 1000
+            try:
+                opik.log_span(
+                    name=f"refutation_{test_name}",
+                    span_type="tool",
+                    input_data={
+                        "test_name": test_name,
+                        "original_effect": kwargs.get("original_effect"),
+                        "use_dowhy": kwargs.get("use_dowhy", False),
+                    },
+                    output_data={
+                        "status": result.status.value,
+                        "refuted_effect": result.refuted_effect,
+                        "p_value": result.p_value,
+                        "delta_percent": result.delta_percent,
+                    },
+                    metadata={
+                        "test_name": test_name,
+                        "estimate_id": estimate_id,
+                        "trace_id": trace_id,
+                        "critical": self.config.get(test_name, {}).get("critical", False),
+                    },
+                    duration_ms=span_duration_ms,
+                    tags=["causal_validation", "refutation", test_name],
+                )
+            except Exception as span_error:
+                logger.debug(f"Failed to log Opik span for {test_name}: {span_error}")
+
+            return result
+
+        except Exception as e:
+            # Log error span
+            span_duration_ms = (time.time() - span_start) * 1000
+            try:
+                opik.log_span(
+                    name=f"refutation_{test_name}",
+                    span_type="tool",
+                    input_data={"test_name": test_name},
+                    output_data={"error": str(e)},
+                    metadata={
+                        "test_name": test_name,
+                        "estimate_id": estimate_id,
+                        "trace_id": trace_id,
+                        "error_type": type(e).__name__,
+                    },
+                    duration_ms=span_duration_ms,
+                    status="error",
+                    tags=["causal_validation", "refutation", test_name, "error"],
+                )
+            except Exception as span_error:
+                logger.debug(f"Failed to log error span for {test_name}: {span_error}")
+            raise
 
     def _run_placebo_test(
         self,
