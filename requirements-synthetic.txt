@@ -5,6 +5,7 @@
 pytest>=8.0.0
 pytest-cov>=5.0.0
 pytest-asyncio>=0.23.0
+pytest-xdist>=3.5.0
 
 # Data processing (only what conftest.py needs)
 numpy>=1.26.0
