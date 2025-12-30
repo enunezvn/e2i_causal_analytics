@@ -1,7 +1,7 @@
 """LangGraph workflow for Gap Analyzer Agent.
 
-Defines the 4-node linear workflow:
-gap_detector → roi_calculator → prioritizer → formatter
+Defines the 5-node linear workflow:
+audit_init → gap_detector → roi_calculator → prioritizer → formatter
 
 Performance target: <20s total execution time
 
@@ -12,6 +12,9 @@ Uses ROICalculationService for full methodology implementation:
 - Attribution framework (Full/Partial/Shared/Minimal)
 - Risk adjustment (4 factors)
 
+Observability:
+- Audit chain recording for tamper-evident logging
+
 Reference: docs/roi_methodology.md, src/services/roi_calculation.py
 """
 
@@ -19,7 +22,9 @@ from typing import Optional
 
 from langgraph.graph import END, StateGraph
 
+from src.agents.base.audit_chain_mixin import create_workflow_initializer
 from src.services.roi_calculation import ROICalculationService
+from src.utils.audit_chain import AgentTier
 
 from .nodes import (
     FormatterNode,
@@ -39,6 +44,7 @@ def create_gap_analyzer_graph(
     """Create the Gap Analyzer LangGraph workflow.
 
     Workflow:
+    0. audit_init: Initialize audit chain workflow (genesis block)
     1. gap_detector: Detect performance gaps across segments (parallel)
     2. roi_calculator: Calculate ROI for each gap using full methodology
     3. prioritizer: Rank and categorize opportunities
@@ -64,17 +70,22 @@ def create_gap_analyzer_graph(
     prioritizer = PrioritizerNode()
     formatter = FormatterNode()
 
+    # Create audit workflow initializer
+    audit_initializer = create_workflow_initializer("gap_analyzer", AgentTier.CAUSAL_ANALYTICS)
+
     # Create graph
     workflow = StateGraph(GapAnalyzerState)
 
     # Add nodes
+    workflow.add_node("audit_init", audit_initializer)  # Initialize audit chain
     workflow.add_node("gap_detector", gap_detector.execute)
     workflow.add_node("roi_calculator", roi_calculator.execute)
     workflow.add_node("prioritizer", prioritizer.execute)
     workflow.add_node("formatter", formatter.execute)
 
-    # Define linear flow
-    workflow.set_entry_point("gap_detector")
+    # Define linear flow starting with audit initialization
+    workflow.set_entry_point("audit_init")
+    workflow.add_edge("audit_init", "gap_detector")
     workflow.add_edge("gap_detector", "roi_calculator")
     workflow.add_edge("roi_calculator", "prioritizer")
     workflow.add_edge("prioritizer", "formatter")

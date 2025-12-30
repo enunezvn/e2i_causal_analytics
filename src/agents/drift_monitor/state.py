@@ -9,6 +9,7 @@ Performance Target: <10s for 50 features
 """
 
 from typing import Literal, NotRequired, Optional, TypedDict
+from uuid import UUID
 
 # Type aliases
 DriftType = Literal["data", "model", "concept"]
@@ -112,3 +113,6 @@ class DriftMonitorState(TypedDict):
     errors: list[ErrorDetails]
     warnings: list[str]
     status: AgentStatus
+
+    # ===== Audit Chain (1) =====
+    audit_workflow_id: NotRequired[Optional[UUID]]

@@ -2,6 +2,9 @@
 E2I Health Score Agent - LangGraph Assembly
 Version: 4.2
 Purpose: Build the Health Score agent graph
+
+Observability:
+- Audit chain recording for tamper-evident logging
 """
 
 from __future__ import annotations
@@ -10,6 +13,9 @@ import logging
 from typing import Any, Optional
 
 from langgraph.graph import END, StateGraph
+
+from src.agents.base.audit_chain_mixin import create_workflow_initializer
+from src.utils.audit_chain import AgentTier
 
 from .nodes.agent_health import AgentHealthNode
 from .nodes.component_health import ComponentHealthNode
@@ -31,7 +37,7 @@ def build_health_score_graph(
     Build the Health Score agent graph.
 
     Architecture:
-        [component] → [model] → [pipeline] → [agent] → [compose] → END
+        [audit_init] → [component] → [model] → [pipeline] → [agent] → [compose] → END
 
     All health checks run sequentially to maintain deterministic execution,
     but each node performs internal parallelism for its checks.
@@ -47,6 +53,9 @@ def build_health_score_graph(
     """
     logger.info("Building Health Score agent graph")
 
+    # Create audit workflow initializer
+    audit_initializer = create_workflow_initializer("health_score", AgentTier.MONITORING)
+
     # Initialize nodes
     component = ComponentHealthNode(health_client)
     model = ModelHealthNode(metrics_store)
@@ -58,14 +67,16 @@ def build_health_score_graph(
     workflow = StateGraph(HealthScoreState)
 
     # Add nodes
+    workflow.add_node("audit_init", audit_initializer)  # Initialize audit chain
     workflow.add_node("component", component.execute)
     workflow.add_node("model", model.execute)
     workflow.add_node("pipeline", pipeline.execute)
     workflow.add_node("agent", agent.execute)
     workflow.add_node("compose", composer.execute)
 
-    # Sequential flow for simplicity and predictability
-    workflow.set_entry_point("component")
+    # Sequential flow starting with audit initialization
+    workflow.set_entry_point("audit_init")
+    workflow.add_edge("audit_init", "component")
     workflow.add_edge("component", "model")
     workflow.add_edge("model", "pipeline")
     workflow.add_edge("pipeline", "agent")
@@ -85,7 +96,7 @@ def build_quick_check_graph(
     Build a minimal quick-check graph.
 
     Architecture:
-        [component] → [compose] → END
+        [audit_init] → [component] → [compose] → END
 
     Only checks component health for fast dashboard updates.
 
@@ -97,6 +108,9 @@ def build_quick_check_graph(
     """
     logger.info("Building Quick Check graph")
 
+    # Create audit workflow initializer
+    audit_initializer = create_workflow_initializer("health_score_quick", AgentTier.MONITORING)
+
     # Initialize nodes
     component = ComponentHealthNode(health_client)
     composer = ScoreComposerNode()
@@ -105,11 +119,13 @@ def build_quick_check_graph(
     workflow = StateGraph(HealthScoreState)
 
     # Add nodes
+    workflow.add_node("audit_init", audit_initializer)  # Initialize audit chain
     workflow.add_node("component", component.execute)
     workflow.add_node("compose", composer.execute)
 
-    # Minimal flow
-    workflow.set_entry_point("component")
+    # Minimal flow starting with audit initialization
+    workflow.set_entry_point("audit_init")
+    workflow.add_edge("audit_init", "component")
     workflow.add_edge("component", "compose")
     workflow.add_edge("compose", END)
 

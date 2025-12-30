@@ -6,6 +6,7 @@ FastAPI route definitions for all API endpoints.
 
 Available Routes:
 -----------------
+- audit: Audit chain verification and inspection endpoints
 - explain: Real-Time SHAP explanation endpoints (v4.1)
 - memory: Memory system endpoints (episodic, procedural, semantic)
 - cognitive: Cognitive workflow endpoints

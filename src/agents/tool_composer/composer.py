@@ -11,6 +11,9 @@ Pipeline:
     Phase 2: PLAN     - Map sub-questions to tools, create execution plan
     Phase 3: EXECUTE  - Run tools in dependency order
     Phase 4: SYNTHESIZE - Combine results into coherent response
+
+Observability:
+- Audit chain recording for tamper-evident logging
 """
 
 from __future__ import annotations
@@ -18,8 +21,11 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
+from uuid import UUID
 
+from src.agents.base.audit_chain_mixin import get_audit_chain_service
 from src.tool_registry.registry import ToolRegistry
+from src.utils.audit_chain import AgentTier
 
 from .decomposer import DecompositionError, QueryDecomposer
 from .executor import ExecutionError, PlanExecutor
@@ -148,6 +154,27 @@ class ToolComposer:
 
         logger.info(f"Starting composition for query: {query[:100]}...")
 
+        # Initialize audit chain workflow
+        audit_workflow_id: Optional[UUID] = None
+        audit_service = get_audit_chain_service()
+        if audit_service:
+            try:
+                entry = audit_service.start_workflow(
+                    agent_name="tool_composer",
+                    agent_tier=AgentTier.COORDINATION,
+                    action_type="workflow_start",
+                    input_data={"query": query[:500]},  # Truncate for storage
+                    user_id=context.get("user_id"),
+                    session_id=context.get("session_id"),
+                    query_text=query,
+                    brand=context.get("brand"),
+                )
+                audit_workflow_id = entry.workflow_id
+                context["audit_workflow_id"] = audit_workflow_id
+                logger.debug(f"Started audit workflow {audit_workflow_id} for tool_composer")
+            except Exception as e:
+                logger.warning(f"Failed to start audit workflow: {e}")
+
         try:
             # ================================================================
             # PHASE 1: DECOMPOSE
@@ -161,6 +188,13 @@ class ToolComposer:
             logger.info(
                 f"Phase 1 complete: {decomposition.question_count} sub-questions "
                 f"({phase_durations['decompose']}ms)"
+            )
+
+            # Record audit entry for decompose phase
+            self._record_audit_entry(
+                audit_service, audit_workflow_id, "decompose",
+                phase_durations["decompose"],
+                {"sub_questions_count": decomposition.question_count}
             )
 
             # ================================================================
@@ -177,6 +211,13 @@ class ToolComposer:
                 f"({phase_durations['plan']}ms)"
             )
 
+            # Record audit entry for plan phase
+            self._record_audit_entry(
+                audit_service, audit_workflow_id, "plan",
+                phase_durations["plan"],
+                {"steps_planned": plan.step_count}
+            )
+
             # ================================================================
             # PHASE 3: EXECUTE
             # ================================================================
@@ -190,6 +231,17 @@ class ToolComposer:
                 f"Phase 3 complete: {execution_trace.tools_succeeded}/"
                 f"{execution_trace.tools_executed} tools succeeded "
                 f"({phase_durations['execute']}ms)"
+            )
+
+            # Record audit entry for execute phase
+            self._record_audit_entry(
+                audit_service, audit_workflow_id, "execute",
+                phase_durations["execute"],
+                {
+                    "tools_executed": execution_trace.tools_executed,
+                    "tools_succeeded": execution_trace.tools_succeeded,
+                },
+                validation_passed=execution_trace.tools_succeeded == execution_trace.tools_executed
             )
 
             # ================================================================
@@ -208,6 +260,14 @@ class ToolComposer:
             logger.info(
                 f"Phase 4 complete: confidence={response.confidence} "
                 f"({phase_durations['synthesize']}ms)"
+            )
+
+            # Record audit entry for synthesize phase
+            self._record_audit_entry(
+                audit_service, audit_workflow_id, "synthesize",
+                phase_durations["synthesize"],
+                {"confidence": response.confidence},
+                confidence_score=response.confidence
             )
 
             # ================================================================
@@ -282,6 +342,42 @@ class ToolComposer:
     def _elapsed_ms(self, start: datetime) -> int:
         """Calculate elapsed milliseconds since start"""
         return int((datetime.now(timezone.utc) - start).total_seconds() * 1000)
+
+    def _record_audit_entry(
+        self,
+        audit_service: Any,
+        workflow_id: Optional[UUID],
+        action_type: str,
+        duration_ms: int,
+        output_data: Dict[str, Any],
+        validation_passed: Optional[bool] = None,
+        confidence_score: Optional[float] = None,
+    ) -> None:
+        """Record an audit chain entry for a composition phase.
+
+        Args:
+            audit_service: The audit chain service instance
+            workflow_id: UUID of the current workflow
+            action_type: Type of action (decompose, plan, execute, synthesize)
+            duration_ms: Duration of the phase in milliseconds
+            output_data: Phase output data to record
+            validation_passed: Optional validation status
+            confidence_score: Optional confidence score
+        """
+        if workflow_id and audit_service:
+            try:
+                audit_service.add_entry(
+                    workflow_id=workflow_id,
+                    agent_name="tool_composer",
+                    agent_tier=AgentTier.COORDINATION,
+                    action_type=action_type,
+                    duration_ms=duration_ms,
+                    output_data=output_data,
+                    validation_passed=validation_passed,
+                    confidence_score=confidence_score,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to record audit entry for {action_type}: {e}")
 
     async def _contribute_to_memory(
         self,

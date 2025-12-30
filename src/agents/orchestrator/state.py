@@ -3,6 +3,7 @@
 import operator
 from datetime import datetime
 from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
+from uuid import UUID
 
 
 class ParsedEntity(TypedDict, total=False):
@@ -233,3 +234,8 @@ class OrchestratorState(TypedDict, total=False):
     fallback_used: bool
     error: Optional[str]
     error_type: Optional[str]
+
+    # ========================================================================
+    # AUDIT CHAIN (Tamper-Evident Logging)
+    # ========================================================================
+    audit_workflow_id: Optional[UUID]

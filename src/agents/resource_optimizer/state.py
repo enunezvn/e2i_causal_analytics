@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import operator
 from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
+from uuid import UUID
 
 
 class AllocationTarget(TypedDict):
@@ -108,3 +109,6 @@ class ResourceOptimizerState(TypedDict):
         "completed",
         "failed",
     ]
+
+    # === AUDIT CHAIN ===
+    audit_workflow_id: Optional[UUID]

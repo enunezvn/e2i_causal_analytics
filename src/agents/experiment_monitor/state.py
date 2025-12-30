@@ -8,6 +8,7 @@ Performance Target: <5s per experiment check
 """
 
 from typing import Literal, NotRequired, Optional, TypedDict
+from uuid import UUID
 
 # Type aliases
 MonitorStatus = Literal["pending", "checking", "analyzing", "alerting", "completed", "failed"]
@@ -160,3 +161,6 @@ class ExperimentMonitorState(TypedDict):
     errors: list[ErrorDetails]
     warnings: list[str]
     status: MonitorStatus
+
+    # ===== Audit Chain (1) =====
+    audit_workflow_id: NotRequired[Optional[UUID]]
