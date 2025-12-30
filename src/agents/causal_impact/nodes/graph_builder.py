@@ -4,22 +4,43 @@ Constructs causal DAGs using domain knowledge and LLM assistance.
 Identifies treatment/outcome variables and valid adjustment sets.
 Computes DAG version hash for expert review workflow.
 
-Version: 4.3
+V4.4 Enhancement: Automatic causal structure learning with multi-algorithm
+ensemble (GES, PC) and gated acceptance for discovered DAGs.
+
+Version: 4.4
 """
 
 import time
-from typing import Dict, List, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import networkx as nx
+import pandas as pd
+from loguru import logger
 
 from src.agents.causal_impact.state import CausalGraph, CausalImpactState
 from src.causal_engine import compute_dag_hash
+from src.causal_engine.discovery import (
+    DiscoveryConfig,
+    DiscoveryGate,
+    DiscoveryResult,
+    DiscoveryRunner,
+    DiscoveryAlgorithmType,
+    GateDecision,
+)
 
 
 class GraphBuilderNode:
     """Builds causal DAG from query and domain knowledge.
 
-    Performance target: <10s
+    V4.4 Enhancement: Supports automatic DAG discovery using structure learning
+    algorithms (GES, PC) with gated acceptance criteria.
+
+    Modes:
+    - Manual (default): Constructs DAG from domain knowledge
+    - Auto-Discovery: Uses ensemble of algorithms to discover structure
+    - Hybrid: Augments manual DAG with high-confidence discovered edges
+
+    Performance target: <10s (manual), <30s (discovery)
     Type: Standard (computation-heavy)
     """
 
@@ -57,17 +78,35 @@ class GraphBuilderNode:
     }
 
     def __init__(self):
-        """Initialize graph builder."""
-        pass
+        """Initialize graph builder with discovery components."""
+        self._discovery_runner: Optional[DiscoveryRunner] = None
+        self._discovery_gate: Optional[DiscoveryGate] = None
+
+    @property
+    def discovery_runner(self) -> DiscoveryRunner:
+        """Lazy-initialize discovery runner."""
+        if self._discovery_runner is None:
+            self._discovery_runner = DiscoveryRunner()
+        return self._discovery_runner
+
+    @property
+    def discovery_gate(self) -> DiscoveryGate:
+        """Lazy-initialize discovery gate."""
+        if self._discovery_gate is None:
+            self._discovery_gate = DiscoveryGate()
+        return self._discovery_gate
 
     async def execute(self, state: CausalImpactState) -> Dict:
-        """Build causal DAG.
+        """Build causal DAG with optional auto-discovery.
 
         Args:
             state: Current workflow state with query and variables
 
         Returns:
             Updated state with causal_graph populated
+
+        V4.4: If auto_discover=True, attempts structure learning first,
+        then falls back to manual DAG based on gate decision.
         """
         start_time = time.time()
 
@@ -80,11 +119,46 @@ class GraphBuilderNode:
             if not treatment or not outcome:
                 treatment, outcome = self._infer_variables_from_query(state.get("query", ""))
 
-            # Build DAG
-            dag = self._construct_dag(treatment, outcome, confounders)
+            # Check if auto-discovery is enabled
+            auto_discover = state.get("auto_discover", False)
+            discovery_result: Optional[DiscoveryResult] = None
+            gate_evaluation: Optional[Dict[str, Any]] = None
+            discovery_latency_ms: float = 0.0
+
+            if auto_discover:
+                logger.info("Auto-discovery enabled, attempting structure learning")
+                discovery_start = time.time()
+
+                try:
+                    discovery_result, gate_evaluation = await self._run_discovery(
+                        state, treatment, outcome
+                    )
+                    discovery_latency_ms = (time.time() - discovery_start) * 1000
+                except Exception as e:
+                    logger.warning(f"Discovery failed: {e}, falling back to manual DAG")
+                    discovery_latency_ms = (time.time() - discovery_start) * 1000
+
+            # Build DAG based on discovery results
+            if discovery_result and gate_evaluation:
+                dag, augmented_edges = self._build_dag_with_discovery(
+                    treatment, outcome, confounders, discovery_result, gate_evaluation
+                )
+            else:
+                # Manual DAG construction (original behavior)
+                dag = self._construct_dag(treatment, outcome, confounders)
+                augmented_edges = []
 
             # Find valid adjustment sets (backdoor criterion)
             adjustment_sets = self._find_adjustment_sets(dag, treatment, outcome)
+
+            # Compute confidence based on discovery results
+            if gate_evaluation and gate_evaluation.get("decision") == GateDecision.ACCEPT.value:
+                confidence = gate_evaluation.get("confidence", 0.85)
+            elif gate_evaluation and gate_evaluation.get("decision") == GateDecision.AUGMENT.value:
+                # Hybrid confidence
+                confidence = min(0.9, 0.85 + 0.05 * len(augmented_edges))
+            else:
+                confidence = 0.85 if treatment and outcome else 0.5
 
             # Convert to CausalGraph
             causal_graph: CausalGraph = {
@@ -94,7 +168,18 @@ class GraphBuilderNode:
                 "outcome_nodes": [outcome],
                 "adjustment_sets": adjustment_sets,
                 "dag_dot": self._to_dot_format(dag),
-                "confidence": 0.85 if treatment and outcome else 0.5,
+                "confidence": confidence,
+                # V4.4: Discovery metadata
+                "discovery_enabled": auto_discover,
+                "discovery_gate_decision": gate_evaluation.get("decision") if gate_evaluation else None,
+                "discovery_algorithms_used": (
+                    [a.value for a in discovery_result.config.algorithms]
+                    if discovery_result and discovery_result.config
+                    else []
+                ),
+                "discovery_confidence": gate_evaluation.get("confidence", 0.0) if gate_evaluation else 0.0,
+                "discovery_n_edges": discovery_result.n_edges if discovery_result else 0,
+                "augmented_edges": augmented_edges,
             }
 
             # Compute DAG version hash for expert review tracking
@@ -103,7 +188,7 @@ class GraphBuilderNode:
 
             latency_ms = (time.time() - start_time) * 1000
 
-            return {
+            result = {
                 **state,
                 "causal_graph": causal_graph,
                 "dag_version_hash": dag_version_hash,
@@ -111,8 +196,19 @@ class GraphBuilderNode:
                 "current_phase": "estimating",
             }
 
+            # Add discovery metadata if used
+            if auto_discover:
+                result["discovery_latency_ms"] = discovery_latency_ms
+                if discovery_result:
+                    result["discovery_result"] = discovery_result.to_dict()
+                if gate_evaluation:
+                    result["discovery_gate_evaluation"] = gate_evaluation
+
+            return result
+
         except Exception as e:
             latency_ms = (time.time() - start_time) * 1000
+            logger.error(f"Graph building failed: {e}")
             return {
                 **state,
                 "graph_builder_error": str(e),
@@ -338,6 +434,147 @@ class GraphBuilderNode:
         lines.append("}")
 
         return "\n".join(lines)
+
+    async def _run_discovery(
+        self,
+        state: CausalImpactState,
+        treatment: str,
+        outcome: str,
+    ) -> Tuple[DiscoveryResult, Dict[str, Any]]:
+        """Run structure learning and gate evaluation.
+
+        Args:
+            state: Current workflow state
+            treatment: Treatment variable name
+            outcome: Outcome variable name
+
+        Returns:
+            Tuple of (DiscoveryResult, gate evaluation dict)
+        """
+        # Get data from state
+        data_cache = state.get("data_cache", {})
+        data = data_cache.get("data")
+
+        if data is None:
+            # Try to create synthetic data from variable info
+            # In production, this would come from the data source
+            logger.warning("No data in cache, using minimal discovery")
+            raise ValueError("No data available for discovery")
+
+        # Ensure data is a DataFrame
+        if not isinstance(data, pd.DataFrame):
+            data = pd.DataFrame(data)
+
+        # Build discovery config from state
+        algorithms_str = state.get("discovery_algorithms", ["ges", "pc"])
+        algorithms = []
+        for algo in algorithms_str:
+            try:
+                algorithms.append(DiscoveryAlgorithmType(algo.lower()))
+            except ValueError:
+                logger.warning(f"Unknown algorithm: {algo}, skipping")
+
+        if not algorithms:
+            algorithms = [DiscoveryAlgorithmType.GES, DiscoveryAlgorithmType.PC]
+
+        config = DiscoveryConfig(
+            algorithms=algorithms,
+            ensemble_threshold=state.get("discovery_ensemble_threshold", 0.5),
+            alpha=state.get("discovery_alpha", 0.05),
+        )
+
+        # Run discovery
+        session_id = state.get("session_id")
+        from uuid import UUID
+
+        session_uuid = UUID(session_id) if session_id else None
+
+        result = await self.discovery_runner.discover_dag(
+            data=data,
+            config=config,
+            session_id=session_uuid,
+        )
+
+        # Evaluate with gate
+        expected_edges = [(treatment, outcome)]  # Minimal expectation
+        evaluation = self.discovery_gate.evaluate(result, expected_edges)
+
+        logger.info(
+            f"Discovery complete: {result.n_edges} edges, "
+            f"gate decision: {evaluation.decision.value}"
+        )
+
+        return result, evaluation.to_dict()
+
+    def _build_dag_with_discovery(
+        self,
+        treatment: str,
+        outcome: str,
+        confounders: List[str],
+        discovery_result: DiscoveryResult,
+        gate_evaluation: Dict[str, Any],
+    ) -> Tuple[nx.DiGraph, List[Tuple[str, str]]]:
+        """Build DAG based on discovery results and gate decision.
+
+        Args:
+            treatment: Treatment variable
+            outcome: Outcome variable
+            confounders: Confounder variables
+            discovery_result: Result from discovery runner
+            gate_evaluation: Result from discovery gate
+
+        Returns:
+            Tuple of (DAG, list of augmented edges)
+        """
+        decision = gate_evaluation.get("decision")
+        augmented_edges: List[Tuple[str, str]] = []
+
+        if decision == GateDecision.ACCEPT.value:
+            # Use discovered DAG directly
+            logger.info("Using discovered DAG (ACCEPT)")
+            if discovery_result.ensemble_dag is not None:
+                dag = discovery_result.ensemble_dag.copy()
+                # Ensure treatment and outcome are present
+                if treatment not in dag.nodes():
+                    dag.add_node(treatment)
+                if outcome not in dag.nodes():
+                    dag.add_node(outcome)
+                return dag, augmented_edges
+
+        elif decision == GateDecision.AUGMENT.value:
+            # Build manual DAG and augment with high-confidence discovered edges
+            logger.info("Augmenting manual DAG with discovered edges (AUGMENT)")
+            dag = self._construct_dag(treatment, outcome, confounders)
+
+            # Get high-confidence edges from gate evaluation
+            high_conf_edges = gate_evaluation.get("high_confidence_edges", [])
+            for edge in high_conf_edges:
+                source = edge.get("source")
+                target = edge.get("target")
+                if source and target:
+                    # Only add if doesn't create cycle
+                    if not dag.has_edge(source, target):
+                        dag.add_edge(source, target)
+                        if nx.is_directed_acyclic_graph(dag):
+                            augmented_edges.append((source, target))
+                            logger.debug(f"Augmented edge: {source} -> {target}")
+                        else:
+                            dag.remove_edge(source, target)
+                            logger.debug(f"Skipped edge (cycle): {source} -> {target}")
+
+            return dag, augmented_edges
+
+        elif decision == GateDecision.REVIEW.value:
+            # Use manual DAG but flag for review
+            logger.info("Using manual DAG, flagged for review (REVIEW)")
+            dag = self._construct_dag(treatment, outcome, confounders)
+            return dag, augmented_edges
+
+        else:
+            # REJECT or unknown: use manual DAG
+            logger.info("Using manual DAG (REJECT or fallback)")
+            dag = self._construct_dag(treatment, outcome, confounders)
+            return dag, augmented_edges
 
 
 # Standalone function for LangGraph integration

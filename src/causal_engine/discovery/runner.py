@@ -1,0 +1,356 @@
+"""
+E2I Causal Analytics - Causal Discovery Runner
+===============================================
+
+Orchestrates causal structure learning with multi-algorithm ensemble.
+
+The DiscoveryRunner:
+1. Runs multiple discovery algorithms in parallel
+2. Combines results using ensemble voting
+3. Computes confidence scores per edge
+4. Returns a unified DAG with edge metadata
+
+Author: E2I Causal Analytics Team
+"""
+
+import asyncio
+import time
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Dict, List, Optional, Set, Tuple, Type
+from uuid import UUID
+
+import networkx as nx
+import numpy as np
+import pandas as pd
+from loguru import logger
+from numpy.typing import NDArray
+
+from .algorithms import GESAlgorithm, PCAlgorithm
+from .base import (
+    AlgorithmResult,
+    BaseDiscoveryAlgorithm,
+    DiscoveredEdge,
+    DiscoveryAlgorithmType,
+    DiscoveryConfig,
+    DiscoveryResult,
+    EdgeType,
+)
+
+
+class DiscoveryRunner:
+    """Orchestrates causal structure learning with multi-algorithm ensemble.
+
+    The runner manages multiple discovery algorithms and combines their
+    results into a single ensemble DAG with confidence scores.
+
+    Example:
+        >>> runner = DiscoveryRunner()
+        >>> config = DiscoveryConfig(
+        ...     algorithms=[DiscoveryAlgorithmType.GES, DiscoveryAlgorithmType.PC],
+        ...     ensemble_threshold=0.5,
+        ... )
+        >>> result = await runner.discover_dag(data, config)
+        >>> print(f"Found {result.n_edges} edges with {result.algorithm_agreement:.2%} agreement")
+    """
+
+    # Registry of available algorithms
+    ALGORITHM_REGISTRY: Dict[DiscoveryAlgorithmType, Type[BaseDiscoveryAlgorithm]] = {
+        DiscoveryAlgorithmType.GES: GESAlgorithm,
+        DiscoveryAlgorithmType.PC: PCAlgorithm,
+    }
+
+    def __init__(
+        self,
+        max_workers: int = 4,
+        timeout_seconds: float = 300.0,
+    ):
+        """Initialize DiscoveryRunner.
+
+        Args:
+            max_workers: Maximum parallel workers for algorithm execution
+            timeout_seconds: Timeout for each algorithm
+        """
+        self.max_workers = max_workers
+        self.timeout_seconds = timeout_seconds
+        self._algorithms: Dict[DiscoveryAlgorithmType, BaseDiscoveryAlgorithm] = {}
+
+    def _get_algorithm(self, algo_type: DiscoveryAlgorithmType) -> BaseDiscoveryAlgorithm:
+        """Get or create algorithm instance.
+
+        Args:
+            algo_type: Algorithm type to get
+
+        Returns:
+            Algorithm instance
+
+        Raises:
+            ValueError: If algorithm type is not supported
+        """
+        if algo_type not in self._algorithms:
+            if algo_type not in self.ALGORITHM_REGISTRY:
+                raise ValueError(
+                    f"Algorithm {algo_type.value} not supported. "
+                    f"Available: {list(self.ALGORITHM_REGISTRY.keys())}"
+                )
+            self._algorithms[algo_type] = self.ALGORITHM_REGISTRY[algo_type]()
+
+        return self._algorithms[algo_type]
+
+    async def discover_dag(
+        self,
+        data: pd.DataFrame,
+        config: Optional[DiscoveryConfig] = None,
+        session_id: Optional[UUID] = None,
+    ) -> DiscoveryResult:
+        """Run causal discovery with ensemble of algorithms.
+
+        Args:
+            data: Input DataFrame with variables as columns
+            config: Discovery configuration. If None, uses defaults.
+            session_id: Session ID for tracking
+
+        Returns:
+            DiscoveryResult with ensemble DAG and confidence scores
+        """
+        if config is None:
+            config = DiscoveryConfig()
+
+        logger.info(
+            f"Starting causal discovery with {len(config.algorithms)} algorithms: "
+            f"{[a.value for a in config.algorithms]}"
+        )
+
+        start_time = time.time()
+        node_names = list(data.columns)
+
+        # Run algorithms (potentially in parallel)
+        algorithm_results = await self._run_algorithms(data, config)
+
+        # Combine results into ensemble
+        edges, ensemble_dag = self._build_ensemble(
+            algorithm_results,
+            node_names,
+            config.ensemble_threshold,
+        )
+
+        total_runtime = time.time() - start_time
+        logger.info(
+            f"Causal discovery complete: {len(edges)} edges found in {total_runtime:.2f}s"
+        )
+
+        return DiscoveryResult(
+            success=True,
+            config=config,
+            ensemble_dag=ensemble_dag,
+            edges=edges,
+            algorithm_results=algorithm_results,
+            session_id=session_id,
+            metadata={
+                "total_runtime_seconds": total_runtime,
+                "node_names": node_names,
+                "n_samples": len(data),
+            },
+        )
+
+    async def _run_algorithms(
+        self,
+        data: pd.DataFrame,
+        config: DiscoveryConfig,
+    ) -> List[AlgorithmResult]:
+        """Run all configured algorithms.
+
+        Args:
+            data: Input data
+            config: Discovery configuration
+
+        Returns:
+            List of results from each algorithm
+        """
+        results = []
+
+        # Run algorithms sequentially for now (causal-learn is not thread-safe)
+        # TODO: Consider process-based parallelism for true parallelism
+        for algo_type in config.algorithms:
+            try:
+                algorithm = self._get_algorithm(algo_type)
+                logger.debug(f"Running {algo_type.value} algorithm...")
+
+                # Run in executor to not block event loop
+                loop = asyncio.get_event_loop()
+                result = await loop.run_in_executor(
+                    None,
+                    lambda: algorithm.discover(data, config),
+                )
+
+                results.append(result)
+                logger.debug(
+                    f"{algo_type.value} found {len(result.edge_list)} edges "
+                    f"in {result.runtime_seconds:.2f}s"
+                )
+
+            except Exception as e:
+                logger.error(f"Algorithm {algo_type.value} failed: {e}")
+                # Create failed result
+                results.append(
+                    AlgorithmResult(
+                        algorithm=algo_type,
+                        adjacency_matrix=np.zeros(
+                            (len(data.columns), len(data.columns)), dtype=int
+                        ),
+                        edge_list=[],
+                        runtime_seconds=0.0,
+                        converged=False,
+                        metadata={"error": str(e)},
+                    )
+                )
+
+        return results
+
+    def _build_ensemble(
+        self,
+        results: List[AlgorithmResult],
+        node_names: List[str],
+        threshold: float,
+    ) -> Tuple[List[DiscoveredEdge], nx.DiGraph]:
+        """Build ensemble DAG from algorithm results.
+
+        Uses voting across algorithms to determine which edges to include.
+        Edges found by >= threshold fraction of algorithms are included.
+
+        Args:
+            results: Results from individual algorithms
+            node_names: Names of nodes
+            threshold: Minimum fraction of algorithms that must agree
+
+        Returns:
+            Tuple of (edge list with confidence, networkx DiGraph)
+        """
+        n_algorithms = len(results)
+        if n_algorithms == 0:
+            return [], nx.DiGraph()
+
+        # Count votes for each edge
+        edge_votes: Dict[Tuple[str, str], List[str]] = {}
+
+        for result in results:
+            if not result.converged:
+                continue
+
+            for source, target in result.edge_list:
+                edge_key = (source, target)
+                if edge_key not in edge_votes:
+                    edge_votes[edge_key] = []
+                edge_votes[edge_key].append(result.algorithm.value)
+
+        # Filter edges by threshold and create DiscoveredEdge objects
+        min_votes = max(1, int(n_algorithms * threshold))
+        edges = []
+
+        for (source, target), algorithms in edge_votes.items():
+            n_votes = len(algorithms)
+            if n_votes >= min_votes:
+                confidence = n_votes / n_algorithms
+                edges.append(
+                    DiscoveredEdge(
+                        source=source,
+                        target=target,
+                        edge_type=EdgeType.DIRECTED,
+                        confidence=confidence,
+                        algorithm_votes=n_votes,
+                        algorithms=algorithms,
+                    )
+                )
+
+        # Build networkx DiGraph
+        dag = nx.DiGraph()
+        dag.add_nodes_from(node_names)
+
+        for edge in edges:
+            dag.add_edge(
+                edge.source,
+                edge.target,
+                confidence=edge.confidence,
+                votes=edge.algorithm_votes,
+                algorithms=edge.algorithms,
+            )
+
+        # Check for cycles and remove lowest-confidence edge if found
+        dag = self._remove_cycles(dag)
+
+        return edges, dag
+
+    def _remove_cycles(self, dag: nx.DiGraph) -> nx.DiGraph:
+        """Remove cycles from graph by removing lowest-confidence edges.
+
+        Args:
+            dag: Graph that may contain cycles
+
+        Returns:
+            Acyclic graph
+        """
+        while True:
+            try:
+                cycle = nx.find_cycle(dag, orientation="original")
+                # Find edge with lowest confidence in cycle
+                min_conf = float("inf")
+                min_edge = None
+
+                for u, v, _ in cycle:
+                    conf = dag.edges[u, v].get("confidence", 1.0)
+                    if conf < min_conf:
+                        min_conf = conf
+                        min_edge = (u, v)
+
+                if min_edge:
+                    logger.warning(
+                        f"Removing cycle edge {min_edge[0]} -> {min_edge[1]} "
+                        f"(confidence: {min_conf:.2f})"
+                    )
+                    dag.remove_edge(*min_edge)
+
+            except nx.NetworkXNoCycle:
+                break
+
+        return dag
+
+    def discover_dag_sync(
+        self,
+        data: pd.DataFrame,
+        config: Optional[DiscoveryConfig] = None,
+        session_id: Optional[UUID] = None,
+    ) -> DiscoveryResult:
+        """Synchronous version of discover_dag.
+
+        Args:
+            data: Input DataFrame
+            config: Discovery configuration
+            session_id: Session ID
+
+        Returns:
+            DiscoveryResult
+        """
+        return asyncio.run(self.discover_dag(data, config, session_id))
+
+    @classmethod
+    def get_available_algorithms(cls) -> List[DiscoveryAlgorithmType]:
+        """Get list of available algorithms.
+
+        Returns:
+            List of supported algorithm types
+        """
+        return list(cls.ALGORITHM_REGISTRY.keys())
+
+    @classmethod
+    def register_algorithm(
+        cls,
+        algo_type: DiscoveryAlgorithmType,
+        algo_class: Type[BaseDiscoveryAlgorithm],
+    ) -> None:
+        """Register a new algorithm.
+
+        Args:
+            algo_type: Algorithm type identifier
+            algo_class: Algorithm implementation class
+        """
+        cls.ALGORITHM_REGISTRY[algo_type] = algo_class
+        logger.info(f"Registered algorithm: {algo_type.value}")
