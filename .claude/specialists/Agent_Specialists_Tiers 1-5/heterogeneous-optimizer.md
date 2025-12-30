@@ -1367,3 +1367,266 @@ class TestHetOptCognitiveIntegration:
         """Test graceful operation without cognitive context."""
         pass
 ```
+
+---
+
+## Discovery Integration (V4.4+)
+
+### Overview
+
+The Heterogeneous Optimizer can optionally leverage discovered causal structures from the Causal Impact agent's auto-discovery capability (V4.4+). This integration validates treatment-outcome relationships and discovers effect modifiers from learned DAGs.
+
+### Integration Pattern
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│            HETEROGENEOUS OPTIMIZER - DISCOVERY INTEGRATION                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  FROM CAUSAL IMPACT AGENT                   HETEROGENEOUS OPTIMIZER          │
+│  ┌──────────────────────┐                  ┌─────────────────────────────┐   │
+│  │ discovery_result     │                  │                             │   │
+│  │   - ensemble_dag     │─────────────────►│  1. Extract confounders     │   │
+│  │   - edge_confidences │                  │  2. Validate effect_modifiers│   │
+│  │   - gate_decision    │                  │  3. Log discovery metadata  │   │
+│  │                      │                  │                             │   │
+│  │ gate_evaluation      │                  │                             │   │
+│  │   - confidence       │─────────────────►│  4. Adjust CATE confidence  │   │
+│  │   - high_conf_edges  │                  │                             │   │
+│  └──────────────────────┘                  └─────────────────────────────┘   │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### State Fields for Discovery
+
+When receiving discovered structures from Causal Impact agent:
+
+```python
+class HeterogeneousOptimizerState(TypedDict):
+    # ... existing fields ...
+
+    # === DISCOVERY INTEGRATION (V4.4+) ===
+    discovered_dag: Optional[Dict[str, Any]]  # From Causal Impact agent
+    discovered_confounders: Optional[List[str]]  # Extracted from DAG
+    discovery_gate_decision: Optional[str]  # accept/augment/review/reject
+    discovery_confidence: Optional[float]  # Gate confidence score
+    effect_modifiers_validated: Optional[bool]  # True if validated against DAG
+    discovery_metadata: Optional[Dict[str, Any]]  # Additional discovery info
+```
+
+### Confounder Extraction
+
+Extract confounders from discovered DAG for CATE estimation:
+
+```python
+def extract_confounders_from_dag(
+    discovered_dag: Dict[str, Any],
+    treatment_var: str,
+    outcome_var: str
+) -> List[str]:
+    """
+    Extract confounders from discovered DAG.
+
+    Confounders are nodes that:
+    - Have edges TO both treatment and outcome, OR
+    - Lie on backdoor paths between treatment and outcome
+    """
+    edges = discovered_dag.get("edges", [])
+    nodes = discovered_dag.get("nodes", [])
+
+    # Find nodes with edges to both treatment and outcome
+    confounders = []
+    for node in nodes:
+        if node in [treatment_var, outcome_var]:
+            continue
+
+        edges_to_treatment = any(
+            e[0] == node and e[1] == treatment_var for e in edges
+        )
+        edges_to_outcome = any(
+            e[0] == node and e[1] == outcome_var for e in edges
+        )
+
+        if edges_to_treatment and edges_to_outcome:
+            confounders.append(node)
+
+    return confounders
+```
+
+### Effect Modifier Validation
+
+Validate that effect_modifiers are consistent with discovered structure:
+
+```python
+def validate_effect_modifiers(
+    effect_modifiers: List[str],
+    discovered_dag: Dict[str, Any],
+    treatment_var: str,
+    outcome_var: str
+) -> Dict[str, Any]:
+    """
+    Validate effect modifiers against discovered DAG.
+
+    Returns validation results with recommendations.
+    """
+    edges = discovered_dag.get("edges", [])
+    edge_confidences = discovered_dag.get("edge_confidences", {})
+
+    validated = []
+    warnings = []
+
+    for modifier in effect_modifiers:
+        # Check if modifier affects outcome
+        affects_outcome = any(
+            e[0] == modifier and e[1] == outcome_var for e in edges
+        )
+
+        # Check if modifier interacts with treatment
+        interacts_with_treatment = any(
+            (e[0] == modifier and e[1] == treatment_var) or
+            (e[0] == treatment_var and e[1] == modifier)
+            for e in edges
+        )
+
+        if affects_outcome:
+            validated.append({
+                "modifier": modifier,
+                "affects_outcome": True,
+                "confidence": edge_confidences.get(f"{modifier}->{outcome_var}", 0.5)
+            })
+        else:
+            warnings.append(
+                f"{modifier} not found to affect {outcome_var} in discovered DAG"
+            )
+
+    return {
+        "validated_modifiers": validated,
+        "warnings": warnings,
+        "validation_rate": len(validated) / len(effect_modifiers) if effect_modifiers else 1.0
+    }
+```
+
+### CATE Confidence Adjustment
+
+Adjust CATE confidence based on discovery quality:
+
+```python
+def adjust_cate_confidence(
+    base_confidence: float,
+    discovery_gate_decision: str,
+    discovery_confidence: float,
+    effect_modifiers_validation_rate: float
+) -> float:
+    """
+    Adjust CATE confidence based on discovery quality.
+
+    Higher discovery confidence → Higher CATE confidence
+    ACCEPT gate decision → Boost confidence
+    REJECT gate decision → Reduce confidence
+    """
+    gate_multipliers = {
+        "accept": 1.1,
+        "augment": 1.0,
+        "review": 0.9,
+        "reject": 0.8
+    }
+
+    multiplier = gate_multipliers.get(discovery_gate_decision, 1.0)
+
+    # Factor in discovery confidence
+    discovery_factor = 0.5 + (discovery_confidence * 0.5)
+
+    # Factor in modifier validation
+    validation_factor = 0.7 + (effect_modifiers_validation_rate * 0.3)
+
+    adjusted = base_confidence * multiplier * discovery_factor * validation_factor
+
+    return min(max(adjusted, 0.0), 1.0)
+```
+
+### Usage in HeterogeneousOptimizerState
+
+```python
+# State with discovery integration
+state = HeterogeneousOptimizerState(
+    query="What segments respond best to HCP engagement?",
+    treatment_var="hcp_engagement_level",
+    outcome_var="patient_conversion_rate",
+    effect_modifiers=["geographic_region", "hcp_specialty", "decile"],
+
+    # Discovery context from Causal Impact agent (V4.4+)
+    discovered_dag={
+        "nodes": ["hcp_engagement_level", "patient_conversion_rate", "geographic_region", "market_size"],
+        "edges": [
+            ("hcp_engagement_level", "patient_conversion_rate"),
+            ("geographic_region", "hcp_engagement_level"),
+            ("geographic_region", "patient_conversion_rate"),
+            ("market_size", "patient_conversion_rate")
+        ],
+        "edge_confidences": {
+            "hcp_engagement_level->patient_conversion_rate": 0.92,
+            "geographic_region->hcp_engagement_level": 0.85,
+            "geographic_region->patient_conversion_rate": 0.88
+        }
+    },
+    discovery_gate_decision="accept",
+    discovery_confidence=0.87,
+)
+```
+
+### Configuration
+
+```yaml
+# config/agents/heterogeneous_optimizer.yaml
+
+heterogeneous_optimizer:
+  # ... existing config ...
+
+  discovery_integration:
+    enabled: true
+
+    # Confounder extraction
+    extract_confounders_from_dag: true
+    min_edge_confidence_for_confounder: 0.6
+
+    # Effect modifier validation
+    validate_effect_modifiers: true
+    warn_on_unvalidated_modifiers: true
+
+    # CATE confidence adjustment
+    adjust_cate_confidence: true
+    require_discovery_for_high_confidence: false
+
+    # Logging
+    log_discovery_metadata: true
+```
+
+### Testing Requirements
+
+```python
+# tests/unit/test_agents/test_heterogeneous_optimizer/test_discovery_integration.py
+
+class TestHetOptDiscoveryIntegration:
+    """Tests for Heterogeneous Optimizer discovery integration."""
+
+    def test_confounder_extraction_from_dag(self):
+        """Test extracting confounders from discovered DAG."""
+        pass
+
+    def test_effect_modifier_validation(self):
+        """Test validating effect modifiers against DAG."""
+        pass
+
+    def test_cate_confidence_adjustment(self):
+        """Test confidence adjustment based on discovery quality."""
+        pass
+
+    def test_without_discovery_context(self):
+        """Test graceful operation without discovery context."""
+        pass
+
+    def test_reject_gate_reduces_confidence(self):
+        """Test that REJECT gate decision reduces CATE confidence."""
+        pass
+```

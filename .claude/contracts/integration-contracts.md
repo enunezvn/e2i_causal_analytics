@@ -2,8 +2,8 @@
 
 **Purpose**: Define system-level integration contracts for the E2I Causal Analytics platform, ensuring consistent communication across all layers and components.
 
-**Version**: 1.0
-**Last Updated**: 2025-12-18
+**Version**: 1.1
+**Last Updated**: 2025-12-30
 **Owner**: E2I Development Team
 
 ---
@@ -679,6 +679,22 @@ class CausalAnalysisRequest(BaseModel):
         description="Bootstrap samples for inference"
     )
 
+    # === DISCOVERY (V4.4+) ===
+    auto_discover_graph: bool = Field(
+        default=False,
+        description="Enable automatic DAG structure learning"
+    )
+
+    discovery_method: Optional[Literal["ges", "pc", "ensemble"]] = Field(
+        None,
+        description="Discovery method: 'ges' (Greedy Equivalence Search), 'pc' (Peter-Clark), 'ensemble' (both with voting)"
+    )
+
+    discovery_config: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Discovery configuration: ensemble_threshold (0.5), alpha (0.05), max_iterations (1000)"
+    )
+
 class CausalAnalysisResponse(BaseModel):
     """
     Response from Causal Engine.
@@ -735,6 +751,39 @@ class CausalAnalysisResponse(BaseModel):
     sample_size: int = Field(..., description="Effective sample size")
 
     computation_time_ms: int = Field(..., description="Computation time")
+
+    # === DISCOVERY RESULTS (V4.4+) ===
+    discovery_performed: bool = Field(
+        default=False,
+        description="Whether auto-discovery was performed"
+    )
+
+    discovered_graph: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Discovered DAG structure: {nodes: List[str], edges: List[Tuple[str, str]], edge_confidences: Dict}"
+    )
+
+    discovery_confidence: Optional[float] = Field(
+        None,
+        ge=0.0,
+        le=1.0,
+        description="Overall discovery confidence score"
+    )
+
+    discovery_gate_decision: Optional[Literal["accept", "augment", "review", "reject"]] = Field(
+        None,
+        description="Gate decision: accept (>=0.8), augment (0.5-0.8), review (0.3-0.5), reject (<0.3)"
+    )
+
+    discovery_algorithms_used: List[str] = Field(
+        default_factory=list,
+        description="Algorithms used: ['ges', 'pc']"
+    )
+
+    augmented_edges: List[tuple[str, str]] = Field(
+        default_factory=list,
+        description="High-confidence discovered edges added to manual DAG (if gate=augment)"
+    )
 ```
 
 ---
@@ -2235,6 +2284,7 @@ All integration points must have:
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
 | 1.0 | 2025-12-18 | E2I Team | Initial integration contracts |
+| 1.1 | 2025-12-30 | E2I Team | V4.4: Added discovery params to CausalAnalysisRequest/Response |
 
 ---
 

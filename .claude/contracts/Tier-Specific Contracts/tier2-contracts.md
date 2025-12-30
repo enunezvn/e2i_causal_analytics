@@ -46,7 +46,14 @@ class CausalImpactInput(BaseAgentInput):
         None,
         description="Energy score configuration overrides: weights, n_bootstrap, etc."
     )
-    
+
+    # V4.4: Discovery Configuration
+    auto_discover: bool = Field(False, description="Enable automatic DAG structure learning")
+    discovery_config: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Discovery configuration: algorithms=['ges','pc'], ensemble_threshold, alpha"
+    )
+
     # Interpretation
     interpretation_depth: Literal["none", "minimal", "standard", "deep"] = "standard"
     user_expertise: Literal["executive", "analyst", "data_scientist"] = "analyst"
@@ -140,6 +147,13 @@ class CausalImpactOutput(BaseAgentOutput):
         None,
         description="Gap between best and second-best energy score"
     )
+
+    # V4.4: Discovery Results
+    discovery_enabled: bool = Field(False, description="Whether auto-discovery was used")
+    discovery_gate_decision: Optional[Literal["accept", "augment", "review", "reject"]] = None
+    discovery_confidence: Optional[float] = Field(None, ge=0, le=1, description="Ensemble confidence")
+    discovery_algorithms_used: List[str] = Field(default_factory=list, description="Algorithms used")
+    discovery_latency_ms: Optional[float] = None
 ```
 
 ### Handoff Format
@@ -179,6 +193,16 @@ causal_impact_handoff:
         energy_score: <score>
         ate: <estimate>
     energy_score_gap: <gap between best and second-best>
+
+  # V4.4: Discovery Results (if auto_discover=True)
+  discovery:
+    enabled: <bool>
+    gate_decision: <accept|augment|review|reject>
+    confidence: <0.0-1.0>
+    algorithms_used: [<ges>, <pc>]
+    discovered_edges: <count>
+    augmented_edges: [<list of (source, target) tuples>]
+    latency_ms: <value>
 
   interpretation: <natural language summary>
   confidence_level: high|medium|low
@@ -574,6 +598,15 @@ class CausalAnalysisTrainingSignal:
     energy_score_gap: float = 0.0  # Gap between best and second-best
     selection_time_ms: float = 0.0
 
+    # === V4.4: Discovery Phase ===
+    auto_discover: bool = False
+    discovery_algorithms: List[str] = field(default_factory=list)  # ["ges", "pc"]
+    discovery_gate_decision: str = ""  # accept, augment, review, reject
+    discovery_confidence: float = 0.0
+    discovered_edges_count: int = 0
+    augmented_edges_count: int = 0
+    discovery_latency_ms: float = 0.0
+
     # === Interpretation Phase ===
     interpretation_depth: str = ""  # none, minimal, standard, deep
     narrative_length: int = 0
@@ -905,6 +938,7 @@ signal_flow:
 
 | Date | Change |
 |------|--------|
+| 2025-12-30 | V4.4: Added Discovery Phase contracts |
 | 2025-12-26 | V4.2: Added Energy Score Enhancement contracts |
 | 2025-12-23 | V5: Added DSPy Sender role specification |
 | 2025-12-08 | V4: Added ROI calculation outputs |
@@ -954,3 +988,47 @@ signal_flow:
 - `first_success` - Legacy: use first estimator that succeeds
 - `best_energy` - Default: select estimator with lowest energy score
 - `ensemble` - Future: combine multiple estimators
+
+---
+
+## V4.4: Discovery Phase Summary
+
+### New Contracts Added
+
+1. **CausalImpactInput** - Added `auto_discover` and `discovery_config` fields
+2. **CausalImpactOutput** - Added discovery result fields
+3. **CausalAnalysisTrainingSignal** - Added discovery phase fields
+4. **Handoff Format** - Added discovery section
+
+### Discovery Configuration
+
+```python
+discovery_config: Optional[Dict[str, Any]] = {
+    "algorithms": ["ges", "pc"],  # Discovery algorithms
+    "ensemble_threshold": 0.5,     # Min agreement for edge inclusion
+    "alpha": 0.05,                 # Significance level for CI tests
+}
+```
+
+### Gate Decisions
+
+| Decision | Confidence | Behavior |
+|----------|------------|----------|
+| accept | >= 0.8 | Use discovered DAG directly |
+| augment | 0.5 - 0.8 | Add high-confidence edges to manual DAG |
+| review | 0.3 - 0.5 | Flag for expert review |
+| reject | < 0.3 | Fall back to manual DAG only |
+
+### Supported Discovery Algorithms
+
+- `ges` - Greedy Equivalence Search (score-based)
+- `pc` - Peter-Clark (constraint-based)
+- `fci` - Fast Causal Inference (future: latent confounders)
+- `lingam` - Linear Non-Gaussian (future: non-Gaussian data)
+
+### Database Schema
+
+Discovery results stored in:
+- `ml.discovered_dags` - Discovered DAG structures
+- `ml.driver_rankings` - Causal vs predictive rankings
+- `ml.discovery_algorithm_runs` - Algorithm execution logs

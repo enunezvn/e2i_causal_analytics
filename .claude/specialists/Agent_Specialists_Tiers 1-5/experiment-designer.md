@@ -1517,3 +1517,331 @@ async def test_training_signal_computation():
     reward = signal.compute_reward()
     assert reward > 0.7  # High-quality design should have high reward
 ```
+
+---
+
+## Discovered DAG Integration (V4.4+)
+
+### Overview
+
+The Experiment Designer can accept pre-discovered causal graphs from the Causal Impact agent's auto-discovery capability (V4.4+). This allows experiment designs to be informed by data-driven causal structure rather than relying solely on domain knowledge.
+
+### Integration Pattern
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│              EXPERIMENT DESIGNER - DISCOVERY INTEGRATION                     │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  FROM CAUSAL IMPACT AGENT                     EXPERIMENT DESIGNER            │
+│  ┌──────────────────────┐                    ┌─────────────────────────────┐ │
+│  │ discovered_dag_spec  │                    │                             │ │
+│  │   - nodes            │───────────────────►│  1. Extract treatment-      │ │
+│  │   - edges            │                    │     outcome relationships   │ │
+│  │   - confidences      │                    │                             │ │
+│  │                      │                    │  2. Identify confounders    │ │
+│  │ gate_evaluation      │                    │     for randomization       │ │
+│  │   - decision         │───────────────────►│                             │ │
+│  │   - confidence       │                    │  3. Validate design against │ │
+│  │   - reasons          │                    │     discovered structure    │ │
+│  └──────────────────────┘                    └─────────────────────────────┘ │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### State Fields for Discovery
+
+```python
+class ExperimentDesignerState(TypedDict):
+    # ... existing fields ...
+
+    # === DISCOVERED DAG INTEGRATION (V4.4+) ===
+    discovered_dag_spec: Optional[Dict[str, Any]]  # From Causal Impact agent
+    discovery_gate_decision: Optional[str]  # accept/augment/review/reject
+    discovery_confidence: Optional[float]  # Gate confidence score
+    discovered_confounders: Optional[List[str]]  # For stratification
+    dag_validated_design: Optional[bool]  # True if design validated against DAG
+    discovery_warnings: Optional[List[str]]  # Issues with discovered structure
+```
+
+### Confounder-Based Stratification
+
+Use discovered confounders for experiment stratification:
+
+```python
+def design_stratification_from_dag(
+    discovered_dag: Dict[str, Any],
+    treatment_var: str,
+    outcome_var: str,
+    max_strata: int = 4
+) -> Dict[str, Any]:
+    """
+    Design stratification based on discovered confounders.
+
+    Confounders are variables that affect both treatment assignment
+    and outcome - these should be used for stratified randomization.
+    """
+    edges = discovered_dag.get("edges", [])
+    edge_confidences = discovered_dag.get("edge_confidences", {})
+
+    # Identify confounders (affect both treatment and outcome)
+    confounders = []
+    for node in discovered_dag.get("nodes", []):
+        if node in [treatment_var, outcome_var]:
+            continue
+
+        affects_treatment = any(
+            e[0] == node and e[1] == treatment_var for e in edges
+        )
+        affects_outcome = any(
+            e[0] == node and e[1] == outcome_var for e in edges
+        )
+
+        if affects_treatment and affects_outcome:
+            # Calculate combined confidence
+            conf_treatment = edge_confidences.get(f"{node}->{treatment_var}", 0.5)
+            conf_outcome = edge_confidences.get(f"{node}->{outcome_var}", 0.5)
+            combined_conf = (conf_treatment + conf_outcome) / 2
+
+            confounders.append({
+                "variable": node,
+                "confidence": combined_conf,
+                "stratification_priority": combined_conf
+            })
+
+    # Sort by priority and limit
+    confounders.sort(key=lambda x: x["stratification_priority"], reverse=True)
+    selected = confounders[:max_strata]
+
+    return {
+        "stratification_variables": [c["variable"] for c in selected],
+        "variable_confidences": {c["variable"]: c["confidence"] for c in selected},
+        "total_confounders_found": len(confounders),
+        "recommendation": f"Stratify on {len(selected)} variables for balanced randomization"
+    }
+```
+
+### Design Validation Against DAG
+
+Validate experiment design against discovered structure:
+
+```python
+def validate_design_against_dag(
+    design: ExperimentDesign,
+    discovered_dag: Dict[str, Any],
+    discovery_confidence: float
+) -> Dict[str, Any]:
+    """
+    Validate experiment design against discovered causal structure.
+
+    Checks:
+    - Treatment → Outcome edge exists
+    - Confounders are controlled for
+    - No unexpected mediators
+    """
+    edges = discovered_dag.get("edges", [])
+    treatment = design.treatment_variable
+    outcome = design.outcome_variable
+
+    validations = []
+    warnings = []
+
+    # Check treatment → outcome relationship
+    treatment_outcome_edge = any(
+        e[0] == treatment and e[1] == outcome for e in edges
+    )
+    if treatment_outcome_edge:
+        validations.append({
+            "check": "treatment_outcome_relationship",
+            "passed": True,
+            "message": f"Discovered DAG confirms {treatment} → {outcome} relationship"
+        })
+    else:
+        warnings.append(
+            f"Warning: No direct edge {treatment} → {outcome} in discovered DAG. "
+            "Effect may be mediated or spurious."
+        )
+
+    # Check confounder control
+    discovered_confounders = [
+        node for node in discovered_dag.get("nodes", [])
+        if node not in [treatment, outcome]
+        and any(e[0] == node and e[1] == treatment for e in edges)
+        and any(e[0] == node and e[1] == outcome for e in edges)
+    ]
+
+    controlled = set(design.stratification_variables or [])
+    uncontrolled = set(discovered_confounders) - controlled
+
+    if uncontrolled:
+        warnings.append(
+            f"Uncontrolled confounders: {list(uncontrolled)}. "
+            "Consider adding to stratification."
+        )
+    else:
+        validations.append({
+            "check": "confounder_control",
+            "passed": True,
+            "message": "All discovered confounders are controlled"
+        })
+
+    # Flag low discovery confidence
+    if discovery_confidence < 0.5:
+        warnings.append(
+            f"Discovery confidence is low ({discovery_confidence:.2f}). "
+            "DAG structure may be unreliable."
+        )
+
+    return {
+        "validations": validations,
+        "warnings": warnings,
+        "overall_valid": len(warnings) == 0,
+        "recommendation": "Proceed" if len(warnings) == 0 else "Review warnings"
+    }
+```
+
+### Expert Review Flagging
+
+Flag low-confidence discoveries for expert review:
+
+```python
+def flag_for_expert_review(
+    discovery_gate_decision: str,
+    discovery_confidence: float,
+    design_complexity: str
+) -> Dict[str, Any]:
+    """
+    Determine if experiment design needs expert review based on discovery.
+
+    Returns:
+        Review requirements and priority
+    """
+    requires_review = False
+    priority = "low"
+    reasons = []
+
+    # Flag based on gate decision
+    if discovery_gate_decision in ["review", "reject"]:
+        requires_review = True
+        reasons.append(f"Discovery gate decision: {discovery_gate_decision}")
+        priority = "high" if discovery_gate_decision == "reject" else "medium"
+
+    # Flag low confidence
+    if discovery_confidence < 0.5:
+        requires_review = True
+        reasons.append(f"Low discovery confidence: {discovery_confidence:.2f}")
+        if priority == "low":
+            priority = "medium"
+
+    # Flag complex designs with uncertain structure
+    if design_complexity == "complex" and discovery_confidence < 0.7:
+        requires_review = True
+        reasons.append("Complex design with uncertain causal structure")
+        priority = "high"
+
+    return {
+        "requires_expert_review": requires_review,
+        "priority": priority,
+        "reasons": reasons,
+        "recommended_reviewer": "causal_methods_expert" if requires_review else None
+    }
+```
+
+### Usage Example
+
+```python
+# State with discovered DAG integration
+state = ExperimentDesignerState(
+    business_question="Does increased HCP call frequency improve TRx?",
+    hypothesis="Higher call frequency → Higher TRx",
+    treatment_variable="call_frequency",
+    outcome_variable="trx_volume",
+
+    # Discovered DAG from Causal Impact agent (V4.4+)
+    discovered_dag_spec={
+        "nodes": ["call_frequency", "trx_volume", "geographic_region", "hcp_specialty", "market_size"],
+        "edges": [
+            ("call_frequency", "trx_volume"),
+            ("geographic_region", "call_frequency"),
+            ("geographic_region", "trx_volume"),
+            ("hcp_specialty", "trx_volume"),
+            ("market_size", "trx_volume")
+        ],
+        "edge_confidences": {
+            "call_frequency->trx_volume": 0.88,
+            "geographic_region->call_frequency": 0.92,
+            "geographic_region->trx_volume": 0.85
+        }
+    },
+    discovery_gate_decision="accept",
+    discovery_confidence=0.85,
+)
+
+# ExperimentDesignerNode will:
+# 1. Extract confounders: ["geographic_region"]
+# 2. Recommend stratification on geographic_region
+# 3. Validate design against discovered structure
+# 4. Proceed without expert review (high confidence)
+```
+
+### Configuration
+
+```yaml
+# config/agents/experiment_designer.yaml
+
+experiment_designer:
+  # ... existing config ...
+
+  discovery_integration:
+    enabled: true
+
+    # DAG acceptance
+    accept_discovered_dags: true
+    min_confidence_for_auto_use: 0.7
+
+    # Stratification
+    use_discovered_confounders: true
+    max_stratification_variables: 4
+
+    # Validation
+    validate_design_against_dag: true
+    flag_uncontrolled_confounders: true
+
+    # Expert review
+    flag_low_confidence_for_review: true
+    low_confidence_threshold: 0.5
+    auto_flag_reject_decisions: true
+```
+
+### Testing Requirements
+
+```python
+# tests/unit/test_agents/test_experiment_designer/test_discovery_integration.py
+
+class TestExperimentDesignerDiscoveryIntegration:
+    """Tests for Experiment Designer discovery integration."""
+
+    def test_stratification_from_discovered_dag(self):
+        """Test designing stratification from discovered confounders."""
+        pass
+
+    def test_design_validation_against_dag(self):
+        """Test validating experiment design against DAG."""
+        pass
+
+    def test_expert_review_flagging(self):
+        """Test flagging low-confidence discoveries for review."""
+        pass
+
+    def test_without_discovery_context(self):
+        """Test graceful operation without discovery context."""
+        pass
+
+    def test_reject_decision_triggers_review(self):
+        """Test that REJECT gate decision triggers expert review."""
+        pass
+
+    def test_uncontrolled_confounder_warning(self):
+        """Test warning for uncontrolled discovered confounders."""
+        pass
+```
