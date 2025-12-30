@@ -363,7 +363,7 @@ class RAGASEvaluator:
     def __init__(
         self,
         config: Optional[EvaluationConfig] = None,
-        llm_provider: str = "anthropic",
+        llm_provider: str = "auto",
         enable_opik_tracing: bool = True,
     ):
         """
@@ -371,15 +371,30 @@ class RAGASEvaluator:
 
         Args:
             config: Evaluation configuration
-            llm_provider: LLM provider for metrics (anthropic, openai)
+            llm_provider: LLM provider for metrics (auto, anthropic, openai)
+                          When "auto", detects available API key
             enable_opik_tracing: Whether to trace evaluations to Opik
         """
         self.config = config or EvaluationConfig()
-        self.llm_provider = llm_provider
+        self.llm_provider = self._detect_llm_provider(llm_provider)
         self.enable_opik_tracing = enable_opik_tracing and _OPIK_AVAILABLE
         self._ragas_available = self._check_ragas()
         self._llm_configured = self._check_llm()
         self._opik_tracer = _get_opik_tracer() if self.enable_opik_tracing else None
+
+    def _detect_llm_provider(self, provider: str) -> str:
+        """Detect LLM provider from environment if set to auto."""
+        if provider != "auto":
+            return provider
+        # Auto-detect: prefer OpenAI for RAGAS (better integration)
+        if os.environ.get("OPENAI_API_KEY"):
+            logger.info("Auto-detected OpenAI API key for RAGAS evaluation")
+            return "openai"
+        if os.environ.get("ANTHROPIC_API_KEY"):
+            logger.info("Auto-detected Anthropic API key for RAGAS evaluation")
+            return "anthropic"
+        logger.warning("No LLM API key found, will use fallback heuristic evaluation")
+        return "none"
 
     def _check_ragas(self) -> bool:
         """Check if RAGAS is available."""
