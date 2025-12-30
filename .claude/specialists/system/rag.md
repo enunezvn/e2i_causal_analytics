@@ -443,7 +443,7 @@ dspy_signals = [
         "latency_ms": 45,
         "phase": "summarizer"
     },
-    # ... signals from all 11 signatures
+    # ... signals from all 11 Cognitive RAG signatures (50+ total across system)
 ]
 ```
 

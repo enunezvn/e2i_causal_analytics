@@ -984,7 +984,7 @@ async def test_tier5_agent_integration(agent_name: str):
 | Agent | DSPy Role | Primary Signature | Behavior |
 |-------|-----------|-------------------|----------|
 | **Explainer** | Recipient | N/A (consumes optimized prompts) | Uses QueryRewriteSignature for query clarification |
-| **Feedback Learner** | Hybrid | All 11 Cognitive RAG signatures | Collects training signals AND consumes/distributes prompts |
+| **Feedback Learner** | Hybrid | All 14 Cognitive RAG DSPy components (11 signatures + 4 modules) + 36 agent signatures | Collects training signals AND consumes/distributes prompts |
 
 ### 10.0.1 DSPy Recipient Mixin (Explainer)
 

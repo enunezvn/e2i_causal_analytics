@@ -490,11 +490,11 @@ Tier 0 agents operate within the ML pipeline and do not require 4-Memory Archite
 | Aspect | Status | Details |
 |--------|--------|---------|
 | **Location** | `src/rag/cognitive_rag_dspy.py` | CausalRAG DSPy implementation |
-| **DSPy Type** | Core | Central to all 11 DSPy signatures |
+| **DSPy Type** | Core | Central to 11 Cognitive RAG signatures (50+ total across system) |
 | **Contract** | ✅ COMPLETE | Full DSPy integration with 4-phase cognitive workflow |
 | **Tests** | ✅ COMPLETE | `tests/rag/test_cognitive_rag_dspy.py` (950 lines) |
 
-**Implemented DSPy Signatures (11 total)**:
+**Implemented DSPy Signatures (11 in Cognitive RAG, 50+ total system-wide)**:
 
 | Phase | Signature | Purpose | Status |
 |-------|-----------|---------|--------|
