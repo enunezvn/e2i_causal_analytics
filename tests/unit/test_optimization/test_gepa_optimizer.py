@@ -168,7 +168,11 @@ class TestCreateGEPAOptimizer:
     def test_create_optimizer_with_tool_optimization(
         self, mock_lm_class, mock_gepa_class, mock_metric, sample_trainset, sample_valset
     ):
-        """Test creating optimizer with tool optimization enabled."""
+        """Test creating optimizer with tool optimization enabled.
+
+        Note: enable_tool_optimization is accepted by create_gepa_optimizer
+        but not passed to GEPA as GEPA doesn't support it yet (reserved for future).
+        """
         from src.optimization.gepa.optimizer_setup import create_gepa_optimizer
 
         mock_gepa_instance = MagicMock()
@@ -183,8 +187,9 @@ class TestCreateGEPAOptimizer:
         )
 
         assert optimizer is not None
+        # Verify optimizer was created (enable_tool_optimization is reserved for future)
         call_kwargs = mock_gepa_class.call_args[1]
-        assert call_kwargs["enable_tool_optimization"] is True
+        assert call_kwargs["auto"] == "medium"
 
     @patch("dspy.GEPA")
     @patch("dspy.LM")
@@ -247,10 +252,10 @@ class TestCreateOptimizerForAgent:
         )
 
         assert optimizer is not None
-        # causal_impact should get medium budget and tool optimization
+        # causal_impact should get medium budget
+        # Note: enable_tool_optimization is reserved for future (not passed to GEPA)
         call_kwargs = mock_gepa_class.call_args[1]
         assert call_kwargs["auto"] == "medium"
-        assert call_kwargs["enable_tool_optimization"] is True
 
     @patch("dspy.GEPA")
     @patch("dspy.LM")
@@ -270,10 +275,10 @@ class TestCreateOptimizerForAgent:
         )
 
         assert optimizer is not None
-        # experiment_designer should get medium budget and tool optimization
+        # experiment_designer should get medium budget
+        # Note: enable_tool_optimization is reserved for future (not passed to GEPA)
         call_kwargs = mock_gepa_class.call_args[1]
         assert call_kwargs["auto"] == "medium"
-        assert call_kwargs["enable_tool_optimization"] is True
 
     @patch("dspy.GEPA")
     @patch("dspy.LM")
@@ -293,10 +298,10 @@ class TestCreateOptimizerForAgent:
         )
 
         assert optimizer is not None
-        # feedback_learner should get heavy budget (Tier 5 Deep) but no tool optimization
+        # feedback_learner should get heavy budget (Tier 5 Deep)
+        # Note: enable_tool_optimization is reserved for future (not passed to GEPA)
         call_kwargs = mock_gepa_class.call_args[1]
         assert call_kwargs["auto"] == "heavy"
-        assert call_kwargs["enable_tool_optimization"] is False
 
 
 class TestVersioning:
