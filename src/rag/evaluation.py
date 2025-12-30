@@ -25,10 +25,25 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-import mlflow
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# MLflow Integration Flag
+# =============================================================================
+
+_MLFLOW_AVAILABLE = False
+mlflow = None  # type: ignore
+
+try:
+    import mlflow as _mlflow
+
+    mlflow = _mlflow
+    _MLFLOW_AVAILABLE = True
+except ImportError:
+    logger.debug("MLflow not available - experiment tracking disabled")
 
 
 # =============================================================================
@@ -914,6 +929,10 @@ class RAGEvaluationPipeline:
             report: Evaluation report to log
         """
         if not self.config.log_to_mlflow:
+            return
+
+        if not _MLFLOW_AVAILABLE:
+            logger.warning("MLflow logging requested but mlflow is not installed")
             return
 
         try:
