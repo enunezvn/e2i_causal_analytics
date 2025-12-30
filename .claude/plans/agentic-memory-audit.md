@@ -462,7 +462,7 @@ This audit examines the E2I Causal Analytics 4-memory architecture and 4-phase c
 **Implementation Quality**:
 - `src/memory/cognitive_integration.py`: `_run_reflector()` method (75 lines)
 - Async execution: Launched via `asyncio.create_task()` in `process_query()`
-- Selective attention: Skips low-confidence (<0.5) interactions
+- Selective attention: Skips low-confidence (<0.6) interactions
 - Episodic memory storage: Full `EpisodicMemoryInput` with E2I context
 - Graphiti storage: `_store_to_graphiti()` method (49 lines):
   - Combines query + response into episode content
