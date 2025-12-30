@@ -2,6 +2,9 @@
 E2I Resource Optimizer Agent - Graph Assembly
 Version: 4.2
 Purpose: LangGraph workflow for resource allocation optimization
+
+Observability:
+- Audit chain recording for tamper-evident logging
 """
 
 from __future__ import annotations
@@ -10,6 +13,9 @@ import logging
 from typing import Any
 
 from langgraph.graph import END, StateGraph
+
+from src.agents.base.audit_chain_mixin import create_workflow_initializer
+from src.utils.audit_chain import AgentTier
 
 from .nodes import (
     ImpactProjectorNode,
@@ -52,11 +58,16 @@ def build_resource_optimizer_graph() -> Any:
     Build the full Resource Optimizer agent graph.
 
     Pipeline:
-    formulate -> optimize -> [scenario] -> project -> END
+    audit_init -> formulate -> optimize -> [scenario] -> project -> END
 
     Returns:
         Compiled LangGraph workflow
     """
+    # Create audit workflow initializer
+    audit_initializer = create_workflow_initializer(
+        "resource_optimizer", AgentTier.ML_PREDICTIONS
+    )
+
     # Initialize nodes
     formulator = ProblemFormulatorNode()
     optimizer = OptimizerNode()
@@ -67,14 +78,18 @@ def build_resource_optimizer_graph() -> Any:
     workflow = StateGraph(ResourceOptimizerState)
 
     # Add nodes
+    workflow.add_node("audit_init", audit_initializer)  # Initialize audit chain
     workflow.add_node("formulate", formulator.execute)
     workflow.add_node("optimize", optimizer.execute)
     workflow.add_node("scenario", scenario.execute)
     workflow.add_node("project", projector.execute)
     workflow.add_node("error_handler", error_handler_node)
 
-    # Set entry point
-    workflow.set_entry_point("formulate")
+    # Set entry point - start with audit initialization
+    workflow.set_entry_point("audit_init")
+
+    # Edge from audit_init to formulate
+    workflow.add_edge("audit_init", "formulate")
 
     # Add edges
     workflow.add_conditional_edges(
@@ -101,11 +116,16 @@ def build_simple_optimizer_graph() -> Any:
     Build a simplified Resource Optimizer graph without scenario analysis.
 
     Pipeline:
-    formulate -> optimize -> project -> END
+    audit_init -> formulate -> optimize -> project -> END
 
     Returns:
         Compiled LangGraph workflow
     """
+    # Create audit workflow initializer
+    audit_initializer = create_workflow_initializer(
+        "resource_optimizer_simple", AgentTier.ML_PREDICTIONS
+    )
+
     # Initialize nodes
     formulator = ProblemFormulatorNode()
     optimizer = OptimizerNode()
@@ -115,13 +135,16 @@ def build_simple_optimizer_graph() -> Any:
     workflow = StateGraph(ResourceOptimizerState)
 
     # Add nodes
+    workflow.add_node("audit_init", audit_initializer)  # Initialize audit chain
     workflow.add_node("formulate", formulator.execute)
     workflow.add_node("optimize", optimizer.execute)
     workflow.add_node("project", projector.execute)
     workflow.add_node("error_handler", error_handler_node)
 
-    # Set entry point
-    workflow.set_entry_point("formulate")
+    # Set entry point - start with audit initialization
+    workflow.set_entry_point("audit_init")
+
+    workflow.add_edge("audit_init", "formulate")
 
     # Add edges
     workflow.add_conditional_edges(

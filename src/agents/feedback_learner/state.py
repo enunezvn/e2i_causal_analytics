@@ -1,22 +1,29 @@
 """
 E2I Feedback Learner Agent - State Definitions
-Version: 4.2
+Version: 4.3
 Purpose: TypedDict state for feedback learning workflow
 
 Includes DSPy integration support:
 - CognitiveContext from CognitiveRAG 4-phase cycle
 - Training signal fields for MIPROv2 optimization
+- ValidationOutcome from Causal Validation Protocol
 """
 
 from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional, TypedDict
+from uuid import UUID
 
 # Import cognitive context from DSPy integration module
 from .dspy_integration import (
     FeedbackLearnerCognitiveContext,
     FeedbackLearnerTrainingSignal,
 )
+
+# Import validation outcome for causal validation learning
+# NOTE: Must be unconditional (not TYPE_CHECKING) because TypedDict evaluates
+# forward references at runtime when used with get_type_hints() or similar
+from src.causal_engine.validation_outcome import ValidationOutcome
 
 
 class FeedbackItem(TypedDict):
@@ -111,6 +118,9 @@ class FeedbackLearnerState(TypedDict):
     feedback_items: Optional[List[FeedbackItem]]
     feedback_summary: Optional[FeedbackSummary]
 
+    # === CAUSAL VALIDATION OUTCOMES (From Causal Impact Agent) ===
+    validation_outcomes: Optional[List[ValidationOutcome]]
+
     # === PATTERN ANALYSIS ===
     detected_patterns: Optional[List[DetectedPattern]]
     pattern_clusters: Optional[Dict[str, List[str]]]
@@ -158,3 +168,6 @@ class FeedbackLearnerState(TypedDict):
         "completed",
         "failed",
     ]
+
+    # === AUDIT CHAIN ===
+    audit_workflow_id: Optional[UUID]

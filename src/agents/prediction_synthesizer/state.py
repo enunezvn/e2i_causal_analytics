@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import operator
 from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
+from uuid import UUID
 
 
 class ModelPrediction(TypedDict):
@@ -81,3 +82,6 @@ class PredictionSynthesizerState(TypedDict, total=False):
     errors: Annotated[List[Dict[str, Any]], operator.add]
     warnings: Annotated[List[str], operator.add]
     status: Literal["pending", "predicting", "combining", "enriching", "completed", "failed"]
+
+    # === AUDIT CHAIN ===
+    audit_workflow_id: UUID

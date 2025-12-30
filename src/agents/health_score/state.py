@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import operator
 from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
+from uuid import UUID
 
 
 class ComponentStatus(TypedDict):
@@ -99,3 +100,6 @@ class HealthScoreState(TypedDict):
     # === ERROR HANDLING ===
     errors: Annotated[List[Dict[str, Any]], operator.add]
     status: Literal["pending", "checking", "completed", "failed"]
+
+    # === AUDIT CHAIN ===
+    audit_workflow_id: Optional[UUID]

@@ -6,6 +6,9 @@ Purpose: LangGraph workflow for natural language explanations
 Memory Integration:
 - LangGraph RedisSaver checkpointer for workflow state persistence
 - Enables pause/resume and conversation threading
+
+Observability:
+- Audit chain recording for tamper-evident logging
 """
 
 from __future__ import annotations
@@ -15,6 +18,9 @@ from typing import Any, Optional
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, StateGraph
+
+from src.agents.base.audit_chain_mixin import create_workflow_initializer
+from src.utils.audit_chain import AgentTier
 
 from .nodes import ContextAssemblerNode, DeepReasonerNode, NarrativeGeneratorNode
 from .state import ExplainerState
@@ -75,7 +81,7 @@ def build_explainer_graph(
     Build the Explainer agent graph.
 
     Pipeline:
-    assemble -> reason -> generate -> END
+    audit_init -> assemble -> reason -> generate -> END
 
     Args:
         conversation_store: Optional store for conversation history
@@ -87,6 +93,11 @@ def build_explainer_graph(
     Returns:
         Compiled LangGraph workflow
     """
+    # Create audit workflow initializer
+    audit_initializer = create_workflow_initializer(
+        "explainer", AgentTier.SELF_IMPROVEMENT
+    )
+
     # Initialize nodes
     assembler = ContextAssemblerNode(conversation_store)
     reasoner = DeepReasonerNode(use_llm=use_llm, llm=llm)
@@ -96,13 +107,17 @@ def build_explainer_graph(
     workflow = StateGraph(ExplainerState)
 
     # Add nodes
+    workflow.add_node("audit_init", audit_initializer)  # Initialize audit chain
     workflow.add_node("assemble", assembler.execute)
     workflow.add_node("reason", reasoner.execute)
     workflow.add_node("generate", generator.execute)
     workflow.add_node("error_handler", error_handler_node)
 
-    # Set entry point
-    workflow.set_entry_point("assemble")
+    # Set entry point - start with audit initialization
+    workflow.set_entry_point("audit_init")
+
+    # Edge from audit_init to assemble
+    workflow.add_edge("audit_init", "assemble")
 
     # Add edges
     workflow.add_conditional_edges(
@@ -132,7 +147,7 @@ def build_simple_explainer_graph(use_checkpointer: bool = True) -> Any:
     Build a simplified Explainer graph without LLM.
 
     Pipeline:
-    assemble -> reason -> generate -> END
+    audit_init -> assemble -> reason -> generate -> END
 
     Args:
         use_checkpointer: Whether to use Redis checkpointer

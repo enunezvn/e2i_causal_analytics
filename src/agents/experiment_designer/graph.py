@@ -3,7 +3,7 @@
 This module assembles the LangGraph workflow for the experiment designer agent.
 
 Workflow: Sequential execution with conditional redesign loop
-    START → context_loader → twin_simulation (optional) → design_reasoning →
+    audit_init → context_loader → twin_simulation (optional) → design_reasoning →
     power_analysis → validity_audit → (conditional: redesign → power_analysis) →
     template_generator → END
 
@@ -11,6 +11,9 @@ Phase 15 Integration:
     - Added twin_simulation node between context_loader and design_reasoning
     - If simulation recommends SKIP, workflow exits early
     - If simulation recommends DEPLOY, passes prior_estimate to power_analysis
+
+Observability:
+- Audit chain recording for tamper-evident logging
 
 Graph Architecture: .claude/specialists/Agent_Specialists_Tiers 1-5/experiment-designer.md lines 864-951
 Contract: .claude/contracts/tier3-contracts.md lines 82-142
@@ -21,6 +24,7 @@ from typing import Any, Callable
 
 from langgraph.graph import END, StateGraph
 
+from src.agents.base.audit_chain_mixin import create_workflow_initializer
 from src.agents.experiment_designer.nodes import (
     ContextLoaderNode,
     DesignReasoningNode,
@@ -31,6 +35,7 @@ from src.agents.experiment_designer.nodes import (
     ValidityAuditNode,
 )
 from src.agents.experiment_designer.state import ExperimentDesignState
+from src.utils.audit_chain import AgentTier
 
 
 def wrap_async_node(async_func: Callable) -> Callable:
@@ -100,6 +105,7 @@ def create_experiment_designer_graph(
     """Create the experiment designer agent graph with redesign loop.
 
     Workflow:
+        0. audit_init: Initialize audit chain workflow (genesis block)
         1. context_loader: Load organizational learning context
         2. twin_simulation: Digital twin pre-screening (Phase 15)
         3. design_reasoning: Deep reasoning for experiment design (LLM)
@@ -125,6 +131,11 @@ def create_experiment_designer_graph(
     Returns:
         Compiled StateGraph ready for execution
     """
+    # Create audit workflow initializer
+    audit_initializer = create_workflow_initializer(
+        "experiment_designer", AgentTier.MONITORING
+    )
+
     # Initialize nodes
     context_node = ContextLoaderNode(knowledge_store)
     twin_node = TwinSimulationNode(auto_skip_on_low_effect=auto_skip_on_low_effect)
@@ -138,6 +149,7 @@ def create_experiment_designer_graph(
     workflow = StateGraph(ExperimentDesignState)
 
     # Add nodes to graph (wrapped for sync compatibility)
+    workflow.add_node("audit_init", audit_initializer)  # Initialize audit chain
     workflow.add_node("context_loader", wrap_async_node(context_node.execute))
     workflow.add_node("twin_simulation", wrap_async_node(twin_node.execute))
     workflow.add_node("design_reasoning", wrap_async_node(design_node.execute))
@@ -147,10 +159,13 @@ def create_experiment_designer_graph(
     workflow.add_node("template_generator", wrap_async_node(template_node.execute))
     workflow.add_node("error_handler", error_handler_node)
 
-    # Set entry point
-    workflow.set_entry_point("context_loader")
+    # Set entry point - start with audit initialization
+    workflow.set_entry_point("audit_init")
 
     # Define edges
+    # audit_init → context_loader
+    workflow.add_edge("audit_init", "context_loader")
+
     # context_loader → twin_simulation (always)
     workflow.add_edge("context_loader", "twin_simulation")
 

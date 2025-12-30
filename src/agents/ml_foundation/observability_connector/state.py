@@ -1,6 +1,7 @@
 """State definition for observability_connector agent."""
 
 from typing import Any, Dict, List, Optional, TypedDict
+from uuid import UUID
 
 
 class ObservabilityConnectorState(TypedDict, total=False):
@@ -113,3 +114,8 @@ class ObservabilityConnectorState(TypedDict, total=False):
     error: Optional[str]
     error_type: Optional[str]
     error_details: Optional[Dict[str, Any]]
+
+    # ========================================================================
+    # AUDIT CHAIN
+    # ========================================================================
+    audit_workflow_id: UUID

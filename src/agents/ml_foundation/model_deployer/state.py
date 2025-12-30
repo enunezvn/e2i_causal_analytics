@@ -9,6 +9,7 @@ This agent manages the model lifecycle from development through production:
 """
 
 from typing import Any, Dict, List, Literal, Optional, TypedDict
+from uuid import UUID
 
 
 class ModelDeployerState(TypedDict, total=False):
@@ -187,3 +188,6 @@ class ModelDeployerState(TypedDict, total=False):
     error: Optional[str]  # Error message if failed
     error_type: Optional[str]  # Error classification
     error_details: Optional[Dict[str, Any]]  # Additional error context
+
+    # === AUDIT CHAIN ===
+    audit_workflow_id: UUID

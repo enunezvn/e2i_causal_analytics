@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import operator
 from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
+from uuid import UUID
 
 
 class AnalysisContext(TypedDict):
@@ -90,3 +91,6 @@ class ExplainerState(TypedDict):
     errors: Annotated[List[Dict[str, Any]], operator.add]
     warnings: Annotated[List[str], operator.add]
     status: Literal["pending", "assembling", "reasoning", "generating", "completed", "failed"]
+
+    # === AUDIT CHAIN ===
+    audit_workflow_id: Optional[UUID]

@@ -7,7 +7,8 @@ Contract: .claude/contracts/tier3-contracts.md lines 82-200
 Specialist: .claude/specialists/Agent_Specialists_Tiers 1-5/experiment-designer.md
 """
 
-from typing import Any, Literal
+from typing import Any, Literal, Optional
+from uuid import UUID
 
 from typing_extensions import NotRequired, TypedDict
 
@@ -276,3 +277,6 @@ class ExperimentDesignState(TypedDict):
     errors: list[ErrorDetails]
     warnings: list[str]
     status: AgentStatus
+
+    # ===== Audit Chain =====
+    audit_workflow_id: NotRequired[Optional[UUID]]

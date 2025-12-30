@@ -25,6 +25,7 @@ from fastapi import FastAPI, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from src.api.routes.audit import router as audit_router
 from src.api.routes.causal import router as causal_router
 from src.api.routes.cognitive import router as cognitive_router
 from src.api.routes.digital_twin import router as digital_twin_router
@@ -306,6 +307,9 @@ app.include_router(kpi_router)
 
 # Causal inference endpoints (Phase B10)
 app.include_router(causal_router)
+
+# Audit chain endpoints (tamper-evident logging)
+app.include_router(audit_router)
 
 # TODO: Add additional routers as they're developed:
 # - Agent orchestration: /api/agents

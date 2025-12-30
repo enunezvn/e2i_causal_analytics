@@ -4,6 +4,7 @@ This module defines the TypedDict state used by the model_trainer LangGraph.
 """
 
 from typing import Any, Dict, List, Optional, TypedDict
+from uuid import UUID
 
 
 class ModelTrainerState(TypedDict, total=False):
@@ -156,3 +157,6 @@ class ModelTrainerState(TypedDict, total=False):
     # Error handling
     error: Optional[str]
     error_type: Optional[str]
+
+    # Audit chain
+    audit_workflow_id: UUID

@@ -23,6 +23,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
+from uuid import UUID
+
+from src.utils.audit_chain import AgentTier, AuditChainService
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +92,9 @@ class PipelineResult:
     current_stage: PipelineStage
     experiment_id: Optional[str] = None
 
+    # Audit chain integration
+    audit_workflow_id: Optional[UUID] = None
+
     # Stage outputs
     scope_spec: Optional[Dict[str, Any]] = None
     success_criteria: Optional[Dict[str, Any]] = None
@@ -146,6 +152,63 @@ class MLFoundationPipeline:
         self._observability = None
         self._feast_adapter = None
         self._feast_initialized = False
+        self._audit_service: Optional[AuditChainService] = None
+
+    def _get_audit_service(self) -> Optional[AuditChainService]:
+        """Get audit chain service (lazy initialization).
+
+        Returns:
+            AuditChainService instance or None if initialization fails
+        """
+        if self._audit_service is None:
+            try:
+                self._audit_service = AuditChainService()
+                logger.debug("Audit chain service initialized")
+            except Exception as e:
+                logger.warning(f"Failed to initialize audit service (non-fatal): {e}")
+        return self._audit_service
+
+    def _record_audit_entry(
+        self,
+        workflow_id: Optional[UUID],
+        agent_name: str,
+        action_type: str,
+        duration_ms: int,
+        output_data: Dict[str, Any],
+        validation_passed: Optional[bool] = None,
+        confidence_score: Optional[float] = None,
+    ) -> None:
+        """Record an audit chain entry for a pipeline stage.
+
+        Args:
+            workflow_id: UUID of the current workflow
+            agent_name: Name of the agent/stage
+            action_type: Type of action performed
+            duration_ms: Duration of the stage in milliseconds
+            output_data: Stage output data to record
+            validation_passed: Optional validation status
+            confidence_score: Optional confidence score
+        """
+        if not workflow_id:
+            return
+
+        audit_service = self._get_audit_service()
+        if not audit_service:
+            return
+
+        try:
+            audit_service.add_entry(
+                workflow_id=workflow_id,
+                agent_name=agent_name,
+                agent_tier=AgentTier.ML_FOUNDATION,
+                action_type=action_type,
+                duration_ms=duration_ms,
+                output_data=output_data,
+                validation_passed=validation_passed,
+                confidence_score=confidence_score,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to record audit entry for {agent_name}: {e}")
 
     def _get_agent(self, agent_name: str) -> Any:
         """Lazy-load an agent instance.
@@ -328,6 +391,18 @@ class MLFoundationPipeline:
         # Get feature refs from input or config
         feature_refs = input_data.get("feature_refs") or self.config.feast_feature_refs
 
+        # Initialize audit workflow
+        audit_workflow_id: Optional[UUID] = None
+        audit_service = self._get_audit_service()
+        if audit_service:
+            try:
+                audit_workflow_id = audit_service.start_workflow(
+                    "ml_foundation_pipeline", AgentTier.ML_FOUNDATION
+                )
+                logger.debug(f"Started audit workflow: {audit_workflow_id}")
+            except Exception as e:
+                logger.warning(f"Failed to start audit workflow (non-fatal): {e}")
+
         result = PipelineResult(
             pipeline_run_id=pipeline_run_id,
             status="in_progress",
@@ -335,6 +410,7 @@ class MLFoundationPipeline:
             started_at=started_at.isoformat(),
             feast_enabled=self.config.enable_feast,
             feature_refs_used=feature_refs,
+            audit_workflow_id=audit_workflow_id,
         )
 
         logger.info(f"Starting ML Foundation Pipeline: {pipeline_run_id}")
@@ -477,6 +553,18 @@ class MLFoundationPipeline:
             f"duration={stage_duration:.2f}s"
         )
 
+        # Record audit entry
+        self._record_audit_entry(
+            workflow_id=result.audit_workflow_id,
+            agent_name="scope_definer",
+            action_type="scope_definition",
+            duration_ms=int(stage_duration * 1000),
+            output_data={
+                "experiment_id": result.experiment_id,
+                "problem_type": result.scope_spec.get("problem_type"),
+            },
+        )
+
         if self.config.on_stage_complete:
             self.config.on_stage_complete(PipelineStage.SCOPE_DEFINITION, scope_output)
 
@@ -594,6 +682,19 @@ class MLFoundationPipeline:
                 "Consider refreshing features before production use."
             )
 
+        # Record audit entry
+        self._record_audit_entry(
+            workflow_id=result.audit_workflow_id,
+            agent_name="data_preparer",
+            action_type="data_preparation",
+            duration_ms=int(stage_duration * 1000),
+            output_data={
+                "qc_score": result.qc_report.get("overall_score", 0),
+                "gate_passed": gate_passed,
+            },
+            validation_passed=gate_passed,
+        )
+
         return gate_passed
 
     async def _run_model_selection(
@@ -648,6 +749,19 @@ class MLFoundationPipeline:
             f"Stage 3 complete: algorithm={result.model_candidate.get('algorithm_name')}, "
             f"score={result.model_candidate.get('selection_score', 0):.3f}, "
             f"duration={stage_duration:.2f}s"
+        )
+
+        # Record audit entry
+        self._record_audit_entry(
+            workflow_id=result.audit_workflow_id,
+            agent_name="model_selector",
+            action_type="model_selection",
+            duration_ms=int(stage_duration * 1000),
+            output_data={
+                "algorithm_name": result.model_candidate.get("algorithm_name"),
+                "selection_score": result.model_candidate.get("selection_score", 0),
+            },
+            confidence_score=result.model_candidate.get("selection_score"),
         )
 
         if self.config.on_stage_complete:
@@ -733,6 +847,21 @@ class MLFoundationPipeline:
             f"duration={stage_duration:.2f}s"
         )
 
+        # Record audit entry
+        self._record_audit_entry(
+            workflow_id=result.audit_workflow_id,
+            agent_name="model_trainer",
+            action_type="model_training",
+            duration_ms=int(stage_duration * 1000),
+            output_data={
+                "training_run_id": trainer_output.get("training_run_id"),
+                "success_criteria_met": success,
+                "primary_metric": primary_metric,
+                "hpo_trials": trainer_output.get("hpo_trials_run", 0),
+            },
+            validation_passed=success,
+        )
+
         if self.config.on_stage_complete:
             self.config.on_stage_complete(PipelineStage.MODEL_TRAINING, trainer_output)
 
@@ -785,6 +914,18 @@ class MLFoundationPipeline:
         logger.info(
             f"Stage 5 complete: top_features={top_features}, "
             f"duration={stage_duration:.2f}s"
+        )
+
+        # Record audit entry
+        self._record_audit_entry(
+            workflow_id=result.audit_workflow_id,
+            agent_name="feature_analyzer",
+            action_type="feature_analysis",
+            duration_ms=int(stage_duration * 1000),
+            output_data={
+                "top_features": top_features,
+                "feature_count": len(analyzer_output.get("top_features", [])),
+            },
         )
 
         if self.config.on_stage_complete:
@@ -867,6 +1008,20 @@ class MLFoundationPipeline:
             f"Stage 6 complete: deployment_successful={success}, "
             f"endpoint_url={endpoint_url}, "
             f"duration={stage_duration:.2f}s"
+        )
+
+        # Record audit entry
+        self._record_audit_entry(
+            workflow_id=result.audit_workflow_id,
+            agent_name="model_deployer",
+            action_type="model_deployment",
+            duration_ms=int(stage_duration * 1000),
+            output_data={
+                "deployment_successful": success,
+                "endpoint_url": endpoint_url,
+                "target_environment": target_env,
+            },
+            validation_passed=success,
         )
 
         if self.config.on_stage_complete:

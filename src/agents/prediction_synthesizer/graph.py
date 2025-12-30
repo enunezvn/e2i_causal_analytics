@@ -2,6 +2,9 @@
 E2I Prediction Synthesizer Agent - LangGraph Assembly
 Version: 4.2
 Purpose: Build the prediction synthesizer workflow graph
+
+Observability:
+- Audit chain recording for tamper-evident logging
 """
 
 from __future__ import annotations
@@ -11,6 +14,9 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from langgraph.graph import END, StateGraph
+
+from src.agents.base.audit_chain_mixin import create_workflow_initializer
+from src.utils.audit_chain import AgentTier
 
 from .nodes.context_enricher import ContextEnricherNode
 from .nodes.ensemble_combiner import EnsembleCombinerNode
@@ -30,9 +36,9 @@ def build_prediction_synthesizer_graph(
     Build the Prediction Synthesizer agent graph.
 
     Architecture:
-        [orchestrate] → [combine] → [enrich] → END
-                 ↓           ↓
-             [error]    [error]
+        [audit_init] → [orchestrate] → [combine] → [enrich] → END
+                              ↓           ↓
+                          [error]    [error]
 
     Args:
         model_registry: Registry of available models
@@ -43,6 +49,11 @@ def build_prediction_synthesizer_graph(
     Returns:
         Compiled LangGraph workflow
     """
+    # Create audit workflow initializer
+    audit_initializer = create_workflow_initializer(
+        "prediction_synthesizer", AgentTier.ML_PREDICTIONS
+    )
+
     # Initialize nodes
     orchestrator = ModelOrchestratorNode(
         model_registry=model_registry,
@@ -58,13 +69,17 @@ def build_prediction_synthesizer_graph(
     workflow = StateGraph(PredictionSynthesizerState)
 
     # Add nodes
+    workflow.add_node("audit_init", audit_initializer)  # Initialize audit chain
     workflow.add_node("orchestrate", orchestrator.execute)
     workflow.add_node("combine", combiner.execute)
     workflow.add_node("enrich", enricher.execute)
     workflow.add_node("error_handler", _error_handler_node)
 
-    # Entry point
-    workflow.set_entry_point("orchestrate")
+    # Entry point - start with audit initialization
+    workflow.set_entry_point("audit_init")
+
+    # Edge from audit_init to orchestrate
+    workflow.add_edge("audit_init", "orchestrate")
 
     # Conditional edges from orchestrator
     workflow.add_conditional_edges(
@@ -116,7 +131,7 @@ def build_simple_prediction_graph(
     Build a simplified prediction graph without context enrichment.
 
     Architecture:
-        [orchestrate] → [combine] → END
+        [audit_init] → [orchestrate] → [combine] → END
 
     Args:
         model_clients: Dict mapping model_id to prediction client
@@ -124,16 +139,25 @@ def build_simple_prediction_graph(
     Returns:
         Compiled LangGraph workflow
     """
+    # Create audit workflow initializer
+    audit_initializer = create_workflow_initializer(
+        "prediction_synthesizer_simple", AgentTier.ML_PREDICTIONS
+    )
+
     orchestrator = ModelOrchestratorNode(model_clients=model_clients)
     combiner = EnsembleCombinerNode()
 
     workflow = StateGraph(PredictionSynthesizerState)
 
+    workflow.add_node("audit_init", audit_initializer)  # Initialize audit chain
     workflow.add_node("orchestrate", orchestrator.execute)
     workflow.add_node("combine", combiner.execute)
     workflow.add_node("error_handler", _error_handler_node)
 
-    workflow.set_entry_point("orchestrate")
+    # Entry point - start with audit initialization
+    workflow.set_entry_point("audit_init")
+
+    workflow.add_edge("audit_init", "orchestrate")
 
     workflow.add_conditional_edges(
         "orchestrate",

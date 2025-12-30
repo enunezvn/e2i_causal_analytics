@@ -7,9 +7,12 @@ Contract: .claude/contracts/tier2-contracts.md
 Observability:
   - Per-node Opik tracing (CONTRACT_VALIDATION.md #12)
   - MLflow experiment tracking (CONTRACT_VALIDATION.md #13)
+  - Audit chain recording for tamper-evident logging
 """
 
 import functools
+import hashlib
+import json
 import logging
 import tempfile
 import time
@@ -17,6 +20,10 @@ from typing import Any, Callable, Dict, Literal, Optional, TypeVar
 
 from langgraph.graph import END, StateGraph
 
+from src.agents.base.audit_chain_mixin import (
+    create_workflow_initializer,
+    get_audit_chain_service,
+)
 from src.agents.causal_impact.nodes.estimation import estimate_causal_effect
 from src.agents.causal_impact.nodes.graph_builder import build_causal_graph
 from src.agents.causal_impact.nodes.interpretation import interpret_results
@@ -25,6 +32,7 @@ from src.agents.causal_impact.nodes.sensitivity import analyze_sensitivity
 from src.agents.causal_impact.state import CausalImpactState
 from src.mlops.mlflow_connector import get_mlflow_connector
 from src.mlops.opik_connector import get_opik_connector
+from src.utils.audit_chain import AgentTier
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +41,7 @@ F = TypeVar("F", bound=Callable[..., Any])
 
 
 def traced_node(node_name: str) -> Callable[[F], F]:
-    """Decorator to add Opik tracing to workflow nodes.
+    """Decorator to add Opik tracing and audit chain recording to workflow nodes.
 
     Creates a span for each node execution with:
     - Node name and operation tracking
@@ -41,12 +49,13 @@ def traced_node(node_name: str) -> Callable[[F], F]:
     - Latency measurement
     - Error tracking
     - Parent span linking via state.span_id
+    - Audit chain entry for tamper-evident logging
 
     Args:
         node_name: Name of the node (e.g., "graph_builder", "estimation")
 
     Returns:
-        Decorated async function with Opik tracing
+        Decorated async function with Opik tracing and audit recording
 
     Example:
         @traced_node("graph_builder")
@@ -58,11 +67,13 @@ def traced_node(node_name: str) -> Callable[[F], F]:
         @functools.wraps(func)
         async def wrapper(state: CausalImpactState) -> Dict[str, Any]:
             opik = get_opik_connector()
+            audit_service = get_audit_chain_service()
 
             # Extract tracing context from state
             trace_id = state.get("query_id")  # Use query_id as trace correlation
             parent_span_id = state.get("span_id")  # Parent span from dispatcher
             session_id = state.get("session_id")
+            workflow_id = state.get("audit_workflow_id")
 
             # Prepare sanitized input (exclude large data structures)
             sanitized_input = {
@@ -79,7 +90,10 @@ def traced_node(node_name: str) -> Callable[[F], F]:
                 "agent_name": "causal_impact",
                 "session_id": session_id,
                 "dispatch_id": state.get("dispatch_id"),
+                "audit_workflow_id": str(workflow_id) if workflow_id else None,
             }
+
+            start_time = time.time()
 
             async with opik.trace_agent(
                 agent_name="causal_impact",
@@ -87,12 +101,14 @@ def traced_node(node_name: str) -> Callable[[F], F]:
                 trace_id=trace_id,
                 parent_span_id=parent_span_id,
                 metadata=metadata,
-                tags=["causal_impact", node_name, "workflow_node"],
+                tags=["causal_impact", node_name, "workflow_node", "audited"],
                 input_data=sanitized_input,
             ) as span:
                 try:
                     # Execute the actual node function
                     result = await func(state)
+
+                    duration_ms = int((time.time() - start_time) * 1000)
 
                     # Set output data (sanitized)
                     output_summary = {
@@ -102,6 +118,10 @@ def traced_node(node_name: str) -> Callable[[F], F]:
                     }
 
                     # Add node-specific output fields
+                    validation_passed = None
+                    confidence_score = None
+                    refutation_results = None
+
                     if node_name == "graph_builder":
                         output_summary["graph_confidence"] = result.get(
                             "causal_graph", {}
@@ -113,11 +133,15 @@ def traced_node(node_name: str) -> Callable[[F], F]:
                         output_summary["statistical_significance"] = est.get(
                             "statistical_significance"
                         )
+                        confidence_score = est.get("confidence")
                     elif node_name == "refutation":
                         ref = result.get("refutation_results", {})
                         output_summary["tests_passed"] = ref.get("tests_passed")
                         output_summary["overall_robust"] = ref.get("overall_robust")
                         output_summary["gate_decision"] = ref.get("gate_decision")
+                        # Capture refutation results for audit
+                        validation_passed = ref.get("overall_robust")
+                        refutation_results = ref
                     elif node_name == "sensitivity":
                         sens = result.get("sensitivity_analysis", {})
                         output_summary["e_value"] = sens.get("e_value")
@@ -130,6 +154,7 @@ def traced_node(node_name: str) -> Callable[[F], F]:
                             "causal_confidence"
                         )
                         output_summary["depth_level"] = interp.get("depth_level")
+                        confidence_score = interp.get("causal_confidence")
 
                     span.set_output(output_summary)
 
@@ -137,6 +162,36 @@ def traced_node(node_name: str) -> Callable[[F], F]:
                     latency_key = f"{node_name}_latency_ms"
                     if latency_key in result:
                         span.set_attribute("node_latency_ms", result[latency_key])
+
+                    # Record audit chain entry
+                    if workflow_id and audit_service:
+                        try:
+                            # Compute input/output hashes
+                            input_hash = hashlib.sha256(
+                                json.dumps(sanitized_input, sort_keys=True, default=str).encode()
+                            ).hexdigest()[:32]
+                            output_hash = hashlib.sha256(
+                                json.dumps(output_summary, sort_keys=True, default=str).encode()
+                            ).hexdigest()[:32]
+
+                            audit_service.add_entry(
+                                workflow_id=workflow_id,
+                                agent_name="causal_impact",
+                                agent_tier=AgentTier.CAUSAL_ANALYTICS.value,
+                                action_type=node_name,
+                                duration_ms=duration_ms,
+                                input_hash=input_hash,
+                                output_hash=output_hash,
+                                validation_passed=validation_passed,
+                                confidence_score=confidence_score,
+                                refutation_results=refutation_results,
+                                user_id=state.get("user_id"),
+                                session_id=state.get("session_id"),
+                                brand=state.get("brand"),
+                            )
+                            logger.debug(f"Recorded audit entry for {node_name}")
+                        except Exception as ae:
+                            logger.warning(f"Failed to record audit entry: {ae}")
 
                     return result
 
@@ -229,6 +284,7 @@ def create_causal_impact_graph(enable_checkpointing: bool = False):
     """Create causal impact workflow graph with conditional routing.
 
     Contract-compliant pipeline with error handling:
+    0. audit_init: Initialize audit chain workflow (genesis block)
     1. graph_builder: Construct causal DAG (Standard, <10s)
     2. estimation: Estimate causal effect (Standard, <30s)
        → conditional: refutation | interpretation (partial success) | error_handler
@@ -248,7 +304,11 @@ def create_causal_impact_graph(enable_checkpointing: bool = False):
     # Create workflow
     workflow = StateGraph(CausalImpactState)
 
+    # Create audit workflow initializer
+    audit_initializer = create_workflow_initializer("causal_impact", AgentTier.CAUSAL_ANALYTICS)
+
     # Add nodes with Opik tracing wrappers (CONTRACT_VALIDATION.md #12)
+    workflow.add_node("audit_init", audit_initializer)  # Initialize audit chain
     workflow.add_node("graph_builder", traced_build_causal_graph)
     workflow.add_node("estimation", traced_estimate_causal_effect)
     workflow.add_node("refutation", traced_refute_causal_estimate)
@@ -256,10 +316,11 @@ def create_causal_impact_graph(enable_checkpointing: bool = False):
     workflow.add_node("interpretation", traced_interpret_results)
     workflow.add_node("error_handler", handle_workflow_error)  # Error handler not traced
 
-    # Set entry point
-    workflow.set_entry_point("graph_builder")
+    # Set entry point to audit initializer
+    workflow.set_entry_point("audit_init")
 
-    # Linear edge: graph_builder → estimation
+    # Linear edge: audit_init → graph_builder → estimation
+    workflow.add_edge("audit_init", "graph_builder")
     workflow.add_edge("graph_builder", "estimation")
 
     # Conditional edge after estimation (contract: partial success routing)
