@@ -1435,3 +1435,254 @@ tests/unit/test_agents/test_causal_impact/
 3. **Prior path alignment**: Results align with previously discovered causal paths
 4. **Training signal quality**: Emits accurate quality signals for optimization
 5. **Memory contribution**: Successfully stores results to causal_paths index
+
+---
+
+## Auto-Discovery Capability (V4.4+)
+
+The Causal Impact agent supports **automatic DAG structure learning** via the `src/causal_engine/discovery/` module. This capability uses ensemble algorithms (GES, PC) to discover causal structure from data, with a gating mechanism to determine how to use the results.
+
+### Discovery Module Components
+
+| Component | Class | Purpose |
+|-----------|-------|---------|
+| Runner | `DiscoveryRunner` | Orchestrates multi-algorithm ensemble discovery |
+| Gate | `DiscoveryGate` | Evaluates discovery quality and makes ACCEPT/REJECT decisions |
+| Ranker | `DriverRanker` | Compares causal vs predictive feature importance |
+| Algorithms | `GESWrapper`, `PCWrapper` | causal-learn algorithm wrappers |
+
+### State Fields for Discovery
+
+```python
+class CausalImpactState(TypedDict):
+    """Extended state with discovery fields."""
+
+    # Standard fields
+    query: str
+    treatment_var: str
+    outcome_var: str
+    confounders: List[str]
+
+    # Discovery Control (V4.4+)
+    auto_discover: bool  # Enable structure learning (default: False)
+    discovery_algorithms: List[str]  # Algorithms to use ["ges", "pc"]
+    discovery_ensemble_threshold: float  # Min agreement threshold (0.5)
+    discovery_alpha: float  # Significance level for CI tests (0.05)
+
+    # Discovery Results (populated by GraphBuilderNode)
+    discovery_result: Optional[Dict[str, Any]]  # Full DiscoveryResult
+    discovery_gate_evaluation: Optional[Dict[str, Any]]  # GateEvaluation
+    discovery_latency_ms: Optional[float]  # Performance metric
+```
+
+### Gate Decisions
+
+The `DiscoveryGate` evaluates discovery quality and returns one of four decisions:
+
+| Decision | Confidence Range | Behavior |
+|----------|-----------------|----------|
+| **ACCEPT** | >= 0.8 | Use discovered DAG directly for estimation |
+| **AUGMENT** | 0.5 - 0.8 | Add high-confidence edges to manual DAG |
+| **REVIEW** | 0.3 - 0.5 | Flag for expert review, use manual DAG |
+| **REJECT** | < 0.3 | Discovery failed, use manual DAG only |
+
+**Gate Evaluation Factors**:
+- Average edge confidence across ensemble
+- Algorithm agreement (edge voting)
+- Structure validity (DAG, connected graph)
+- Edge count relative to node count
+
+### CausalGraphSpec with Discovery
+
+```python
+class CausalGraphSpec(TypedDict):
+    """Extended graph specification with discovery metadata."""
+
+    # Standard fields
+    treatment_nodes: List[str]
+    outcome_nodes: List[str]
+    confounders: List[str]
+    edges: List[Tuple[str, str]]
+    adjustment_sets: List[List[str]]
+    dag_dot: str  # DOT format for visualization
+
+    # Discovery Metadata (V4.4+)
+    discovery_enabled: bool
+    discovery_gate_decision: Optional[str]  # accept/augment/review/reject
+    discovery_confidence: Optional[float]
+    discovery_algorithms_used: List[str]
+    augmented_edges: List[Tuple[str, str]]  # Edges added via AUGMENT
+```
+
+### GraphBuilderNode Integration
+
+The `GraphBuilderNode` (`src/agents/causal_impact/nodes/graph_builder.py`) handles auto-discovery:
+
+```python
+# State with auto-discovery enabled
+state = {
+    "query": "What is the effect of HCP engagement on conversion?",
+    "treatment_var": "hcp_engagement_level",
+    "outcome_var": "patient_conversion_rate",
+    "auto_discover": True,                    # Enable discovery
+    "data_cache": {"data": dataframe},        # Required for discovery
+    "discovery_algorithms": ["ges", "pc"],    # Optional, defaults to both
+    "discovery_ensemble_threshold": 0.5,      # Optional
+}
+
+result = await graph_builder_node.execute(state)
+
+# Result includes:
+# - causal_graph: DAG with discovery_enabled, discovery_gate_decision
+# - discovery_result: Full DiscoveryResult
+# - discovery_gate_evaluation: GateEvaluation with confidence, reasons
+# - discovery_latency_ms: Performance metric
+```
+
+### Tool Registry Integration
+
+Two tools are registered for discovery operations:
+
+| Tool | Purpose | Parameters |
+|------|---------|------------|
+| `discover_dag` | Run structure learning ensemble | `data`, `algorithms`, `threshold`, `alpha` |
+| `rank_drivers` | Compare causal vs predictive importance | `dag`, `target`, `shap_values`, `feature_names` |
+
+```python
+# Example tool usage
+from src.tool_registry import get_tool
+
+discover_tool = get_tool("discover_dag")
+result = await discover_tool(
+    data=df,
+    algorithms=["ges", "pc"],
+    ensemble_threshold=0.5,
+    alpha=0.05,
+)
+
+# Driver ranking with SHAP comparison
+rank_tool = get_tool("rank_drivers")
+ranking = await rank_tool(
+    dag=result.ensemble_dag,
+    target="patient_conversion_rate",
+    shap_values=shap_values,
+    feature_names=feature_names,
+)
+```
+
+### Discovery Workflow
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    GRAPH BUILDER NODE (V4.4+)                        │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  ┌────────────┐     ┌────────────────┐     ┌───────────────────┐   │
+│  │ auto_discover│───►│ DiscoveryRunner│───►│ DiscoveryGate    │   │
+│  │ = True?     │    │ (GES + PC)     │    │ evaluate()       │   │
+│  └────────────┘     └────────────────┘     └───────────────────┘   │
+│        │                    │                       │               │
+│        │                    │                       ▼               │
+│        │                    │            ┌──────────────────┐      │
+│        │                    │            │  Gate Decision   │      │
+│        │                    │            │  ─────────────   │      │
+│        │                    │            │  ACCEPT → Use    │      │
+│        │                    │            │  AUGMENT → Merge │      │
+│        │                    │            │  REVIEW → Flag   │      │
+│        │                    │            │  REJECT → Manual │      │
+│        │                    │            └──────────────────┘      │
+│        │                    │                       │               │
+│        ▼                    ▼                       ▼               │
+│  ┌─────────────────────────────────────────────────────────────┐   │
+│  │                    Final DAG for Estimation                  │   │
+│  └─────────────────────────────────────────────────────────────┘   │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Database Schema
+
+Discovery results are persisted to `ml.discovered_dags`:
+
+```sql
+-- From database/ml/026_causal_discovery_tables.sql
+CREATE TABLE IF NOT EXISTS ml.discovered_dags (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id UUID REFERENCES ml.user_sessions(id),
+    algorithms JSONB NOT NULL,           -- ["ges", "pc"]
+    edge_list JSONB NOT NULL,            -- [{source, target, confidence, votes}]
+    ensemble_threshold FLOAT,
+    gate_decision gate_decision_type,    -- ACCEPT, REVIEW, REJECT, AUGMENT
+    gate_confidence FLOAT,
+    gate_reasons JSONB,
+    n_nodes INTEGER,
+    n_edges INTEGER,
+    metadata JSONB,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+### Testing Requirements for Discovery
+
+```
+tests/unit/test_causal_engine/test_discovery/
+├── test_base.py           # Enums, dataclasses, serialization (18 tests)
+├── test_runner.py         # DiscoveryRunner, ensemble, cycles (25 tests)
+├── test_gate.py           # GateConfig, GateEvaluation (18 tests)
+└── test_driver_ranker.py  # Rankings, correlation (16 tests)
+
+tests/integration/
+└── test_graph_builder_discovery.py  # GraphBuilderNode integration (21 tests)
+```
+
+### Configuration
+
+```yaml
+# config/agents.yaml - Causal Impact discovery configuration
+
+causal_impact:
+  discovery:
+    enabled: true  # Allow auto_discover flag
+    default_algorithms: ["ges", "pc"]
+    default_ensemble_threshold: 0.5
+    default_alpha: 0.05
+    timeout_seconds: 300
+    max_workers: 4
+
+  gate:
+    accept_threshold: 0.8
+    review_threshold: 0.5
+    augment_edge_threshold: 0.9
+    require_dag: true
+```
+
+### Error Handling
+
+When discovery fails, the agent falls back gracefully to manual DAG construction:
+
+```python
+# From GraphBuilderNode
+try:
+    if state.get("auto_discover") and state.get("data_cache", {}).get("data") is not None:
+        discovery_result, gate_evaluation = await self._run_discovery(state)
+        # Use discovery based on gate decision
+    else:
+        # Fall back to manual DAG
+        discovery_result = None
+        gate_evaluation = None
+except Exception as e:
+    logger.warning(f"Discovery failed, using manual DAG: {e}")
+    discovery_result = None
+    gate_evaluation = {"decision": None, "error": str(e)}
+```
+
+### Integration with Downstream Agents
+
+Discovered DAGs flow to downstream agents:
+
+| Agent | How It Uses Discovery |
+|-------|----------------------|
+| **EstimationNode** | Uses discovered confounders for adjustment |
+| **Heterogeneous Optimizer** | Validates effect modifiers against discovered structure |
+| **Experiment Designer** | Uses discovered confounders in experiment design |
+| **Feedback Learner** | Tracks discovery accuracy patterns |

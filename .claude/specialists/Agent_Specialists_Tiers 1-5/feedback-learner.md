@@ -1276,3 +1276,697 @@ OPTIMIZATION_SCHEDULE = {
 | Response Quality | ~75% | ~95% | +20% |
 | Agent Routing | ~80% | ~95% | +15% |
 | Hop Efficiency | ~60% | ~90% | +30% |
+
+---
+
+## Discovery Feedback Loop (V4.4+)
+
+The Feedback Learner tracks causal discovery outcomes and recommends parameter adjustments based on accumulated feedback patterns.
+
+### Integration Pattern
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    DISCOVERY FEEDBACK LOOP                               │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────────────┐       │
+│  │ Discovery    │───▶│ Gate         │───▶│ User/Expert          │       │
+│  │ Runner       │    │ Evaluation   │    │ Feedback             │       │
+│  └──────────────┘    └──────────────┘    └──────────┬───────────┘       │
+│                                                      │                   │
+│                                                      ▼                   │
+│  ┌──────────────────────────────────────────────────────────────┐       │
+│  │                    FEEDBACK LEARNER                           │       │
+│  │  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐  │       │
+│  │  │ Accuracy       │  │ Pattern        │  │ Parameter      │  │       │
+│  │  │ Tracking       │  │ Detection      │  │ Recommender    │  │       │
+│  │  └────────────────┘  └────────────────┘  └────────────────┘  │       │
+│  └──────────────────────────────────────────────────────────────┘       │
+│                              │                                           │
+│                              ▼                                           │
+│  ┌──────────────────────────────────────────────────────────────┐       │
+│  │ OUTPUTS:                                                      │       │
+│  │ • Discovery accuracy metrics                                  │       │
+│  │ • Failure pattern analysis                                    │       │
+│  │ • Parameter adjustment recommendations                        │       │
+│  │ • Algorithm selection guidance                                │       │
+│  └──────────────────────────────────────────────────────────────┘       │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### State Fields for Discovery Feedback
+
+```python
+class FeedbackLearnerState(TypedDict):
+    # ... existing fields ...
+
+    # === DISCOVERY FEEDBACK (V4.4+) ===
+    discovery_feedback_records: Optional[List[Dict[str, Any]]]  # Accumulated feedback
+    discovery_accuracy_metrics: Optional[Dict[str, float]]  # Per-algorithm accuracy
+    discovery_failure_patterns: Optional[List[Dict[str, Any]]]  # Identified patterns
+    discovery_parameter_recommendations: Optional[Dict[str, Any]]  # Suggested adjustments
+    discovery_algorithm_rankings: Optional[List[Tuple[str, float]]]  # Algorithm performance
+```
+
+### Feedback Collection
+
+Collect feedback on discovery outcomes from user interactions and expert reviews:
+
+```python
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Any
+from datetime import datetime
+from enum import Enum
+from uuid import UUID
+
+
+class DiscoveryFeedbackType(Enum):
+    """Types of discovery feedback."""
+    USER_CORRECTION = "user_correction"  # User corrected a discovered edge
+    EXPERT_REVIEW = "expert_review"  # Expert validated discovery
+    OUTCOME_VALIDATION = "outcome_validation"  # Downstream effect confirmed/denied
+    GATE_OVERRIDE = "gate_override"  # User overrode gate decision
+
+
+@dataclass
+class DiscoveryFeedbackRecord:
+    """Single discovery feedback record."""
+    feedback_id: UUID
+    session_id: UUID
+    discovery_id: UUID  # References ml.discovered_dags
+    feedback_type: DiscoveryFeedbackType
+
+    # Discovery context
+    algorithms_used: List[str]
+    ensemble_threshold: float
+    gate_decision: str
+    gate_confidence: float
+
+    # Feedback specifics
+    feedback_positive: bool  # True = discovery was correct
+    corrected_edges: Optional[List[Dict[str, Any]]] = None  # Added/removed edges
+    feedback_notes: Optional[str] = None
+
+    # Metadata
+    created_at: datetime = field(default_factory=datetime.utcnow)
+    feedback_source: str = "user"  # user, expert, automated
+
+
+def collect_discovery_feedback(
+    state: Dict[str, Any],
+    feedback_type: DiscoveryFeedbackType,
+    is_positive: bool,
+    corrected_edges: Optional[List[Dict[str, Any]]] = None,
+    notes: Optional[str] = None,
+) -> DiscoveryFeedbackRecord:
+    """
+    Collect feedback on a discovery outcome.
+
+    Args:
+        state: Current state with discovery results
+        feedback_type: Type of feedback being provided
+        is_positive: Whether discovery was accurate
+        corrected_edges: Any edge corrections made
+        notes: Optional feedback notes
+
+    Returns:
+        DiscoveryFeedbackRecord for storage
+    """
+    import uuid
+
+    discovery_result = state.get("discovery_result", {})
+    gate_eval = state.get("discovery_gate_evaluation", {})
+
+    return DiscoveryFeedbackRecord(
+        feedback_id=uuid.uuid4(),
+        session_id=state.get("session_id"),
+        discovery_id=discovery_result.get("discovery_id"),
+        feedback_type=feedback_type,
+        algorithms_used=discovery_result.get("algorithms", ["ges", "pc"]),
+        ensemble_threshold=discovery_result.get("ensemble_threshold", 0.5),
+        gate_decision=gate_eval.get("decision", "unknown"),
+        gate_confidence=gate_eval.get("confidence", 0.0),
+        feedback_positive=is_positive,
+        corrected_edges=corrected_edges,
+        feedback_notes=notes,
+    )
+```
+
+### Accuracy Tracking
+
+Track discovery accuracy metrics over time by algorithm and configuration:
+
+```python
+from collections import defaultdict
+from typing import Dict, List, Tuple
+
+
+@dataclass
+class DiscoveryAccuracyMetrics:
+    """Accuracy metrics for discovery configurations."""
+    total_discoveries: int = 0
+    positive_feedback_count: int = 0
+    negative_feedback_count: int = 0
+
+    # Per-algorithm metrics
+    algorithm_accuracy: Dict[str, float] = field(default_factory=dict)
+    algorithm_counts: Dict[str, Tuple[int, int]] = field(default_factory=dict)  # (positive, total)
+
+    # Per-gate-decision metrics
+    gate_decision_accuracy: Dict[str, float] = field(default_factory=dict)
+
+    # Edge-level metrics
+    edge_precision: float = 0.0  # Fraction of discovered edges that were correct
+    edge_recall: float = 0.0  # Fraction of true edges that were discovered
+
+    @property
+    def overall_accuracy(self) -> float:
+        """Overall discovery accuracy."""
+        if self.total_discoveries == 0:
+            return 0.0
+        return self.positive_feedback_count / self.total_discoveries
+
+
+def compute_discovery_accuracy(
+    feedback_records: List[DiscoveryFeedbackRecord],
+) -> DiscoveryAccuracyMetrics:
+    """
+    Compute accuracy metrics from accumulated feedback.
+
+    Args:
+        feedback_records: List of feedback records
+
+    Returns:
+        DiscoveryAccuracyMetrics with computed values
+    """
+    metrics = DiscoveryAccuracyMetrics()
+
+    # Algorithm-level tracking
+    algo_positive = defaultdict(int)
+    algo_total = defaultdict(int)
+
+    # Gate decision tracking
+    gate_positive = defaultdict(int)
+    gate_total = defaultdict(int)
+
+    # Edge-level tracking
+    total_discovered_edges = 0
+    correct_edges = 0
+    total_true_edges = 0
+    discovered_true_edges = 0
+
+    for record in feedback_records:
+        metrics.total_discoveries += 1
+
+        if record.feedback_positive:
+            metrics.positive_feedback_count += 1
+        else:
+            metrics.negative_feedback_count += 1
+
+        # Track by algorithm
+        for algo in record.algorithms_used:
+            algo_total[algo] += 1
+            if record.feedback_positive:
+                algo_positive[algo] += 1
+
+        # Track by gate decision
+        gate_total[record.gate_decision] += 1
+        if record.feedback_positive:
+            gate_positive[record.gate_decision] += 1
+
+        # Track edge corrections for precision/recall
+        if record.corrected_edges:
+            for edge in record.corrected_edges:
+                if edge.get("correction_type") == "removed":
+                    # Edge was incorrectly discovered
+                    total_discovered_edges += 1
+                elif edge.get("correction_type") == "added":
+                    # Edge was missed
+                    total_true_edges += 1
+                elif edge.get("correction_type") == "confirmed":
+                    correct_edges += 1
+                    discovered_true_edges += 1
+                    total_discovered_edges += 1
+                    total_true_edges += 1
+
+    # Compute algorithm accuracy
+    for algo in algo_total:
+        metrics.algorithm_accuracy[algo] = (
+            algo_positive[algo] / algo_total[algo] if algo_total[algo] > 0 else 0.0
+        )
+        metrics.algorithm_counts[algo] = (algo_positive[algo], algo_total[algo])
+
+    # Compute gate decision accuracy
+    for decision in gate_total:
+        metrics.gate_decision_accuracy[decision] = (
+            gate_positive[decision] / gate_total[decision] if gate_total[decision] > 0 else 0.0
+        )
+
+    # Compute edge precision/recall
+    if total_discovered_edges > 0:
+        metrics.edge_precision = correct_edges / total_discovered_edges
+    if total_true_edges > 0:
+        metrics.edge_recall = discovered_true_edges / total_true_edges
+
+    return metrics
+```
+
+### Pattern Detection
+
+Identify patterns in discovery failures to improve future runs:
+
+```python
+from typing import List, Dict, Any, Optional
+from dataclasses import dataclass
+
+
+@dataclass
+class DiscoveryFailurePattern:
+    """Identified pattern in discovery failures."""
+    pattern_id: str
+    pattern_type: str  # "data_characteristic", "configuration", "domain"
+    description: str
+    frequency: int  # Number of times observed
+    confidence: float  # Confidence this is a real pattern
+
+    # Pattern specifics
+    trigger_conditions: Dict[str, Any]  # When this failure occurs
+    affected_algorithms: List[str]  # Which algorithms are affected
+    recommended_action: str  # What to do about it
+
+
+def detect_failure_patterns(
+    feedback_records: List[DiscoveryFeedbackRecord],
+    min_frequency: int = 3,
+    min_confidence: float = 0.7,
+) -> List[DiscoveryFailurePattern]:
+    """
+    Detect patterns in discovery failures.
+
+    Args:
+        feedback_records: List of feedback records
+        min_frequency: Minimum occurrences to consider a pattern
+        min_confidence: Minimum confidence threshold
+
+    Returns:
+        List of identified failure patterns
+    """
+    patterns = []
+    negative_records = [r for r in feedback_records if not r.feedback_positive]
+
+    if len(negative_records) < min_frequency:
+        return patterns
+
+    # Pattern 1: Low ensemble threshold failures
+    low_threshold_failures = [
+        r for r in negative_records
+        if r.ensemble_threshold < 0.5
+    ]
+    if len(low_threshold_failures) >= min_frequency:
+        confidence = len(low_threshold_failures) / len(negative_records)
+        if confidence >= min_confidence:
+            patterns.append(DiscoveryFailurePattern(
+                pattern_id="low_ensemble_threshold",
+                pattern_type="configuration",
+                description="Discovery failures correlate with low ensemble threshold (<0.5)",
+                frequency=len(low_threshold_failures),
+                confidence=confidence,
+                trigger_conditions={"ensemble_threshold": "<0.5"},
+                affected_algorithms=["all"],
+                recommended_action="Increase ensemble_threshold to 0.6 or higher",
+            ))
+
+    # Pattern 2: Single algorithm failures
+    single_algo_failures = [
+        r for r in negative_records
+        if len(r.algorithms_used) == 1
+    ]
+    if len(single_algo_failures) >= min_frequency:
+        confidence = len(single_algo_failures) / len(negative_records)
+        if confidence >= min_confidence:
+            patterns.append(DiscoveryFailurePattern(
+                pattern_id="single_algorithm",
+                pattern_type="configuration",
+                description="Discovery failures correlate with using only one algorithm",
+                frequency=len(single_algo_failures),
+                confidence=confidence,
+                trigger_conditions={"algorithm_count": 1},
+                affected_algorithms=list(set(
+                    r.algorithms_used[0] for r in single_algo_failures
+                )),
+                recommended_action="Use ensemble of GES + PC for better edge voting",
+            ))
+
+    # Pattern 3: Algorithm-specific failures
+    algo_failure_counts: Dict[str, int] = defaultdict(int)
+    algo_total_counts: Dict[str, int] = defaultdict(int)
+
+    for record in feedback_records:
+        for algo in record.algorithms_used:
+            algo_total_counts[algo] += 1
+            if not record.feedback_positive:
+                algo_failure_counts[algo] += 1
+
+    for algo, failure_count in algo_failure_counts.items():
+        if failure_count >= min_frequency:
+            failure_rate = failure_count / algo_total_counts[algo]
+            if failure_rate >= 0.5:  # >50% failure rate
+                patterns.append(DiscoveryFailurePattern(
+                    pattern_id=f"{algo}_high_failure",
+                    pattern_type="algorithm",
+                    description=f"{algo.upper()} algorithm has high failure rate ({failure_rate:.1%})",
+                    frequency=failure_count,
+                    confidence=failure_rate,
+                    trigger_conditions={"algorithm": algo},
+                    affected_algorithms=[algo],
+                    recommended_action=f"Reduce weight of {algo} in ensemble or exclude",
+                ))
+
+    # Pattern 4: Gate override patterns
+    overridden_accepts = [
+        r for r in negative_records
+        if r.gate_decision == "accept" and r.feedback_type == DiscoveryFeedbackType.GATE_OVERRIDE
+    ]
+    if len(overridden_accepts) >= min_frequency:
+        avg_confidence = sum(r.gate_confidence for r in overridden_accepts) / len(overridden_accepts)
+        patterns.append(DiscoveryFailurePattern(
+            pattern_id="accept_threshold_too_low",
+            pattern_type="configuration",
+            description=f"ACCEPT gate decisions being overridden (avg confidence: {avg_confidence:.2f})",
+            frequency=len(overridden_accepts),
+            confidence=len(overridden_accepts) / len(negative_records),
+            trigger_conditions={"gate_decision": "accept", "avg_confidence": avg_confidence},
+            affected_algorithms=["all"],
+            recommended_action=f"Increase ACCEPT threshold from 0.8 to {avg_confidence + 0.1:.2f}",
+        ))
+
+    return patterns
+```
+
+### Parameter Recommender
+
+Generate recommendations for discovery parameter adjustments:
+
+```python
+from typing import Dict, Any, List, Optional
+from dataclasses import dataclass
+
+
+@dataclass
+class ParameterRecommendation:
+    """Recommendation for parameter adjustment."""
+    parameter: str
+    current_value: Any
+    recommended_value: Any
+    confidence: float
+    reasoning: str
+    expected_improvement: str
+
+
+def generate_parameter_recommendations(
+    accuracy_metrics: DiscoveryAccuracyMetrics,
+    failure_patterns: List[DiscoveryFailurePattern],
+    current_config: Dict[str, Any],
+) -> List[ParameterRecommendation]:
+    """
+    Generate parameter adjustment recommendations.
+
+    Args:
+        accuracy_metrics: Current accuracy metrics
+        failure_patterns: Identified failure patterns
+        current_config: Current discovery configuration
+
+    Returns:
+        List of parameter recommendations
+    """
+    recommendations = []
+
+    # Recommendation 1: Ensemble threshold adjustment
+    if accuracy_metrics.overall_accuracy < 0.7:
+        current_threshold = current_config.get("ensemble_threshold", 0.5)
+        recommendations.append(ParameterRecommendation(
+            parameter="ensemble_threshold",
+            current_value=current_threshold,
+            recommended_value=min(current_threshold + 0.1, 0.8),
+            confidence=0.8,
+            reasoning=f"Overall accuracy ({accuracy_metrics.overall_accuracy:.1%}) below 70% target",
+            expected_improvement="Reduce false positive edges by requiring higher agreement",
+        ))
+
+    # Recommendation 2: Algorithm selection based on performance
+    best_algo = max(
+        accuracy_metrics.algorithm_accuracy.items(),
+        key=lambda x: x[1],
+        default=(None, 0.0)
+    )
+    worst_algo = min(
+        accuracy_metrics.algorithm_accuracy.items(),
+        key=lambda x: x[1],
+        default=(None, 1.0)
+    )
+
+    if best_algo[0] and worst_algo[0] and best_algo[1] - worst_algo[1] > 0.2:
+        current_algos = current_config.get("algorithms", ["ges", "pc"])
+        if worst_algo[0] in current_algos and len(current_algos) > 1:
+            recommendations.append(ParameterRecommendation(
+                parameter="algorithms",
+                current_value=current_algos,
+                recommended_value=[a for a in current_algos if a != worst_algo[0]],
+                confidence=0.7,
+                reasoning=f"{worst_algo[0].upper()} accuracy ({worst_algo[1]:.1%}) significantly below {best_algo[0].upper()} ({best_algo[1]:.1%})",
+                expected_improvement=f"Remove low-performing algorithm to improve ensemble quality",
+            ))
+
+    # Recommendation 3: Gate threshold adjustments based on patterns
+    for pattern in failure_patterns:
+        if pattern.pattern_id == "accept_threshold_too_low":
+            current_accept = current_config.get("gate_thresholds", {}).get("accept", 0.8)
+            recommendations.append(ParameterRecommendation(
+                parameter="gate_thresholds.accept",
+                current_value=current_accept,
+                recommended_value=min(current_accept + 0.05, 0.95),
+                confidence=pattern.confidence,
+                reasoning=pattern.description,
+                expected_improvement="Reduce false ACCEPT decisions requiring expert review",
+            ))
+
+    # Recommendation 4: Alpha (significance level) for statistical tests
+    if accuracy_metrics.edge_precision < 0.6:
+        current_alpha = current_config.get("alpha", 0.05)
+        recommendations.append(ParameterRecommendation(
+            parameter="alpha",
+            current_value=current_alpha,
+            recommended_value=max(current_alpha / 2, 0.01),
+            confidence=0.6,
+            reasoning=f"Edge precision ({accuracy_metrics.edge_precision:.1%}) indicates too many false positives",
+            expected_improvement="Stricter significance threshold reduces spurious edge detection",
+        ))
+
+    return recommendations
+```
+
+### Usage Example
+
+```python
+from src.agents.feedback_learner.discovery_feedback import (
+    collect_discovery_feedback,
+    compute_discovery_accuracy,
+    detect_failure_patterns,
+    generate_parameter_recommendations,
+    DiscoveryFeedbackType,
+)
+
+
+async def process_discovery_feedback(state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Process discovery feedback and generate recommendations.
+
+    Args:
+        state: Current agent state with discovery results and feedback
+
+    Returns:
+        Updated state with accuracy metrics and recommendations
+    """
+    # Collect new feedback
+    if state.get("new_discovery_feedback"):
+        feedback = collect_discovery_feedback(
+            state=state,
+            feedback_type=DiscoveryFeedbackType(state["new_discovery_feedback"]["type"]),
+            is_positive=state["new_discovery_feedback"]["positive"],
+            corrected_edges=state["new_discovery_feedback"].get("corrections"),
+            notes=state["new_discovery_feedback"].get("notes"),
+        )
+
+        # Store feedback
+        existing_records = state.get("discovery_feedback_records", [])
+        existing_records.append(feedback.__dict__)
+        state["discovery_feedback_records"] = existing_records
+
+    # Compute accuracy metrics
+    records = state.get("discovery_feedback_records", [])
+    if records:
+        metrics = compute_discovery_accuracy(
+            [DiscoveryFeedbackRecord(**r) for r in records]
+        )
+        state["discovery_accuracy_metrics"] = {
+            "overall_accuracy": metrics.overall_accuracy,
+            "algorithm_accuracy": metrics.algorithm_accuracy,
+            "gate_decision_accuracy": metrics.gate_decision_accuracy,
+            "edge_precision": metrics.edge_precision,
+            "edge_recall": metrics.edge_recall,
+        }
+
+        # Detect failure patterns
+        patterns = detect_failure_patterns(
+            [DiscoveryFeedbackRecord(**r) for r in records]
+        )
+        state["discovery_failure_patterns"] = [p.__dict__ for p in patterns]
+
+        # Generate recommendations
+        current_config = state.get("discovery_config", {
+            "ensemble_threshold": 0.5,
+            "algorithms": ["ges", "pc"],
+            "alpha": 0.05,
+        })
+        recommendations = generate_parameter_recommendations(
+            metrics, patterns, current_config
+        )
+        state["discovery_parameter_recommendations"] = [r.__dict__ for r in recommendations]
+
+        # Rank algorithms by performance
+        state["discovery_algorithm_rankings"] = sorted(
+            metrics.algorithm_accuracy.items(),
+            key=lambda x: x[1],
+            reverse=True,
+        )
+
+    return state
+```
+
+### Configuration
+
+```yaml
+# config/feedback_learner_discovery.yaml
+
+discovery_feedback:
+  # Minimum records before pattern detection
+  min_records_for_patterns: 10
+
+  # Pattern detection thresholds
+  pattern_detection:
+    min_frequency: 3
+    min_confidence: 0.7
+
+  # Accuracy targets
+  accuracy_targets:
+    overall: 0.8
+    edge_precision: 0.75
+    edge_recall: 0.7
+
+  # Recommendation triggers
+  recommendation_triggers:
+    accuracy_below: 0.7
+    precision_below: 0.6
+    algorithm_gap: 0.2  # Difference between best and worst
+
+  # Feedback retention
+  retention:
+    max_records: 1000
+    max_age_days: 90
+```
+
+### Testing Requirements
+
+```python
+# tests/unit/test_agents/test_feedback_learner/test_discovery_feedback.py
+
+class TestDiscoveryFeedbackCollection:
+    """Test feedback collection functions."""
+
+    def test_collect_user_correction_feedback(self):
+        """Test collecting user correction feedback."""
+        pass
+
+    def test_collect_expert_review_feedback(self):
+        """Test collecting expert review feedback."""
+        pass
+
+    def test_collect_gate_override_feedback(self):
+        """Test collecting gate override feedback."""
+        pass
+
+
+class TestDiscoveryAccuracyMetrics:
+    """Test accuracy computation."""
+
+    def test_overall_accuracy_computation(self):
+        """Test overall accuracy calculation."""
+        pass
+
+    def test_algorithm_accuracy_tracking(self):
+        """Test per-algorithm accuracy tracking."""
+        pass
+
+    def test_edge_precision_recall(self):
+        """Test edge-level precision/recall."""
+        pass
+
+
+class TestFailurePatternDetection:
+    """Test pattern detection."""
+
+    def test_low_threshold_pattern_detection(self):
+        """Test detection of low ensemble threshold failures."""
+        pass
+
+    def test_single_algorithm_pattern_detection(self):
+        """Test detection of single algorithm failures."""
+        pass
+
+    def test_algorithm_specific_pattern_detection(self):
+        """Test algorithm-specific failure detection."""
+        pass
+
+
+class TestParameterRecommendations:
+    """Test recommendation generation."""
+
+    def test_threshold_increase_recommendation(self):
+        """Test ensemble threshold increase recommendation."""
+        pass
+
+    def test_algorithm_removal_recommendation(self):
+        """Test poor algorithm removal recommendation."""
+        pass
+
+    def test_alpha_adjustment_recommendation(self):
+        """Test significance level adjustment recommendation."""
+        pass
+```
+
+### Integration with Self-Improvement Loop
+
+The discovery feedback loop integrates with the broader self-improvement system:
+
+1. **Feedback Collection**: Automatically captured when users correct discovered DAGs
+2. **Pattern Learning**: DSPy signatures learn from accumulated feedback patterns
+3. **Parameter Tuning**: GEPA optimizer adjusts discovery parameters based on metrics
+4. **Continuous Monitoring**: Accuracy metrics tracked via Opik dashboards
+
+```python
+# Integration with existing DSPy optimization
+DISCOVERY_FEEDBACK_SIGNATURES = {
+    "DiscoveryParameterSignature": {
+        "input_fields": ["accuracy_metrics", "failure_patterns", "current_config"],
+        "output_fields": ["recommended_config"],
+        "description": "Recommend discovery configuration adjustments",
+    },
+    "FailurePatternSignature": {
+        "input_fields": ["feedback_records", "discovery_metadata"],
+        "output_fields": ["identified_patterns", "pattern_confidence"],
+        "description": "Identify patterns in discovery failures",
+    },
+}
+```

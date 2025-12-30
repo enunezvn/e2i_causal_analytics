@@ -2,9 +2,16 @@
 
 **Purpose**: Define interfaces and expectations for communication between the Orchestrator agent and all other agents in the E2I Causal Analytics system.
 
-**Version**: 1.0
-**Last Updated**: 2025-12-18
+**Version**: 1.1
+**Last Updated**: 2025-12-30
 **Owner**: E2I Development Team
+
+## Revision History
+
+| Version | Date | Author | Changes |
+|---------|------|--------|---------|
+| 1.0 | 2025-12-18 | E2I Team | Initial version |
+| 1.1 | 2025-12-30 | E2I Team | V4.4: Added discovery fields to AgentSelectionCriteria (enable_discovery, discovery_config) |
 
 ---
 
@@ -311,6 +318,17 @@ class AgentSelectionCriteria(BaseModel):
     requires_experimentation: bool = Field(
         default=False,
         description="Requires experiment design"
+    )
+
+    # === DISCOVERY (V4.4+) ===
+    enable_discovery: bool = Field(
+        default=False,
+        description="Enable automatic DAG structure learning for causal intents"
+    )
+
+    discovery_config: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Discovery configuration: algorithms=['ges','pc'], ensemble_threshold (0.5), alpha (0.05)"
     )
 
     # === CONSTRAINTS ===

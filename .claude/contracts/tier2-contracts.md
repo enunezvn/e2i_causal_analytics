@@ -113,6 +113,13 @@ class CausalImpactInput(BaseModel):
     )
     confidence_level: float = Field(0.95, ge=0.5, le=0.99)
 
+    # Discovery Configuration (V4.4+)
+    auto_discover: bool = Field(False, description="Enable automatic DAG structure learning")
+    discovery_config: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Discovery configuration: algorithms, ensemble_threshold, alpha"
+    )
+
     # Model configuration
     model_config = {
         "json_schema_extra": {
@@ -206,6 +213,13 @@ class CausalGraphSpec(TypedDict):
     dot_string: str
     description: str
 
+    # Discovery Metadata (V4.4+)
+    discovery_enabled: bool  # Whether auto-discovery was used
+    discovery_gate_decision: Optional[str]  # "accept", "augment", "review", "reject"
+    discovery_confidence: Optional[float]  # Ensemble confidence score (0-1)
+    discovery_algorithms_used: List[str]  # ["ges", "pc"]
+    augmented_edges: List[Tuple[str, str]]  # High-confidence discovered edges added
+
 class RefutationResults(TypedDict):
     """DoWhy refutation test results"""
     placebo_treatment: Dict[str, Any]
@@ -236,6 +250,18 @@ class CausalImpactState(TypedDict):
     user_expertise: Literal["executive", "analyst", "data_scientist"]
     estimation_method: str
     confidence_level: float
+
+    # === DISCOVERY CONTROL (V4.4+) ===
+    auto_discover: bool  # Enable structure learning (default: False)
+    discovery_algorithms: List[str]  # Algorithms to use ["ges", "pc"]
+    discovery_ensemble_threshold: float  # Min agreement threshold (0.5)
+    discovery_alpha: float  # Significance level for CI tests (0.05)
+    data_cache: Optional[Dict[str, Any]]  # DataFrame cache for discovery
+
+    # === DISCOVERY RESULTS (V4.4+) ===
+    discovery_result: Optional[Dict[str, Any]]  # Full DiscoveryResult
+    discovery_gate_evaluation: Optional[Dict[str, Any]]  # GateEvaluation dict
+    discovery_latency_ms: Optional[float]  # Performance metric
 
     # === COMPUTATION OUTPUTS ===
     causal_graph: Optional[CausalGraphSpec]

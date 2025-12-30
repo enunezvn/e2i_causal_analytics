@@ -23,6 +23,14 @@ class CausalGraph(TypedDict, total=False):
     confidence: float  # Graph construction confidence (0-1)
     dag_version_hash: str  # SHA256 hash for expert review tracking
 
+    # V4.4: Causal Discovery Integration
+    discovery_enabled: bool  # Whether auto-discovery was used
+    discovery_gate_decision: Literal["accept", "review", "reject", "augment"]  # Gate outcome
+    discovery_algorithms_used: List[str]  # Algorithms run (e.g., ["ges", "pc"])
+    discovery_confidence: float  # Discovery ensemble confidence (0-1)
+    discovery_n_edges: int  # Number of edges from discovery
+    augmented_edges: List[tuple[str, str]]  # High-confidence edges added to manual DAG
+
 
 class EstimationResult(TypedDict, total=False):
     """Causal effect estimation results.
@@ -196,6 +204,16 @@ class CausalImpactState(TypedDict):
     dag_version_hash: NotRequired[str]  # SHA256 hash for expert review tracking
     graph_builder_latency_ms: NotRequired[float]
     graph_builder_error: NotRequired[str]
+
+    # V4.4: Causal Discovery Configuration
+    auto_discover: NotRequired[bool]  # Enable automatic DAG discovery (default: False)
+    discovery_algorithms: NotRequired[List[str]]  # Algorithms to use: ["ges", "pc", "fci", "lingam"]
+    discovery_ensemble_threshold: NotRequired[float]  # Min algorithm agreement (default: 0.5)
+    discovery_alpha: NotRequired[float]  # Significance level for CI tests (default: 0.05)
+    discovery_fallback_to_manual: NotRequired[bool]  # Use manual DAG on discovery failure (default: True)
+    discovery_result: NotRequired[Dict[str, Any]]  # Full DiscoveryResult from runner
+    discovery_gate_evaluation: NotRequired[Dict[str, Any]]  # Full GateEvaluation from gate
+    discovery_latency_ms: NotRequired[float]  # Discovery computation time
 
     # Estimation outputs
     estimation_result: NotRequired[EstimationResult]

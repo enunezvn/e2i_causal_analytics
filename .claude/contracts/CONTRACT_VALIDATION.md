@@ -653,10 +653,214 @@ Location: `tests/integration/test_signal_flow/`
 
 ---
 
+## Causal Discovery Validation Rules (V4.4+)
+
+The causal discovery module (`src/causal_engine/discovery/`) adds automatic DAG structure learning. These validation rules ensure discovery is used correctly.
+
+### Data Requirements
+
+| Rule | Validation | Error |
+|------|------------|-------|
+| **D1** | If `auto_discover=True`, `data_cache` must contain DataFrame | `DiscoveryRequiresDataError` |
+| **D2** | DataFrame must have >= 100 rows for valid discovery | `InsufficientDataError` |
+| **D3** | DataFrame must have >= 3 columns (treatment + outcome + confounder) | `InsufficientFeaturesError` |
+| **D4** | No column may have >50% missing values | `ExcessiveMissingDataError` |
+
+### Algorithm Configuration
+
+| Rule | Validation | Error |
+|------|------------|-------|
+| **A1** | `discovery_algorithms` must be subset of `["ges", "pc", "fci", "lingam"]` | `InvalidAlgorithmError` |
+| **A2** | `ensemble_threshold` must be in range `[0.0, 1.0]` | `InvalidThresholdError` |
+| **A3** | `discovery_alpha` must be in range `(0.0, 1.0)` | `InvalidAlphaError` |
+| **A4** | At least one algorithm must be specified | `NoAlgorithmError` |
+
+### Gate Decision Validation
+
+| Rule | Validation | Error |
+|------|------------|-------|
+| **G1** | `gate_decision` must be one of: `accept`, `augment`, `review`, `reject` | `InvalidGateDecisionError` |
+| **G2** | `gate_confidence` must be in range `[0.0, 1.0]` | `InvalidConfidenceError` |
+| **G3** | If `gate_decision="accept"`, `gate_confidence >= 0.8` | `AcceptThresholdViolation` |
+| **G4** | If `gate_decision="reject"`, `gate_confidence < 0.3` | `RejectThresholdViolation` |
+
+### DAG Structure Validation
+
+| Rule | Validation | Error |
+|------|------------|-------|
+| **S1** | Discovered DAG must be acyclic | `CyclicGraphError` |
+| **S2** | Discovered DAG must be connected (weak connectivity) | `DisconnectedGraphWarning` |
+| **S3** | Edge confidence scores must be in `[0.0, 1.0]` | `InvalidEdgeConfidenceError` |
+| **S4** | Edge votes must be <= number of algorithms used | `InvalidVoteCountError` |
+
+### Integration Validation
+
+| Rule | Validation | Error |
+|------|------------|-------|
+| **I1** | If downstream agents use `discovered_confounders`, `gate_decision` must be `accept` or `augment` | `UseOfRejectedDiscoveryWarning` |
+| **I2** | If `effect_modifiers_validated=True`, discovery must have occurred | `ValidationWithoutDiscoveryError` |
+| **I3** | Discovery metadata must include `algorithms`, `threshold`, `confidence` | `IncompletMetadataError` |
+
+### Validation Code
+
+```python
+from typing import Dict, Any, List, Optional
+import pandas as pd
+
+
+class DiscoveryValidationError(Exception):
+    """Base exception for discovery validation errors."""
+    pass
+
+
+class DiscoveryRequiresDataError(DiscoveryValidationError):
+    """Raised when auto_discover=True but no data provided."""
+    pass
+
+
+class InvalidGateDecisionError(DiscoveryValidationError):
+    """Raised when gate decision is not in allowed set."""
+    pass
+
+
+VALID_ALGORITHMS = {"ges", "pc", "fci", "lingam"}
+VALID_GATE_DECISIONS = {"accept", "augment", "review", "reject"}
+
+
+def validate_discovery_input(state: Dict[str, Any]) -> List[str]:
+    """
+    Validate discovery input configuration.
+
+    Args:
+        state: Agent state with discovery configuration
+
+    Returns:
+        List of validation warnings (empty if all valid)
+
+    Raises:
+        DiscoveryValidationError: If critical validation fails
+    """
+    warnings = []
+
+    # D1: Data requirement
+    if state.get("auto_discover"):
+        data_cache = state.get("data_cache", {})
+        data = data_cache.get("data")
+
+        if data is None:
+            raise DiscoveryRequiresDataError(
+                "auto_discover=True requires data_cache with DataFrame"
+            )
+
+        if not isinstance(data, pd.DataFrame):
+            raise DiscoveryRequiresDataError(
+                f"data_cache['data'] must be DataFrame, got {type(data)}"
+            )
+
+        # D2: Minimum rows
+        if len(data) < 100:
+            warnings.append(f"DataFrame has {len(data)} rows, <100 may give unreliable discovery")
+
+        # D3: Minimum columns
+        if len(data.columns) < 3:
+            raise DiscoveryValidationError(
+                f"DataFrame has {len(data.columns)} columns, need >=3 for discovery"
+            )
+
+        # D4: Missing values
+        for col in data.columns:
+            missing_pct = data[col].isna().mean()
+            if missing_pct > 0.5:
+                warnings.append(f"Column '{col}' has {missing_pct:.0%} missing values")
+
+    # A1: Valid algorithms
+    algorithms = state.get("discovery_algorithms", ["ges", "pc"])
+    invalid_algos = set(algorithms) - VALID_ALGORITHMS
+    if invalid_algos:
+        raise DiscoveryValidationError(
+            f"Invalid algorithms: {invalid_algos}. Valid: {VALID_ALGORITHMS}"
+        )
+
+    # A2: Threshold range
+    threshold = state.get("discovery_ensemble_threshold", 0.5)
+    if not 0.0 <= threshold <= 1.0:
+        raise DiscoveryValidationError(
+            f"ensemble_threshold must be in [0.0, 1.0], got {threshold}"
+        )
+
+    # A3: Alpha range
+    alpha = state.get("discovery_alpha", 0.05)
+    if not 0.0 < alpha < 1.0:
+        raise DiscoveryValidationError(
+            f"discovery_alpha must be in (0.0, 1.0), got {alpha}"
+        )
+
+    return warnings
+
+
+def validate_discovery_output(state: Dict[str, Any]) -> List[str]:
+    """
+    Validate discovery output.
+
+    Args:
+        state: Agent state with discovery results
+
+    Returns:
+        List of validation warnings
+
+    Raises:
+        DiscoveryValidationError: If critical validation fails
+    """
+    warnings = []
+    gate_eval = state.get("discovery_gate_evaluation", {})
+
+    # G1: Valid gate decision
+    decision = gate_eval.get("decision")
+    if decision and decision not in VALID_GATE_DECISIONS:
+        raise InvalidGateDecisionError(
+            f"Invalid gate decision: {decision}. Valid: {VALID_GATE_DECISIONS}"
+        )
+
+    # G2: Confidence range
+    confidence = gate_eval.get("confidence", 0.0)
+    if not 0.0 <= confidence <= 1.0:
+        raise DiscoveryValidationError(
+            f"gate confidence must be in [0.0, 1.0], got {confidence}"
+        )
+
+    # G3: Accept threshold
+    if decision == "accept" and confidence < 0.8:
+        warnings.append(
+            f"ACCEPT decision with confidence {confidence:.2f} < 0.8 threshold"
+        )
+
+    # G4: Reject threshold
+    if decision == "reject" and confidence >= 0.3:
+        warnings.append(
+            f"REJECT decision with confidence {confidence:.2f} >= 0.3 (unusual)"
+        )
+
+    return warnings
+```
+
+### Test Coverage
+
+| Test Category | Count | Status |
+|---------------|-------|--------|
+| Discovery base types (base.py) | 18 | ✅ |
+| DiscoveryRunner (runner.py) | 25 | ✅ |
+| DiscoveryGate (gate.py) | 18 | ✅ |
+| DriverRanker (driver_ranker.py) | 16 | ✅ |
+| GraphBuilder discovery integration | 21 | ✅ |
+| **Total Discovery Tests** | **98** | ✅ |
+
+---
+
 ## Change Log
 
 | Date | Change |
 |------|--------|
+| 2025-12-30 | Added Causal Discovery Validation Rules (V4.4) - 14 validation rules |
 | 2025-12-23 | Initial creation - Phase 2 of audit complete |
 | 2025-12-23 | Added all 18 agents with validation status |
 | 2025-12-23 | Added signal flow architecture diagram |
