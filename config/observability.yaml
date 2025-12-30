@@ -6,7 +6,7 @@
 # components including Opik SDK integration, span batching, circuit breaker,
 # metrics caching, and data retention.
 #
-# Version: 1.1.0
+# Version: 1.2.0
 # Last Updated: 2025-12-30
 #
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -14,10 +14,25 @@
 # OPIK DEPLOYMENT (Local Development)
 # ───────────────────────────────────────────────────────────────────────────────
 # Location: /home/enunez/opik/deployment/docker-compose/
-# Start:    cd /home/enunez/opik/deployment/docker-compose && docker compose --profile opik up -d
-# Stop:     cd /home/enunez/opik/deployment/docker-compose && docker compose --profile opik down
+#
+# RECOMMENDED (uses opik-manager.sh with retry logic and proxy bypass):
+#   Start:    /home/enunez/opik/deployment/docker-compose/opik-manager.sh start
+#   Stop:     /home/enunez/opik/deployment/docker-compose/opik-manager.sh stop
+#   Status:   /home/enunez/opik/deployment/docker-compose/opik-manager.sh status
+#   Logs:     /home/enunez/opik/deployment/docker-compose/opik-manager.sh logs
+#
+# ALTERNATIVE (direct docker-compose, may fail on corporate network):
+#   Start:    cd /home/enunez/opik/deployment/docker-compose && docker compose --profile opik up -d
+#   Stop:     cd /home/enunez/opik/deployment/docker-compose && docker compose --profile opik down
+#
 # UI:       http://localhost:5173
-# API:      http://localhost:8080
+# API:      http://localhost:8080 (proxied through nginx at :5173/api)
+#
+# TROUBLESHOOTING:
+# If images fail to download, ensure Docker proxy bypass is configured:
+# File: /etc/systemd/system/docker.service.d/http-proxy.conf should include:
+#   NO_PROXY=localhost,127.0.0.1,registry-1.docker.io,docker.io,*.docker.io,*.docker.com,ghcr.io
+# Then run: sudo systemctl daemon-reload && sudo systemctl restart docker
 #
 # ═══════════════════════════════════════════════════════════════════════════════
 
