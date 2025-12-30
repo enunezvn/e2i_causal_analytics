@@ -4,6 +4,7 @@ This module defines the TypedDict state used by the scope_definer LangGraph.
 """
 
 from typing import Any, Dict, List, Literal, Optional, TypedDict
+from uuid import UUID
 
 
 class ScopeDefinerState(TypedDict, total=False):
@@ -99,3 +100,6 @@ class ScopeDefinerState(TypedDict, total=False):
     # Error handling
     error: Optional[str]
     error_type: Optional[str]
+
+    # Audit chain
+    audit_workflow_id: UUID

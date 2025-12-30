@@ -6,6 +6,7 @@ for the gap analyzer workflow: gap detection → ROI calculation → prioritizat
 
 import operator
 from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
+from uuid import UUID
 
 
 class PerformanceGap(TypedDict):
@@ -198,6 +199,9 @@ class GapAnalyzerState(TypedDict):
     ]]
     routing_confidence: Optional[float]  # Confidence in library routing decision
     routing_rationale: Optional[str]  # Why this library routing was chosen
+
+    # Audit chain (tamper-evident logging)
+    audit_workflow_id: Optional[UUID]
 
 
 # Type aliases for output contract compliance

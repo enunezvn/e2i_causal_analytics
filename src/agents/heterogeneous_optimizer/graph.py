@@ -1,13 +1,19 @@
 """LangGraph workflow for Heterogeneous Optimizer Agent.
 
-Defines the 5-node workflow (B9.4: with hierarchical nesting):
-    estimate_cate → analyze_segments → hierarchical_analysis → learn_policy → generate_profiles
+Defines the 6-node workflow (B9.4: with hierarchical nesting):
+    audit_init → estimate_cate → analyze_segments → hierarchical_analysis → learn_policy → generate_profiles
 
 The hierarchical_analysis node (B9.4) computes segment-level CATE estimates
 using EconML within CausalML uplift segments, with nested confidence intervals.
+
+Observability:
+- Audit chain recording for tamper-evident logging
 """
 
 from langgraph.graph import END, StateGraph
+
+from src.agents.base.audit_chain_mixin import create_workflow_initializer
+from src.utils.audit_chain import AgentTier
 
 from .nodes.cate_estimator import CATEEstimatorNode
 from .nodes.hierarchical_analyzer import HierarchicalAnalyzerNode
@@ -38,6 +44,7 @@ def create_heterogeneous_optimizer_graph(
     """Create the Heterogeneous Optimizer agent LangGraph workflow.
 
     Workflow (with hierarchical enabled - default):
+        0. audit_init: Initialize audit chain workflow (genesis block)
         1. estimate_cate: Estimate CATE using EconML CausalForestDML
         2. analyze_segments: Identify high/low responder segments
         3. hierarchical_analysis: Compute segment-level CATE with nested CIs (B9.4)
@@ -45,6 +52,7 @@ def create_heterogeneous_optimizer_graph(
         5. generate_profiles: Create visualization data and summaries
 
     Workflow (without hierarchical):
+        0. audit_init: Initialize audit chain workflow (genesis block)
         1. estimate_cate: Estimate CATE using EconML CausalForestDML
         2. analyze_segments: Identify high/low responder segments
         3. learn_policy: Generate optimal treatment allocation policy
@@ -65,10 +73,16 @@ def create_heterogeneous_optimizer_graph(
     policy_learner = PolicyLearnerNode()
     profile_generator = ProfileGeneratorNode()
 
+    # Create audit workflow initializer
+    audit_initializer = create_workflow_initializer(
+        "heterogeneous_optimizer", AgentTier.CAUSAL_ANALYTICS
+    )
+
     # Build graph
     workflow = StateGraph(HeterogeneousOptimizerState)
 
     # Add nodes
+    workflow.add_node("audit_init", audit_initializer)  # Initialize audit chain
     workflow.add_node("estimate_cate", cate_estimator.execute)
     workflow.add_node("analyze_segments", segment_analyzer.execute)
     if enable_hierarchical:
@@ -77,8 +91,11 @@ def create_heterogeneous_optimizer_graph(
     workflow.add_node("generate_profiles", profile_generator.execute)
     workflow.add_node("error_handler", error_handler_node)
 
-    # Entry point
-    workflow.set_entry_point("estimate_cate")
+    # Entry point - start with audit initialization
+    workflow.set_entry_point("audit_init")
+
+    # Linear edge from audit_init to estimate_cate
+    workflow.add_edge("audit_init", "estimate_cate")
 
     # Conditional edges for error handling
     workflow.add_conditional_edges(

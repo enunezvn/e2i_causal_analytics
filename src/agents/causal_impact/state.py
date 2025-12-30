@@ -6,6 +6,7 @@ Contract: .claude/contracts/tier2-contracts.md
 
 import operator
 from typing import Annotated, Any, Dict, List, Literal, TypedDict
+from uuid import UUID
 
 from typing_extensions import NotRequired
 
@@ -297,6 +298,9 @@ class CausalImpactState(TypedDict):
     fallback_used: NotRequired[bool]
     retry_count: NotRequired[int]
     refutation_passed: NotRequired[bool]
+
+    # Audit chain (tamper-evident logging)
+    audit_workflow_id: NotRequired[UUID]
 
 
 class CausalImpactInput(TypedDict):

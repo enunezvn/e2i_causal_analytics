@@ -4,6 +4,7 @@ This module defines the TypedDict state used by the data_preparer LangGraph.
 """
 
 from typing import Any, Dict, List, Literal, Optional, TypedDict
+from uuid import UUID
 
 
 class DataPreparerState(TypedDict, total=False):
@@ -105,3 +106,6 @@ class DataPreparerState(TypedDict, total=False):
     # Error handling
     error: Optional[str]
     error_type: Optional[str]
+
+    # Audit chain
+    audit_workflow_id: UUID

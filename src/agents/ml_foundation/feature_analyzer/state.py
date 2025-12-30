@@ -9,6 +9,7 @@ This agent is a HYBRID agent with 5 nodes:
 """
 
 from typing import Any, Dict, List, Optional, Tuple, TypedDict
+from uuid import UUID
 
 import numpy as np
 import pandas as pd
@@ -184,3 +185,6 @@ class FeatureAnalyzerState(TypedDict, total=False):
     error: Optional[str]  # Error message if failed
     error_type: Optional[str]  # Error classification
     error_details: Optional[Dict[str, Any]]  # Additional error context
+
+    # === AUDIT CHAIN ===
+    audit_workflow_id: UUID

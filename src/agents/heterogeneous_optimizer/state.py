@@ -5,6 +5,7 @@ This module defines the LangGraph state structure for segment-level CATE analysi
 
 import operator
 from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
+from uuid import UUID
 
 
 class CATEResult(TypedDict):
@@ -175,6 +176,9 @@ class HeterogeneousOptimizerState(TypedDict):
     ]]
     routing_confidence: Optional[float]  # Confidence in library routing decision
     routing_rationale: Optional[str]  # Why this library routing was chosen
+
+    # Audit chain (tamper-evident logging)
+    audit_workflow_id: Optional[UUID]
 
 
 class HeterogeneousOptimizerInput(TypedDict):

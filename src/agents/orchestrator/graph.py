@@ -1,16 +1,22 @@
 """LangGraph workflow for orchestrator agent.
 
 Linear flow optimized for speed:
-    [classify] → [rag_context] → [route] → [dispatch] → [synthesize] → END
+    [audit_init] → [classify] → [rag_context] → [route] → [dispatch] → [synthesize] → END
 
 Total latency target: <2 seconds for orchestration overhead
 (excluding agent execution time)
+
+Observability:
+- Audit chain recording for tamper-evident logging
 """
 
 from typing import Any, Dict, Optional
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
+
+from src.agents.base.audit_chain_mixin import create_workflow_initializer
+from src.utils.audit_chain import AgentTier
 
 from .nodes import (
     classify_intent,
@@ -30,10 +36,10 @@ def create_orchestrator_graph(
     """Build the Orchestrator agent graph.
 
     Architecture (with RAG enabled):
-        [classify] → [rag_context] → [route] → [dispatch] → [synthesize] → END
+        [audit_init] → [classify] → [rag_context] → [route] → [dispatch] → [synthesize] → END
 
     Architecture (with RAG disabled):
-        [classify] → [route] → [dispatch] → [synthesize] → END
+        [audit_init] → [classify] → [route] → [dispatch] → [synthesize] → END
 
     Total latency target: <2 seconds for classification + routing
     (Agent execution time is additional)
@@ -46,8 +52,14 @@ def create_orchestrator_graph(
     Returns:
         Compiled StateGraph
     """
+    # Create audit workflow initializer
+    audit_initializer = create_workflow_initializer("orchestrator", AgentTier.COORDINATION)
+
     # Build graph
     workflow = StateGraph(OrchestratorState)
+
+    # Add audit init node
+    workflow.add_node("audit_init", audit_initializer)
 
     # Add nodes
     workflow.add_node("classify", classify_intent)
@@ -73,8 +85,11 @@ def create_orchestrator_graph(
 
     workflow.add_node("synthesize", synthesize_response)
 
-    # Linear flow (no conditionals for speed)
-    workflow.set_entry_point("classify")
+    # Linear flow (no conditionals for speed) - start with audit_init
+    workflow.set_entry_point("audit_init")
+
+    # Edge from audit_init to classify
+    workflow.add_edge("audit_init", "classify")
 
     if enable_rag:
         workflow.add_edge("classify", "rag_context")

@@ -16,6 +16,9 @@ from typing import Any, Dict, Optional
 
 from langgraph.graph import END, StateGraph
 
+from src.agents.base.audit_chain_mixin import create_workflow_initializer
+from src.utils.audit_chain import AgentTier
+
 from .dspy_integration import (
     FeedbackLearnerCognitiveContext,
     FeedbackLearnerTrainingSignal,
@@ -44,10 +47,10 @@ def build_feedback_learner_graph(
     Build the Feedback Learner agent graph with DSPy integration.
 
     Architecture (with rubric evaluation enabled):
-        [enrich] → [collect] → [analyze] → [rubric] → [extract] → [update] → [finalize] → END
+        [audit_init] → [enrich] → [collect] → [analyze] → [rubric] → [extract] → [update] → [finalize] → END
 
     Architecture (without rubric evaluation):
-        [enrich] → [collect] → [analyze] → [extract] → [update] → [finalize] → END
+        [audit_init] → [enrich] → [collect] → [analyze] → [extract] → [update] → [finalize] → END
 
     Args:
         feedback_store: Store for user feedback
@@ -62,6 +65,11 @@ def build_feedback_learner_graph(
     Returns:
         Compiled LangGraph workflow
     """
+    # Create audit workflow initializer
+    audit_initializer = create_workflow_initializer(
+        "feedback_learner", AgentTier.SELF_IMPROVEMENT
+    )
+
     # Initialize nodes
     collector = FeedbackCollectorNode(feedback_store, outcome_store)
     analyzer = PatternAnalyzerNode(use_llm=use_llm, llm=llm)
@@ -77,6 +85,7 @@ def build_feedback_learner_graph(
         return await _cognitive_context_enricher(state, cognitive_rag)
 
     # Add nodes
+    workflow.add_node("audit_init", audit_initializer)  # Initialize audit chain
     workflow.add_node("enrich", enrich_node)
     workflow.add_node("collect", collector.execute)
     workflow.add_node("analyze", analyzer.execute)
@@ -87,8 +96,11 @@ def build_feedback_learner_graph(
     workflow.add_node("finalize", _finalize_training_signal)
     workflow.add_node("error_handler", _error_handler_node)
 
-    # Flow - start with cognitive enrichment
-    workflow.set_entry_point("enrich")
+    # Flow - start with audit initialization
+    workflow.set_entry_point("audit_init")
+
+    # Audit init proceeds to cognitive enrichment
+    workflow.add_edge("audit_init", "enrich")
 
     # Enrich always proceeds to collect
     workflow.add_edge("enrich", "collect")
