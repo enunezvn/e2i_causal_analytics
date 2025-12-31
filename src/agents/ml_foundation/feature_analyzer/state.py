@@ -188,3 +188,49 @@ class FeatureAnalyzerState(TypedDict, total=False):
 
     # === AUDIT CHAIN ===
     audit_workflow_id: UUID
+
+    # === DISCOVERY INTEGRATION (V4.4) ===
+    # Configuration for causal discovery integration
+
+    discovery_enabled: bool  # Enable causal discovery (default: False)
+    discovery_config: Dict[str, Any]  # DiscoveryConfig as dict
+    # Keys: algorithms, alpha, min_votes, max_cond_vars, ensemble_method, etc.
+
+    # Discovery results from DiscoveryRunner
+    discovery_result: Dict[str, Any]  # DiscoveryResult as dict
+    # Keys: ensemble_dag, algorithm_results, edges, n_edges, metadata, success
+
+    # Gate evaluation from DiscoveryGate
+    discovery_gate_decision: str  # "accept" | "review" | "reject" | "augment"
+    discovery_gate_confidence: float  # Overall confidence [0, 1]
+    discovery_gate_reasons: List[str]  # Reasons for decision
+
+    # === CAUSAL RANKING (V4.4) ===
+    # Comparison of causal vs predictive feature importance
+
+    # Target variable for causal analysis
+    causal_target_variable: str  # Target for causal path analysis
+
+    # Rankings from DriverRanker
+    causal_rankings: List[Dict[str, Any]]  # List of FeatureRanking dicts
+    # Each dict: feature_name, causal_rank, predictive_rank, causal_score,
+    #            predictive_score, rank_difference, is_direct_cause, path_length
+
+    # Rank correlation
+    rank_correlation: float  # Spearman correlation between causal & predictive ranks
+
+    # Feature categorization
+    divergent_features: List[str]  # Features with |rank_difference| > threshold
+    causal_only_features: List[str]  # Features with causal but no predictive signal
+    predictive_only_features: List[str]  # Features with predictive but no causal signal
+    concordant_features: List[str]  # Features with similar causal & predictive ranks
+
+    # Causal-specific importance
+    causal_importance: Dict[str, float]  # {"feature_name": causal_importance_score}
+    causal_importance_ranked: List[Tuple[str, float]]  # Sorted by causal importance
+
+    # Direct causes (features with direct edge to target)
+    direct_cause_features: List[str]  # Features that are direct causes of target
+
+    # Causal interpretation (from NL node)
+    causal_interpretation: str  # NL explanation of causal vs predictive comparison
