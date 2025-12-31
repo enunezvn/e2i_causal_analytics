@@ -25,7 +25,13 @@ import pandas as pd
 from loguru import logger
 from numpy.typing import NDArray
 
-from .algorithms import FCIAlgorithm, GESAlgorithm, PCAlgorithm
+from .algorithms import (
+    DirectLiNGAMAlgorithm,
+    FCIAlgorithm,
+    GESAlgorithm,
+    ICALiNGAMAlgorithm,
+    PCAlgorithm,
+)
 from .base import (
     AlgorithmResult,
     BaseDiscoveryAlgorithm,
@@ -61,6 +67,8 @@ class DiscoveryRunner:
         DiscoveryAlgorithmType.GES: GESAlgorithm,
         DiscoveryAlgorithmType.PC: PCAlgorithm,
         DiscoveryAlgorithmType.FCI: FCIAlgorithm,
+        DiscoveryAlgorithmType.DIRECT_LINGAM: DirectLiNGAMAlgorithm,
+        DiscoveryAlgorithmType.ICA_LINGAM: ICALiNGAMAlgorithm,
     }
 
     def __init__(
