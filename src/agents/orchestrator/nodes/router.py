@@ -2,11 +2,13 @@
 
 Fast routing decisions based on intent classification.
 No LLM calls - pure logic.
+
+V4.4: Added discovery routing to pass DAG data to discovery-aware agents.
 """
 
 import time
 from collections import defaultdict
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from ..state import AgentDispatch, OrchestratorState
 
@@ -15,10 +17,20 @@ class RouterNode:
     """Fast routing decisions based on intent classification.
 
     No LLM calls - pure logic.
+
+    V4.4: Added discovery routing to pass DAG data to discovery-aware agents.
     """
 
     # Priority mapping: critical > high > medium > low
     PRIORITY_ORDER = {"critical": 1, "high": 2, "medium": 3, "low": 4}
+
+    # V4.4: Agents that can use discovered DAG for validation
+    DISCOVERY_AWARE_AGENTS = [
+        "causal_impact",
+        "gap_analyzer",
+        "heterogeneous_optimizer",
+        "experiment_designer",
+    ]
 
     # Agent capabilities mapping
     INTENT_TO_AGENTS = {
@@ -176,6 +188,16 @@ class RouterNode:
                     )
                 ]
 
+        # V4.4: Apply discovery routing to enhance dispatch parameters
+        discovery_routing_applied = False
+        discovery_aware_agents: List[str] = []
+
+        if self._should_apply_discovery_routing(state):
+            dispatch_plan, discovery_aware_agents = self._enhance_with_discovery_data(
+                dispatch_plan, state
+            )
+            discovery_routing_applied = len(discovery_aware_agents) > 0
+
         routing_time = int((time.time() - start_time) * 1000)
 
         return {
@@ -184,6 +206,9 @@ class RouterNode:
             "parallel_groups": parallel_groups or [[d["agent_name"] for d in dispatch_plan]],
             "routing_latency_ms": routing_time,
             "current_phase": "dispatching",
+            # V4.4: Discovery routing metadata
+            "discovery_routing_applied": discovery_routing_applied,
+            "discovery_aware_agents": discovery_aware_agents if discovery_aware_agents else None,
         }
 
     def _default_routing(self, state: OrchestratorState, start_time: float) -> OrchestratorState:
@@ -254,6 +279,107 @@ class RouterNode:
             groups[d["priority"]].append(d["agent_name"])
         # Sort by priority order: critical=1, high=2, medium=3, low=4
         return [groups[p] for p in sorted(groups.keys(), key=lambda x: self.PRIORITY_ORDER.get(x, 99))]
+
+    # ========================================================================
+    # V4.4: Discovery Routing Methods
+    # ========================================================================
+
+    def _should_apply_discovery_routing(self, state: OrchestratorState) -> bool:
+        """Check if discovery routing should be applied.
+
+        Discovery routing is applied when:
+        1. enable_discovery is True OR propagate_discovered_dag is True
+        2. Gate decision is NOT 'reject'
+
+        Args:
+            state: Current orchestrator state
+
+        Returns:
+            True if discovery routing should be applied
+        """
+        # Check if discovery is enabled or DAG propagation is requested
+        enable_discovery = state.get("enable_discovery", False)
+        propagate_dag = state.get("propagate_discovered_dag", False)
+
+        if not (enable_discovery or propagate_dag):
+            return False
+
+        # Check gate decision - reject means don't use DAG
+        gate_decision = state.get("discovery_gate_decision")
+        if gate_decision == "reject":
+            return False
+
+        return True
+
+    def _enhance_with_discovery_data(
+        self,
+        dispatch_plan: List[AgentDispatch],
+        state: OrchestratorState,
+    ) -> tuple[List[AgentDispatch], List[str]]:
+        """Enhance dispatch parameters with discovery data for discovery-aware agents.
+
+        Args:
+            dispatch_plan: Current dispatch plan
+            state: Current orchestrator state with discovery data
+
+        Returns:
+            Tuple of (enhanced dispatch plan, list of agents that received DAG data)
+        """
+        enhanced_plan: List[AgentDispatch] = []
+        discovery_aware_agents: List[str] = []
+
+        # Extract discovery data from state
+        discovery_config = state.get("discovery_config")
+        dag_adjacency = state.get("discovered_dag_adjacency")
+        dag_nodes = state.get("discovered_dag_nodes")
+        dag_edge_types = state.get("discovered_dag_edge_types")
+        gate_decision = state.get("discovery_gate_decision")
+        gate_confidence = state.get("discovery_gate_confidence")
+
+        # Check if we have DAG data to propagate
+        has_dag_data = dag_adjacency is not None and dag_nodes is not None
+
+        for dispatch in dispatch_plan:
+            agent_name = dispatch.get("agent_name", "")
+
+            # Check if this agent is discovery-aware
+            if agent_name in self.DISCOVERY_AWARE_AGENTS:
+                # Create enhanced parameters
+                enhanced_params = dict(dispatch.get("parameters", {}))
+
+                # Add discovery config if available
+                if discovery_config:
+                    enhanced_params["discovery_config"] = discovery_config
+
+                # Add DAG data if available and propagation is enabled
+                if has_dag_data and state.get("propagate_discovered_dag", True):
+                    enhanced_params["discovered_dag_adjacency"] = dag_adjacency
+                    enhanced_params["discovered_dag_nodes"] = dag_nodes
+                    if dag_edge_types:
+                        enhanced_params["discovered_dag_edge_types"] = dag_edge_types
+
+                    # Add gate decision for validation
+                    if gate_decision:
+                        enhanced_params["discovery_gate_decision"] = gate_decision
+                    if gate_confidence is not None:
+                        enhanced_params["discovery_gate_confidence"] = gate_confidence
+
+                    discovery_aware_agents.append(agent_name)
+
+                # Create enhanced dispatch
+                enhanced_dispatch = AgentDispatch(
+                    agent_name=agent_name,
+                    priority=dispatch.get("priority", "medium"),
+                    parameters=enhanced_params,
+                    timeout_ms=dispatch.get("timeout_ms", 30000),
+                    fallback_agent=dispatch.get("fallback_agent"),
+                )
+                enhanced_plan.append(enhanced_dispatch)
+            else:
+                # Non-discovery-aware agent, keep original dispatch
+                enhanced_plan.append(dispatch)
+
+        return enhanced_plan, discovery_aware_agents
 
 
 # Export for use in graph

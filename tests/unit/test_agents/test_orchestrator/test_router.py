@@ -536,3 +536,426 @@ class TestIntentToAgentMapping:
             assert all(
                 p in valid_priorities for p in priorities
             ), f"Invalid priority in pattern {pattern}"
+
+
+# ============================================================================
+# V4.4: Discovery Routing Tests
+# ============================================================================
+
+
+class TestShouldApplyDiscoveryRouting:
+    """Test _should_apply_discovery_routing method."""
+
+    def test_apply_when_enable_discovery_true(self):
+        """Should apply discovery routing when enable_discovery is True."""
+        router = RouterNode()
+
+        state = {"enable_discovery": True}
+        assert router._should_apply_discovery_routing(state) is True
+
+    def test_apply_when_propagate_dag_true(self):
+        """Should apply discovery routing when propagate_discovered_dag is True."""
+        router = RouterNode()
+
+        state = {"propagate_discovered_dag": True}
+        assert router._should_apply_discovery_routing(state) is True
+
+    def test_not_apply_when_both_false(self):
+        """Should not apply discovery routing when both flags are False."""
+        router = RouterNode()
+
+        state = {"enable_discovery": False, "propagate_discovered_dag": False}
+        assert router._should_apply_discovery_routing(state) is False
+
+    def test_not_apply_when_missing(self):
+        """Should not apply discovery routing when flags are missing."""
+        router = RouterNode()
+
+        state = {}
+        assert router._should_apply_discovery_routing(state) is False
+
+    def test_not_apply_when_gate_rejected(self):
+        """Should not apply discovery routing when gate decision is reject."""
+        router = RouterNode()
+
+        state = {
+            "enable_discovery": True,
+            "discovery_gate_decision": "reject",
+        }
+        assert router._should_apply_discovery_routing(state) is False
+
+    def test_apply_when_gate_accept(self):
+        """Should apply discovery routing when gate decision is accept."""
+        router = RouterNode()
+
+        state = {
+            "enable_discovery": True,
+            "discovery_gate_decision": "accept",
+        }
+        assert router._should_apply_discovery_routing(state) is True
+
+    def test_apply_when_gate_review(self):
+        """Should apply discovery routing when gate decision is review."""
+        router = RouterNode()
+
+        state = {
+            "enable_discovery": True,
+            "discovery_gate_decision": "review",
+        }
+        assert router._should_apply_discovery_routing(state) is True
+
+    def test_apply_when_gate_augment(self):
+        """Should apply discovery routing when gate decision is augment."""
+        router = RouterNode()
+
+        state = {
+            "enable_discovery": True,
+            "discovery_gate_decision": "augment",
+        }
+        assert router._should_apply_discovery_routing(state) is True
+
+
+class TestEnhanceWithDiscoveryData:
+    """Test _enhance_with_discovery_data method."""
+
+    @pytest.fixture
+    def sample_dag_adjacency(self):
+        """Sample DAG adjacency matrix."""
+        return [[0, 1, 0], [0, 0, 1], [0, 0, 0]]
+
+    @pytest.fixture
+    def sample_dag_nodes(self):
+        """Sample DAG nodes."""
+        return ["treatment", "segment", "outcome"]
+
+    @pytest.fixture
+    def sample_state(self, sample_dag_adjacency, sample_dag_nodes):
+        """Sample state with discovery data."""
+        return {
+            "enable_discovery": True,
+            "propagate_discovered_dag": True,
+            "discovery_config": {"algorithms": ["ges", "pc"], "threshold": 0.5},
+            "discovered_dag_adjacency": sample_dag_adjacency,
+            "discovered_dag_nodes": sample_dag_nodes,
+            "discovered_dag_edge_types": {"treatment->segment": "DIRECTED"},
+            "discovery_gate_decision": "accept",
+            "discovery_gate_confidence": 0.85,
+        }
+
+    def test_enhance_discovery_aware_agent(self, sample_state):
+        """Should enhance discovery-aware agent with DAG data."""
+        router = RouterNode()
+
+        dispatch_plan = [
+            {
+                "agent_name": "causal_impact",
+                "priority": "critical",
+                "parameters": {"interpretation_depth": "standard"},
+                "timeout_ms": 30000,
+                "fallback_agent": "explainer",
+            }
+        ]
+
+        enhanced, aware_agents = router._enhance_with_discovery_data(
+            dispatch_plan, sample_state
+        )
+
+        assert len(enhanced) == 1
+        assert enhanced[0]["agent_name"] == "causal_impact"
+        assert "discovered_dag_adjacency" in enhanced[0]["parameters"]
+        assert "discovered_dag_nodes" in enhanced[0]["parameters"]
+        assert "discovery_gate_decision" in enhanced[0]["parameters"]
+        assert enhanced[0]["parameters"]["discovery_gate_confidence"] == 0.85
+        assert "causal_impact" in aware_agents
+
+    def test_preserve_existing_parameters(self, sample_state):
+        """Should preserve existing agent parameters."""
+        router = RouterNode()
+
+        dispatch_plan = [
+            {
+                "agent_name": "causal_impact",
+                "priority": "critical",
+                "parameters": {"interpretation_depth": "deep", "custom": "value"},
+                "timeout_ms": 30000,
+                "fallback_agent": "explainer",
+            }
+        ]
+
+        enhanced, _ = router._enhance_with_discovery_data(dispatch_plan, sample_state)
+
+        assert enhanced[0]["parameters"]["interpretation_depth"] == "deep"
+        assert enhanced[0]["parameters"]["custom"] == "value"
+
+    def test_non_discovery_aware_agent_unchanged(self, sample_state):
+        """Should not modify non-discovery-aware agents."""
+        router = RouterNode()
+
+        dispatch_plan = [
+            {
+                "agent_name": "health_score",
+                "priority": "critical",
+                "parameters": {},
+                "timeout_ms": 5000,
+                "fallback_agent": None,
+            }
+        ]
+
+        enhanced, aware_agents = router._enhance_with_discovery_data(
+            dispatch_plan, sample_state
+        )
+
+        assert len(enhanced) == 1
+        assert "discovered_dag_adjacency" not in enhanced[0]["parameters"]
+        assert aware_agents == []
+
+    def test_multiple_discovery_aware_agents(self, sample_state):
+        """Should enhance multiple discovery-aware agents."""
+        router = RouterNode()
+
+        dispatch_plan = [
+            {
+                "agent_name": "causal_impact",
+                "priority": "critical",
+                "parameters": {},
+                "timeout_ms": 30000,
+                "fallback_agent": None,
+            },
+            {
+                "agent_name": "heterogeneous_optimizer",
+                "priority": "high",
+                "parameters": {},
+                "timeout_ms": 25000,
+                "fallback_agent": None,
+            },
+        ]
+
+        enhanced, aware_agents = router._enhance_with_discovery_data(
+            dispatch_plan, sample_state
+        )
+
+        assert len(enhanced) == 2
+        assert set(aware_agents) == {"causal_impact", "heterogeneous_optimizer"}
+        assert "discovered_dag_adjacency" in enhanced[0]["parameters"]
+        assert "discovered_dag_adjacency" in enhanced[1]["parameters"]
+
+    def test_no_dag_data_only_config(self):
+        """Should add discovery_config even without DAG data."""
+        router = RouterNode()
+
+        state = {
+            "enable_discovery": True,
+            "propagate_discovered_dag": True,
+            "discovery_config": {"algorithms": ["ges"]},
+        }
+
+        dispatch_plan = [
+            {
+                "agent_name": "gap_analyzer",
+                "priority": "critical",
+                "parameters": {},
+                "timeout_ms": 20000,
+                "fallback_agent": None,
+            }
+        ]
+
+        enhanced, aware_agents = router._enhance_with_discovery_data(
+            dispatch_plan, state
+        )
+
+        assert "discovery_config" in enhanced[0]["parameters"]
+        # No DAG data, so not in aware_agents
+        assert aware_agents == []
+
+    def test_discovery_aware_agents_list(self):
+        """Should correctly identify all discovery-aware agents."""
+        router = RouterNode()
+
+        expected_agents = [
+            "causal_impact",
+            "gap_analyzer",
+            "heterogeneous_optimizer",
+            "experiment_designer",
+        ]
+
+        assert router.DISCOVERY_AWARE_AGENTS == expected_agents
+
+
+class TestDiscoveryRoutingIntegration:
+    """Integration tests for discovery routing in execute method."""
+
+    @pytest.fixture
+    def sample_dag_adjacency(self):
+        """Sample DAG adjacency matrix."""
+        return [[0, 1, 0], [0, 0, 1], [0, 0, 0]]
+
+    @pytest.fixture
+    def sample_dag_nodes(self):
+        """Sample DAG nodes."""
+        return ["treatment", "segment", "outcome"]
+
+    @pytest.mark.asyncio
+    async def test_discovery_routing_applied_for_causal_effect(
+        self, sample_dag_adjacency, sample_dag_nodes
+    ):
+        """Should apply discovery routing for causal_effect intent."""
+        router = RouterNode()
+
+        state = {
+            "intent": {
+                "primary_intent": "causal_effect",
+                "confidence": 0.95,
+                "secondary_intents": [],
+                "requires_multi_agent": False,
+            },
+            "enable_discovery": True,
+            "propagate_discovered_dag": True,
+            "discovered_dag_adjacency": sample_dag_adjacency,
+            "discovered_dag_nodes": sample_dag_nodes,
+            "discovery_gate_decision": "accept",
+            "discovery_gate_confidence": 0.85,
+        }
+
+        result = await router.execute(state)
+
+        assert result["discovery_routing_applied"] is True
+        assert result["discovery_aware_agents"] == ["causal_impact"]
+        assert "discovered_dag_adjacency" in result["dispatch_plan"][0]["parameters"]
+
+    @pytest.mark.asyncio
+    async def test_discovery_routing_not_applied_for_non_aware_agent(
+        self, sample_dag_adjacency, sample_dag_nodes
+    ):
+        """Should not apply discovery routing for non-discovery-aware agents."""
+        router = RouterNode()
+
+        state = {
+            "intent": {
+                "primary_intent": "system_health",
+                "confidence": 0.95,
+                "secondary_intents": [],
+                "requires_multi_agent": False,
+            },
+            "enable_discovery": True,
+            "propagate_discovered_dag": True,
+            "discovered_dag_adjacency": sample_dag_adjacency,
+            "discovered_dag_nodes": sample_dag_nodes,
+            "discovery_gate_decision": "accept",
+        }
+
+        result = await router.execute(state)
+
+        assert result["discovery_routing_applied"] is False
+        assert result["discovery_aware_agents"] is None
+
+    @pytest.mark.asyncio
+    async def test_discovery_routing_skipped_on_reject(
+        self, sample_dag_adjacency, sample_dag_nodes
+    ):
+        """Should skip discovery routing when gate is rejected."""
+        router = RouterNode()
+
+        state = {
+            "intent": {
+                "primary_intent": "causal_effect",
+                "confidence": 0.95,
+                "secondary_intents": [],
+                "requires_multi_agent": False,
+            },
+            "enable_discovery": True,
+            "propagate_discovered_dag": True,
+            "discovered_dag_adjacency": sample_dag_adjacency,
+            "discovered_dag_nodes": sample_dag_nodes,
+            "discovery_gate_decision": "reject",
+        }
+
+        result = await router.execute(state)
+
+        assert result["discovery_routing_applied"] is False
+        assert "discovered_dag_adjacency" not in result["dispatch_plan"][0]["parameters"]
+
+    @pytest.mark.asyncio
+    async def test_multi_agent_discovery_routing(
+        self, sample_dag_adjacency, sample_dag_nodes
+    ):
+        """Should apply discovery routing to multiple discovery-aware agents."""
+        router = RouterNode()
+
+        state = {
+            "intent": {
+                "primary_intent": "causal_effect",
+                "confidence": 0.90,
+                "secondary_intents": ["segment_analysis"],
+                "requires_multi_agent": True,
+            },
+            "enable_discovery": True,
+            "propagate_discovered_dag": True,
+            "discovered_dag_adjacency": sample_dag_adjacency,
+            "discovered_dag_nodes": sample_dag_nodes,
+            "discovery_gate_decision": "accept",
+        }
+
+        result = await router.execute(state)
+
+        assert result["discovery_routing_applied"] is True
+        # Both causal_impact and heterogeneous_optimizer are discovery-aware
+        assert set(result["discovery_aware_agents"]) == {
+            "causal_impact",
+            "heterogeneous_optimizer",
+        }
+
+    @pytest.mark.asyncio
+    async def test_discovery_routing_with_no_dag_data(self):
+        """Should handle discovery routing without DAG data."""
+        router = RouterNode()
+
+        state = {
+            "intent": {
+                "primary_intent": "segment_analysis",
+                "confidence": 0.88,
+                "secondary_intents": [],
+                "requires_multi_agent": False,
+            },
+            "enable_discovery": True,
+            "discovery_config": {"algorithms": ["ges"]},
+        }
+
+        result = await router.execute(state)
+
+        # Discovery routing applied but no agents received DAG
+        assert result["discovery_routing_applied"] is False
+        assert "discovery_config" in result["dispatch_plan"][0]["parameters"]
+
+    @pytest.mark.asyncio
+    async def test_experiment_designer_receives_dag(
+        self, sample_dag_adjacency, sample_dag_nodes
+    ):
+        """Should pass DAG data to experiment_designer agent."""
+        router = RouterNode()
+
+        state = {
+            "intent": {
+                "primary_intent": "experiment_design",
+                "confidence": 0.90,
+                "secondary_intents": [],
+                "requires_multi_agent": False,
+            },
+            "enable_discovery": True,
+            "propagate_discovered_dag": True,
+            "discovered_dag_adjacency": sample_dag_adjacency,
+            "discovered_dag_nodes": sample_dag_nodes,
+            "discovered_dag_edge_types": {"treatment<->segment": "BIDIRECTED"},
+            "discovery_gate_decision": "accept",
+            "discovery_gate_confidence": 0.80,
+        }
+
+        result = await router.execute(state)
+
+        assert result["discovery_routing_applied"] is True
+        assert "experiment_designer" in result["discovery_aware_agents"]
+        params = result["dispatch_plan"][0]["parameters"]
+        assert params["discovered_dag_adjacency"] == sample_dag_adjacency
+        assert params["discovered_dag_nodes"] == sample_dag_nodes
+        assert params["discovered_dag_edge_types"] == {"treatment<->segment": "BIDIRECTED"}
+        assert params["discovery_gate_decision"] == "accept"
+        assert params["discovery_gate_confidence"] == 0.80
