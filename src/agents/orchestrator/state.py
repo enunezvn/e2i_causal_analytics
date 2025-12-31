@@ -168,6 +168,28 @@ class OrchestratorState(TypedDict, total=False):
     routing_latency_ms: int
 
     # ========================================================================
+    # V4.4: CAUSAL DISCOVERY ROUTING
+    # ========================================================================
+
+    # Discovery configuration (input from user or NLP layer)
+    enable_discovery: bool  # Whether to enable DAG structure learning
+    discovery_config: Optional[Dict[str, Any]]  # algorithms, thresholds, etc.
+
+    # Discovery result propagation (from upstream discovery or Feature Analyzer)
+    propagate_discovered_dag: bool  # Whether to pass DAG to downstream agents
+    discovered_dag_adjacency: Optional[List[List[int]]]  # Adjacency matrix
+    discovered_dag_nodes: Optional[List[str]]  # Node names
+    discovered_dag_edge_types: Optional[Dict[str, str]]  # Edge types (DIRECTED, BIDIRECTED)
+
+    # Gate decision (from discovery module)
+    discovery_gate_decision: Optional[Literal["accept", "review", "reject", "augment"]]
+    discovery_gate_confidence: Optional[float]  # Gate confidence [0, 1]
+
+    # Discovery-aware routing metadata
+    discovery_routing_applied: bool  # Whether discovery routing was applied
+    discovery_aware_agents: Optional[List[str]]  # Agents that received DAG data
+
+    # ========================================================================
     # NODE 2.5 OUTPUT: Library Routing (B7.4 Multi-Library Support)
     # ========================================================================
 
