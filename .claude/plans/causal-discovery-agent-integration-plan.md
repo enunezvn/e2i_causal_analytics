@@ -3,7 +3,7 @@
 **Version**: 1.1.0
 **Created**: 2025-12-31
 **Updated**: 2025-12-31
-**Status**: Wave 1 COMPLETE ✅ | Wave 2 COMPLETE ✅ | Wave 3 Ready for Implementation
+**Status**: Wave 1 COMPLETE ✅ | Wave 2 COMPLETE ✅ | Wave 3 COMPLETE ✅
 **Feature**: Causal-vs-Predictive Ranking with Structure Learning (GES/PC/FCI/LiNGAM)
 
 ---
@@ -48,12 +48,15 @@ This plan integrates the new causal discovery module (`src/causal_engine/discove
 | Tier 3 Contracts | `.claude/contracts/tier3-contracts.md` | ✅ V1.1 with structural drift + DAG validity |
 | Drift Monitor | `src/agents/drift_monitor/nodes/structural_drift_detector.py` | ✅ V4.4 structural drift detection |
 
-### Needs Updates (Wave 3)
-| Component | File | Priority |
-|-----------|------|----------|
-| Integration Contracts | `.claude/contracts/integration-contracts.md` | MEDIUM |
-| Orchestrator Routing | `src/agents/orchestrator/graph.py` | MEDIUM |
-| Explainer Nodes | `src/agents/explainer/nodes/` | MEDIUM |
+### Completed (Wave 3) ✅
+| Component | File | Status |
+|-----------|------|--------|
+| Integration Contracts | `.claude/contracts/integration-contracts.md` | ✅ V4.4 Discovery Contract |
+| Orchestrator Routing | `src/agents/orchestrator/nodes/router.py` | ✅ V4.4 Discovery Routing |
+| Orchestrator State | `src/agents/orchestrator/state.py` | ✅ V4.4 Discovery Fields |
+| Explainer Narrator | `src/agents/explainer/nodes/narrative_generator.py` | ✅ V4.4 Causal Discovery Section |
+| Explainer State | `src/agents/explainer/state.py` | ✅ V4.4 Discovery Fields |
+| Drift Monitor | `src/agents/drift_monitor/nodes/structural_drift_detector.py` | ✅ V4.4 Structural Drift |
 
 ---
 
@@ -68,9 +71,10 @@ This plan integrates the new causal discovery module (`src/causal_engine/discove
 **Actual Tests**: 222 tests passed (2025-12-31)
 **Status**: COMPLETE ✅
 
-### Wave 3: MEDIUM - Supporting Integration (Orchestrator + Explainer + Drift Monitor)
+### Wave 3: MEDIUM - Supporting Integration (Orchestrator + Explainer + Drift Monitor) ✅ COMPLETE
 **Estimated Tests**: ~26 tests in 3 batches
-**Status**: Ready for Implementation
+**Actual Tests**: 98 tests passed (2025-12-31)
+**Status**: COMPLETE ✅
 
 ---
 
