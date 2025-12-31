@@ -280,3 +280,24 @@ class ExperimentDesignState(TypedDict):
 
     # ===== Audit Chain =====
     audit_workflow_id: NotRequired[Optional[UUID]]
+
+    # ========================================================================
+    # V4.4: Causal Discovery Integration
+    # ========================================================================
+
+    # Discovered DAG from causal discovery module
+    discovered_dag_adjacency: NotRequired[list[list[int]]]  # Adjacency matrix
+    discovered_dag_nodes: NotRequired[list[str]]  # Node names
+    discovered_dag_edge_types: NotRequired[dict[str, str]]  # Edge types (DIRECTED, BIDIRECTED, UNDIRECTED)
+
+    # Discovery gate decision
+    discovery_gate_decision: NotRequired[Literal["accept", "review", "reject", "augment"]]
+    discovery_gate_confidence: NotRequired[float]  # Gate confidence [0, 1]
+
+    # DAG-aware validity enhancements
+    dag_confounders_validated: NotRequired[list[str]]  # Confounders in DAG that need control
+    dag_missing_confounders: NotRequired[list[str]]  # Assumed confounders NOT in DAG
+    dag_latent_confounders: NotRequired[list[str]]  # Latent confounders from FCI bidirected edges
+    dag_instrument_candidates: NotRequired[list[str]]  # Valid IV candidates from DAG
+    dag_effect_modifiers: NotRequired[list[str]]  # Effect modifiers identified from DAG
+    dag_validation_warnings: NotRequired[list[str]]  # Warnings from DAG validation

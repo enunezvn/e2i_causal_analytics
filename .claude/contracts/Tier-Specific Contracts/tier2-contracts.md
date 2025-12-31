@@ -394,22 +394,36 @@ class PolicyRecommendation(BaseModel):
 
 class HeterogeneousOptimizerOutput(BaseAgentOutput):
     """Output contract for Heterogeneous Optimizer Agent"""
-    
+
     # CATE results
     cate_result: CATEResult
-    
+
     # Segment profiles
     high_responders: List[SegmentProfile]
     low_responders: List[SegmentProfile]
     all_segments: List[SegmentProfile]
-    
+
     # Policy recommendations
     policy_recommendations: List[PolicyRecommendation]
     expected_total_lift: float
-    
+
     # Summary
     summary: str
     key_effect_modifiers: List[str]
+
+    # V4.4: DAG Validation Outputs
+    dag_validated_segments: Optional[List[str]] = Field(
+        None, description="Segments with valid causal paths in discovered DAG"
+    )
+    dag_invalid_segments: Optional[List[str]] = Field(
+        None, description="Segments without causal paths (use with caution)"
+    )
+    latent_confounder_segments: Optional[List[str]] = Field(
+        None, description="Segments with bidirected edges (latent confounders)"
+    )
+    dag_validation_warnings: Optional[List[str]] = Field(
+        None, description="Warnings from DAG validation"
+    )
 ```
 
 ### Handoff Format
@@ -418,31 +432,39 @@ class HeterogeneousOptimizerOutput(BaseAgentOutput):
 heterogeneous_optimizer_handoff:
   agent: heterogeneous_optimizer
   analysis_type: cate_estimation
-  
+
   key_findings:
     - ate: <overall effect>
     - heterogeneity_score: <0-1>
     - high_responders: <count>
     - low_responders: <count>
-  
+
   top_effect_modifiers:
     - feature: <name>
       importance: <value>
-  
+
   segment_profiles:
     high_responders:
       - segment: <name>
         cate: <value>
         size: <percentage>%
         defining_features: {<feature>: <value>}
-  
+
   policy_recommendation:
     expected_lift: <value>
     allocation_changes:
       - segment: <name>
         current: <rate>
         recommended: <rate>
-  
+
+  # V4.4: DAG Validation Results (if discovered DAG available)
+  dag_validation:
+    enabled: <bool>
+    validated_segments: <count>
+    invalid_segments: <count>
+    latent_confounder_segments: <count>
+    warnings: [<list of warnings>]
+
   requires_further_analysis: <bool>
   suggested_next_agent: experiment_designer|explainer
 ```
@@ -709,6 +731,14 @@ class HeterogeneousOptimizationTrainingSignal:
     best_responder_segment: str = ""
     worst_responder_segment: str = ""
 
+    # === V4.4: DAG Validation Phase ===
+    dag_validation_enabled: bool = False
+    dag_validated_segments: int = 0
+    dag_invalid_segments: int = 0
+    latent_confounder_segments: int = 0
+    dag_gate_decision: str = ""  # accept, review, reject, augment
+    dag_validation_warnings: int = 0
+
     # === Policy Learning Phase ===
     policy_rules_generated: int = 0
     expected_policy_value: float = 0.0
@@ -723,10 +753,11 @@ class HeterogeneousOptimizationTrainingSignal:
         """
         Compute reward for MIPROv2 optimization.
 
-        Weighting:
-        - segmentation_quality: 0.30 (significant / total segments)
+        Weighting (V4.4 Updated):
+        - segmentation_quality: 0.25 (significant / total segments)
         - cate_precision: 0.25 (heterogeneity + confidence)
-        - policy_value: 0.20 (expected value + rules)
+        - dag_validation_quality: 0.10 (validated segments ratio)
+        - policy_value: 0.15 (expected value + rules)
         - efficiency: 0.15 (latency)
         - user_satisfaction: 0.10 (if available)
         """
@@ -938,6 +969,7 @@ signal_flow:
 
 | Date | Change |
 |------|--------|
+| 2025-12-31 | V4.4.1: Added DAG Validation outputs for Heterogeneous Optimizer |
 | 2025-12-30 | V4.4: Added Discovery Phase contracts |
 | 2025-12-26 | V4.2: Added Energy Score Enhancement contracts |
 | 2025-12-23 | V5: Added DSPy Sender role specification |
