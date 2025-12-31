@@ -6,13 +6,15 @@ Follows contracts defined in .claude/contracts/tier3-contracts.md (lines 349-562
 Tier: 3 (Monitoring)
 Agent Type: Standard (Fast Path)
 Performance Target: <10s for 50 features
+
+V4.4: Added structural drift detection for causal DAG changes.
 """
 
-from typing import Literal, NotRequired, Optional, TypedDict
+from typing import Any, Dict, List, Literal, NotRequired, Optional, TypedDict
 from uuid import UUID
 
 # Type aliases
-DriftType = Literal["data", "model", "concept"]
+DriftType = Literal["data", "model", "concept", "structural"]  # V4.4: Added structural
 DriftSeverity = Literal["none", "low", "medium", "high", "critical"]
 AlertSeverity = Literal["warning", "critical"]
 AgentStatus = Literal["pending", "detecting", "aggregating", "completed", "failed"]
@@ -49,6 +51,23 @@ class DriftAlert(TypedDict):
     timestamp: str
 
 
+class StructuralDriftResult(TypedDict):
+    """V4.4: Structural drift detection result.
+
+    Tracks changes in the causal DAG structure over time.
+    """
+
+    detected: bool
+    drift_score: float  # Percentage of edges changed (0.0 to 1.0)
+    added_edges: List[str]  # Format: "source->target"
+    removed_edges: List[str]  # Format: "source->target"
+    stable_edges: NotRequired[List[str]]  # Unchanged edges
+    edge_type_changes: NotRequired[List[Dict[str, Any]]]  # Edge type drift
+    severity: str  # "none", "low", "medium", "high", "critical"
+    recommendation: Optional[str]  # Action recommendation
+    critical_path_broken: NotRequired[bool]  # If treatment->outcome path broken
+
+
 class ErrorDetails(TypedDict):
     """Error information."""
 
@@ -61,18 +80,23 @@ class DriftMonitorState(TypedDict):
     """Complete state for Drift Monitor Agent.
 
     Contract: .claude/contracts/tier3-contracts.md lines 447-494
-    Total Fields: 23
+    Total Fields: 31 (V4.4: 8 new fields)
 
     Field Groups:
     - Input (5): query, model_id, features_to_monitor, time_window, brand
-    - Configuration (5): significance_level, psi_threshold, check_data_drift,
-                         check_model_drift, check_concept_drift
-    - Detection outputs (3): data_drift_results, model_drift_results, concept_drift_results
+    - Configuration (6): significance_level, psi_threshold, check_data_drift,
+                         check_model_drift, check_concept_drift, check_structural_drift
+    - Detection outputs (5): data_drift_results, model_drift_results, concept_drift_results,
+                            structural_drift_results, structural_drift_details
     - Aggregated outputs (3): overall_drift_score, features_with_drift, alerts
     - Summary (2): drift_summary, recommended_actions
     - Execution metadata (4): detection_latency_ms, features_checked,
                               baseline_timestamp, current_timestamp
     - Error handling (3): errors, warnings, status
+    - Audit Chain (1): audit_workflow_id
+    - V4.4 Discovery (7): baseline_dag_adjacency, baseline_dag_edge_types,
+                          current_dag_adjacency, current_dag_edge_types,
+                          dag_nodes, discovery_config
     """
 
     # ===== Input Fields (5) =====
@@ -82,17 +106,20 @@ class DriftMonitorState(TypedDict):
     time_window: str
     brand: NotRequired[Optional[str]]
 
-    # ===== Configuration (5) =====
+    # ===== Configuration (6) =====
     significance_level: float
     psi_threshold: float
     check_data_drift: bool
     check_model_drift: bool
     check_concept_drift: bool
+    check_structural_drift: NotRequired[bool]  # V4.4: Enable structural drift detection
 
-    # ===== Detection Outputs (3) =====
+    # ===== Detection Outputs (4) =====
     data_drift_results: NotRequired[list[DriftResult]]
     model_drift_results: NotRequired[list[DriftResult]]
     concept_drift_results: NotRequired[list[DriftResult]]
+    structural_drift_results: NotRequired[list[DriftResult]]  # V4.4: DAG structure drift
+    structural_drift_details: NotRequired[StructuralDriftResult]  # V4.4: Detailed drift info
 
     # ===== Aggregated Outputs (3) =====
     overall_drift_score: NotRequired[float]
@@ -116,3 +143,21 @@ class DriftMonitorState(TypedDict):
 
     # ===== Audit Chain (1) =====
     audit_workflow_id: NotRequired[Optional[UUID]]
+
+    # ========================================================================
+    # V4.4: Causal Discovery Integration
+    # ========================================================================
+
+    # Baseline DAG (from historical discovery)
+    baseline_dag_adjacency: NotRequired[List[List[int]]]  # Binary adjacency matrix
+    baseline_dag_edge_types: NotRequired[Dict[str, str]]  # Edge types (DIRECTED, BIDIRECTED)
+
+    # Current DAG (from recent discovery on new data)
+    current_dag_adjacency: NotRequired[List[List[int]]]  # Binary adjacency matrix
+    current_dag_edge_types: NotRequired[Dict[str, str]]  # Edge types
+
+    # Node names (shared between baseline and current)
+    dag_nodes: NotRequired[List[str]]  # Variable names
+
+    # Discovery configuration for re-running on current data
+    discovery_config: NotRequired[Dict[str, Any]]

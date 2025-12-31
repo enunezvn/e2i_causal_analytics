@@ -511,52 +511,33 @@ def validate_experiment_design(
 
 ---
 
-### Phase 3.3: Drift Monitor Structural Drift
+### Phase 3.3: Drift Monitor Structural Drift ✅ COMPLETE
 **Priority**: MEDIUM
-**Files to Create**:
-- `src/agents/drift_monitor/nodes/structural_drift_detector.py`
+**Status**: Completed 2025-12-31
+**Files Created/Modified**:
+- `src/agents/drift_monitor/nodes/structural_drift_detector.py` - NEW: StructuralDriftNode class
+- `src/agents/drift_monitor/state.py` - Added V4.4 fields (StructuralDriftResult, DAG fields)
+- `src/agents/drift_monitor/nodes/__init__.py` - Export StructuralDriftNode
+- `src/agents/drift_monitor/graph.py` - Integrated structural_drift node into workflow
 
-**Implementation**:
-```python
-"""Structural Drift Detector for DAG changes."""
+**Implementation Summary**:
+- Created `StructuralDriftNode` class with async `execute` method
+- Detects changes in causal DAG structure (added/removed edges, edge type changes)
+- Calculates drift score as percentage of edges changed
+- Severity thresholds: critical (>30%), high (>20%), medium (>10%), low (>5%)
+- Edge type changes (DIRECTED -> BIDIRECTED) trigger critical severity
+- Generates recommendations based on drift severity
+- Added V4.4 state fields: `check_structural_drift`, `structural_drift_results`, `structural_drift_details`, DAG comparison fields
+- Updated workflow: audit_init → data_drift → model_drift → concept_drift → structural_drift → alert_aggregator → END
 
-from src.causal_engine.discovery.runner import DiscoveryRunner
+**Tests Added** (12 tests in test_structural_drift.py):
+- `TestStructuralDriftNodeBasics` (3 tests): Identical DAGs, added edges, removed edges
+- `TestStructuralDriftSeverity` (2 tests): Low and critical severity thresholds
+- `TestEdgeTypeChanges` (1 test): DIRECTED -> BIDIRECTED detection
+- `TestEdgeCases` (4 tests): Disabled, no DAG data, failed status, empty DAGs
+- `TestStateUpdates` (2 tests): Latency tracking, recommendation generation
 
-async def detect_structural_drift(
-    current_dag: nx.DiGraph,
-    new_data: pd.DataFrame,
-    config: DiscoveryConfig,
-) -> StructuralDriftResult:
-    """Detect changes in causal structure over time."""
-
-    runner = DiscoveryRunner()
-    new_result = await runner.discover_dag(new_data, config)
-
-    if not new_result.success:
-        return StructuralDriftResult(detected=False, reason="Discovery failed")
-
-    new_dag = new_result.ensemble_dag
-
-    # Compare edges
-    old_edges = set(current_dag.edges())
-    new_edges = set(new_dag.edges())
-
-    added_edges = new_edges - old_edges
-    removed_edges = old_edges - new_edges
-
-    # Calculate drift score
-    total_edges = len(old_edges | new_edges)
-    changed_edges = len(added_edges) + len(removed_edges)
-    drift_score = changed_edges / total_edges if total_edges > 0 else 0
-
-    return StructuralDriftResult(
-        detected=drift_score > 0.1,
-        drift_score=drift_score,
-        added_edges=list(added_edges),
-        removed_edges=list(removed_edges),
-        recommendation="Re-train models" if drift_score > 0.2 else None,
-    )
-```
+**Validation**: All 164 drift monitor tests pass
 
 ---
 
