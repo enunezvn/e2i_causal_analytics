@@ -476,16 +476,26 @@ def validate_experiment_design(
 
 ## Wave 3: MEDIUM - Supporting Integration
 
-### Phase 3.1: Orchestrator Discovery Routing
+### Phase 3.1: Orchestrator Discovery Routing ✅ COMPLETE
 **Priority**: MEDIUM
-**Files to Modify**:
-- `src/agents/orchestrator/graph.py`
-- `src/agents/orchestrator/nodes/router.py`
+**Status**: Completed 2025-12-31
+**Files Modified**:
+- `src/agents/orchestrator/state.py` - Added V4.4 discovery routing fields
+- `src/agents/orchestrator/nodes/router.py` - Added discovery routing logic
 
-**Changes Required**:
-- Route discovery-enabled queries to appropriate agents
-- Pass discovery_config through agent chain
-- Handle gate decisions in routing logic
+**Implementation Summary**:
+- Added `DISCOVERY_AWARE_AGENTS` list (causal_impact, gap_analyzer, heterogeneous_optimizer, experiment_designer)
+- Implemented `_should_apply_discovery_routing()` - checks enable_discovery/propagate_dag flags and gate decision
+- Implemented `_enhance_with_discovery_data()` - passes DAG adjacency, nodes, edge types, gate decision to downstream agents
+- Updated `execute()` to apply discovery routing and track metadata
+- State fields added: `enable_discovery`, `discovery_config`, `propagate_discovered_dag`, `discovered_dag_adjacency`, `discovered_dag_nodes`, `discovered_dag_edge_types`, `discovery_gate_decision`, `discovery_gate_confidence`, `discovery_routing_applied`, `discovery_aware_agents`
+
+**Tests Added** (20 tests in test_router.py):
+- `TestShouldApplyDiscoveryRouting` (8 tests): Gate decision handling
+- `TestEnhanceWithDiscoveryData` (6 tests): Parameter enhancement
+- `TestDiscoveryRoutingIntegration` (6 tests): End-to-end routing
+
+**Validation**: All 49 router tests pass
 
 ---
 
@@ -602,7 +612,7 @@ async def detect_structural_drift(
 - [ ] Wave 2 Tests Pass (3 batches, ~30 tests)
 
 ### Wave 3: MEDIUM
-- [ ] Phase 3.1: Orchestrator Discovery Routing
+- [x] Phase 3.1: Orchestrator Discovery Routing ✅ (2025-12-31)
 - [ ] Phase 3.2: Explainer Causal Narrative
 - [ ] Phase 3.3: Drift Monitor Structural Drift
 - [ ] Phase 3.4: Integration Contract Updates
