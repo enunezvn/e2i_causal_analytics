@@ -2,8 +2,8 @@
 
 **Purpose**: Define system-level integration contracts for the E2I Causal Analytics platform, ensuring consistent communication across all layers and components.
 
-**Version**: 1.1
-**Last Updated**: 2025-12-30
+**Version**: 1.2
+**Last Updated**: 2025-12-31
 **Owner**: E2I Development Team
 
 ---
@@ -784,6 +784,325 @@ class CausalAnalysisResponse(BaseModel):
         default_factory=list,
         description="High-confidence discovered edges added to manual DAG (if gate=augment)"
     )
+```
+
+---
+
+## Causal Engine Discovery Contract (V4.4)
+
+This section defines the V4.4 causal discovery integration interfaces for the Discovery Runner, DriverRanker, and DiscoveryGate components.
+
+### Discovery Runner Interface
+
+The Discovery Runner orchestrates ensemble-based causal structure discovery using multiple algorithms.
+
+```python
+from typing import Dict, Any, List, Optional, Literal, Tuple
+from dataclasses import dataclass
+from enum import Enum
+import pandas as pd
+import networkx as nx
+
+class DiscoveryAlgorithm(str, Enum):
+    """Supported causal discovery algorithms."""
+    GES = "ges"      # Greedy Equivalence Search (score-based)
+    PC = "pc"        # Peter-Clark (constraint-based)
+    FCI = "fci"      # Fast Causal Inference (handles latent confounders)
+
+
+@dataclass
+class DiscoveryConfig:
+    """
+    Configuration for causal structure discovery.
+
+    Used by: Feature Analyzer, Causal Impact, Orchestrator
+    """
+
+    # === ALGORITHM SELECTION ===
+    algorithms: List[DiscoveryAlgorithm] = None  # Default: [GES, PC]
+    ensemble_threshold: float = 0.5  # Minimum agreement for edge inclusion
+
+    # === STATISTICAL PARAMETERS ===
+    alpha: float = 0.05  # Significance level for independence tests
+    max_iterations: int = 1000  # Max iterations for score-based methods
+
+    # === CONSTRAINTS ===
+    forbidden_edges: Optional[List[Tuple[str, str]]] = None
+    required_edges: Optional[List[Tuple[str, str]]] = None
+
+    # === PERFORMANCE ===
+    max_conditioning_set_size: Optional[int] = None  # Limit conditioning set size
+    timeout_seconds: int = 300  # Per-algorithm timeout
+
+
+@dataclass
+class AlgorithmResult:
+    """
+    Result from a single discovery algorithm.
+    """
+
+    algorithm: DiscoveryAlgorithm
+    adjacency_matrix: List[List[int]]  # Binary adjacency matrix
+    edge_list: List[Tuple[str, str]]  # (source, target) pairs
+    edge_confidences: Dict[str, float]  # "source->target": confidence
+    edge_types: Dict[str, str]  # "source->target": DIRECTED|BIDIRECTED|UNDIRECTED
+    score: Optional[float]  # BIC score for score-based methods
+    execution_time_ms: int
+    converged: bool
+
+
+@dataclass
+class DiscoveryResult:
+    """
+    Complete result from ensemble causal discovery.
+
+    Output from DiscoveryRunner.run()
+    """
+
+    # === ENSEMBLE DAG ===
+    ensemble_dag: nx.DiGraph  # Final consensus DAG
+    adjacency_matrix: List[List[int]]  # Binary adjacency matrix
+    node_names: List[str]  # Variable names in matrix order
+    edge_list: List[Tuple[str, str]]  # Final edges
+
+    # === EDGE METADATA ===
+    edge_confidences: Dict[str, float]  # Agreement scores per edge
+    edge_types: Dict[str, str]  # DIRECTED, BIDIRECTED, UNDIRECTED
+
+    # === ALGORITHM RESULTS ===
+    algorithm_results: List[AlgorithmResult]  # Per-algorithm details
+    algorithms_used: List[str]
+
+    # === GATE DECISION ===
+    gate_decision: Literal["accept", "augment", "review", "reject"]
+    gate_confidence: float
+    high_confidence_edges: List[Tuple[str, str]]  # Edges with >0.8 agreement
+
+    # === METADATA ===
+    total_execution_time_ms: int
+    discovery_timestamp: str
+
+
+# Discovery Runner API
+async def run_discovery(
+    data: pd.DataFrame,
+    config: DiscoveryConfig,
+    target_variable: Optional[str] = None,
+) -> DiscoveryResult:
+    """
+    Run ensemble causal discovery on data.
+
+    Args:
+        data: DataFrame with variables as columns
+        config: Discovery configuration
+        target_variable: Optional target to ensure paths are identified
+
+    Returns:
+        DiscoveryResult with ensemble DAG and algorithm details
+    """
+    ...
+```
+
+### DriverRanker Interface
+
+The DriverRanker combines causal structure with SHAP importance to identify true causal drivers.
+
+```python
+from typing import Dict, Any, List, Optional, Tuple
+from dataclasses import dataclass
+import networkx as nx
+import numpy as np
+
+
+@dataclass
+class DriverRankingResult:
+    """
+    Result from causal driver ranking.
+
+    Combines causal structure with SHAP importance to identify
+    true causal drivers vs spurious correlations.
+    """
+
+    # === RANKINGS ===
+    causal_rankings: List[Tuple[str, float]]  # (feature, causal_score) sorted
+    shap_rankings: List[Tuple[str, float]]  # (feature, shap_importance) sorted
+    combined_rankings: List[Tuple[str, float]]  # Weighted combination
+
+    # === DRIVER CATEGORIES ===
+    true_causal_drivers: List[str]  # High causal + high SHAP
+    predictive_only: List[str]  # High SHAP but no causal path
+    confounded_features: List[str]  # May be spurious
+
+    # === CORRELATIONS ===
+    rank_correlation: float  # Spearman correlation between rankings
+    divergent_features: List[Dict[str, Any]]  # Features where rankings differ significantly
+    # Each: {"feature": str, "causal_rank": int, "shap_rank": int, "divergence": float}
+
+    # === CAUSAL PATHS ===
+    direct_causes: List[str]  # Direct parents of target
+    indirect_causes: List[str]  # Ancestors with indirect paths
+    path_lengths: Dict[str, int]  # Feature -> shortest path to target
+
+    # === METADATA ===
+    target_variable: str
+    features_analyzed: int
+    algorithm_used: str
+
+
+# DriverRanker API
+def rank_drivers(
+    dag: nx.DiGraph,
+    target: str,
+    shap_values: np.ndarray,
+    feature_names: List[str],
+    weighting: float = 0.5,  # Weight for causal vs SHAP
+) -> DriverRankingResult:
+    """
+    Rank features as causal drivers combining structure and importance.
+
+    Args:
+        dag: Discovered or provided causal DAG
+        target: Target variable name
+        shap_values: SHAP importance values (shape: n_samples x n_features)
+        feature_names: Feature names matching SHAP columns
+        weighting: Weight for causal score (1-weighting for SHAP)
+
+    Returns:
+        DriverRankingResult with rankings and categorization
+    """
+    ...
+```
+
+### DiscoveryGate Interface
+
+The DiscoveryGate evaluates discovery quality and determines whether to accept, augment, review, or reject results.
+
+```python
+from typing import Dict, Any, List, Optional, Tuple, Literal
+from dataclasses import dataclass
+
+
+class GateDecision(str, Enum):
+    """Discovery gate decisions."""
+    ACCEPT = "accept"    # Confidence >= 0.8, use discovered DAG directly
+    AUGMENT = "augment"  # Confidence 0.5-0.8, add high-confidence edges to manual DAG
+    REVIEW = "review"    # Confidence 0.3-0.5, flag for human review
+    REJECT = "reject"    # Confidence < 0.3, use manual DAG only
+
+
+@dataclass
+class GateEvaluation:
+    """
+    Result from discovery gate evaluation.
+
+    Determines how discovered structure should be used.
+    """
+
+    # === DECISION ===
+    decision: GateDecision
+    confidence: float  # Overall confidence score (0.0 to 1.0)
+
+    # === EDGE ANALYSIS ===
+    high_confidence_edges: List[Tuple[str, str]]  # Edges with >0.8 agreement
+    low_confidence_edges: List[Tuple[str, str]]  # Edges with <0.5 agreement
+    conflicting_edges: List[Tuple[str, str]]  # Edges where algorithms disagree
+
+    # === VALIDATION ===
+    expected_edges_found: int  # If expected_edges provided
+    expected_edges_missing: int
+    unexpected_edges: int
+
+    # === QUALITY METRICS ===
+    algorithm_agreement: float  # Average pairwise agreement
+    structure_stability: float  # Sensitivity to bootstrap samples
+    acyclicity_score: float  # 1.0 if DAG, <1.0 if cycles detected
+
+    # === RECOMMENDATIONS ===
+    recommendation: str  # Human-readable recommendation
+    edges_to_add: List[Tuple[str, str]]  # If decision is AUGMENT
+    edges_to_review: List[Tuple[str, str]]  # Edges needing human review
+
+
+# DiscoveryGate API
+def evaluate_discovery(
+    result: DiscoveryResult,
+    expected_edges: Optional[List[Tuple[str, str]]] = None,
+    required_paths: Optional[List[Tuple[str, str]]] = None,
+) -> GateEvaluation:
+    """
+    Evaluate discovery result quality and determine action.
+
+    Args:
+        result: DiscoveryResult from run_discovery()
+        expected_edges: Optional known edges to validate against
+        required_paths: Optional required paths (e.g., treatment->outcome)
+
+    Returns:
+        GateEvaluation with decision and recommendations
+    """
+    ...
+```
+
+### Structural Drift Detection Contract (V4.4)
+
+The Structural Drift Detector compares causal DAG structures between baseline and current periods.
+
+```python
+from typing import Dict, Any, List, Optional, Literal
+from dataclasses import dataclass
+
+
+@dataclass
+class StructuralDriftInput:
+    """
+    Input for structural drift detection.
+
+    Compares baseline vs current causal DAG structures.
+    """
+
+    # === BASELINE DAG ===
+    baseline_adjacency: List[List[int]]  # Binary adjacency matrix
+    baseline_edge_types: Dict[str, str]  # "A->B": DIRECTED|BIDIRECTED
+
+    # === CURRENT DAG ===
+    current_adjacency: List[List[int]]  # Binary adjacency matrix
+    current_edge_types: Dict[str, str]  # "A->B": DIRECTED|BIDIRECTED
+
+    # === NODE MAPPING ===
+    node_names: List[str]  # Shared variable names
+
+
+@dataclass
+class StructuralDriftResult:
+    """
+    Result from structural drift detection.
+
+    Output from StructuralDriftNode.execute()
+    """
+
+    # === DRIFT DETECTION ===
+    detected: bool  # Whether significant drift was found
+    drift_score: float  # Percentage of edges changed (0.0 to 1.0)
+
+    # === EDGE CHANGES ===
+    added_edges: List[str]  # Format: "source->target"
+    removed_edges: List[str]  # Format: "source->target"
+    stable_edges: List[str]  # Unchanged edges
+
+    # === EDGE TYPE CHANGES ===
+    edge_type_changes: List[Dict[str, Any]]
+    # Each: {"edge": "A->B", "from": "DIRECTED", "to": "BIDIRECTED"}
+
+    # === SEVERITY ===
+    severity: Literal["none", "low", "medium", "high", "critical"]
+    # none: <5%, low: 5-10%, medium: 10-20%, high: 20-30%, critical: >30%
+
+    # === CRITICAL PATH ANALYSIS ===
+    critical_path_broken: bool  # If treatment->outcome path affected
+    affected_paths: List[List[str]]  # Paths that changed
+
+    # === RECOMMENDATIONS ===
+    recommendation: str  # Action recommendation based on severity
 ```
 
 ---
@@ -2285,6 +2604,7 @@ All integration points must have:
 |---------|------|--------|---------|
 | 1.0 | 2025-12-18 | E2I Team | Initial integration contracts |
 | 1.1 | 2025-12-30 | E2I Team | V4.4: Added discovery params to CausalAnalysisRequest/Response |
+| 1.2 | 2025-12-31 | E2I Team | V4.4: Added Causal Engine Discovery Contract section (DiscoveryRunner, DriverRanker, DiscoveryGate, StructuralDrift interfaces) |
 
 ---
 
