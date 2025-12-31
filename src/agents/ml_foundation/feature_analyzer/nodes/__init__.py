@@ -1,16 +1,18 @@
 """Nodes for feature_analyzer agent.
 
-Extended hybrid pipeline with 5 nodes:
+Extended hybrid pipeline with 6 nodes:
 1. Feature Generation (NO LLM) - feature_generator.py
 2. Feature Selection (NO LLM) - feature_selector.py
 3. SHAP Computation (NO LLM) - shap_computer.py
 4. Interaction Detection (NO LLM) - interaction_detector.py
-5. NL Interpretation (LLM) - importance_narrator.py
+5. Causal Ranking (NO LLM) - causal_ranker.py (V4.4)
+6. NL Interpretation (LLM) - importance_narrator.py
 
 Additional utilities:
 - Feature Visualization - feature_visualizer.py (charts, tables)
 """
 
+from .causal_ranker import rank_causal_drivers
 from .feature_generator import generate_features
 from .feature_selector import get_feature_selection_summary, select_features
 from .feature_visualizer import generate_visualizations
@@ -28,5 +30,8 @@ __all__ = [
     # SHAP analysis
     "compute_shap",
     "detect_interactions",
+    # Causal analysis (V4.4)
+    "rank_causal_drivers",
+    # NL interpretation
     "narrate_importance",
 ]

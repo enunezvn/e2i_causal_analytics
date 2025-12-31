@@ -650,7 +650,7 @@ test_metrics = evaluate(model, X_test_processed, y_test)
 ## Feature Analyzer Contract (Hybrid)
 
 ### Purpose
-Computes SHAP values (computation) and generates natural language interpretations (LLM).
+Computes SHAP values (computation), performs causal discovery comparison (V4.4), and generates natural language interpretations (LLM).
 
 ### Input Contract
 
@@ -661,28 +661,38 @@ analysis_request:
   experiment_id: string
   run_id: string                  # MLflow run ID
   timestamp: datetime             # ISO 8601
-  
+
   # Model reference
   model_reference:
     model_uri: string             # MLflow model URI
     algorithm: string
-    
+
   # Data reference
   data_reference:
     X: string                     # Reference to feature matrix
     sample_size: int              # For SHAP computation
-    
+
   # Analysis configuration
   analysis_config:
     compute_global: bool          # Global feature importance
     compute_local: bool           # Individual explanations
     compute_interactions: bool    # Interaction effects
     segment_analysis: list[string] # ["region", "specialty"]
-    
+
   # Interpretation configuration
   interpretation_config:
     audience: enum                # "executive" | "analyst" | "technical"
     include_recommendations: bool
+
+  # V4.4: Causal Discovery Integration
+  discovery_config:
+    discovery_enabled: bool       # Enable causal discovery (default: false)
+    algorithms: list[string]      # ["ges", "pc", "fci", "lingam"]
+    ensemble_threshold: float     # Edge voting threshold (default: 0.5)
+    alpha: float                  # Significance level (default: 0.05)
+    accept_threshold: float       # Gate accept threshold (default: 0.8)
+    review_threshold: float       # Gate review threshold (default: 0.5)
+    causal_target_variable: string  # Target for causal path analysis
 ```
 
 ### Output Contract
@@ -695,7 +705,7 @@ analysis_response:
   run_id: string
   timestamp: datetime
   processing_time_ms: int
-  
+
   # Computation results (NO LLM)
   shap_analysis:
     # Global importance
@@ -703,13 +713,13 @@ analysis_response:
       - feature: string
         importance: float         # Normalized 0-1
         direction: string         # "positive" | "negative" | "mixed"
-        
+
     # Feature interactions
     interactions:
       - feature_a: string
         feature_b: string
         interaction_strength: float
-        
+
     # Segment analysis
     segment_shap:
       - segment: string           # "Northeast"
@@ -717,33 +727,69 @@ analysis_response:
         top_features:
           - feature: string
             importance: float
-            
+
     # Expected value
     expected_value: float
-    
+
+  # V4.4: Causal Discovery Results (NO LLM)
+  causal_discovery:
+    # Discovery metadata
+    discovery_enabled: bool
+    discovery_gate_decision: enum  # "accept" | "review" | "reject" | "augment"
+    discovery_gate_confidence: float
+    discovery_gate_reasons: list[string]
+
+    # Causal vs Predictive Rankings
+    causal_rankings:
+      - feature_name: string
+        causal_rank: int          # Rank by causal importance
+        predictive_rank: int      # Rank by SHAP importance
+        causal_score: float       # DAG-based importance (0-1)
+        predictive_score: float   # SHAP-based importance (0-1)
+        rank_difference: int      # causal_rank - predictive_rank
+        is_direct_cause: bool     # Direct edge to target
+        path_length: int          # Shortest path to target (null if no path)
+
+    # Correlation and divergence
+    rank_correlation: float       # Spearman correlation between rankings
+    divergent_features: list[string]  # Features with |rank_diff| > 3
+
+    # Feature categorization
+    causal_only_features: list[string]    # Causal signal, no predictive
+    predictive_only_features: list[string] # Predictive signal, no causal
+    concordant_features: list[string]      # Both causal and predictive
+    direct_cause_features: list[string]    # Direct causes of target
+
+    # Causal importance dict (for downstream agents)
+    causal_importance:
+      feature_name: float         # Causal importance scores
+
   # Interpretation results (LLM - Hybrid node)
   interpretation:
     # Executive summary
     executive_summary: string     # 2-3 sentences
-    
+
     # Feature explanations
     feature_explanations:
       - feature: string
         plain_language: string    # "Higher call frequency strongly predicts conversion"
         business_implication: string
-        
+
     # Key insights
     key_insights:
       - insight: string
         confidence: enum          # "high" | "medium" | "low"
         evidence: string
-        
+
     # Recommendations
     recommendations:
       - action: string
         expected_impact: string
         priority: enum
-        
+
+    # V4.4: Causal interpretation (when discovery enabled)
+    causal_interpretation: string  # NL comparison of causal vs predictive
+
   # Semantic memory updates
   memory_updates:
     feature_relationships:
@@ -751,7 +797,7 @@ analysis_response:
         target: string            # "conversion"
         relationship: string      # "positive_causal"
         strength: float
-        
+
   # Status
   status: enum                    # "success" | "partial" | "failed"
   warnings: list[string]
@@ -1229,4 +1275,5 @@ pytest tests/integration/test_tier0_contracts.py::test_tier0_to_tier1_handoff
 
 | Date | Change |
 |------|--------|
+| 2025-12-31 | V4.4: Added causal discovery integration to Feature Analyzer (discovery_config input, causal_rankings output, causal_interpretation in interpretation) |
 | 2025-12-08 | Initial creation for V4 architecture |
