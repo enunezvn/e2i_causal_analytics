@@ -3,7 +3,7 @@
 **Version**: 1.1.0
 **Created**: 2025-12-31
 **Updated**: 2025-12-31
-**Status**: Wave 1 COMPLETE ✅ | Wave 2-3 Ready for Implementation
+**Status**: Wave 1 COMPLETE ✅ | Wave 2 COMPLETE ✅ | Wave 3 Ready for Implementation
 **Feature**: Causal-vs-Predictive Ranking with Structure Learning (GES/PC/FCI/LiNGAM)
 
 ---
@@ -35,18 +35,25 @@ This plan integrates the new causal discovery module (`src/causal_engine/discove
 | Causal Impact Graph Builder | `src/agents/causal_impact/nodes/graph_builder.py` | ✅ Full discovery integration |
 | Tier 0 Contracts | `.claude/contracts/tier0-contracts.md` | ✅ V1.1 with discovery contracts |
 
-### Needs Updates (Wave 2-3)
+### Completed (Wave 2) ✅
+| Component | File | Status |
+|-----------|------|--------|
+| Data Contracts | `.claude/contracts/data-contracts.md` | ✅ V1.1 with DiscoveryResult schema |
+| Gap Analyzer Prioritizer | `src/agents/gap_analyzer/nodes/prioritizer.py` | ✅ V4.4 causal evidence filtering |
+| Gap Analyzer State | `src/agents/gap_analyzer/state.py` | ✅ V4.4 discovery fields |
+| Het. Optimizer Nodes | `src/agents/heterogeneous_optimizer/nodes/segment_analyzer.py` | ✅ V4.4 DAG validation |
+| Het. Optimizer State | `src/agents/heterogeneous_optimizer/state.py` | ✅ V4.4 discovery fields |
+| Experiment Designer | `src/agents/experiment_designer/nodes/validity_audit.py` | ✅ V4.4 DAG-aware validity |
+| Experiment Designer State | `src/agents/experiment_designer/state.py` | ✅ V4.4 discovery fields |
+| Tier 3 Contracts | `.claude/contracts/tier3-contracts.md` | ✅ V1.1 with structural drift + DAG validity |
+| Drift Monitor | `src/agents/drift_monitor/nodes/structural_drift_detector.py` | ✅ V4.4 structural drift detection |
+
+### Needs Updates (Wave 3)
 | Component | File | Priority |
 |-----------|------|----------|
-| Data Contracts | `.claude/contracts/data-contracts.md` | HIGH |
-| Gap Analyzer Prioritizer | `src/agents/gap_analyzer/nodes/prioritizer.py` | HIGH |
-| Het. Optimizer Nodes | `src/agents/heterogeneous_optimizer/nodes/` | HIGH |
-| Experiment Designer | `src/agents/experiment_designer/nodes/` | HIGH |
 | Integration Contracts | `.claude/contracts/integration-contracts.md` | MEDIUM |
-| Tier 3 Contracts | `.claude/contracts/tier3-contracts.md` | MEDIUM |
 | Orchestrator Routing | `src/agents/orchestrator/graph.py` | MEDIUM |
 | Explainer Nodes | `src/agents/explainer/nodes/` | MEDIUM |
-| Drift Monitor | `src/agents/drift_monitor/nodes/structural_drift_detector.py` | ✅ Already implemented
 
 ---
 
@@ -56,9 +63,10 @@ This plan integrates the new causal discovery module (`src/causal_engine/discove
 **Estimated Tests**: ~35 tests in 4 batches
 **Actual Tests**: 60+ tests passed (2025-12-31)
 
-### Wave 2: HIGH - Downstream Agents (Gap Analyzer + Het. Optimizer + Exp. Designer)
+### Wave 2: HIGH - Downstream Agents (Gap Analyzer + Het. Optimizer + Exp. Designer) ✅ COMPLETE
 **Estimated Tests**: ~30 tests in 3 batches
-**Status**: Ready for Implementation
+**Actual Tests**: 222 tests passed (2025-12-31)
+**Status**: COMPLETE ✅
 
 ### Wave 3: MEDIUM - Supporting Integration (Orchestrator + Explainer + Drift Monitor)
 **Estimated Tests**: ~26 tests in 3 batches
