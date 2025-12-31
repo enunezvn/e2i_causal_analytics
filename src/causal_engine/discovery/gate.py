@@ -17,13 +17,16 @@ Author: E2I Causal Analytics Team
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
 
 import networkx as nx
 import numpy as np
 from loguru import logger
 
 from .base import DiscoveredEdge, DiscoveryResult, GateDecision
+
+if TYPE_CHECKING:
+    from .observability import DiscoverySpan, DiscoveryTracer
 
 
 @dataclass
@@ -102,13 +105,19 @@ class DiscoveryGate:
         ...     augment_manual_dag(evaluation.high_confidence_edges)
     """
 
-    def __init__(self, config: Optional[GateConfig] = None):
+    def __init__(
+        self,
+        config: Optional[GateConfig] = None,
+        tracer: Optional["DiscoveryTracer"] = None,
+    ):
         """Initialize DiscoveryGate.
 
         Args:
             config: Gate configuration. Uses defaults if None.
+            tracer: Optional DiscoveryTracer for Opik observability
         """
         self.config = config or GateConfig()
+        self._tracer = tracer
 
     def evaluate(
         self,
@@ -379,3 +388,40 @@ class DiscoveryGate:
                 )
 
         return valid_edges
+
+    async def evaluate_with_tracing(
+        self,
+        result: DiscoveryResult,
+        parent_span: "DiscoverySpan",
+        expected_edges: Optional[List[Tuple[str, str]]] = None,
+    ) -> GateEvaluation:
+        """Evaluate with Opik tracing.
+
+        Args:
+            result: Discovery result to evaluate
+            parent_span: Parent DiscoverySpan for tracing
+            expected_edges: Optional list of expected edges
+
+        Returns:
+            GateEvaluation with decision and reasoning
+        """
+        evaluation = self.evaluate(result, expected_edges)
+
+        # Log to tracer if available
+        if self._tracer:
+            await self._tracer.log_gate_decision(
+                parent_span=parent_span,
+                decision=evaluation.decision,
+                confidence=evaluation.confidence,
+                reasons=evaluation.reasons,
+            )
+
+        return evaluation
+
+    def set_tracer(self, tracer: "DiscoveryTracer") -> None:
+        """Set the tracer for observability.
+
+        Args:
+            tracer: DiscoveryTracer instance
+        """
+        self._tracer = tracer
