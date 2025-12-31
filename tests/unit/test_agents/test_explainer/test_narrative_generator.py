@@ -316,3 +316,255 @@ class TestNarrativeGeneratorNode:
 
         # Explanation should have meaningful content
         assert len(result["detailed_explanation"]) > 20
+
+    # ========================================================================
+    # V4.4: CAUSAL DISCOVERY NARRATIVE TESTS
+    # ========================================================================
+
+    @pytest.mark.asyncio
+    async def test_gate_decision_translation_executive(self, base_explainer_state):
+        """Test gate decision translation for executive audience."""
+        node = NarrativeGeneratorNode(use_llm=False)
+
+        # Test accept decision
+        result = node._translate_gate_decision("accept", 0.92, "executive")
+        assert "high confidence" in result.lower() or "reliable" in result.lower()
+        assert "92%" in result or "0.92" in result
+
+        # Test review decision
+        result = node._translate_gate_decision("review", 0.65, "executive")
+        assert "review" in result.lower() or "validation" in result.lower()
+
+        # Test reject decision
+        result = node._translate_gate_decision("reject", 0.3, "executive")
+        assert "low confidence" in result.lower() or "validation" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_gate_decision_translation_data_scientist(self, base_explainer_state):
+        """Test gate decision translation for data scientist audience."""
+        node = NarrativeGeneratorNode(use_llm=False)
+
+        # Test accept decision - should be more technical
+        result = node._translate_gate_decision("accept", 0.92, "data_scientist")
+        assert "DAG" in result or "structure" in result.lower()
+        assert "0.92" in result or "92" in result
+
+        # Test augment decision
+        result = node._translate_gate_decision("augment", 0.75, "data_scientist")
+        assert "augment" in result.lower() or "domain" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_gate_decision_translation_analyst(self, base_explainer_state):
+        """Test gate decision translation for analyst audience."""
+        node = NarrativeGeneratorNode(use_llm=False)
+
+        result = node._translate_gate_decision("accept", 0.88, "analyst")
+        # Analyst should get balanced explanation
+        assert len(result) > 10  # Has meaningful content
+
+    @pytest.mark.asyncio
+    async def test_has_discovery_data_with_rankings(self, base_explainer_state):
+        """Test _has_discovery_data with causal rankings."""
+        node = NarrativeGeneratorNode(use_llm=False)
+
+        state = {
+            **base_explainer_state,
+            "causal_rankings": [{"feature": "marketing_spend", "rank": 1}],
+        }
+        assert node._has_discovery_data(state) is True
+
+    @pytest.mark.asyncio
+    async def test_has_discovery_data_with_dag(self, base_explainer_state):
+        """Test _has_discovery_data with DAG data."""
+        node = NarrativeGeneratorNode(use_llm=False)
+
+        state = {
+            **base_explainer_state,
+            "discovered_dag_adjacency": [[0, 1], [0, 0]],
+            "discovered_dag_nodes": ["X", "Y"],
+        }
+        assert node._has_discovery_data(state) is True
+
+    @pytest.mark.asyncio
+    async def test_has_discovery_data_with_gate_decision(self, base_explainer_state):
+        """Test _has_discovery_data with gate decision only."""
+        node = NarrativeGeneratorNode(use_llm=False)
+
+        state = {
+            **base_explainer_state,
+            "discovery_gate_decision": "accept",
+        }
+        assert node._has_discovery_data(state) is True
+
+    @pytest.mark.asyncio
+    async def test_has_discovery_data_empty(self, base_explainer_state):
+        """Test _has_discovery_data with no discovery data."""
+        node = NarrativeGeneratorNode(use_llm=False)
+
+        assert node._has_discovery_data(base_explainer_state) is False
+
+    @pytest.mark.asyncio
+    async def test_ranking_comparison_generation(self, base_explainer_state):
+        """Test ranking comparison narrative generation."""
+        node = NarrativeGeneratorNode(use_llm=False)
+
+        state = {
+            **base_explainer_state,
+            "causal_rankings": [
+                {"feature": "marketing_spend", "rank": 1},
+                {"feature": "rep_visits", "rank": 2},
+            ],
+            "predictive_rankings": [
+                {"feature": "rep_visits", "rank": 1},
+                {"feature": "marketing_spend", "rank": 2},
+            ],
+            "rank_correlation": 0.75,
+        }
+
+        result = node._generate_ranking_comparison(state, "analyst")
+        assert result is not None
+        assert "correlation" in result.lower() or "0.75" in result
+
+    @pytest.mark.asyncio
+    async def test_divergent_features_explanation(self, base_explainer_state):
+        """Test divergent features explanation generation."""
+        node = NarrativeGeneratorNode(use_llm=False)
+
+        divergent = ["marketing_spend", "territory_size"]
+        state = {
+            **base_explainer_state,
+            "divergent_features": divergent,
+            "user_expertise": "analyst",
+        }
+
+        result = node._explain_divergent_features(divergent, state, "analyst")
+        assert result is not None
+        assert "marketing_spend" in result
+        assert "territory_size" in result
+
+    @pytest.mark.asyncio
+    async def test_causal_only_features_explanation(self, base_explainer_state):
+        """Test causal-only features explanation generation."""
+        node = NarrativeGeneratorNode(use_llm=False)
+
+        causal_only = ["regulatory_changes", "competitive_entry"]
+
+        result = node._explain_causal_only_features(causal_only, "executive")
+        assert result is not None
+        # Should mention the features
+        assert "regulatory_changes" in result or "competitive_entry" in result
+
+    @pytest.mark.asyncio
+    async def test_latent_confounder_extraction(self, base_explainer_state):
+        """Test latent confounder extraction from edge types."""
+        node = NarrativeGeneratorNode(use_llm=False)
+
+        state = {
+            **base_explainer_state,
+            "discovered_dag_edge_types": {
+                "marketing_spend->sales": "DIRECTED",
+                "rep_visits<->territory_size": "BIDIRECTED",
+                "pricing<->demand": "BIDIRECTED",
+            },
+            "discovered_dag_nodes": ["marketing_spend", "sales", "rep_visits",
+                                      "territory_size", "pricing", "demand"],
+        }
+
+        confounders = node._extract_latent_confounders(state)
+        assert len(confounders) == 2
+        # Should have the bidirected pairs
+        assert any("rep_visits" in str(c) for c in confounders)
+        assert any("pricing" in str(c) for c in confounders)
+
+    @pytest.mark.asyncio
+    async def test_latent_confounder_explanation_executive(self, base_explainer_state):
+        """Test latent confounder explanation for executive."""
+        node = NarrativeGeneratorNode(use_llm=False)
+
+        # Confounders are edge keys from _extract_latent_confounders
+        confounders = ["rep_visits<->territory_size", "pricing<->demand"]
+
+        result = node._explain_latent_confounders(confounders, "executive")
+        assert result is not None
+        # Executive should get business-friendly explanation
+        assert "unmeasured" in result.lower() or "external" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_latent_confounder_explanation_data_scientist(self, base_explainer_state):
+        """Test latent confounder explanation for data scientist."""
+        node = NarrativeGeneratorNode(use_llm=False)
+
+        confounders = ["rep_visits<->territory_size"]
+
+        result = node._explain_latent_confounders(confounders, "data_scientist")
+        assert result is not None
+        # Data scientist should get technical explanation
+        assert "bidirected" in result.lower() or "latent" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_causal_discovery_section_generation(
+        self, base_explainer_state, sample_causal_analysis
+    ):
+        """Test full causal discovery section generation."""
+        node = NarrativeGeneratorNode(use_llm=False)
+
+        state = {
+            **base_explainer_state,
+            "analysis_results": [sample_causal_analysis],
+            "discovery_gate_decision": "accept",
+            "discovery_gate_confidence": 0.88,
+            "causal_rankings": [
+                {"feature": "marketing_spend", "rank": 1, "score": 0.92},
+                {"feature": "rep_visits", "rank": 2, "score": 0.78},
+            ],
+            "predictive_rankings": [
+                {"feature": "rep_visits", "rank": 1, "score": 0.85},
+                {"feature": "marketing_spend", "rank": 2, "score": 0.72},
+            ],
+            "rank_correlation": 0.65,
+            "divergent_features": ["marketing_spend"],
+            "user_expertise": "analyst",
+        }
+
+        section = node._generate_causal_discovery_section(state, "analyst")
+
+        assert section is not None
+        assert section["section_type"] == "causal_discovery"
+        assert "Causal" in section["title"]
+        assert len(section["content"]) > 50  # Has substantial content
+        # Should have supporting data
+        assert section["supporting_data"] is not None
+        assert "gate_decision" in section["supporting_data"]
+
+    @pytest.mark.asyncio
+    async def test_causal_discovery_section_returns_none_without_data(
+        self, base_explainer_state
+    ):
+        """Test that causal discovery section returns None without discovery data."""
+        node = NarrativeGeneratorNode(use_llm=False)
+
+        section = node._generate_causal_discovery_section(base_explainer_state, "analyst")
+        assert section is None
+
+    @pytest.mark.asyncio
+    async def test_narrative_includes_causal_discovery_section(
+        self, base_explainer_state, sample_causal_analysis
+    ):
+        """Test that narrative generation includes causal discovery section when data present."""
+        reasoned = await self._get_reasoned_state(base_explainer_state, [sample_causal_analysis])
+
+        # Add discovery data to reasoned state
+        reasoned["discovery_gate_decision"] = "accept"
+        reasoned["discovery_gate_confidence"] = 0.9
+        reasoned["causal_rankings"] = [{"feature": "test", "rank": 1}]
+
+        node = NarrativeGeneratorNode(use_llm=False)
+        result = await node.execute(reasoned)
+
+        # Find causal discovery section
+        causal_sections = [
+            s for s in result["narrative_sections"]
+            if s.get("section_type") == "causal_discovery"
+        ]
+        assert len(causal_sections) == 1
+        assert "Causal" in causal_sections[0]["title"]

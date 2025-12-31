@@ -94,3 +94,25 @@ class ExplainerState(TypedDict):
 
     # === AUDIT CHAIN ===
     audit_workflow_id: Optional[UUID]
+
+    # ========================================================================
+    # V4.4: Causal Discovery Integration
+    # ========================================================================
+
+    # Discovered DAG from causal discovery module
+    discovered_dag_adjacency: Optional[List[List[int]]]  # Adjacency matrix
+    discovered_dag_nodes: Optional[List[str]]  # Node names
+    discovered_dag_edge_types: Optional[Dict[str, str]]  # Edge types (DIRECTED, BIDIRECTED)
+
+    # Discovery gate decision
+    discovery_gate_decision: Optional[Literal["accept", "review", "reject", "augment"]]
+    discovery_gate_confidence: Optional[float]  # Gate confidence [0, 1]
+
+    # Causal vs predictive rankings from Feature Analyzer
+    causal_rankings: Optional[List[Dict[str, Any]]]  # FeatureRanking dicts
+    predictive_rankings: Optional[List[Dict[str, Any]]]
+    rank_correlation: Optional[float]  # Spearman correlation between rankings
+    divergent_features: Optional[List[str]]  # Features with high rank difference
+    causal_only_features: Optional[List[str]]  # Features in causal but not predictive
+    predictive_only_features: Optional[List[str]]  # Features in predictive but not causal
+    concordant_features: Optional[List[str]]  # Features with similar rankings
