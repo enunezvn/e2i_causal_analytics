@@ -1,8 +1,9 @@
 # Causal Discovery Agent Integration Plan
 
-**Version**: 1.0.0
+**Version**: 1.1.0
 **Created**: 2025-12-31
-**Status**: Ready for Implementation
+**Updated**: 2025-12-31
+**Status**: Wave 1 COMPLETE ✅ | Wave 2-3 Ready for Implementation
 **Feature**: Causal-vs-Predictive Ranking with Structure Learning (GES/PC/FCI/LiNGAM)
 
 ---
@@ -25,14 +26,19 @@ This plan integrates the new causal discovery module (`src/causal_engine/discove
 | Tier 2 Contracts | `.claude/contracts/tier2-contracts.md` | ✅ CausalImpactInput/Output with discovery fields |
 | Orchestrator Contracts | `.claude/contracts/orchestrator-contracts.md` | ✅ AgentSelectionCriteria with enable_discovery |
 
-### Needs Updates
+### Completed (Wave 1) ✅
+| Component | File | Status |
+|-----------|------|--------|
+| Feature Analyzer State | `src/agents/ml_foundation/feature_analyzer/state.py` | ✅ V4.4 discovery fields added |
+| Feature Analyzer Nodes | `src/agents/ml_foundation/feature_analyzer/nodes/causal_ranker.py` | ✅ DriverRanker + DiscoveryGate integration |
+| Feature Analyzer Narrator | `src/agents/ml_foundation/feature_analyzer/nodes/importance_narrator.py` | ✅ Causal context in explanations |
+| Causal Impact Graph Builder | `src/agents/causal_impact/nodes/graph_builder.py` | ✅ Full discovery integration |
+| Tier 0 Contracts | `.claude/contracts/tier0-contracts.md` | ✅ V1.1 with discovery contracts |
+
+### Needs Updates (Wave 2-3)
 | Component | File | Priority |
 |-----------|------|----------|
-| Feature Analyzer State | `src/agents/ml_foundation/feature_analyzer/state.py` | CRITICAL |
-| Feature Analyzer Nodes | `src/agents/ml_foundation/feature_analyzer/nodes/` | CRITICAL |
-| Causal Impact Graph Builder | `src/agents/causal_impact/nodes/graph_builder.py` | CRITICAL |
 | Data Contracts | `.claude/contracts/data-contracts.md` | HIGH |
-| Tier 0 Contracts | `.claude/contracts/tier0-contracts.md` | HIGH |
 | Gap Analyzer Prioritizer | `src/agents/gap_analyzer/nodes/prioritizer.py` | HIGH |
 | Het. Optimizer Nodes | `src/agents/heterogeneous_optimizer/nodes/` | HIGH |
 | Experiment Designer | `src/agents/experiment_designer/nodes/` | HIGH |
@@ -40,24 +46,34 @@ This plan integrates the new causal discovery module (`src/causal_engine/discove
 | Tier 3 Contracts | `.claude/contracts/tier3-contracts.md` | MEDIUM |
 | Orchestrator Routing | `src/agents/orchestrator/graph.py` | MEDIUM |
 | Explainer Nodes | `src/agents/explainer/nodes/` | MEDIUM |
-| Drift Monitor | `src/agents/drift_monitor/nodes/` | MEDIUM |
+| Drift Monitor | `src/agents/drift_monitor/nodes/structural_drift_detector.py` | ✅ Already implemented
 
 ---
 
 ## Implementation Waves
 
-### Wave 1: CRITICAL - Core Integration (Feature Analyzer + Causal Impact)
+### Wave 1: CRITICAL - Core Integration (Feature Analyzer + Causal Impact) ✅ COMPLETE
 **Estimated Tests**: ~35 tests in 4 batches
+**Actual Tests**: 60+ tests passed (2025-12-31)
 
 ### Wave 2: HIGH - Downstream Agents (Gap Analyzer + Het. Optimizer + Exp. Designer)
 **Estimated Tests**: ~30 tests in 3 batches
+**Status**: Ready for Implementation
 
 ### Wave 3: MEDIUM - Supporting Integration (Orchestrator + Explainer + Drift Monitor)
 **Estimated Tests**: ~26 tests in 3 batches
+**Status**: Ready for Implementation
 
 ---
 
-## Wave 1: CRITICAL - Core Integration
+## Wave 1: CRITICAL - Core Integration ✅ COMPLETE
+
+**Completion Date**: 2025-12-31
+**Tests Passed**:
+- `test_causal_ranker.py`: 33 tests ✅
+- `test_importance_narrator.py`: included in above
+- `test_graph_builder.py`: 15 tests ✅
+- `test_structural_drift.py`: 12 tests ✅
 
 ### Phase 1.1: Feature Analyzer State Extension
 **Priority**: CRITICAL
