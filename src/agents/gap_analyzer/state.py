@@ -203,6 +203,31 @@ class GapAnalyzerState(TypedDict):
     # Audit chain (tamper-evident logging)
     audit_workflow_id: Optional[UUID]
 
+    # ========================================================================
+    # V4.4: Causal Discovery Integration
+    # ========================================================================
+
+    # Causal rankings from Feature Analyzer (DriverRanker output)
+    causal_rankings: Optional[List[Dict[str, Any]]]  # List of FeatureRanking dicts
+    # Each dict: feature_name, causal_rank, predictive_rank, causal_score,
+    #            predictive_score, rank_difference, is_direct_cause, path_length
+
+    # Discovery gate decision from upstream agent
+    discovery_gate_decision: Optional[Literal["accept", "review", "reject", "augment"]]
+    discovery_gate_confidence: Optional[float]  # Gate confidence [0, 1]
+
+    # Causal importance for gap features
+    causal_importance: Optional[Dict[str, float]]  # {feature_name: causal_score}
+
+    # Feature categorization from causal analysis
+    direct_cause_features: Optional[List[str]]  # Features with direct edge to target
+    divergent_features: Optional[List[str]]  # Features with |rank_diff| > threshold
+    causal_only_features: Optional[List[str]]  # Causal signal, no predictive
+    predictive_only_features: Optional[List[str]]  # Predictive signal, no causal
+
+    # Causal prioritization outputs
+    causal_evidence_warnings: Optional[List[str]]  # Warnings about causal evidence
+
 
 # Type aliases for output contract compliance
 GapAnalyzerOutput = TypedDict(

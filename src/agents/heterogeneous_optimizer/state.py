@@ -180,6 +180,25 @@ class HeterogeneousOptimizerState(TypedDict):
     # Audit chain (tamper-evident logging)
     audit_workflow_id: Optional[UUID]
 
+    # ========================================================================
+    # V4.4: Causal Discovery Integration
+    # ========================================================================
+
+    # Discovered DAG from causal discovery module
+    discovered_dag_adjacency: Optional[List[List[int]]]  # Adjacency matrix
+    discovered_dag_nodes: Optional[List[str]]  # Node names
+    discovered_dag_edge_types: Optional[Dict[str, str]]  # Edge types (DIRECTED, BIDIRECTED, UNDIRECTED)
+
+    # Discovery gate decision
+    discovery_gate_decision: Optional[Literal["accept", "review", "reject", "augment"]]
+    discovery_gate_confidence: Optional[float]  # Gate confidence [0, 1]
+
+    # DAG validation outputs
+    dag_validated_segments: Optional[List[str]]  # Segments with valid causal paths
+    dag_invalid_segments: Optional[List[str]]  # Segments without causal paths
+    latent_confounder_segments: Optional[List[str]]  # Segments with bidirected edges (latent confounders)
+    dag_validation_warnings: Optional[List[str]]  # Warnings from DAG validation
+
 
 class HeterogeneousOptimizerInput(TypedDict):
     """Input contract for Heterogeneous Optimizer agent (from orchestrator).

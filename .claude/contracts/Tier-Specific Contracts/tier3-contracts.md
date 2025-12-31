@@ -75,32 +75,52 @@ class ValidityThreat(BaseModel):
 
 class ExperimentDesignerOutput(BaseAgentOutput):
     """Output contract for Experiment Designer Agent"""
-    
+
     # Design specification
     design_type: Literal["rct", "cluster_rct", "regression_discontinuity", "diff_in_diff", "synthetic_control"]
-    
+
     # Refined definitions
     refined_hypothesis: str
     treatment_definition: TreatmentDefinition
     outcome_definitions: List[OutcomeDefinition]
-    
+
     # Sample size and power
     required_sample_size: int
     estimated_power: float
     estimated_duration_weeks: int
-    
+
     # Validity
     validity_threats: List[ValidityThreat]
     overall_validity_score: Literal["strong", "moderate", "weak"]
-    
+
     # Implementation
     randomization_strategy: str
     analysis_plan: str
-    
+
     # Generated artifacts
     dag_specification: Dict[str, Any]
     analysis_code_template: str
     preregistration_document: str
+
+    # V4.4: DAG-Aware Validity Validation
+    dag_confounders_validated: Optional[List[str]] = Field(
+        None, description="Confounders validated against discovered DAG"
+    )
+    dag_missing_confounders: Optional[List[str]] = Field(
+        None, description="Assumed confounders NOT found in discovered DAG"
+    )
+    dag_latent_confounders: Optional[List[str]] = Field(
+        None, description="Latent confounders detected from FCI bidirected edges"
+    )
+    dag_instrument_candidates: Optional[List[str]] = Field(
+        None, description="Valid IV candidates identified from DAG structure"
+    )
+    dag_effect_modifiers: Optional[List[str]] = Field(
+        None, description="Effect modifiers identified from DAG"
+    )
+    dag_validation_warnings: Optional[List[str]] = Field(
+        None, description="Warnings from DAG-aware validity validation"
+    )
 ```
 
 ### Handoff Format
@@ -109,29 +129,39 @@ class ExperimentDesignerOutput(BaseAgentOutput):
 experiment_designer_handoff:
   agent: experiment_designer
   analysis_type: experiment_design
-  
+
   key_findings:
     - design_type: <type>
     - required_sample_size: <n>
     - duration_weeks: <n>
     - validity_score: strong|moderate|weak
-  
+
   design_summary:
     hypothesis: <refined hypothesis>
     treatment: <treatment description>
     outcome: <primary outcome>
     randomization: <strategy>
-  
+
   validity_assessment:
     threats_identified: <count>
     mitigations_proposed: <count>
     proceed_recommendation: proceed|proceed_with_caution|redesign_needed
-  
+
+  # V4.4: DAG-Aware Validity Validation (if discovered DAG available)
+  dag_validation:
+    enabled: <bool>
+    confounders_validated: <count>
+    missing_confounders: [<list>]
+    latent_confounders: [<list>]
+    instrument_candidates: [<list>]
+    effect_modifiers: [<list>]
+    warnings: [<list>]
+
   artifacts:
     dag: <available>
     analysis_code: <available>
     preregistration: <available>
-  
+
   requires_further_analysis: <bool>
   suggested_next_agent: causal_impact
 ```
@@ -570,6 +600,16 @@ class ExperimentDesignTrainingSignal:
     confounders_identified: int = 0
     validity_threats_count: int = 0
 
+    # V4.4: DAG-Aware Validity Validation Phase
+    dag_validation_enabled: bool = False
+    dag_confounders_validated: int = 0
+    dag_missing_confounders: int = 0
+    dag_latent_confounders: int = 0
+    dag_instrument_candidates: int = 0
+    dag_effect_modifiers: int = 0
+    dag_gate_decision: str = ""  # accept, review, reject, augment
+    dag_validation_warnings: int = 0
+
     # Digital Twin Integration
     used_digital_twin: bool = False
     simulation_iterations: int = 0
@@ -585,10 +625,11 @@ class ExperimentDesignTrainingSignal:
         """
         Compute reward for MIPROv2 optimization.
 
-        Weighting:
-        - power_achievement: 0.25 (power >= 0.8)
+        Weighting (V4.4 Updated):
+        - power_achievement: 0.20 (power >= 0.8)
         - validity_coverage: 0.20 (threats identified)
-        - investigation_depth: 0.20 (past experiments, confounders)
+        - dag_validation_quality: 0.10 (confounders validated ratio)
+        - investigation_depth: 0.15 (past experiments, confounders)
         - efficiency: 0.15 (latency)
         - outcome_success: 0.20 (if available)
         """
@@ -792,5 +833,6 @@ experiment_designer   ──┘         │
 
 | Date | Change |
 |------|--------|
+| 2025-12-31 | V4.4: Added DAG-Aware Validity Validation for Experiment Designer |
 | 2025-12-23 | V2: Added DSPy Role specifications for all Tier 3 agents |
 | 2025-12-08 | V1: Initial creation |
