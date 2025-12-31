@@ -649,10 +649,23 @@ def validate_experiment_design(
 - [x] Explainer narrative tests pass (37 tests) ✅
 - [x] Integration contracts updated (v1.2) ✅
 
+### Contract Validations ✅ COMPLETE
+All contract files verified with V4.4 Causal Discovery updates (2025-12-31):
+
+| Contract File | V4.4 Updates | Status |
+|---------------|--------------|--------|
+| `tier0-contracts.md` | FeatureAnalyzerDiscoveryInput/Output, DriverRanker integration | ✅ |
+| `tier2-contracts.md` | discovery_config, discovery_gate_decision, discovery_confidence | ✅ |
+| `tier3-contracts.md` | StructuralDriftResult, DAG-aware validity, EdgeType enum | ✅ |
+| `data-contracts.md` | DiscoveryResult schema, DAG output contract | ✅ |
+| `integration-contracts.md` | Causal Engine discovery interface, gate decisions | ✅ |
+| `orchestrator-contracts.md` | enable_discovery, discovery_config in AgentSelectionCriteria | ✅ |
+
 **V4.4 Causal Discovery Agent Integration Complete**: 2025-12-31
 - Wave 1: Core Integration (Feature Analyzer + Causal Impact)
 - Wave 2: Downstream Agents (Gap Analyzer + Het. Optimizer + Exp. Designer)
 - Wave 3: Supporting Integration (Orchestrator + Explainer + Drift Monitor)
+- Contract Validations: All 6 contract files verified
 
 ---
 
