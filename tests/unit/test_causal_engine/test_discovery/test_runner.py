@@ -62,13 +62,21 @@ class TestGetAlgorithm:
         algo = runner._get_algorithm(DiscoveryAlgorithmType.PC)
         assert algo is not None
 
+    def test_get_fci_algorithm(self):
+        """Test getting FCI algorithm."""
+        runner = DiscoveryRunner()
+
+        algo = runner._get_algorithm(DiscoveryAlgorithmType.FCI)
+        assert algo is not None
+        assert algo.supports_latent_confounders() is True
+
     def test_unsupported_algorithm_raises(self):
         """Test that unsupported algorithm raises error."""
         runner = DiscoveryRunner()
 
-        # FCI is not implemented yet
+        # LINGAM variants are not implemented yet
         with pytest.raises(ValueError, match="not supported"):
-            runner._get_algorithm(DiscoveryAlgorithmType.FCI)
+            runner._get_algorithm(DiscoveryAlgorithmType.DIRECT_LINGAM)
 
 
 class TestGetAvailableAlgorithms:
