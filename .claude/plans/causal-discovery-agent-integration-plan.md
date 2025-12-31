@@ -649,9 +649,10 @@ def validate_experiment_design(
 - [x] Explainer narrative tests pass (37 tests) ✅
 - [x] Integration contracts updated (v1.2) ✅
 
-### Contract Validations ✅ COMPLETE
-All contract files verified with V4.4 Causal Discovery updates (2025-12-31):
+### Contract Validations ✅ EXECUTED & VERIFIED
+All V4.4 contracts validated via code execution (2025-12-31):
 
+**Contract Documentation Verified**:
 | Contract File | V4.4 Updates | Status |
 |---------------|--------------|--------|
 | `tier0-contracts.md` | FeatureAnalyzerDiscoveryInput/Output, DriverRanker integration | ✅ |
@@ -660,6 +661,25 @@ All contract files verified with V4.4 Causal Discovery updates (2025-12-31):
 | `data-contracts.md` | DiscoveryResult schema, DAG output contract | ✅ |
 | `integration-contracts.md` | Causal Engine discovery interface, gate decisions | ✅ |
 | `orchestrator-contracts.md` | enable_discovery, discovery_config in AgentSelectionCriteria | ✅ |
+
+**Contract Implementation Validated** (10/10 passed):
+| Component | Validation | Status |
+|-----------|------------|--------|
+| DiscoveryRunner | `discover_dag` method present | ✅ |
+| DriverRanker | `rank_from_discovery_result` method present | ✅ |
+| DiscoveryGate | `evaluate` method present | ✅ |
+| FeatureAnalyzerState | 4 V4.4 fields (discovery_enabled, causal_rankings, etc.) | ✅ |
+| OrchestratorState | 3 V4.4 fields (enable_discovery, discovery_config, etc.) | ✅ |
+| StructuralDriftNode | `execute` method present | ✅ |
+| ExplainerState | 3 V4.4 fields (discovered_dag_adjacency, etc.) | ✅ |
+| GapAnalyzerState | 3 V4.4 fields (discovery_gate_decision, etc.) | ✅ |
+| ExperimentDesignState | 2 V4.4 fields (discovered_dag_adjacency, etc.) | ✅ |
+| HeterogeneousOptimizerState | 2 V4.4 fields (discovered_dag_adjacency, etc.) | ✅ |
+
+**Test Validations Executed**:
+- DAG validation tests: 51 passed
+- Structural drift tests: 12 passed
+- Router discovery tests: 49 passed
 
 **V4.4 Causal Discovery Agent Integration Complete**: 2025-12-31
 - Wave 1: Core Integration (Feature Analyzer + Causal Impact)
