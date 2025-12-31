@@ -6,6 +6,8 @@ to internal and external validity.
 
 Algorithm: .claude/specialists/Agent_Specialists_Tiers 1-5/experiment-designer.md lines 552-706
 Contract: .claude/contracts/tier3-contracts.md lines 82-142
+
+V4.4: Added DAG-aware validity validation.
 """
 
 import asyncio
@@ -200,6 +202,32 @@ class ValidityAuditNode:
             state["redesign_needed"] = audit.get("redesign_needed", False)
             state["redesign_recommendations"] = audit.get("redesign_recommendations", [])
 
+            # V4.4: DAG-aware validity validation
+            if self._has_dag_evidence(state):
+                dag_results, dag_warnings = self._perform_dag_validation(state)
+
+                # Store DAG validation results in state
+                state["dag_confounders_validated"] = dag_results.get("confounders_validated", [])
+                state["dag_missing_confounders"] = dag_results.get("confounders_missing", [])
+                state["dag_latent_confounders"] = dag_results.get("latent_confounders", [])
+                state["dag_instrument_candidates"] = dag_results.get("instrument_candidates", [])
+                state["dag_effect_modifiers"] = dag_results.get("effect_modifiers", [])
+                state["dag_validation_warnings"] = dag_warnings
+
+                # Add DAG warnings to overall warnings
+                state["warnings"] = state.get("warnings", []) + dag_warnings
+
+                # If missing confounders or latent confounders detected, flag for review
+                if dag_results.get("confounders_missing") or dag_results.get("latent_confounders"):
+                    # Adjust validity score down by 10% for each concern
+                    penalty = 0.1 * (
+                        (1 if dag_results.get("confounders_missing") else 0)
+                        + (1 if dag_results.get("latent_confounders") else 0)
+                    )
+                    state["overall_validity_score"] = max(
+                        0.0, state.get("overall_validity_score", 0.5) - penalty
+                    )
+
             # Update metadata
             state["node_latencies_ms"] = node_latencies
             state["total_llm_tokens_used"] = state.get("total_llm_tokens_used", 0) + 1500
@@ -367,3 +395,271 @@ For each threat, assess severity (low/medium/high/critical) and mitigation:
             "external_validity_limits": ["Unable to fully assess"],
             "mitigation_recommendations": [],
         }
+
+    # =========================================================================
+    # V4.4: DAG-Aware Validity Validation
+    # =========================================================================
+
+    def _has_dag_evidence(self, state: ExperimentDesignState) -> bool:
+        """Check if DAG evidence is available for validation.
+
+        Args:
+            state: Current experiment design state
+
+        Returns:
+            True if DAG evidence is available and valid
+        """
+        dag_adjacency = state.get("discovered_dag_adjacency")
+        dag_nodes = state.get("discovered_dag_nodes")
+        discovery_gate_decision = state.get("discovery_gate_decision")
+
+        # DAG evidence is available if:
+        # 1. We have DAG adjacency matrix and nodes
+        # 2. Discovery gate decision is accept or review (not reject)
+        return (
+            dag_adjacency is not None
+            and dag_nodes is not None
+            and len(dag_adjacency) > 0
+            and len(dag_nodes) > 0
+            and discovery_gate_decision in ("accept", "review")
+        )
+
+    def _validate_confounders_against_dag(
+        self, state: ExperimentDesignState
+    ) -> tuple[list[str], list[str], list[str]]:
+        """Validate assumed confounders against discovered DAG.
+
+        V4.4: Check which confounders from causal_assumptions are actually
+        in the DAG, and identify any that are missing (not discovered).
+
+        Args:
+            state: Current experiment design state
+
+        Returns:
+            Tuple of (validated_confounders, missing_confounders, warnings)
+        """
+        validated: list[str] = []
+        missing: list[str] = []
+        warnings: list[str] = []
+
+        dag_nodes = state.get("discovered_dag_nodes", [])
+        dag_nodes_set = set(dag_nodes)
+        causal_assumptions = state.get("causal_assumptions", [])
+
+        # Extract potential confounder variables from assumptions
+        # Assumptions often have format like "Controlled for: specialty, region, ..."
+        potential_confounders: list[str] = []
+        for assumption in causal_assumptions:
+            assumption_lower = assumption.lower()
+            if "control" in assumption_lower or "adjust" in assumption_lower:
+                # Extract variable names - simple heuristic
+                parts = assumption.split(":")
+                if len(parts) > 1:
+                    vars_part = parts[-1]
+                    # Split by common separators
+                    for sep in [",", "and", ";", "/"]:
+                        vars_part = vars_part.replace(sep, ",")
+                    potential_confounders.extend(
+                        [v.strip().lower() for v in vars_part.split(",") if v.strip()]
+                    )
+
+        # Also check common_causes from dowhy_spec if available
+        dowhy_spec = state.get("dowhy_spec")
+        if dowhy_spec:
+            common_causes = dowhy_spec.get("common_causes", [])
+            potential_confounders.extend([c.lower() for c in common_causes])
+
+        # Deduplicate
+        potential_confounders = list(set(potential_confounders))
+
+        # Check each confounder against DAG
+        dag_nodes_lower = {n.lower(): n for n in dag_nodes}
+        for confounder in potential_confounders:
+            if confounder in dag_nodes_lower:
+                validated.append(dag_nodes_lower[confounder])
+            else:
+                missing.append(confounder)
+                warnings.append(
+                    f"Assumed confounder '{confounder}' was NOT discovered in causal DAG. "
+                    f"Effect may be spurious or confounder may not be causally relevant."
+                )
+
+        return validated, missing, warnings
+
+    def _identify_latent_confounders(self, state: ExperimentDesignState) -> list[str]:
+        """Identify latent confounders from FCI bidirected edges.
+
+        V4.4: FCI algorithm detects latent confounders as bidirected edges (↔).
+        These indicate unobserved common causes.
+
+        Args:
+            state: Current experiment design state
+
+        Returns:
+            List of variable pairs with latent confounders
+        """
+        latent_confounders: list[str] = []
+        edge_types = state.get("discovered_dag_edge_types", {})
+
+        for edge_key, edge_type in edge_types.items():
+            if edge_type == "BIDIRECTED":
+                latent_confounders.append(edge_key)
+
+        return latent_confounders
+
+    def _identify_instrument_candidates(self, state: ExperimentDesignState) -> list[str]:
+        """Identify valid instrumental variable candidates from DAG.
+
+        V4.4: A valid IV must:
+        1. Have a path to the treatment
+        2. NOT have a direct path to the outcome (except through treatment)
+        3. NOT share a common cause with the outcome
+
+        Args:
+            state: Current experiment design state
+
+        Returns:
+            List of potential IV candidates
+        """
+        candidates: list[str] = []
+
+        dag_adjacency = state.get("discovered_dag_adjacency", [])
+        dag_nodes = state.get("discovered_dag_nodes", [])
+        treatment_var = state.get("treatment_variable", "")
+        outcome_var = state.get("outcome_variable", "")
+
+        if not dag_adjacency or not dag_nodes or not treatment_var or not outcome_var:
+            return candidates
+
+        node_to_idx = {node: idx for idx, node in enumerate(dag_nodes)}
+        n_nodes = len(dag_nodes)
+
+        treatment_idx = node_to_idx.get(treatment_var)
+        outcome_idx = node_to_idx.get(outcome_var)
+
+        if treatment_idx is None or outcome_idx is None:
+            return candidates
+
+        # For each node, check IV criteria
+        for node_idx, node in enumerate(dag_nodes):
+            if node in (treatment_var, outcome_var):
+                continue
+
+            # Check 1: Has edge to treatment
+            has_edge_to_treatment = dag_adjacency[node_idx][treatment_idx] == 1
+
+            # Check 2: No direct edge to outcome
+            has_edge_to_outcome = dag_adjacency[node_idx][outcome_idx] == 1
+
+            # For simplicity, check basic criteria (full IV validation is complex)
+            if has_edge_to_treatment and not has_edge_to_outcome:
+                candidates.append(node)
+
+        return candidates
+
+    def _identify_effect_modifiers(self, state: ExperimentDesignState) -> list[str]:
+        """Identify effect modifiers from DAG structure.
+
+        V4.4: Effect modifiers are variables that may moderate the treatment effect.
+        In the DAG, these are variables that are:
+        1. Connected to both treatment and outcome
+        2. Not on the causal path from treatment to outcome
+
+        Args:
+            state: Current experiment design state
+
+        Returns:
+            List of potential effect modifiers
+        """
+        modifiers: list[str] = []
+
+        dag_adjacency = state.get("discovered_dag_adjacency", [])
+        dag_nodes = state.get("discovered_dag_nodes", [])
+        treatment_var = state.get("treatment_variable", "")
+        outcome_var = state.get("outcome_variable", "")
+
+        if not dag_adjacency or not dag_nodes or not treatment_var or not outcome_var:
+            return modifiers
+
+        node_to_idx = {node: idx for idx, node in enumerate(dag_nodes)}
+        n_nodes = len(dag_nodes)
+
+        treatment_idx = node_to_idx.get(treatment_var)
+        outcome_idx = node_to_idx.get(outcome_var)
+
+        if treatment_idx is None or outcome_idx is None:
+            return modifiers
+
+        # For each node, check if it could be an effect modifier
+        for node_idx, node in enumerate(dag_nodes):
+            if node in (treatment_var, outcome_var):
+                continue
+
+            # Check if connected to treatment (as cause of treatment OR common cause)
+            connected_to_treatment = (
+                dag_adjacency[node_idx][treatment_idx] == 1  # Node -> Treatment
+                or dag_adjacency[treatment_idx][node_idx] == 1  # Treatment -> Node
+            )
+
+            # Check if connected to outcome (not on causal path, but as common cause)
+            # Common causes point TO both treatment and outcome
+            is_common_cause = (
+                dag_adjacency[node_idx][treatment_idx] == 1
+                and dag_adjacency[node_idx][outcome_idx] == 1
+            )
+
+            if is_common_cause:
+                modifiers.append(node)
+
+        return modifiers
+
+    def _perform_dag_validation(
+        self, state: ExperimentDesignState
+    ) -> tuple[dict[str, Any], list[str]]:
+        """Perform comprehensive DAG-based validity validation.
+
+        V4.4: Main entry point for DAG-aware validation.
+
+        Args:
+            state: Current experiment design state
+
+        Returns:
+            Tuple of (dag_validation_results, warnings)
+        """
+        results: dict[str, Any] = {}
+        all_warnings: list[str] = []
+
+        # Validate confounders
+        validated, missing, confounder_warnings = self._validate_confounders_against_dag(state)
+        results["confounders_validated"] = validated
+        results["confounders_missing"] = missing
+        all_warnings.extend(confounder_warnings)
+
+        # Identify latent confounders
+        latent = self._identify_latent_confounders(state)
+        results["latent_confounders"] = latent
+        if latent:
+            all_warnings.append(
+                f"DAG reveals {len(latent)} latent confounder(s): {', '.join(latent)}. "
+                "Consider sensitivity analysis or finding proxies for unmeasured confounders."
+            )
+
+        # Identify IV candidates
+        iv_candidates = self._identify_instrument_candidates(state)
+        results["instrument_candidates"] = iv_candidates
+        if iv_candidates:
+            all_warnings.append(
+                f"DAG suggests potential instrumental variables: {', '.join(iv_candidates)}. "
+                "Consider IV design if RCT is not feasible."
+            )
+
+        # Identify effect modifiers
+        effect_modifiers = self._identify_effect_modifiers(state)
+        results["effect_modifiers"] = effect_modifiers
+        if effect_modifiers:
+            all_warnings.append(
+                f"DAG identifies potential effect modifiers: {', '.join(effect_modifiers)}. "
+                "Consider stratification or interaction analysis."
+            )
+
+        return results, all_warnings

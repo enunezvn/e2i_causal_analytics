@@ -8,10 +8,12 @@ Categorization Criteria:
 - Quick Wins: cost < $10k AND gap < 10% AND ROI > 1
 - Strategic Bets: cost > $50k AND ROI > 2
 - Implementation Difficulty: Based on cost, gap size, complexity
+
+V4.4: Added causal evidence filtering and confidence adjustments.
 """
 
 import time
-from typing import Any, Dict, List, Literal
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from ..state import (
     GapAnalyzerState,
@@ -19,6 +21,12 @@ from ..state import (
     PrioritizedOpportunity,
     ROIEstimate,
 )
+
+
+# V4.4: Causal evidence adjustment constants
+DIRECT_CAUSE_BOOST = 1.2  # Boost for direct causes
+NO_CAUSAL_EVIDENCE_PENALTY = 0.7  # Penalty for predictive-only features
+HIGH_CAUSAL_SCORE_THRESHOLD = 0.6  # Threshold for "high" causal importance
 
 
 class PrioritizerNode:
@@ -88,7 +96,25 @@ class PrioritizerNode:
 
                 opportunities.append(opportunity)
 
-            # Sort by expected ROI (descending)
+            # V4.4: Apply causal evidence adjustments if available
+            causal_evidence_warnings: List[str] = []
+            if self._has_causal_evidence(state):
+                causal_rankings = state.get("causal_rankings", [])
+                direct_cause_features = state.get("direct_cause_features", [])
+                predictive_only_features = state.get("predictive_only_features", [])
+
+                # Build causal lookup
+                causal_lookup = self._build_causal_feature_lookup(causal_rankings)
+
+                # Apply causal adjustments
+                opportunities, causal_evidence_warnings = self._apply_causal_evidence_adjustments(
+                    opportunities,
+                    causal_lookup,
+                    direct_cause_features,
+                    predictive_only_features,
+                )
+
+            # Sort by expected ROI (descending) - may have been adjusted by causal evidence
             opportunities.sort(key=lambda o: o["roi_estimate"]["expected_roi"], reverse=True)
 
             # Assign ranks
@@ -104,13 +130,19 @@ class PrioritizerNode:
 
             prioritization_latency_ms = int((time.time() - start_time) * 1000)
 
-            return {
+            result: Dict[str, Any] = {
                 "prioritized_opportunities": prioritized_opportunities,
                 "quick_wins": quick_wins,
                 "strategic_bets": strategic_bets,
                 "prioritization_latency_ms": prioritization_latency_ms,
                 "status": "completed",
             }
+
+            # V4.4: Add causal evidence warnings if any
+            if causal_evidence_warnings:
+                result["causal_evidence_warnings"] = causal_evidence_warnings
+
+            return result
 
         except Exception as e:
             prioritization_latency_ms = int((time.time() - start_time) * 1000)
@@ -324,3 +356,144 @@ class PrioritizerNode:
         strategic_bets.sort(key=lambda o: o["roi_estimate"]["expected_roi"], reverse=True)
 
         return strategic_bets
+
+    # =========================================================================
+    # V4.4: Causal Evidence Filtering Methods
+    # =========================================================================
+
+    def _build_causal_feature_lookup(
+        self, causal_rankings: List[Dict[str, Any]]
+    ) -> Dict[str, Dict[str, Any]]:
+        """Build lookup from feature name to causal ranking info.
+
+        Args:
+            causal_rankings: List of FeatureRanking dicts from DriverRanker
+
+        Returns:
+            Dict mapping feature_name to ranking info
+        """
+        lookup: Dict[str, Dict[str, Any]] = {}
+        for ranking in causal_rankings:
+            feature_name = ranking.get("feature_name", "")
+            if feature_name:
+                lookup[feature_name] = {
+                    "causal_rank": ranking.get("causal_rank"),
+                    "predictive_rank": ranking.get("predictive_rank"),
+                    "causal_score": ranking.get("causal_score", 0.0),
+                    "predictive_score": ranking.get("predictive_score", 0.0),
+                    "rank_difference": ranking.get("rank_difference", 0),
+                    "is_direct_cause": ranking.get("is_direct_cause", False),
+                    "path_length": ranking.get("path_length"),
+                }
+        return lookup
+
+    def _get_gap_feature_name(self, gap: PerformanceGap) -> str:
+        """Extract feature name from gap for causal lookup.
+
+        The gap's metric and segment form the feature identifier.
+
+        Args:
+            gap: Performance gap
+
+        Returns:
+            Feature name for causal lookup
+        """
+        # Primary feature is the metric being measured
+        return gap["metric"]
+
+    def _apply_causal_evidence_adjustments(
+        self,
+        opportunities: List[PrioritizedOpportunity],
+        causal_lookup: Dict[str, Dict[str, Any]],
+        direct_cause_features: List[str],
+        predictive_only_features: List[str],
+    ) -> Tuple[List[PrioritizedOpportunity], List[str]]:
+        """Adjust opportunity ROI based on causal evidence.
+
+        V4.4: Boost opportunities targeting direct causes,
+        penalize those based only on predictive importance.
+
+        Args:
+            opportunities: List of opportunities to adjust
+            causal_lookup: Feature name to causal ranking lookup
+            direct_cause_features: Features with direct causal edge to target
+            predictive_only_features: Features with predictive but no causal signal
+
+        Returns:
+            Tuple of (adjusted opportunities, causal evidence warnings)
+        """
+        adjusted_opportunities = []
+        warnings: List[str] = []
+
+        for opp in opportunities:
+            gap = opp["gap"]
+            feature_name = self._get_gap_feature_name(gap)
+            roi_estimate = opp["roi_estimate"]
+            original_roi = roi_estimate["expected_roi"]
+
+            # Get causal info for this feature
+            causal_info = causal_lookup.get(feature_name)
+
+            adjustment_factor = 1.0
+            adjustment_reason = None
+
+            if causal_info:
+                causal_score = causal_info.get("causal_score", 0.0)
+                is_direct_cause = causal_info.get("is_direct_cause", False)
+
+                # Boost for direct causes
+                if is_direct_cause or feature_name in direct_cause_features:
+                    adjustment_factor = DIRECT_CAUSE_BOOST
+                    adjustment_reason = "direct_cause_boost"
+                # Boost for high causal score
+                elif causal_score >= HIGH_CAUSAL_SCORE_THRESHOLD:
+                    adjustment_factor = 1.0 + (causal_score - HIGH_CAUSAL_SCORE_THRESHOLD) * 0.5
+                    adjustment_reason = "high_causal_score"
+                # Penalize predictive-only features
+                elif feature_name in predictive_only_features:
+                    adjustment_factor = NO_CAUSAL_EVIDENCE_PENALTY
+                    adjustment_reason = "predictive_only_penalty"
+                    warnings.append(
+                        f"Gap '{gap['gap_id']}' targets '{feature_name}' which lacks causal evidence. "
+                        f"ROI adjusted by {NO_CAUSAL_EVIDENCE_PENALTY:.0%}."
+                    )
+            else:
+                # No causal info available - add warning but don't adjust
+                warnings.append(
+                    f"Gap '{gap['gap_id']}' targets '{feature_name}' with no causal analysis available."
+                )
+
+            # Apply adjustment to ROI
+            if adjustment_factor != 1.0:
+                adjusted_roi = original_roi * adjustment_factor
+                # Create updated ROI estimate with causal adjustment
+                adjusted_roi_estimate = dict(roi_estimate)
+                adjusted_roi_estimate["expected_roi"] = adjusted_roi
+                adjusted_roi_estimate["causal_adjustment_factor"] = adjustment_factor
+                adjusted_roi_estimate["causal_adjustment_reason"] = adjustment_reason
+
+                # Create adjusted opportunity
+                adjusted_opp = dict(opp)
+                adjusted_opp["roi_estimate"] = adjusted_roi_estimate
+                adjusted_opportunities.append(adjusted_opp)
+            else:
+                adjusted_opportunities.append(opp)
+
+        return adjusted_opportunities, warnings
+
+    def _has_causal_evidence(self, state: GapAnalyzerState) -> bool:
+        """Check if causal discovery results are available and valid.
+
+        Args:
+            state: Current gap analyzer state
+
+        Returns:
+            True if causal evidence is available for filtering
+        """
+        causal_rankings = state.get("causal_rankings", [])
+        discovery_gate_decision = state.get("discovery_gate_decision")
+
+        # Causal evidence is available if:
+        # 1. We have causal rankings
+        # 2. Discovery gate decision is accept or review (not reject)
+        return bool(causal_rankings) and discovery_gate_decision in ("accept", "review")

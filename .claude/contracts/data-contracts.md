@@ -442,9 +442,93 @@ Changes that don't require code updates:
 
 ---
 
-**Last Updated**: [Date]
-**Version**: 1.0
-**Owner**: [Team/Person]
+## Causal Discovery Data Contract (V4.4)
+
+### Overview
+
+The causal discovery module produces DAG (Directed Acyclic Graph) structures that flow through agents for DAG-aware validation. This contract defines the schema for discovered DAG data.
+
+### DAG Output Schema
+
+```python
+from typing import Dict, List, Literal, Optional, TypedDict
+
+class DiscoveryResult(TypedDict):
+    """Output from causal discovery module."""
+
+    # Core DAG structure
+    adjacency_matrix: List[List[int]]  # n x n matrix, 1 = edge exists
+    nodes: List[str]  # Node names (column headers)
+    edge_types: Dict[str, str]  # "A->B": "DIRECTED" | "BIDIRECTED" | "UNDIRECTED"
+
+    # Ensemble metadata
+    algorithm: str  # "ensemble", "ges", "pc", "fci", "lingam"
+    algorithm_configs: Dict[str, Any]  # Per-algorithm parameters
+    ensemble_threshold: float  # Min agreement threshold (0.5-1.0)
+    edge_agreements: Dict[str, float]  # "A->B": 0.75 (agreement score)
+
+    # Quality metrics
+    confidence_score: float  # Overall confidence (0-1)
+    n_edges: int  # Total edges discovered
+    n_bidirected: int  # Bidirected edges (latent confounders)
+    sparsity: float  # Edge density (0-1)
+
+    # Performance
+    latency_ms: float
+    data_hash: str  # For reproducibility
+
+
+class GateEvaluation(TypedDict):
+    """Quality gate evaluation for discovered DAG."""
+
+    decision: Literal["accept", "review", "reject", "augment"]
+    confidence: float  # Gate confidence (0-1)
+    reasons: List[str]  # Reasons for decision
+    augmented_edges: List[tuple[str, str]]  # High-confidence edges to add
+    warnings: List[str]  # Non-blocking warnings
+```
+
+### Agent State DAG Fields
+
+All agents receiving DAG data must include these state fields:
+
+```python
+# Core DAG fields (required)
+discovered_dag_adjacency: Optional[List[List[int]]]  # Adjacency matrix
+discovered_dag_nodes: Optional[List[str]]  # Node names
+discovered_dag_edge_types: Optional[Dict[str, str]]  # Edge type mapping
+
+# Gate decision (required)
+discovery_gate_decision: Optional[Literal["accept", "review", "reject", "augment"]]
+discovery_gate_confidence: Optional[float]  # 0-1 scale
+```
+
+### DAG Validation Rules
+
+1. **Adjacency Matrix**: Must be square (n x n), values in {0, 1}
+2. **Nodes**: Length must match adjacency matrix dimension
+3. **Edge Types**: Keys must be in format "A->B" or "A<->B"
+4. **Gate Decision**: Required for DAG usage; "reject" disables DAG features
+
+### Contract Obligations
+
+| Component | Obligation |
+|-----------|------------|
+| Discovery Module | Produce DiscoveryResult conforming to schema |
+| Orchestrator | Pass DAG data to downstream agents |
+| Agents | Check `_has_dag_evidence()` before using DAG |
+| Agents | Respect gate decision (skip validation if "reject") |
+
+---
+
+**Last Updated**: 2025-12-31
+**Version**: 1.1
+**Owner**: E2I Team
+
+**Changes in V1.1**:
+- Added Causal Discovery Data Contract (V4.4) for DAG output schema
+- Added Agent State DAG Fields contract
+- Added DAG Validation Rules
 
 **Instructions**:
 1. All data processing code MUST conform to these contracts
