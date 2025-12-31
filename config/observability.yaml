@@ -243,6 +243,97 @@ spans:
     - "authorization"
 
 # ─────────────────────────────────────────────────────────────────────────────
+# CAUSAL DISCOVERY METRICS
+# ─────────────────────────────────────────────────────────────────────────────
+# Metrics for causal discovery observability
+
+causal_discovery:
+  enabled: true
+
+  # Tracing settings
+  tracing:
+    enabled: true
+    trace_all_algorithms: true              # Trace individual algorithm runs
+    trace_ensemble_voting: true             # Trace ensemble combination
+    trace_gate_decisions: true              # Trace gate ACCEPT/REVIEW/REJECT/AUGMENT
+    trace_cache_events: true                # Trace cache hits/misses
+
+  # Metrics to collect
+  metrics:
+    # Algorithm performance
+    - name: "discovery_algorithm_runtime_seconds"
+      type: "histogram"
+      description: "Runtime for each algorithm"
+      labels: ["algorithm"]
+
+    - name: "discovery_algorithm_edges_found"
+      type: "gauge"
+      description: "Number of edges found by algorithm"
+      labels: ["algorithm"]
+
+    - name: "discovery_algorithm_converged"
+      type: "counter"
+      description: "Whether algorithm converged"
+      labels: ["algorithm", "converged"]
+
+    # Ensemble metrics
+    - name: "discovery_edges_discovered"
+      type: "gauge"
+      description: "Total edges in ensemble DAG"
+
+    - name: "discovery_algorithm_agreement"
+      type: "gauge"
+      description: "Agreement ratio across algorithms (0-1)"
+
+    - name: "discovery_total_runtime_seconds"
+      type: "histogram"
+      description: "Total discovery runtime"
+      buckets: [0.5, 1, 2, 5, 10, 30, 60, 120, 300]
+
+    # Gate decision metrics
+    - name: "discovery_gate_decision"
+      type: "counter"
+      description: "Gate decision counts"
+      labels: ["decision"]  # ACCEPT, REVIEW, REJECT, AUGMENT
+
+    - name: "discovery_gate_confidence"
+      type: "histogram"
+      description: "Gate confidence scores"
+      buckets: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+
+    # Cache metrics
+    - name: "discovery_cache_hit"
+      type: "counter"
+      description: "Cache hit/miss counts"
+      labels: ["hit"]
+
+    - name: "discovery_cache_latency_ms"
+      type: "histogram"
+      description: "Cache lookup latency"
+      buckets: [1, 5, 10, 25, 50, 100, 250, 500]
+
+  # Dashboard settings
+  dashboard:
+    refresh_interval_seconds: 30
+    default_time_range: "1h"
+    panels:
+      - name: "Algorithm Performance"
+        metrics: ["discovery_algorithm_runtime_seconds", "discovery_algorithm_edges_found"]
+        visualization: "bar_chart"
+
+      - name: "Gate Decisions"
+        metrics: ["discovery_gate_decision", "discovery_gate_confidence"]
+        visualization: "pie_chart"
+
+      - name: "Cache Performance"
+        metrics: ["discovery_cache_hit", "discovery_cache_latency_ms"]
+        visualization: "time_series"
+
+      - name: "Ensemble Quality"
+        metrics: ["discovery_algorithm_agreement", "discovery_edges_discovered"]
+        visualization: "gauge"
+
+# ─────────────────────────────────────────────────────────────────────────────
 # AGENT TIER CONFIGURATION
 # ─────────────────────────────────────────────────────────────────────────────
 # Tier-specific observability settings
