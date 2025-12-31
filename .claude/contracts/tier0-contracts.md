@@ -2,8 +2,8 @@
 
 **Purpose**: Define integration contracts for the 7 ML Foundation agents that handle the complete ML lifecycle from problem definition to production deployment.
 
-**Version**: 1.0
-**Last Updated**: 2025-12-18
+**Version**: 1.1
+**Last Updated**: 2025-12-31 (V4.4 Causal Discovery Integration)
 **Owner**: E2I Development Team
 
 ---
@@ -683,6 +683,151 @@ class FeatureAnalyzerOutput(BaseModel):
 - **Memory**: Writes to semantic memory (feature relationships)
 - **Blocking**: No (but provides valuable context for deployment)
 - **MLOps Tools**: SHAP, Opik (for LLM interpretation)
+
+### V4.4 Enhancement: Causal Discovery Integration
+
+The feature_analyzer can optionally enable causal discovery to compare causal vs predictive feature importance using the DriverRanker.
+
+#### FeatureAnalyzerDiscoveryInput
+
+```python
+from typing import Dict, Any, List, Optional, Literal
+from pydantic import BaseModel, Field
+
+class FeatureAnalyzerDiscoveryInput(BaseModel):
+    """Optional discovery configuration for feature_analyzer."""
+
+    discovery_enabled: bool = Field(
+        default=False,
+        description="Enable causal discovery for causal vs predictive comparison"
+    )
+
+    discovery_config: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="""DiscoveryConfig parameters:
+        - algorithms: List[str] - ['ges', 'pc', 'fci', 'lingam']
+        - alpha: float - Significance level (default: 0.05)
+        - ensemble_threshold: float - Min algorithm agreement (default: 0.5)
+        - max_cond_vars: int - Max conditioning set size (default: 3)
+        """
+    )
+
+    causal_target_variable: Optional[str] = Field(
+        None,
+        description="Target variable for causal path analysis (inferred from y if not set)"
+    )
+
+    divergent_threshold: int = Field(
+        default=3,
+        description="Rank difference threshold for divergent features"
+    )
+```
+
+#### FeatureAnalyzerDiscoveryOutput
+
+```python
+from typing import Dict, Any, List, Tuple, Literal
+from pydantic import BaseModel, Field
+
+class FeatureRanking(BaseModel):
+    """Individual feature ranking from DriverRanker."""
+
+    feature_name: str
+    causal_rank: int
+    predictive_rank: int
+    causal_score: float
+    predictive_score: float
+    rank_difference: int
+    is_direct_cause: bool
+    path_length: Optional[int] = None
+
+class FeatureAnalyzerDiscoveryOutput(BaseModel):
+    """Discovery output from feature_analyzer."""
+
+    # Discovery result
+    discovery_result: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Full DiscoveryResult from DiscoveryRunner"
+    )
+
+    # Gate evaluation
+    discovery_gate_decision: Optional[Literal["accept", "review", "reject", "augment"]] = Field(
+        None,
+        description="Gate decision for discovery quality"
+    )
+    discovery_gate_confidence: Optional[float] = Field(
+        None,
+        description="Gate confidence score (0-1)"
+    )
+    discovery_gate_reasons: List[str] = Field(
+        default_factory=list,
+        description="Reasons for gate decision"
+    )
+
+    # Causal rankings
+    causal_rankings: List[FeatureRanking] = Field(
+        default_factory=list,
+        description="Feature rankings from DriverRanker"
+    )
+
+    # Rank correlation
+    rank_correlation: Optional[float] = Field(
+        None,
+        description="Spearman correlation between causal and predictive ranks"
+    )
+
+    # Feature categorization
+    divergent_features: List[str] = Field(
+        default_factory=list,
+        description="Features with |rank_difference| > threshold"
+    )
+    causal_only_features: List[str] = Field(
+        default_factory=list,
+        description="Features with causal but no predictive signal"
+    )
+    predictive_only_features: List[str] = Field(
+        default_factory=list,
+        description="Features with predictive but no causal signal"
+    )
+    concordant_features: List[str] = Field(
+        default_factory=list,
+        description="Features with similar causal and predictive ranks"
+    )
+
+    # Causal importance
+    causal_importance: Dict[str, float] = Field(
+        default_factory=dict,
+        description="Causal importance scores by feature"
+    )
+    causal_importance_ranked: List[Tuple[str, float]] = Field(
+        default_factory=list,
+        description="Sorted causal importance (feature, score)"
+    )
+
+    # Direct causes
+    direct_cause_features: List[str] = Field(
+        default_factory=list,
+        description="Features that are direct causes of target"
+    )
+
+    # Interpretation
+    causal_interpretation: Optional[str] = Field(
+        None,
+        description="NL explanation of causal vs predictive comparison"
+    )
+```
+
+#### Discovery Integration Contract
+
+- **Components Used**: DiscoveryRunner, DiscoveryGate, DriverRanker
+- **Execution**: After SHAP computation (requires shap_values for comparison)
+- **Skip Conditions**: discovery_enabled=False, missing data/SHAP values
+- **Gate Decisions**:
+  - `accept`: Use discovered rankings directly
+  - `review`: Use rankings but flag for human review
+  - `reject`: Skip causal comparison (SHAP-only)
+  - `augment`: Combine discovered insights with SHAP
+- **Key Insight**: Divergent features reveal where correlation ≠ causation
 
 ---
 
