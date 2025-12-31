@@ -13,10 +13,12 @@ Algorithms:
 Author: E2I Causal Analytics Team
 """
 
+from .fci_wrapper import FCIAlgorithm
 from .ges_wrapper import GESAlgorithm
 from .pc_wrapper import PCAlgorithm
 
 __all__ = [
+    "FCIAlgorithm",
     "GESAlgorithm",
     "PCAlgorithm",
 ]

@@ -16,7 +16,7 @@ Author: E2I Causal Analytics Team
 import asyncio
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict, List, Optional, Set, Tuple, Type
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple, Type
 from uuid import UUID
 
 import networkx as nx
@@ -25,7 +25,7 @@ import pandas as pd
 from loguru import logger
 from numpy.typing import NDArray
 
-from .algorithms import GESAlgorithm, PCAlgorithm
+from .algorithms import FCIAlgorithm, GESAlgorithm, PCAlgorithm
 from .base import (
     AlgorithmResult,
     BaseDiscoveryAlgorithm,
@@ -35,6 +35,9 @@ from .base import (
     DiscoveryResult,
     EdgeType,
 )
+
+if TYPE_CHECKING:
+    from .observability import DiscoveryTracer
 
 
 class DiscoveryRunner:
@@ -57,22 +60,47 @@ class DiscoveryRunner:
     ALGORITHM_REGISTRY: Dict[DiscoveryAlgorithmType, Type[BaseDiscoveryAlgorithm]] = {
         DiscoveryAlgorithmType.GES: GESAlgorithm,
         DiscoveryAlgorithmType.PC: PCAlgorithm,
+        DiscoveryAlgorithmType.FCI: FCIAlgorithm,
     }
 
     def __init__(
         self,
         max_workers: int = 4,
         timeout_seconds: float = 300.0,
+        tracer: Optional["DiscoveryTracer"] = None,
+        enable_tracing: bool = True,
     ):
         """Initialize DiscoveryRunner.
 
         Args:
             max_workers: Maximum parallel workers for algorithm execution
             timeout_seconds: Timeout for each algorithm
+            tracer: Optional DiscoveryTracer for Opik observability
+            enable_tracing: Whether to enable tracing (default True)
         """
         self.max_workers = max_workers
         self.timeout_seconds = timeout_seconds
         self._algorithms: Dict[DiscoveryAlgorithmType, BaseDiscoveryAlgorithm] = {}
+        self._tracer = tracer
+        self._enable_tracing = enable_tracing
+
+        # Initialize tracer if enabled and not provided
+        if enable_tracing and tracer is None:
+            self._init_tracer()
+
+    def _init_tracer(self) -> None:
+        """Initialize DiscoveryTracer for observability."""
+        try:
+            from .observability import get_discovery_tracer
+
+            self._tracer = get_discovery_tracer()
+            logger.debug("DiscoveryTracer initialized for runner")
+        except ImportError:
+            logger.warning("DiscoveryTracer not available, tracing disabled")
+            self._enable_tracing = False
+        except Exception as e:
+            logger.warning(f"Failed to initialize DiscoveryTracer: {e}")
+            self._enable_tracing = False
 
     def _get_algorithm(self, algo_type: DiscoveryAlgorithmType) -> BaseDiscoveryAlgorithm:
         """Get or create algorithm instance.
@@ -123,6 +151,25 @@ class DiscoveryRunner:
         start_time = time.time()
         node_names = list(data.columns)
 
+        # Execute with optional tracing
+        if self._enable_tracing and self._tracer:
+            return await self._discover_dag_with_tracing(
+                data, config, session_id, node_names, start_time
+            )
+        else:
+            return await self._discover_dag_internal(
+                data, config, session_id, node_names, start_time
+            )
+
+    async def _discover_dag_internal(
+        self,
+        data: pd.DataFrame,
+        config: DiscoveryConfig,
+        session_id: Optional[UUID],
+        node_names: List[str],
+        start_time: float,
+    ) -> DiscoveryResult:
+        """Internal discovery implementation without tracing."""
         # Run algorithms (potentially in parallel)
         algorithm_results = await self._run_algorithms(data, config)
 
@@ -151,6 +198,128 @@ class DiscoveryRunner:
                 "n_samples": len(data),
             },
         )
+
+    async def _discover_dag_with_tracing(
+        self,
+        data: pd.DataFrame,
+        config: DiscoveryConfig,
+        session_id: Optional[UUID],
+        node_names: List[str],
+        start_time: float,
+    ) -> DiscoveryResult:
+        """Discovery implementation with Opik tracing."""
+        async with self._tracer.trace_discovery(
+            session_id=session_id,
+            algorithms=[a.value for a in config.algorithms],
+            n_variables=len(node_names),
+            n_samples=len(data),
+            config=config,
+            tags=["causal_discovery", "ensemble"],
+        ) as span:
+            # Run algorithms with individual tracing
+            algorithm_results = await self._run_algorithms_with_tracing(
+                data, config, span
+            )
+
+            # Combine results into ensemble
+            edges, ensemble_dag = self._build_ensemble(
+                algorithm_results,
+                node_names,
+                config.ensemble_threshold,
+            )
+
+            total_runtime = time.time() - start_time
+
+            # Calculate algorithm agreement
+            n_converged = len([r for r in algorithm_results if r.converged])
+            agreement = 0.0
+            if edges and n_converged > 0:
+                agreement = sum(e.confidence for e in edges) / len(edges)
+
+            # Log ensemble result to tracer
+            await self._tracer.log_ensemble_result(
+                parent_span=span,
+                n_edges=len(edges),
+                agreement=agreement,
+                runtime_seconds=total_runtime,
+            )
+
+            # Update span with final results
+            span.n_edges_discovered = len(edges)
+            span.algorithm_agreement = agreement
+
+            logger.info(
+                f"Causal discovery complete: {len(edges)} edges found in {total_runtime:.2f}s"
+            )
+
+            return DiscoveryResult(
+                success=True,
+                config=config,
+                ensemble_dag=ensemble_dag,
+                edges=edges,
+                algorithm_results=algorithm_results,
+                session_id=session_id,
+                metadata={
+                    "total_runtime_seconds": total_runtime,
+                    "node_names": node_names,
+                    "n_samples": len(data),
+                    "trace_id": span.trace_id,
+                    "span_id": span.span_id,
+                },
+            )
+
+    async def _run_algorithms_with_tracing(
+        self,
+        data: pd.DataFrame,
+        config: DiscoveryConfig,
+        parent_span: Any,
+    ) -> List[AlgorithmResult]:
+        """Run algorithms with individual result tracing."""
+        results = []
+
+        for algo_type in config.algorithms:
+            try:
+                algorithm = self._get_algorithm(algo_type)
+                logger.debug(f"Running {algo_type.value} algorithm...")
+
+                # Run in executor to not block event loop
+                loop = asyncio.get_event_loop()
+                result = await loop.run_in_executor(
+                    None,
+                    lambda: algorithm.discover(data, config),
+                )
+
+                results.append(result)
+
+                # Log algorithm result to tracer
+                if self._tracer:
+                    await self._tracer.log_algorithm_result(parent_span, result)
+
+                logger.debug(
+                    f"{algo_type.value} found {len(result.edge_list)} edges "
+                    f"in {result.runtime_seconds:.2f}s"
+                )
+
+            except Exception as e:
+                logger.error(f"Algorithm {algo_type.value} failed: {e}")
+                # Create failed result
+                failed_result = AlgorithmResult(
+                    algorithm=algo_type,
+                    adjacency_matrix=np.zeros(
+                        (len(data.columns), len(data.columns)), dtype=int
+                    ),
+                    edge_list=[],
+                    runtime_seconds=0.0,
+                    converged=False,
+                    metadata={"error": str(e)},
+                )
+                results.append(failed_result)
+
+                # Log failed result
+                if self._tracer:
+                    await self._tracer.log_algorithm_result(parent_span, failed_result)
+
+        return results
 
     async def _run_algorithms(
         self,
