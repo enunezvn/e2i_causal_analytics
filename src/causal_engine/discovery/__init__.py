@@ -11,7 +11,8 @@ Components:
 - DiscoveryRunner: Orchestrates multi-algorithm ensemble discovery
 - DiscoveryGate: Evaluates discovery results for acceptance
 - DriverRanker: Compares causal vs predictive feature importance
-- Algorithm wrappers: GES, PC (FCI, LiNGAM coming soon)
+- DiscoveryCache: Caches discovery results to avoid redundant computation
+- Algorithm wrappers: GES, PC, FCI, DirectLiNGAM, ICA-LiNGAM
 
 Example:
     >>> from src.causal_engine.discovery import (
@@ -20,15 +21,22 @@ Example:
     ...     DiscoveryAlgorithmType,
     ...     DiscoveryGate,
     ...     GateDecision,
+    ...     DiscoveryCache,
     ... )
     >>>
-    >>> # Run discovery
+    >>> # Run discovery with caching
+    >>> cache = DiscoveryCache()
     >>> runner = DiscoveryRunner()
     >>> config = DiscoveryConfig(
     ...     algorithms=[DiscoveryAlgorithmType.GES, DiscoveryAlgorithmType.PC],
     ...     ensemble_threshold=0.5,
     ... )
-    >>> result = await runner.discover_dag(data, config)
+    >>>
+    >>> # Check cache first
+    >>> result = await cache.get(data, config)
+    >>> if result is None:
+    ...     result = await runner.discover_dag(data, config)
+    ...     await cache.set(data, config, result)
     >>>
     >>> # Evaluate result
     >>> gate = DiscoveryGate()
@@ -50,6 +58,12 @@ from .base import (
     EdgeType,
     GateDecision,
 )
+from .cache import (
+    CacheConfig,
+    CacheStats,
+    DiscoveryCache,
+    get_discovery_cache,
+)
 from .driver_ranker import (
     DriverRanker,
     DriverRankingResult,
@@ -60,6 +74,12 @@ from .gate import (
     DiscoveryGate,
     GateConfig,
     GateEvaluation,
+)
+from .hasher import (
+    hash_config,
+    hash_dataframe,
+    hash_discovery_request,
+    make_cache_key,
 )
 from .runner import DiscoveryRunner
 
@@ -74,6 +94,16 @@ __all__ = [
     "DriverRanker",
     "DriverRankingResult",
     "FeatureRanking",
+    # Cache
+    "DiscoveryCache",
+    "CacheConfig",
+    "CacheStats",
+    "get_discovery_cache",
+    # Hashing
+    "hash_dataframe",
+    "hash_config",
+    "hash_discovery_request",
+    "make_cache_key",
     # Enums
     "DiscoveryAlgorithmType",
     "GateDecision",

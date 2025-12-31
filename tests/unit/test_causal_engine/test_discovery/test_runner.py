@@ -70,13 +70,21 @@ class TestGetAlgorithm:
         assert algo is not None
         assert algo.supports_latent_confounders() is True
 
-    def test_unsupported_algorithm_raises(self):
-        """Test that unsupported algorithm raises error."""
+    def test_get_direct_lingam_algorithm(self):
+        """Test getting DirectLiNGAM algorithm."""
         runner = DiscoveryRunner()
 
-        # LINGAM variants are not implemented yet
-        with pytest.raises(ValueError, match="not supported"):
-            runner._get_algorithm(DiscoveryAlgorithmType.DIRECT_LINGAM)
+        algo = runner._get_algorithm(DiscoveryAlgorithmType.DIRECT_LINGAM)
+        assert algo is not None
+        assert algo.supports_latent_confounders() is False
+
+    def test_get_ica_lingam_algorithm(self):
+        """Test getting ICA-LiNGAM algorithm."""
+        runner = DiscoveryRunner()
+
+        algo = runner._get_algorithm(DiscoveryAlgorithmType.ICA_LINGAM)
+        assert algo is not None
+        assert algo.supports_latent_confounders() is False
 
 
 class TestGetAvailableAlgorithms:
