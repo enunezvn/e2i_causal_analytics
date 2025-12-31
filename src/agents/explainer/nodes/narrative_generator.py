@@ -1,7 +1,12 @@
 """
 E2I Explainer Agent - Narrative Generator Node
-Version: 4.2
+Version: 4.4
 Purpose: Generate final narrative explanations
+
+V4.4: Added causal discovery narrative support:
+- Causal vs predictive ranking comparisons
+- Divergent feature explanations
+- Gate decision translation to user-friendly language
 
 Memory Integration:
 - Working Memory (Redis): Cache generated explanations with 24h TTL
@@ -193,6 +198,11 @@ class NarrativeGeneratorNode:
                     supporting_data={"count": len(opportunities)},
                 )
             )
+
+        # V4.4: Causal Discovery section
+        causal_narrative = self._generate_causal_discovery_section(state, expertise)
+        if causal_narrative:
+            sections.append(causal_narrative)
 
         # Next Steps
         next_steps = self._create_next_steps(insights, expertise)
@@ -497,6 +507,409 @@ class NarrativeGeneratorNode:
             ]
 
         return follow_ups[:5]
+
+    # =========================================================================
+    # V4.4: CAUSAL DISCOVERY NARRATIVE
+    # =========================================================================
+
+    def _has_discovery_data(self, state: ExplainerState) -> bool:
+        """Check if state contains causal discovery data.
+
+        Args:
+            state: Current explainer state
+
+        Returns:
+            True if discovery data is present
+        """
+        # Check for ranking data
+        has_rankings = (
+            state.get("causal_rankings") is not None
+            or state.get("divergent_features") is not None
+        )
+
+        # Check for DAG data
+        has_dag = (
+            state.get("discovered_dag_adjacency") is not None
+            and state.get("discovered_dag_nodes") is not None
+        )
+
+        # Check for gate decision
+        has_gate = state.get("discovery_gate_decision") is not None
+
+        return has_rankings or has_dag or has_gate
+
+    def _generate_causal_discovery_section(
+        self, state: ExplainerState, expertise: str
+    ) -> Optional[NarrativeSection]:
+        """Generate narrative section for causal discovery results.
+
+        V4.4: Creates explanations that distinguish causal vs predictive,
+        explain divergent features, and translate gate decisions.
+
+        Args:
+            state: Current explainer state with discovery data
+            expertise: User expertise level
+
+        Returns:
+            NarrativeSection if discovery data present, None otherwise
+        """
+        if not self._has_discovery_data(state):
+            return None
+
+        content_parts = []
+
+        # Gate decision explanation
+        gate_decision = state.get("discovery_gate_decision")
+        if gate_decision:
+            gate_explanation = self._translate_gate_decision(
+                gate_decision,
+                state.get("discovery_gate_confidence"),
+                expertise,
+            )
+            content_parts.append(gate_explanation)
+
+        # Causal vs predictive comparison
+        if state.get("causal_rankings") or state.get("rank_correlation") is not None:
+            comparison = self._generate_ranking_comparison(state, expertise)
+            content_parts.append(comparison)
+
+        # Divergent features explanation
+        divergent = state.get("divergent_features")
+        if divergent:
+            divergent_explanation = self._explain_divergent_features(
+                divergent, state, expertise
+            )
+            content_parts.append(divergent_explanation)
+
+        # Causal-only features
+        causal_only = state.get("causal_only_features")
+        if causal_only:
+            causal_only_explanation = self._explain_causal_only_features(
+                causal_only, expertise
+            )
+            content_parts.append(causal_only_explanation)
+
+        # Latent confounders (from FCI bidirected edges)
+        latent_confounders = self._extract_latent_confounders(state)
+        if latent_confounders:
+            latent_explanation = self._explain_latent_confounders(
+                latent_confounders, expertise
+            )
+            content_parts.append(latent_explanation)
+
+        if not content_parts:
+            return None
+
+        return NarrativeSection(
+            section_type="causal_discovery",
+            title="Causal Structure Analysis",
+            content="\n\n".join(content_parts),
+            supporting_data={
+                "gate_decision": gate_decision,
+                "rank_correlation": state.get("rank_correlation"),
+                "divergent_count": len(divergent) if divergent else 0,
+            },
+        )
+
+    def _translate_gate_decision(
+        self,
+        decision: str,
+        confidence: Optional[float],
+        expertise: str,
+    ) -> str:
+        """Translate gate decision to user-friendly language.
+
+        Args:
+            decision: Gate decision (accept, review, reject, augment)
+            confidence: Gate confidence score (0-1)
+            expertise: User expertise level
+
+        Returns:
+            Human-readable explanation of the gate decision
+        """
+        confidence_str = f"{confidence:.0%}" if confidence else "unknown"
+
+        if expertise == "executive":
+            translations = {
+                "accept": (
+                    f"**Causal Analysis Status:** High confidence ({confidence_str}). "
+                    "The discovered relationships are reliable for decision-making."
+                ),
+                "review": (
+                    f"**Causal Analysis Status:** Moderate confidence ({confidence_str}). "
+                    "Results should be reviewed before major decisions."
+                ),
+                "reject": (
+                    f"**Causal Analysis Status:** Low confidence ({confidence_str}). "
+                    "Causal findings require additional validation."
+                ),
+                "augment": (
+                    f"**Causal Analysis Status:** Augmented ({confidence_str}). "
+                    "Results enhanced with high-confidence relationships from domain knowledge."
+                ),
+            }
+        elif expertise == "data_scientist":
+            translations = {
+                "accept": (
+                    f"**Discovery Gate: ACCEPT** (confidence: {confidence_str})\n"
+                    "Ensemble DAG passed quality thresholds. Edge stability and "
+                    "algorithm agreement meet production criteria."
+                ),
+                "review": (
+                    f"**Discovery Gate: REVIEW** (confidence: {confidence_str})\n"
+                    "Some edges have borderline agreement scores. Manual validation "
+                    "recommended for high-impact decisions."
+                ),
+                "reject": (
+                    f"**Discovery Gate: REJECT** (confidence: {confidence_str})\n"
+                    "Insufficient algorithm agreement or edge stability. Consider: "
+                    "larger sample, alternative algorithms, or domain constraints."
+                ),
+                "augment": (
+                    f"**Discovery Gate: AUGMENT** (confidence: {confidence_str})\n"
+                    "DAG augmented with high-confidence edges from prior knowledge. "
+                    "Original discovery had gaps filled by domain expertise."
+                ),
+            }
+        else:  # analyst
+            translations = {
+                "accept": (
+                    f"**Causal Discovery Quality:** Accepted ({confidence_str} confidence)\n"
+                    "The discovered causal relationships are statistically robust and "
+                    "can be used for analysis."
+                ),
+                "review": (
+                    f"**Causal Discovery Quality:** Review Needed ({confidence_str} confidence)\n"
+                    "Some causal relationships have moderate certainty. Consider "
+                    "validating key findings with domain experts."
+                ),
+                "reject": (
+                    f"**Causal Discovery Quality:** Rejected ({confidence_str} confidence)\n"
+                    "The causal structure could not be reliably determined. "
+                    "Findings should be treated as correlational only."
+                ),
+                "augment": (
+                    f"**Causal Discovery Quality:** Augmented ({confidence_str} confidence)\n"
+                    "The analysis was enhanced with known causal relationships "
+                    "to improve completeness."
+                ),
+            }
+
+        return translations.get(decision, f"**Discovery Status:** {decision}")
+
+    def _generate_ranking_comparison(
+        self, state: ExplainerState, expertise: str
+    ) -> str:
+        """Generate comparison of causal vs predictive rankings.
+
+        Args:
+            state: State with ranking data
+            expertise: User expertise level
+
+        Returns:
+            Narrative comparing causal and predictive importance
+        """
+        rank_corr = state.get("rank_correlation")
+        causal_rankings = state.get("causal_rankings") or []
+        predictive_rankings = state.get("predictive_rankings") or []
+
+        parts = []
+
+        if expertise == "executive":
+            if rank_corr is not None:
+                if rank_corr > 0.7:
+                    parts.append(
+                        "**Driver Analysis:** Predictive indicators align well with "
+                        "causal drivers, increasing confidence in recommendations."
+                    )
+                elif rank_corr > 0.3:
+                    parts.append(
+                        "**Driver Analysis:** Some predictive indicators differ from "
+                        "causal drivers. Prioritize causal factors for interventions."
+                    )
+                else:
+                    parts.append(
+                        "**Driver Analysis:** Predictive indicators diverge significantly "
+                        "from causal drivers. Focus on causal factors for lasting impact."
+                    )
+
+        elif expertise == "data_scientist":
+            if rank_corr is not None:
+                parts.append(
+                    f"**Causal vs Predictive Ranking Correlation:** ρ = {rank_corr:.3f}"
+                )
+
+            if causal_rankings:
+                top_causal = [r.get("feature_name", "unknown") for r in causal_rankings[:3]]
+                parts.append(f"Top causal drivers: {', '.join(top_causal)}")
+
+            if predictive_rankings:
+                top_pred = [r.get("feature_name", "unknown") for r in predictive_rankings[:3]]
+                parts.append(f"Top predictive features: {', '.join(top_pred)}")
+
+        else:  # analyst
+            if rank_corr is not None:
+                correlation_desc = (
+                    "strong" if rank_corr > 0.7
+                    else "moderate" if rank_corr > 0.3
+                    else "weak"
+                )
+                parts.append(
+                    f"**Feature Importance Analysis:** There is a {correlation_desc} "
+                    f"correlation ({rank_corr:.0%}) between what predicts outcomes "
+                    "and what actually causes them."
+                )
+
+                if rank_corr < 0.5:
+                    parts.append(
+                        "This suggests some features that appear predictive may be "
+                        "correlated with outcomes rather than causing them."
+                    )
+
+        return "\n".join(parts) if parts else ""
+
+    def _explain_divergent_features(
+        self,
+        divergent: List[str],
+        state: ExplainerState,
+        expertise: str,
+    ) -> str:
+        """Explain features with divergent causal vs predictive rankings.
+
+        Args:
+            divergent: List of divergent feature names
+            state: State with ranking data
+            expertise: User expertise level
+
+        Returns:
+            Explanation of divergent features
+        """
+        if not divergent:
+            return ""
+
+        top_divergent = divergent[:5]
+
+        if expertise == "executive":
+            return (
+                f"**Action Alert:** {len(divergent)} factors show different predictive "
+                f"vs causal importance. Focus interventions on: {', '.join(top_divergent[:3])}"
+            )
+
+        elif expertise == "data_scientist":
+            lines = [f"**Divergent Features** (|Δrank| > 3): {len(divergent)} features"]
+            for feat in top_divergent:
+                lines.append(f"  - {feat}")
+            lines.append(
+                "These features have significantly different causal vs predictive ranks. "
+                "Consider: confounding, mediators, or suppressor effects."
+            )
+            return "\n".join(lines)
+
+        else:  # analyst
+            return (
+                f"**Features to Investigate:** The following {len(divergent)} features "
+                f"predict outcomes differently than they cause them:\n"
+                + "\n".join(f"- {f}" for f in top_divergent)
+                + "\n\nThis may indicate indirect relationships or confounding factors."
+            )
+
+    def _explain_causal_only_features(
+        self, causal_only: List[str], expertise: str
+    ) -> str:
+        """Explain features that appear in causal but not predictive rankings.
+
+        Args:
+            causal_only: List of causal-only feature names
+            expertise: User expertise level
+
+        Returns:
+            Explanation of causal-only features
+        """
+        if not causal_only:
+            return ""
+
+        top_features = causal_only[:3]
+
+        if expertise == "executive":
+            return (
+                f"**Hidden Drivers:** {len(causal_only)} causal factors aren't captured "
+                f"by predictive models. Key ones: {', '.join(top_features)}"
+            )
+
+        elif expertise == "data_scientist":
+            return (
+                f"**Causal-Only Features:** {len(causal_only)} variables have causal "
+                f"paths to outcome but weak/no predictive signal:\n"
+                + "\n".join(f"  - {f}" for f in top_features)
+                + "\nThese may be masked by confounders or have delayed effects."
+            )
+
+        else:  # analyst
+            return (
+                f"**Important Finding:** {len(causal_only)} factors influence outcomes "
+                f"but aren't reflected in predictive models:\n"
+                + "\n".join(f"- {f}" for f in top_features)
+                + "\n\nThese are valuable intervention targets that standard ML may miss."
+            )
+
+    def _extract_latent_confounders(self, state: ExplainerState) -> List[str]:
+        """Extract latent confounders from bidirected edges in discovered DAG.
+
+        Args:
+            state: State with DAG edge types
+
+        Returns:
+            List of variable pairs with latent confounders
+        """
+        edge_types = state.get("discovered_dag_edge_types") or {}
+        latent = []
+
+        for edge_key, edge_type in edge_types.items():
+            if edge_type in ("BIDIRECTED", "bidirected"):
+                latent.append(edge_key)
+
+        return latent
+
+    def _explain_latent_confounders(
+        self, latent_pairs: List[str], expertise: str
+    ) -> str:
+        """Explain latent confounders detected by FCI algorithm.
+
+        Args:
+            latent_pairs: List of edge keys with bidirected edges
+            expertise: User expertise level
+
+        Returns:
+            Explanation of latent confounders
+        """
+        if not latent_pairs:
+            return ""
+
+        top_pairs = latent_pairs[:3]
+
+        if expertise == "executive":
+            return (
+                f"**Unmeasured Factors:** Analysis detected {len(latent_pairs)} "
+                "relationships influenced by factors not in the data. "
+                "Consider what external variables might be driving these patterns."
+            )
+
+        elif expertise == "data_scientist":
+            return (
+                f"**Latent Confounders Detected** (FCI bidirected edges): "
+                f"{len(latent_pairs)} pairs\n"
+                + "\n".join(f"  - {p}" for p in top_pairs)
+                + "\n\nThese indicate unmeasured common causes. Consider: "
+                "instrumental variables, proxy controls, or sensitivity analysis."
+            )
+
+        else:  # analyst
+            return (
+                f"**Hidden Influences:** The analysis detected {len(latent_pairs)} "
+                "relationships that appear to be influenced by unmeasured factors:\n"
+                + "\n".join(f"- {p}" for p in top_pairs)
+                + "\n\nThis is important context when interpreting these relationships."
+            )
 
     # =========================================================================
     # MEMORY STORAGE
