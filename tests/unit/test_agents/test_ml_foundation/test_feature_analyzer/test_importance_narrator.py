@@ -8,6 +8,7 @@ from src.agents.ml_foundation.feature_analyzer.nodes.importance_narrator import 
     _build_complete_interpretation,
     _interpret_interactions,
     _parse_interpretation_response,
+    _prepare_causal_context,
     _prepare_interpretation_context,
     narrate_importance,
 )
@@ -349,3 +350,228 @@ class TestBuildCompleteInterpretation:
         # Should still have executive summary
         assert "Executive Summary" in interpretation
         assert "Summary" in interpretation
+
+
+class TestPrepareCausalContext:
+    """Test causal context preparation for LLM (V4.4)."""
+
+    def test_prepares_context_with_rankings(self):
+        """Should prepare causal context with feature rankings."""
+        causal_rankings = [
+            {
+                "feature_name": "call_frequency",
+                "causal_rank": 1,
+                "predictive_rank": 2,
+                "rank_difference": -1,
+                "is_direct_cause": True,
+            },
+            {
+                "feature_name": "recency_days",
+                "causal_rank": 2,
+                "predictive_rank": 1,
+                "rank_difference": 1,
+                "is_direct_cause": False,
+            },
+        ]
+
+        context = _prepare_causal_context(
+            causal_rankings=causal_rankings,
+            discovery_gate_decision="accept",
+            discovery_gate_confidence=0.85,
+            rank_correlation=0.75,
+            divergent_features=[],
+            direct_cause_features=["call_frequency"],
+            causal_only_features=[],
+            predictive_only_features=[],
+        )
+
+        assert "Discovery Quality" in context
+        assert "accept" in context
+        assert "0.85" in context
+        assert "Rank Correlation" in context
+        assert "0.75" in context
+        assert "call_frequency" in context
+        assert "[DIRECT CAUSE]" in context
+        assert "recency_days" in context
+
+    def test_includes_divergent_features(self):
+        """Should include divergent features in context."""
+        causal_rankings = [
+            {
+                "feature_name": "hidden_driver",
+                "causal_rank": 1,
+                "predictive_rank": 10,
+                "rank_difference": -9,
+                "is_direct_cause": True,
+            },
+        ]
+
+        context = _prepare_causal_context(
+            causal_rankings=causal_rankings,
+            discovery_gate_decision="accept",
+            discovery_gate_confidence=0.8,
+            rank_correlation=0.3,
+            divergent_features=["hidden_driver"],
+            direct_cause_features=["hidden_driver"],
+            causal_only_features=[],
+            predictive_only_features=[],
+        )
+
+        assert "Divergent Features" in context
+        assert "hidden_driver" in context
+
+    def test_includes_feature_categorization(self):
+        """Should include all feature categories."""
+        context = _prepare_causal_context(
+            causal_rankings=[],
+            discovery_gate_decision="review",
+            discovery_gate_confidence=0.6,
+            rank_correlation=0.5,
+            divergent_features=["feat_A"],
+            direct_cause_features=["feat_B"],
+            causal_only_features=["feat_C"],
+            predictive_only_features=["feat_D"],
+        )
+
+        assert "Direct Cause Features" in context
+        assert "feat_B" in context
+        assert "Divergent Features" in context
+        assert "feat_A" in context
+        assert "Causal-Only Features" in context
+        assert "feat_C" in context
+        assert "Predictive-Only Features" in context
+        assert "feat_D" in context
+
+
+@pytest.mark.asyncio
+class TestNarrateImportanceWithCausal:
+    """Test NL interpretation with causal discovery results (V4.4)."""
+
+    @patch("src.agents.ml_foundation.feature_analyzer.nodes.importance_narrator.Anthropic")
+    async def test_includes_causal_interpretation_when_available(self, mock_anthropic_class):
+        """Should include causal interpretation when discovery results available."""
+        state = {
+            "global_importance_ranked": [
+                ("call_frequency", 0.23),
+                ("recency_days", 0.18),
+            ],
+            "feature_directions": {
+                "call_frequency": "positive",
+                "recency_days": "negative",
+            },
+            "top_interactions_raw": [],
+            "experiment_id": "exp_001",
+            "model_version": "v1",
+            # V4.4: Causal discovery results
+            "discovery_enabled": True,
+            "causal_rankings": [
+                {
+                    "feature_name": "call_frequency",
+                    "causal_rank": 1,
+                    "predictive_rank": 2,
+                    "rank_difference": -1,
+                    "is_direct_cause": True,
+                },
+            ],
+            "discovery_gate_decision": "accept",
+            "discovery_gate_confidence": 0.85,
+            "rank_correlation": 0.75,
+            "divergent_features": [],
+            "direct_cause_features": ["call_frequency"],
+            "causal_only_features": [],
+            "predictive_only_features": [],
+        }
+
+        # Mock Anthropic response with causal interpretation
+        mock_response = Mock()
+        mock_response.content = [
+            Mock(
+                text='{"executive_summary": "Model relies on engagement", "feature_explanations": {}, "key_insights": [], "recommendations": [], "cautions": [], "causal_interpretation": "Call frequency is a true causal driver, not just a correlate."}'
+            )
+        ]
+        mock_response.usage = Mock(input_tokens=600, output_tokens=400)
+
+        mock_client = Mock()
+        mock_client.messages.create.return_value = mock_response
+        mock_anthropic_class.return_value = mock_client
+
+        result = await narrate_importance(state)
+
+        # Should include causal interpretation
+        assert "causal_interpretation" in result
+        assert "causal driver" in result["causal_interpretation"]
+
+        # Prompt should include causal context
+        call_args = mock_client.messages.create.call_args
+        prompt = call_args[1]["messages"][0]["content"]
+        assert "Causal Discovery Results" in prompt
+        assert "call_frequency" in prompt
+
+    @patch("src.agents.ml_foundation.feature_analyzer.nodes.importance_narrator.Anthropic")
+    async def test_skips_causal_when_discovery_disabled(self, mock_anthropic_class):
+        """Should not include causal context when discovery is disabled."""
+        state = {
+            "global_importance_ranked": [("feat_1", 0.5)],
+            "feature_directions": {"feat_1": "positive"},
+            "top_interactions_raw": [],
+            "experiment_id": "exp_002",
+            "discovery_enabled": False,  # Disabled
+        }
+
+        mock_response = Mock()
+        mock_response.content = [
+            Mock(
+                text='{"executive_summary": "Summary", "feature_explanations": {}, "key_insights": [], "recommendations": [], "cautions": []}'
+            )
+        ]
+        mock_response.usage = Mock(input_tokens=300, output_tokens=150)
+
+        mock_client = Mock()
+        mock_client.messages.create.return_value = mock_response
+        mock_anthropic_class.return_value = mock_client
+
+        result = await narrate_importance(state)
+
+        # Should not include causal interpretation
+        assert "causal_interpretation" not in result
+
+        # Prompt should not include causal context
+        call_args = mock_client.messages.create.call_args
+        prompt = call_args[1]["messages"][0]["content"]
+        assert "Causal Discovery Results" not in prompt
+
+    @patch("src.agents.ml_foundation.feature_analyzer.nodes.importance_narrator.Anthropic")
+    async def test_skips_causal_when_gate_rejected(self, mock_anthropic_class):
+        """Should not include causal context when gate rejected discovery."""
+        state = {
+            "global_importance_ranked": [("feat_1", 0.5)],
+            "feature_directions": {"feat_1": "positive"},
+            "top_interactions_raw": [],
+            "experiment_id": "exp_003",
+            "discovery_enabled": True,
+            "causal_rankings": [{"feature_name": "feat_1", "causal_rank": 1}],
+            "discovery_gate_decision": "reject",  # Rejected
+            "discovery_gate_confidence": 0.3,
+        }
+
+        mock_response = Mock()
+        mock_response.content = [
+            Mock(
+                text='{"executive_summary": "Summary", "feature_explanations": {}, "key_insights": [], "recommendations": [], "cautions": []}'
+            )
+        ]
+        mock_response.usage = Mock(input_tokens=300, output_tokens=150)
+
+        mock_client = Mock()
+        mock_client.messages.create.return_value = mock_response
+        mock_anthropic_class.return_value = mock_client
+
+        result = await narrate_importance(state)
+
+        # Should not include causal interpretation
+        assert "causal_interpretation" not in result
+
+        # Prompt should not include causal context
+        call_args = mock_client.messages.create.call_args
+        prompt = call_args[1]["messages"][0]["content"]
+        assert "Causal Discovery Results" not in prompt

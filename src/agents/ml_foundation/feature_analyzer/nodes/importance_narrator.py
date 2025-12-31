@@ -2,10 +2,12 @@
 
 Generates natural language interpretations of SHAP analysis using Claude.
 This is the LLM interpretation node in the hybrid pipeline.
+
+V4.4: Added causal discovery integration for causal vs predictive comparison.
 """
 
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from anthropic import Anthropic
 
@@ -19,6 +21,7 @@ async def narrate_importance(state: Dict[str, Any]) -> Dict[str, Any]:
     3. Creates feature-specific explanations
     4. Identifies key insights and recommendations
     5. Flags cautions about model behavior
+    6. (V4.4) Compares causal vs predictive importance if discovery enabled
 
     Args:
         state: Current agent state with SHAP analysis
@@ -36,6 +39,17 @@ async def narrate_importance(state: Dict[str, Any]) -> Dict[str, Any]:
         experiment_id = state.get("experiment_id", "unknown")
         model_version = state.get("model_version", "unknown")
 
+        # V4.4: Extract causal discovery results if available
+        discovery_enabled = state.get("discovery_enabled", False)
+        causal_rankings = state.get("causal_rankings", [])
+        discovery_gate_decision = state.get("discovery_gate_decision", None)
+        discovery_gate_confidence = state.get("discovery_gate_confidence", 0.0)
+        rank_correlation = state.get("rank_correlation", 0.0)
+        divergent_features = state.get("divergent_features", [])
+        direct_cause_features = state.get("direct_cause_features", [])
+        causal_only_features = state.get("causal_only_features", [])
+        predictive_only_features = state.get("predictive_only_features", [])
+
         if not global_importance_ranked:
             return {
                 "error": "Missing SHAP analysis results for interpretation",
@@ -52,14 +66,51 @@ async def narrate_importance(state: Dict[str, Any]) -> Dict[str, Any]:
             model_version,
         )
 
+        # V4.4: Add causal context if discovery was successful
+        has_causal_results = (
+            discovery_enabled
+            and causal_rankings
+            and discovery_gate_decision in ("accept", "review")
+        )
+
+        causal_context = ""
+        if has_causal_results:
+            causal_context = _prepare_causal_context(
+                causal_rankings=causal_rankings,
+                discovery_gate_decision=discovery_gate_decision,
+                discovery_gate_confidence=discovery_gate_confidence,
+                rank_correlation=rank_correlation,
+                divergent_features=divergent_features,
+                direct_cause_features=direct_cause_features,
+                causal_only_features=causal_only_features,
+                predictive_only_features=predictive_only_features,
+            )
+
         # Call Claude for interpretation
         client = Anthropic()
+
+        # V4.4: Build prompt with optional causal section
+        causal_section = ""
+        causal_output_section = ""
+        if has_causal_results:
+            causal_section = f"""
+
+## Causal Discovery Results
+
+{causal_context}
+"""
+            causal_output_section = """
+
+6. **Causal vs Predictive Comparison** (if causal results available)
+   - How causal importance differs from predictive importance
+   - Which features are "true causes" vs correlation-based predictors
+   - Implications for intervention design"""
 
         prompt = f"""You are an ML interpretability expert analyzing SHAP results for a pharmaceutical commercial analytics model.
 
 ## SHAP Analysis Results
 
-{context}
+{context}{causal_section}
 
 ## Your Task
 
@@ -84,7 +135,7 @@ Generate a comprehensive interpretability report with:
 
 5. **Cautions** (1-3 warnings)
    - Limitations or risks
-   - Potential confounders
+   - Potential confounders{causal_output_section}
 
 ## Important Context
 
@@ -100,7 +151,7 @@ Format your response as JSON with this structure:
   }},
   "key_insights": ["insight 1", "insight 2", ...],
   "recommendations": ["rec 1", "rec 2", ...],
-  "cautions": ["caution 1", "caution 2", ...]
+  "cautions": ["caution 1", "caution 2", ...]{', "causal_interpretation": "..."' if has_causal_results else ''}
 }}"""
 
         response = client.messages.create(
@@ -125,6 +176,9 @@ Format your response as JSON with this structure:
         cautions = interpretation_data.get("cautions", [])
         executive_summary = interpretation_data.get("executive_summary", "")
 
+        # V4.4: Extract causal interpretation if available
+        causal_interpretation = interpretation_data.get("causal_interpretation", "")
+
         # Generate interaction interpretations
         interaction_interpretations = _interpret_interactions(
             top_interactions_raw, feature_explanations
@@ -137,7 +191,7 @@ Format your response as JSON with this structure:
 
         computation_time = time.time() - start_time
 
-        return {
+        result = {
             "executive_summary": executive_summary,
             "feature_explanations": feature_explanations,
             "interaction_interpretations": interaction_interpretations,
@@ -149,6 +203,12 @@ Format your response as JSON with this structure:
             "interpretation_time_seconds": computation_time,
             "interpretation_tokens": interpretation_tokens,
         }
+
+        # V4.4: Add causal interpretation if available
+        if causal_interpretation:
+            result["causal_interpretation"] = causal_interpretation
+
+        return result
 
     except Exception as e:
         return {
@@ -201,6 +261,72 @@ def _prepare_interpretation_context(
             context_parts.append(f"{i}. {feat1} × {feat2}: {strength:.4f} ({interaction_type})")
 
     return "\n".join(context_parts)
+
+
+def _prepare_causal_context(
+    causal_rankings: List[Dict[str, Any]],
+    discovery_gate_decision: str,
+    discovery_gate_confidence: float,
+    rank_correlation: float,
+    divergent_features: List[str],
+    direct_cause_features: List[str],
+    causal_only_features: List[str],
+    predictive_only_features: List[str],
+) -> str:
+    """Prepare causal discovery context for LLM interpretation.
+
+    Args:
+        causal_rankings: List of feature ranking dicts from DriverRanker
+        discovery_gate_decision: Gate decision (accept/review/reject)
+        discovery_gate_confidence: Gate confidence score
+        rank_correlation: Spearman correlation between causal and predictive ranks
+        divergent_features: Features with large rank differences
+        direct_cause_features: Features that are direct causes of target
+        causal_only_features: Features with causal but no predictive signal
+        predictive_only_features: Features with predictive but no causal signal
+
+    Returns:
+        Formatted causal context string
+    """
+    parts = []
+
+    # Discovery quality
+    parts.append(f"**Discovery Quality**: {discovery_gate_decision} (confidence: {discovery_gate_confidence:.2f})")
+    parts.append(f"**Causal-Predictive Rank Correlation**: {rank_correlation:.3f}")
+    parts.append("")
+
+    # Top causal rankings
+    if causal_rankings:
+        parts.append("**Top Features by Causal vs Predictive Importance**:")
+        sorted_rankings = sorted(causal_rankings, key=lambda x: x.get("causal_rank", 999))
+        for r in sorted_rankings[:10]:
+            feature = r.get("feature_name", "unknown")
+            causal_rank = r.get("causal_rank", "N/A")
+            predictive_rank = r.get("predictive_rank", "N/A")
+            rank_diff = r.get("rank_difference", 0)
+            is_direct = r.get("is_direct_cause", False)
+
+            direct_marker = " [DIRECT CAUSE]" if is_direct else ""
+            parts.append(
+                f"  - {feature}: causal_rank={causal_rank}, predictive_rank={predictive_rank}, "
+                f"diff={rank_diff:+d}{direct_marker}"
+            )
+        parts.append("")
+
+    # Feature categorization
+    if direct_cause_features:
+        parts.append(f"**Direct Cause Features** (direct edge to target): {', '.join(direct_cause_features)}")
+
+    if divergent_features:
+        parts.append(f"**Divergent Features** (|rank_diff| > 3): {', '.join(divergent_features)}")
+
+    if causal_only_features:
+        parts.append(f"**Causal-Only Features** (causal signal, no predictive): {', '.join(causal_only_features)}")
+
+    if predictive_only_features:
+        parts.append(f"**Predictive-Only Features** (predictive signal, no causal): {', '.join(predictive_only_features)}")
+
+    return "\n".join(parts)
 
 
 def _parse_interpretation_response(response_text: str) -> Dict[str, Any]:
