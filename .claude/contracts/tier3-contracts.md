@@ -1,7 +1,7 @@
 # Tier 3 Contracts: Design & Monitoring Agents
 
-**Version**: 1.0
-**Last Updated**: 2025-12-18
+**Version**: 1.1
+**Last Updated**: 2025-12-31
 **Status**: Active
 
 ## Overview
@@ -34,7 +34,10 @@ ProceedRecommendation = Literal["proceed", "proceed_with_caution", "redesign_nee
 
 # Drift severity
 DriftSeverity = Literal["none", "low", "medium", "high", "critical"]
-DriftType = Literal["data", "model", "concept"]
+DriftType = Literal["data", "model", "concept", "structural"]  # V4.4: Added structural
+
+# V4.4: Edge type for causal DAG structure
+EdgeType = Literal["DIRECTED", "BIDIRECTED", "UNDIRECTED"]
 
 # Health statuses
 HealthStatus = Literal["healthy", "degraded", "unhealthy", "unknown"]
@@ -263,6 +266,21 @@ class ExperimentDesignState(TypedDict):
     validity_score: Optional[Literal["strong", "moderate", "weak"]]
     proceed_recommendation: Optional[Literal["proceed", "proceed_with_caution", "redesign_needed"]]
 
+    # === V4.4: CAUSAL DISCOVERY INTEGRATION ===
+    discovered_dag_adjacency: Optional[List[List[int]]]  # Discovered DAG adjacency matrix
+    discovered_dag_nodes: Optional[List[str]]            # Node names
+    discovered_dag_edge_types: Optional[Dict[str, str]]  # Edge type mapping
+    discovery_gate_decision: Optional[Literal["accept", "review", "reject", "augment"]]
+    discovery_gate_confidence: Optional[float]           # 0-1 scale
+
+    # === V4.4: DAG-AWARE VALIDITY OUTPUTS ===
+    dag_confounders_validated: Optional[List[str]]       # Confounders confirmed by DAG
+    dag_missing_confounders: Optional[List[str]]         # Confounders not in DAG
+    dag_latent_confounders: Optional[List[str]]          # Latent confounders (FCI bidirected)
+    dag_instrument_candidates: Optional[List[str]]       # IV candidates from DAG
+    dag_effect_modifiers: Optional[List[str]]            # Effect modifiers from DAG
+    dag_validation_warnings: Optional[List[str]]         # DAG validation warnings
+
     # === DOWHY INTEGRATION OUTPUTS ===
     causal_dag_spec: Optional[Dict[str, Any]]
     analysis_code_template: Optional[str]
@@ -376,6 +394,7 @@ class DriftMonitorInput(BaseModel):
     check_data_drift: bool = Field(True, description="Whether to check data drift")
     check_model_drift: bool = Field(True, description="Whether to check model drift")
     check_concept_drift: bool = Field(True, description="Whether to check concept drift")
+    check_structural_drift: bool = Field(True, description="Whether to check causal DAG structural drift (V4.4)")
 
     # Model configuration
     model_config = {
@@ -409,6 +428,20 @@ class DriftResult(BaseModel):
     baseline_period: str
     current_period: str
 
+
+class StructuralDriftResult(BaseModel):
+    """V4.4: Structural drift detection result for causal DAG changes"""
+    detected: bool
+    drift_score: float = Field(..., ge=0.0, le=1.0, description="Proportion of edges changed")
+    severity: DriftSeverity
+    added_edges: List[str] = Field(default_factory=list, description="Edges added (e.g., 'A->B')")
+    removed_edges: List[str] = Field(default_factory=list, description="Edges removed")
+    edge_type_changes: List[Dict[str, str]] = Field(
+        default_factory=list,
+        description="Edge type changes (e.g., DIRECTED -> BIDIRECTED)"
+    )
+    recommendation: Optional[str] = Field(None, description="Recommended action")
+
 class DriftAlert(BaseModel):
     """Drift alert for notification"""
     alert_id: str
@@ -426,6 +459,8 @@ class DriftMonitorOutput(BaseModel):
     data_drift_results: List[DriftResult] = Field(..., description="Data drift detection results")
     model_drift_results: List[DriftResult] = Field(..., description="Model drift detection results")
     concept_drift_results: List[DriftResult] = Field(..., description="Concept drift detection results")
+    structural_drift_results: List[DriftResult] = Field(default_factory=list, description="V4.4: Structural DAG drift results")
+    structural_drift_details: Optional[StructuralDriftResult] = Field(None, description="V4.4: Detailed structural drift analysis")
 
     # Aggregated outputs
     overall_drift_score: float = Field(..., ge=0.0, le=1.0, description="Composite drift score")
@@ -466,11 +501,21 @@ class DriftMonitorState(TypedDict):
     check_data_drift: bool
     check_model_drift: bool
     check_concept_drift: bool
+    check_structural_drift: bool  # V4.4
+
+    # === V4.4: CAUSAL DAG INPUT (for structural drift) ===
+    baseline_dag_adjacency: Optional[List[List[int]]]  # Baseline DAG adjacency matrix
+    current_dag_adjacency: Optional[List[List[int]]]   # Current DAG adjacency matrix
+    dag_nodes: Optional[List[str]]                      # Node names
+    baseline_dag_edge_types: Optional[Dict[str, str]]   # Baseline edge types
+    current_dag_edge_types: Optional[Dict[str, str]]    # Current edge types
 
     # === DETECTION OUTPUTS ===
     data_drift_results: Optional[List[Dict[str, Any]]]  # DriftResult
     model_drift_results: Optional[List[Dict[str, Any]]]
     concept_drift_results: Optional[List[Dict[str, Any]]]
+    structural_drift_results: Optional[List[Dict[str, Any]]]  # V4.4
+    structural_drift_details: Optional[Dict[str, Any]]        # V4.4: StructuralDriftResult
 
     # === AGGREGATED OUTPUTS ===
     overall_drift_score: Optional[float]
@@ -1170,6 +1215,7 @@ async def test_tier3_agent_integration(agent_name: str):
 
 | Version | Date | Changes | Author |
 |---------|------|---------|--------|
+| 1.1 | 2025-12-31 | V4.4: Added structural drift detection, DAG-aware validity for Experiment Designer | Claude |
 | 1.0 | 2025-12-18 | Initial Tier 3 contracts | Claude |
 
 ---
