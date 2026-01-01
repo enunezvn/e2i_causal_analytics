@@ -455,6 +455,7 @@ class TestResponseParsing:
         assert "JSON" in str(exc_info.value)
 
 
+@pytest.mark.xdist_group(name="sync_wrappers")
 class TestSyncWrapper:
     """Tests for synchronous wrapper function"""
 

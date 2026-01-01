@@ -317,6 +317,7 @@ class TestExperimentMonitorAgentAsync:
         assert call_args["experiment_ids"] == []
 
 
+@pytest.mark.xdist_group(name="sync_wrappers")
 class TestExperimentMonitorAgentSync:
     """Tests for ExperimentMonitorAgent synchronous execution."""
 
