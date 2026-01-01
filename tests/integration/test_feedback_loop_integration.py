@@ -118,7 +118,21 @@ def mock_drift_alert_data() -> List[Dict[str, Any]]:
 
 
 @pytest.fixture
-def mock_supabase_client():
+def event_loop_for_mocks():
+    """Create a fresh event loop for tests that use AsyncMock in sync context.
+
+    This is needed because AsyncMock creation requires an active event loop.
+    After pytest-asyncio closes its loop (after async tests), sync tests using
+    AsyncMock would fail with 'Event loop is closed' without this fixture.
+    """
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    yield loop
+    # Don't close the loop - let pytest-asyncio handle cleanup
+
+
+@pytest.fixture
+def mock_supabase_client(event_loop_for_mocks):
     """Create a mock Supabase client for testing."""
     client = MagicMock()
 
@@ -155,6 +169,7 @@ def mock_supabase_client():
 # =============================================================================
 
 
+@pytest.mark.xdist_group(name="feedback_loop_integration")
 class TestFeedbackLoopEndToEnd:
     """Tests for end-to-end feedback loop flow."""
 
@@ -265,6 +280,7 @@ class TestFeedbackLoopEndToEnd:
 # =============================================================================
 
 
+@pytest.mark.xdist_group(name="feedback_loop_integration")
 class TestFeedbackLoopToConceptDrift:
     """Tests for concept drift detection integration."""
 
@@ -366,6 +382,7 @@ class TestFeedbackLoopToConceptDrift:
 # =============================================================================
 
 
+@pytest.mark.xdist_group(name="feedback_loop_integration")
 class TestFeedbackLoopScheduling:
     """Tests for Celery Beat schedule configuration."""
 
@@ -445,6 +462,7 @@ class TestFeedbackLoopScheduling:
 # =============================================================================
 
 
+@pytest.mark.xdist_group(name="feedback_loop_integration")
 class TestRunFullFeedbackLoop:
     """Tests for the convenience task that runs all windows."""
 
@@ -506,15 +524,16 @@ class TestRunFullFeedbackLoop:
 # =============================================================================
 
 
+@pytest.mark.xdist_group(name="feedback_loop_integration")
 class TestFeedbackLoopErrorHandling:
     """Tests for error handling in feedback loop flow."""
 
     @patch("src.memory.services.factories.get_supabase_client")
-    def test_handles_database_unavailable(self, mock_get_client):
+    def test_handles_database_unavailable(self, mock_get_client, event_loop_for_mocks):
         """Test graceful handling when database is unavailable."""
         from src.tasks.feedback_loop_tasks import run_feedback_loop_short_window
 
-        # Mock no client available
+        # Mock no client available (event_loop_for_mocks ensures active loop for AsyncMock)
         mock_get_client.return_value = AsyncMock(return_value=None)()
 
         # Execute
@@ -576,6 +595,7 @@ class TestFeedbackLoopErrorHandling:
 # =============================================================================
 
 
+@pytest.mark.xdist_group(name="feedback_loop_integration")
 @requires_supabase
 class TestFeedbackLoopLiveIntegration:
     """Live integration tests that require actual Supabase connection."""
