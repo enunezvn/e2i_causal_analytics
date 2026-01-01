@@ -79,11 +79,13 @@ class TestPredictionGenerator:
     def test_prediction_types_valid(self, generator):
         """Test that prediction types are from valid set."""
         df = generator.generate()
+        # Note: Types MUST match Supabase prediction_type ENUM:
+        # {trigger, propensity, risk, churn, next_best_action}
         valid_types = {
-            "propensity_to_prescribe",
-            "treatment_adherence",
-            "patient_value",
-            "churn_risk",
+            "propensity",
+            "risk",
+            "trigger",
+            "churn",
             "next_best_action",
         }
 
@@ -107,18 +109,10 @@ class TestPredictionGenerator:
         """Test that prediction values are within type-specific ranges."""
         df = generator.generate()
 
-        # Probability-based predictions should be 0-1
-        prob_types = ["propensity_to_prescribe", "treatment_adherence", "churn_risk", "next_best_action"]
-        prob_df = df[df["prediction_type"].isin(prob_types)]
-        if len(prob_df) > 0:
-            assert prob_df["prediction_value"].min() >= 0
-            assert prob_df["prediction_value"].max() <= 1
-
-        # Patient value can be higher
-        value_df = df[df["prediction_type"] == "patient_value"]
-        if len(value_df) > 0:
-            assert value_df["prediction_value"].min() >= 0
-            assert value_df["prediction_value"].max() <= 50000
+        # All prediction types are probability-based (0-1 range)
+        # Types: propensity, risk, trigger, churn, next_best_action
+        assert df["prediction_value"].min() >= 0, "Prediction values should be >= 0"
+        assert df["prediction_value"].max() <= 1, "Prediction values should be <= 1"
 
     def test_model_version_format(self, generator):
         """Test that model versions have correct format."""

@@ -35,7 +35,7 @@ class TestSchemaValidator:
             "years_experience": [10, 20, 5],
             "academic_hcp": [1, 0, 0],
             "total_patient_volume": [200, 300, 150],
-            "brand": ["remibrutinib", "fabhalta", "kisqali"],
+            "brand": ["Remibrutinib", "Fabhalta", "Kisqali"],
         })
 
     @pytest.fixture
@@ -45,7 +45,7 @@ class TestSchemaValidator:
             "patient_journey_id": ["patient_000001", "patient_000002"],
             "patient_id": ["pt_000001", "pt_000002"],
             "hcp_id": ["hcp_00001", "hcp_00002"],
-            "brand": ["remibrutinib", "fabhalta"],
+            "brand": ["Remibrutinib", "Fabhalta"],
             "journey_start_date": ["2023-01-01", "2023-06-15"],
             "data_split": ["train", "validation"],
             "disease_severity": [5.5, 7.2],
