@@ -6,6 +6,8 @@ Tests the Feedback Learner integration from Causal Validation Protocol.
 Phase 4: Connect Feedback Learner to validation outcomes
 """
 
+import os
+from unittest.mock import patch
 
 import pytest
 
@@ -34,6 +36,7 @@ from src.causal_engine import (
     get_validation_outcome_store,
     log_validation_outcome,
 )
+from src.causal_engine.validation_outcome_store import reset_validation_outcome_store
 
 
 class TestValidationOutcomeType:
@@ -633,11 +636,20 @@ class TestGlobalAccessors:
     """Test global accessor functions."""
 
     def test_get_validation_outcome_store(self):
-        """Test getting global store instance."""
-        store = get_validation_outcome_store()
+        """Test getting global store instance (in-memory mode)."""
+        # Reset global singleton to ensure clean state
+        reset_validation_outcome_store()
 
-        assert store is not None
-        assert isinstance(store, InMemoryValidationOutcomeStore)
+        # Isolate environment by removing SUPABASE_URL
+        env_without_supabase = {k: v for k, v in os.environ.items() if k != "SUPABASE_URL"}
+        with patch.dict(os.environ, env_without_supabase, clear=True):
+            store = get_validation_outcome_store()
+
+            assert store is not None
+            assert isinstance(store, InMemoryValidationOutcomeStore)
+
+        # Cleanup: reset again for subsequent tests
+        reset_validation_outcome_store()
 
     def test_get_experiment_knowledge_store(self):
         """Test getting global knowledge store instance."""
