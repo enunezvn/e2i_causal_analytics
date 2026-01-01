@@ -19,8 +19,6 @@ from src.ml.synthetic.generators import (
     HCPGenerator,
     PatientGenerator,
     TreatmentGenerator,
-    EngagementGenerator,
-    OutcomeGenerator,
     PredictionGenerator,
     TriggerGenerator,
     GeneratorConfig,
@@ -99,13 +97,15 @@ class TestLoadingOrder:
     """Test suite for loading order constants."""
 
     def test_loading_order_has_all_tables(self):
-        """Test that loading order includes expected tables."""
+        """Test that loading order includes expected tables.
+
+        Note: engagement_events and business_outcomes were removed
+        as they don't exist in the current Supabase schema.
+        """
         expected_tables = [
             "hcp_profiles",
             "patient_journeys",
             "treatment_events",
-            "engagement_events",
-            "business_outcomes",
             "ml_predictions",
             "triggers",
         ]
@@ -124,8 +124,8 @@ class TestLoadingOrder:
         """Test that events load after patients."""
         patient_idx = LOADING_ORDER.index("patient_journeys")
         assert LOADING_ORDER.index("treatment_events") > patient_idx
-        assert LOADING_ORDER.index("engagement_events") > patient_idx
-        assert LOADING_ORDER.index("business_outcomes") > patient_idx
+        assert LOADING_ORDER.index("ml_predictions") > patient_idx
+        assert LOADING_ORDER.index("triggers") > patient_idx
 
 
 class TestTableColumns:
@@ -146,8 +146,12 @@ class TestTableColumns:
         assert "geographic_region" in TABLE_COLUMNS["hcp_profiles"]
 
     def test_patient_journeys_has_required_columns(self):
-        """Test that patient journeys has required columns."""
-        required = ["patient_journey_id", "patient_id", "hcp_id", "data_split", "geographic_region"]
+        """Test that patient journeys has required columns.
+
+        Note: hcp_id was removed from TABLE_COLUMNS for batch loading
+        as it's not a required column in the Supabase patient_journeys table.
+        """
+        required = ["patient_journey_id", "patient_id", "brand", "data_split", "geographic_region"]
         for col in required:
             assert col in TABLE_COLUMNS["patient_journeys"]
 
@@ -173,7 +177,11 @@ class TestBatchLoader:
 
     @pytest.fixture
     def sample_datasets(self):
-        """Generate sample datasets for testing."""
+        """Generate sample datasets for testing.
+
+        Note: Only includes tables that exist in current Supabase schema
+        (engagement_events and business_outcomes were removed).
+        """
         # Generate HCPs
         hcp_config = GeneratorConfig(seed=42, n_records=20)
         hcp_df = HCPGenerator(hcp_config).generate()
@@ -182,20 +190,25 @@ class TestBatchLoader:
         patient_config = GeneratorConfig(seed=42, n_records=50, dgp_type=DGPType.CONFOUNDED)
         patient_df = PatientGenerator(patient_config, hcp_df=hcp_df).generate()
 
-        # Generate events
+        # Generate treatment events
         treatment_config = GeneratorConfig(seed=42, n_records=100)
         treatment_df = TreatmentGenerator(treatment_config, patient_df=patient_df).generate()
+        # Rename columns to match database schema
+        if "treatment_date" in treatment_df.columns:
+            treatment_df = treatment_df.rename(columns={"treatment_date": "event_date"})
+        if "treatment_type" in treatment_df.columns:
+            treatment_df = treatment_df.rename(columns={"treatment_type": "event_type"})
+        if "days_supply" in treatment_df.columns:
+            treatment_df = treatment_df.rename(columns={"days_supply": "duration_days"})
 
-        engagement_config = GeneratorConfig(seed=42, n_records=80)
-        engagement_df = EngagementGenerator(engagement_config, hcp_df=hcp_df).generate()
-
-        outcome_config = GeneratorConfig(seed=42, n_records=30)
-        outcome_df = OutcomeGenerator(outcome_config, patient_df=patient_df).generate()
-
-        # Generate ML entities
+        # Generate ML predictions
         prediction_config = GeneratorConfig(seed=42, n_records=60)
         prediction_df = PredictionGenerator(prediction_config, patient_df=patient_df).generate()
+        # Rename columns to match database schema
+        if "prediction_date" in prediction_df.columns:
+            prediction_df = prediction_df.rename(columns={"prediction_date": "prediction_timestamp"})
 
+        # Generate triggers
         trigger_config = GeneratorConfig(seed=42, n_records=40)
         trigger_df = TriggerGenerator(trigger_config, patient_df=patient_df, hcp_df=hcp_df).generate()
 
@@ -203,8 +216,6 @@ class TestBatchLoader:
             "hcp_profiles": hcp_df,
             "patient_journeys": patient_df,
             "treatment_events": treatment_df,
-            "engagement_events": engagement_df,
-            "business_outcomes": outcome_df,
             "ml_predictions": prediction_df,
             "triggers": trigger_df,
         }
@@ -336,7 +347,10 @@ class TestBatchLoaderIntegration:
 
     @pytest.fixture
     def full_pipeline_datasets(self):
-        """Generate full pipeline datasets."""
+        """Generate full pipeline datasets.
+
+        Note: Only includes tables that exist in current Supabase schema.
+        """
         # HCPs
         hcp_config = GeneratorConfig(seed=42, n_records=30)
         hcp_df = HCPGenerator(hcp_config).generate()
@@ -345,23 +359,27 @@ class TestBatchLoaderIntegration:
         patient_config = GeneratorConfig(seed=42, n_records=100, dgp_type=DGPType.CONFOUNDED)
         patient_df = PatientGenerator(patient_config, hcp_df=hcp_df).generate()
 
-        # All event types
+        # Treatment events
         treatment_df = TreatmentGenerator(
             GeneratorConfig(seed=42, n_records=200), patient_df=patient_df
         ).generate()
+        # Rename columns to match database schema
+        if "treatment_date" in treatment_df.columns:
+            treatment_df = treatment_df.rename(columns={"treatment_date": "event_date"})
+        if "treatment_type" in treatment_df.columns:
+            treatment_df = treatment_df.rename(columns={"treatment_type": "event_type"})
+        if "days_supply" in treatment_df.columns:
+            treatment_df = treatment_df.rename(columns={"days_supply": "duration_days"})
 
-        engagement_df = EngagementGenerator(
-            GeneratorConfig(seed=42, n_records=150), hcp_df=hcp_df
-        ).generate()
-
-        outcome_df = OutcomeGenerator(
-            GeneratorConfig(seed=42, n_records=50), patient_df=patient_df
-        ).generate()
-
+        # ML Predictions
         prediction_df = PredictionGenerator(
             GeneratorConfig(seed=42, n_records=100), patient_df=patient_df
         ).generate()
+        # Rename columns to match database schema
+        if "prediction_date" in prediction_df.columns:
+            prediction_df = prediction_df.rename(columns={"prediction_date": "prediction_timestamp"})
 
+        # Triggers
         trigger_df = TriggerGenerator(
             GeneratorConfig(seed=42, n_records=80), patient_df=patient_df, hcp_df=hcp_df
         ).generate()
@@ -370,8 +388,6 @@ class TestBatchLoaderIntegration:
             "hcp_profiles": hcp_df,
             "patient_journeys": patient_df,
             "treatment_events": treatment_df,
-            "engagement_events": engagement_df,
-            "business_outcomes": outcome_df,
             "ml_predictions": prediction_df,
             "triggers": trigger_df,
         }
