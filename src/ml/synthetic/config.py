@@ -20,11 +20,14 @@ from typing import Dict, List, Optional
 
 
 class Brand(str, Enum):
-    """Supported pharmaceutical brands."""
+    """Supported pharmaceutical brands.
 
-    REMIBRUTINIB = "remibrutinib"
-    FABHALTA = "fabhalta"
-    KISQALI = "kisqali"
+    Note: Values MUST match Supabase brand_type ENUM exactly (capitalized).
+    """
+
+    REMIBRUTINIB = "Remibrutinib"
+    FABHALTA = "Fabhalta"
+    KISQALI = "Kisqali"
 
 
 class DGPType(str, Enum):
