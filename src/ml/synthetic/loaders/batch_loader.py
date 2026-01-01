@@ -64,46 +64,34 @@ class LoaderConfig:
 
 
 # Table loading order (respects foreign key dependencies)
+# Note: engagement_events and business_outcomes don't exist in current schema
 LOADING_ORDER = [
     "hcp_profiles",
     "patient_journeys",
     "treatment_events",
-    "engagement_events",
-    "business_outcomes",
     "ml_predictions",
     "triggers",
 ]
 
-# Column mappings for each table
+# Column mappings for each table (aligned with actual Supabase schema)
 TABLE_COLUMNS = {
     "hcp_profiles": [
         "hcp_id", "npi", "specialty", "practice_type", "geographic_region",
-        "years_experience", "academic_hcp", "total_patient_volume", "brand",
+        "years_experience", "total_patient_volume",
     ],
     "patient_journeys": [
-        "patient_journey_id", "patient_id", "hcp_id", "brand",
-        "journey_start_date", "disease_severity", "academic_hcp",
-        "engagement_score", "treatment_initiated", "days_to_treatment",
-        "insurance_type", "age_at_diagnosis", "geographic_region", "data_split",
+        "patient_journey_id", "patient_id", "brand",
+        "journey_start_date", "insurance_type", "geographic_region", "data_split",
     ],
     "treatment_events": [
         "treatment_event_id", "patient_journey_id", "patient_id", "brand",
-        "treatment_date", "treatment_type", "days_supply", "refill_number",
-        "adherence_score", "efficacy_score", "data_split",
-    ],
-    "engagement_events": [
-        "engagement_event_id", "hcp_id", "rep_id", "brand",
-        "engagement_date", "engagement_type", "quality_score",
-        "duration_minutes", "data_split",
-    ],
-    "business_outcomes": [
-        "outcome_id", "patient_journey_id", "patient_id", "brand",
-        "outcome_type", "outcome_date", "outcome_value", "data_split",
+        "event_date", "event_type", "duration_days",
+        "data_split",
     ],
     "ml_predictions": [
-        "prediction_id", "patient_journey_id", "patient_id", "hcp_id", "brand",
+        "prediction_id", "patient_id", "hcp_id",
         "prediction_type", "prediction_value", "confidence_score",
-        "uncertainty", "model_version", "prediction_date", "data_split",
+        "model_version", "prediction_timestamp", "data_split",
     ],
     "triggers": [
         "trigger_id", "patient_id", "hcp_id", "trigger_timestamp",
@@ -111,7 +99,7 @@ TABLE_COLUMNS = {
         "expiration_date", "delivery_channel", "delivery_status",
         "acceptance_status", "outcome_tracked", "outcome_value",
         "trigger_reason", "causal_chain", "supporting_evidence",
-        "recommended_action", "brand", "data_split",
+        "recommended_action", "data_split",
     ],
 }
 
@@ -229,7 +217,9 @@ class BatchLoader:
                     lambda x: x if isinstance(x, (dict, list)) else {}
                 )
 
-        # Handle None values
+        # Handle None/NaN values - replace with None for JSON compatibility
+        import numpy as np
+        df_to_load = df_to_load.replace({np.nan: None, np.inf: None, -np.inf: None})
         df_to_load = df_to_load.where(pd.notnull(df_to_load), None)
 
         # Calculate batches
