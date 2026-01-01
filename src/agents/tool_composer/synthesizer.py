@@ -287,8 +287,22 @@ async def synthesize_results(
 def synthesize_sync(synthesis_input: SynthesisInput, llm_client: Any, **kwargs) -> ComposedResponse:
     """
     Synchronous wrapper for synthesis.
+
+    Handles event loop conflicts when called from async contexts.
     """
     import asyncio
 
     synthesizer = ResponseSynthesizer(llm_client=llm_client, **kwargs)
-    return asyncio.run(synthesizer.synthesize(synthesis_input))
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        import nest_asyncio
+
+        nest_asyncio.apply()
+        return loop.run_until_complete(synthesizer.synthesize(synthesis_input))
+    else:
+        return asyncio.run(synthesizer.synthesize(synthesis_input))

@@ -254,9 +254,22 @@ def decompose_sync(query: str, llm_client: Any, **kwargs) -> DecompositionResult
     """
     Synchronous wrapper for decomposition.
 
-    Useful for non-async contexts.
+    Useful for non-async contexts. Handles event loop conflicts
+    when called from async contexts.
     """
     import asyncio
 
     decomposer = QueryDecomposer(llm_client=llm_client, **kwargs)
-    return asyncio.run(decomposer.decompose(query))
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        import nest_asyncio
+
+        nest_asyncio.apply()
+        return loop.run_until_complete(decomposer.decompose(query))
+    else:
+        return asyncio.run(decomposer.decompose(query))

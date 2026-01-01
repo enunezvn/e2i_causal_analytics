@@ -804,8 +804,22 @@ def execute_sync(
 ) -> ExecutionTrace:
     """
     Synchronous wrapper for execution.
+
+    Handles event loop conflicts when called from async contexts.
     """
     import asyncio
 
     executor = PlanExecutor(**kwargs)
-    return asyncio.run(executor.execute(plan, context))
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        import nest_asyncio
+
+        nest_asyncio.apply()
+        return loop.run_until_complete(executor.execute(plan, context))
+    else:
+        return asyncio.run(executor.execute(plan, context))

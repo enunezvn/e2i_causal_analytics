@@ -527,8 +527,22 @@ class PlanningError(Exception):
 def plan_sync(decomposition: DecompositionResult, llm_client: Any, **kwargs) -> ExecutionPlan:
     """
     Synchronous wrapper for planning.
+
+    Handles event loop conflicts when called from async contexts.
     """
     import asyncio
 
     planner = ToolPlanner(llm_client=llm_client, **kwargs)
-    return asyncio.run(planner.plan(decomposition))
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        import nest_asyncio
+
+        nest_asyncio.apply()
+        return loop.run_until_complete(planner.plan(decomposition))
+    else:
+        return asyncio.run(planner.plan(decomposition))

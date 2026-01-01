@@ -506,10 +506,23 @@ def compose_query_sync(
 ) -> CompositionResult:
     """
     Synchronous wrapper for query composition.
+
+    Handles event loop conflicts when called from async contexts.
     """
     import asyncio
 
-    return asyncio.run(compose_query(query, llm_client, context, **kwargs))
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        import nest_asyncio
+
+        nest_asyncio.apply()
+        return loop.run_until_complete(compose_query(query, llm_client, context, **kwargs))
+    else:
+        return asyncio.run(compose_query(query, llm_client, context, **kwargs))
 
 
 # ============================================================================
