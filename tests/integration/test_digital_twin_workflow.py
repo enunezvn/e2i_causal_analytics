@@ -122,6 +122,7 @@ def initial_state_without_twin():
 # =============================================================================
 
 
+@pytest.mark.xdist_group(name="digital_twin_workflow")
 class TestTwinSimulationNode:
     """Test the TwinSimulationNode in isolation."""
 
@@ -270,6 +271,7 @@ class TestTwinSimulationNode:
 # =============================================================================
 
 
+@pytest.mark.xdist_group(name="digital_twin_workflow")
 class TestGraphIntegration:
     """Test the full experiment designer graph with twin simulation."""
 
@@ -320,6 +322,7 @@ class TestGraphIntegration:
 # =============================================================================
 
 
+@pytest.mark.xdist_group(name="digital_twin_workflow")
 class TestWorkflowScenarios:
     """Test complete workflow scenarios."""
 
@@ -399,6 +402,7 @@ class TestWorkflowScenarios:
 # =============================================================================
 
 
+@pytest.mark.xdist_group(name="digital_twin_workflow")
 class TestStateManagement:
     """Test state field management during twin simulation."""
 
@@ -460,6 +464,7 @@ class TestStateManagement:
 # =============================================================================
 
 
+@pytest.mark.xdist_group(name="digital_twin_workflow")
 class TestParameterExtraction:
     """Test extraction of simulation parameters from state/constraints."""
 
