@@ -440,6 +440,7 @@ class TestConvenienceFunction:
         assert mock_llm_client.call_history[0]["model"] == "custom-model"
 
 
+@pytest.mark.xdist_group(name="sync_wrappers")
 class TestSyncWrapper:
     """Tests for synchronous wrapper function"""
 

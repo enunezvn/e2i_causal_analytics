@@ -359,6 +359,7 @@ class TestLLMInteraction:
         assert simple_query in message_content
 
 
+@pytest.mark.xdist_group(name="sync_wrappers")
 class TestSyncWrapper:
     """Tests for synchronous wrapper function"""
 

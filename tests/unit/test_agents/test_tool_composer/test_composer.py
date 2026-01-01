@@ -225,6 +225,7 @@ class TestPhaseExecution:
         assert result.response.response_id.startswith("resp_")
 
 
+@pytest.mark.xdist_group(name="sync_wrappers")
 class TestConvenienceFunctions:
     """Tests for convenience functions"""
 
