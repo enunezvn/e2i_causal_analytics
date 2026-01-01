@@ -84,7 +84,7 @@ class TestSyntheticDataPipelineIntegration:
             "academic_hcp": np.random.binomial(1, 0.3, n_hcps),
             "total_patient_volume": np.random.randint(50, 500, n_hcps),
             "brand": np.random.choice(
-                ["remibrutinib", "fabhalta", "kisqali"],
+                ["Remibrutinib", "Fabhalta", "Kisqali"],
                 n_hcps,
             ),
         })
@@ -143,7 +143,7 @@ class TestSyntheticDataPipelineIntegration:
             "patient_id": [f"pt_{i:06d}" for i in range(n_patients)],
             "hcp_id": hcp_ids,
             "brand": np.random.choice(
-                ["remibrutinib", "fabhalta", "kisqali"],
+                ["Remibrutinib", "Fabhalta", "Kisqali"],
                 n_patients,
             ),
             "journey_start_date": [d.strftime("%Y-%m-%d") for d in journey_dates],
@@ -403,7 +403,7 @@ class TestPipelineValidationPhase6:
             "patient_journey_id": [f"patient_{i:06d}" for i in range(n_patients)],
             "patient_id": [f"pt_{i:06d}" for i in range(n_patients)],
             "hcp_id": [f"hcp_{i % 50:05d}" for i in range(n_patients)],
-            "brand": ["remibrutinib"] * n_patients,
+            "brand": ["Remibrutinib"] * n_patients,
             "journey_start_date": [
                 (date(2022, 1, 1) + timedelta(days=i * 2)).strftime("%Y-%m-%d")
                 for i in range(n_patients)
@@ -723,7 +723,7 @@ class TestValidatorIntegration:
             "patient_id": [f"pt_{i:05d}" for i in range(n)],
             "patient_journey_id": [f"journey_{i:05d}" for i in range(n)],
             "hcp_id": [f"hcp_{i % 10:05d}" for i in range(n)],
-            "brand": ["remibrutinib"] * n,
+            "brand": ["Remibrutinib"] * n,
             "journey_start_date": [
                 (date(2022, 1, 1) + timedelta(days=i * 10)).strftime("%Y-%m-%d")
                 for i in range(n)
