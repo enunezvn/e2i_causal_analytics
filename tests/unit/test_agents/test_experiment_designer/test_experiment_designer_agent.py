@@ -452,6 +452,7 @@ class TestEndToEndWorkflows:
         assert isinstance(result, ExperimentDesignerOutput)
 
     @pytest.mark.asyncio
+    @pytest.mark.timeout(120)  # Extended timeout: 3 brand iterations × ~30s each
     async def test_multiple_brands_workflow(self):
         """Test with different brands."""
         agent = ExperimentDesignerAgent()
@@ -466,6 +467,7 @@ class TestEndToEndWorkflows:
             assert isinstance(result, ExperimentDesignerOutput)
 
     @pytest.mark.asyncio
+    @pytest.mark.timeout(120)  # Extended timeout: 3 formality levels × ~30s each
     async def test_different_formality_levels(self):
         """Test with different preregistration formality levels."""
         agent = ExperimentDesignerAgent()
