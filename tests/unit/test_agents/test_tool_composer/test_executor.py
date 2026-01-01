@@ -618,6 +618,7 @@ class TestExecutionOrder:
         assert execution_order == ["step_1", "step_2"]
 
 
+@pytest.mark.xdist_group(name="sync_wrappers")
 class TestSyncWrapper:
     """Tests for synchronous wrapper function"""
 
