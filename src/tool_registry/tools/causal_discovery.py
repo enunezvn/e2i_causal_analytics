@@ -318,8 +318,7 @@ class CausalDiscoveryTool:
                 algorithms=algorithms,
                 ensemble_threshold=params.ensemble_threshold,
                 alpha=params.alpha,
-                max_k=params.max_k if params.max_k is not None else -1,
-                node_names=params.node_names,
+                max_cond_vars=params.max_k if params.max_k is not None else None,
             )
 
             # Run discovery
@@ -343,24 +342,32 @@ class CausalDiscoveryTool:
             algorithm_results = {}
             for alg_result in result.algorithm_results:
                 algorithm_results[alg_result.algorithm.value] = {
-                    "n_edges": alg_result.n_edges,
+                    "n_edges": len(alg_result.edge_list),
                     "runtime_seconds": alg_result.runtime_seconds,
                     "converged": alg_result.converged,
                     "score": alg_result.score,
                 }
+
+            # Compute total runtime from algorithm results
+            total_runtime = sum(
+                ar.runtime_seconds for ar in result.algorithm_results
+            )
+
+            # Get algorithms used from results
+            algorithms_used = [ar.algorithm.value for ar in result.algorithm_results]
 
             output = DiscoverDagOutput(
                 success=True,
                 n_edges=result.n_edges,
                 n_nodes=result.n_nodes,
                 edge_list=edge_list,
-                algorithms_used=[a.value for a in result.algorithms_used],
+                algorithms_used=algorithms_used,
                 algorithm_results=algorithm_results,
-                ensemble_threshold=result.ensemble_threshold,
+                ensemble_threshold=result.config.ensemble_threshold,
                 gate_decision=evaluation.decision.value,
                 gate_confidence=evaluation.confidence,
                 gate_reasons=evaluation.reasons,
-                total_runtime_seconds=result.total_runtime_seconds,
+                total_runtime_seconds=total_runtime,
                 timestamp=timestamp,
                 trace_id=trace_id,
                 errors=errors,

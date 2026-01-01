@@ -1,7 +1,11 @@
 """
 E2I Tool Composer - Phase 2: Planner
-Version: 4.2
+Version: 4.4
 Purpose: Map sub-questions to tools and create execution plan
+
+V4.4 Updates:
+- Added causal discovery tool hints (discover_dag, rank_drivers, detect_structural_drift)
+- Added tool chaining guidance for discover_dag → rank_drivers pipeline
 """
 
 from __future__ import annotations
@@ -36,6 +40,16 @@ Your task is to map sub-questions to available tools and create an execution pla
 
 ## Available Tools:
 {tools_description}
+
+## Causal Discovery Tool Hints:
+Use these mappings for causal discovery queries:
+- "discover causal structure" / "learn DAG" / "causal graph" / "causal relationships" → discover_dag
+- "causal vs predictive" / "driver ranking" / "feature importance" / "which features cause" → rank_drivers
+- "structural drift" / "causal structure changed" / "DAG stability" → detect_structural_drift
+
+Tool Chaining for Causal Discovery:
+- discover_dag produces `edge_list` → rank_drivers can consume it as `dag_edge_list`
+- Example chain: discover_dag (step_1) → rank_drivers (step_2) with input_mapping: {{"dag_edge_list": "$step_1.edge_list"}}
 
 ## Guidelines:
 1. Match each sub-question to the most appropriate tool based on:
