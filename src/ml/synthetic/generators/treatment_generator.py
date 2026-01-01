@@ -24,26 +24,34 @@ class TreatmentGenerator(BaseGenerator[pd.DataFrame]):
     """
 
     # Treatment type distributions by brand
+    # Note: Values MUST match Supabase event_type ENUM:
+    # {diagnosis, prescription, lab_test, procedure, consultation, hospitalization}
     TREATMENT_TYPES = {
         Brand.REMIBRUTINIB: [
-            ("oral_daily", 0.85),
-            ("topical_prn", 0.10),
-            ("injectable_weekly", 0.05),
+            ("prescription", 0.70),
+            ("consultation", 0.15),
+            ("lab_test", 0.10),
+            ("procedure", 0.05),
         ],
         Brand.FABHALTA: [
-            ("oral_daily", 1.00),
+            ("prescription", 0.75),
+            ("consultation", 0.15),
+            ("lab_test", 0.10),
         ],
         Brand.KISQALI: [
-            ("oral_cyclic", 0.95),  # 21 days on, 7 days off
-            ("oral_continuous", 0.05),
+            ("prescription", 0.65),
+            ("consultation", 0.15),
+            ("lab_test", 0.12),
+            ("procedure", 0.08),
         ],
     }
 
     # Default treatment types for unknown brands
     DEFAULT_TREATMENT_TYPES = [
-        ("oral_daily", 0.70),
-        ("oral_weekly", 0.20),
-        ("injectable_monthly", 0.10),
+        ("prescription", 0.70),
+        ("consultation", 0.15),
+        ("lab_test", 0.10),
+        ("procedure", 0.05),
     ]
 
     @property

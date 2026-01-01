@@ -24,11 +24,13 @@ class PredictionGenerator(BaseGenerator[pd.DataFrame]):
     """
 
     # Prediction types with typical value ranges
+    # Note: Keys MUST match Supabase prediction_type ENUM:
+    # {trigger, propensity, risk, churn, next_best_action}
     PREDICTION_TYPES = {
-        "propensity_to_prescribe": {"min": 0.0, "max": 1.0, "mean": 0.35, "std": 0.20},
-        "treatment_adherence": {"min": 0.0, "max": 1.0, "mean": 0.65, "std": 0.18},
-        "patient_value": {"min": 0.0, "max": 50000.0, "mean": 12000.0, "std": 8000.0},
-        "churn_risk": {"min": 0.0, "max": 1.0, "mean": 0.20, "std": 0.15},
+        "propensity": {"min": 0.0, "max": 1.0, "mean": 0.35, "std": 0.20},
+        "risk": {"min": 0.0, "max": 1.0, "mean": 0.65, "std": 0.18},
+        "trigger": {"min": 0.0, "max": 1.0, "mean": 0.40, "std": 0.22},
+        "churn": {"min": 0.0, "max": 1.0, "mean": 0.20, "std": 0.15},
         "next_best_action": {"min": 0.0, "max": 1.0, "mean": 0.50, "std": 0.25},
     }
 
@@ -101,10 +103,10 @@ class PredictionGenerator(BaseGenerator[pd.DataFrame]):
         disease_severity = patient.get("disease_severity", 5.0)
 
         # Higher engagement improves positive predictions
-        if prediction_type in ["propensity_to_prescribe", "treatment_adherence", "patient_value"]:
+        if prediction_type in ["propensity", "risk", "trigger"]:
             adjustment = (engagement_score - 5) * 0.05
             base_value += adjustment * config["std"]
-        elif prediction_type == "churn_risk":
+        elif prediction_type == "churn":
             # Lower engagement increases churn risk
             adjustment = (5 - engagement_score) * 0.05
             base_value += adjustment * config["std"]
