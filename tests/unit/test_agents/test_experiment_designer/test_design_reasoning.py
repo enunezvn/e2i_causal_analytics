@@ -70,8 +70,12 @@ class MockLLM:
         return self.invoke(prompt)
 
 
+@pytest.mark.xdist_group(name="design_reasoning")
 class TestDesignReasoningNode:
-    """Test DesignReasoningNode functionality."""
+    """Test DesignReasoningNode functionality.
+
+    Uses xdist_group to prevent event loop conflicts in parallel execution.
+    """
 
     def test_create_node(self):
         """Test creating node."""
@@ -203,6 +207,7 @@ class TestDesignReasoningNode:
         assert result["node_latencies_ms"]["design_reasoning"] >= 0
 
 
+@pytest.mark.xdist_group(name="design_reasoning")
 class TestDesignReasoningDesignTypes:
     """Test different design type outputs."""
 
@@ -253,6 +258,7 @@ class TestDesignReasoningDesignTypes:
         assert result["status"] == "calculating"
 
 
+@pytest.mark.xdist_group(name="design_reasoning")
 class TestDesignReasoningOutputValidation:
     """Test design reasoning output validation."""
 
@@ -297,6 +303,7 @@ class TestDesignReasoningOutputValidation:
             assert len(primary_outcomes) >= 1, "Should have at least one primary outcome"
 
 
+@pytest.mark.xdist_group(name="design_reasoning")
 class TestDesignReasoningErrorHandling:
     """Test design reasoning error handling."""
 
@@ -329,6 +336,7 @@ class TestDesignReasoningErrorHandling:
         assert result["constraints"]["budget"] == 50000
 
 
+@pytest.mark.xdist_group(name="design_reasoning")
 class TestDesignReasoningPerformance:
     """Test design reasoning performance characteristics."""
 
