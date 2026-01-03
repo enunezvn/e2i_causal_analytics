@@ -7,7 +7,12 @@ Exposes backend actions for querying KPIs, running analyses,
 and interacting with the E2I agent system.
 
 Author: E2I Causal Analytics Team
-Version: 1.1.0
+Version: 1.2.0
+
+Changelog:
+    1.2.0 - Refactored from monkey-patches to response transformer middleware
+    1.1.0 - Added SDK compatibility patches for frontend v1.x
+    1.0.0 - Initial CopilotKit integration
 """
 
 import logging
@@ -18,57 +23,13 @@ from typing import Annotated, Any, Dict, List, Optional, Sequence, TypedDict
 
 from copilotkit import CopilotKitRemoteEndpoint, LangGraphAGUIAgent, Action as CopilotAction
 from copilotkit.integrations.fastapi import add_fastapi_endpoint
-from fastapi import APIRouter, FastAPI
+from copilotkit.sdk import COPILOTKIT_SDK_VERSION
+from fastapi import APIRouter, FastAPI, Request
+from fastapi.responses import JSONResponse
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, StateGraph
 
 logger = logging.getLogger(__name__)
-
-# =============================================================================
-# MONKEY-PATCH: Fix missing dict_repr on LangGraphAGUIAgent
-# This is a workaround for a bug in copilotkit where LangGraphAGUIAgent
-# doesn't inherit from copilotkit.Agent and lacks dict_repr() method.
-# =============================================================================
-if not hasattr(LangGraphAGUIAgent, 'dict_repr'):
-    def _dict_repr(self):
-        """Dict representation of the agent for CopilotKit info endpoint."""
-        return {
-            'id': self.name,  # Frontend v1.x expects 'id' field
-            'name': self.name,
-            'description': self.description or ''
-        }
-    LangGraphAGUIAgent.dict_repr = _dict_repr
-    logger.info("[CopilotKit] Applied dict_repr monkey-patch to LangGraphAGUIAgent")
-
-# =============================================================================
-# MONKEY-PATCH: Fix info() to return agents as dict (not list)
-# Frontend v1.x expects agents as {agentId: {description: "..."}} not [{id, name, description}]
-# =============================================================================
-from copilotkit.sdk import CopilotKitRemoteEndpoint, COPILOTKIT_SDK_VERSION
-_original_info = CopilotKitRemoteEndpoint.info
-
-def _patched_info(self, *, context):
-    """Patched info method that returns agents as a dict keyed by agent ID."""
-    actions = self.actions(context) if callable(self.actions) else self.actions
-    agents = self.agents(context) if callable(self.agents) else self.agents
-
-    actions_list = [action.dict_repr() for action in actions]
-
-    # Convert agents list to dict keyed by agent ID (for frontend v1.x compatibility)
-    agents_dict = {}
-    for agent in agents:
-        agent_repr = agent.dict_repr()
-        agent_id = agent_repr.get('id') or agent_repr.get('name')
-        agents_dict[agent_id] = {'description': agent_repr.get('description', '')}
-
-    return {
-        "actions": actions_list,
-        "agents": agents_dict,
-        "version": COPILOTKIT_SDK_VERSION  # Frontend expects 'version' not 'sdkVersion'
-    }
-
-CopilotKitRemoteEndpoint.info = _patched_info
-logger.info("[CopilotKit] Applied info() monkey-patch for frontend v1.x compatibility")
 
 # =============================================================================
 # E2I BACKEND ACTIONS
@@ -548,17 +509,74 @@ def create_copilotkit_sdk() -> CopilotKitRemoteEndpoint:
     return sdk
 
 
+def transform_info_response(sdk: CopilotKitRemoteEndpoint) -> Dict[str, Any]:
+    """
+    Transform SDK info response to frontend v1.x compatible format.
+
+    The Python SDK (0.1.x) returns agents as an array with 'sdkVersion',
+    but the JS frontend (1.x) expects agents as a dict with 'version'.
+
+    Args:
+        sdk: The CopilotKit remote endpoint instance
+
+    Returns:
+        Frontend-compatible info response
+    """
+    context: Dict[str, Any] = {}
+
+    # Get agents - handle both callable and static
+    agents = sdk.agents(context) if callable(sdk.agents) else sdk.agents
+
+    # Get actions - handle both callable and static
+    actions = sdk.actions(context) if callable(sdk.actions) else sdk.actions
+
+    # Transform actions to dict representation
+    actions_list = [action.dict_repr() for action in actions]
+
+    # Transform agents array to dict keyed by agent ID (frontend v1.x format)
+    agents_dict = {}
+    for agent in agents:
+        agent_id = agent.name
+        agents_dict[agent_id] = {
+            "description": getattr(agent, "description", "") or ""
+        }
+
+    return {
+        "actions": actions_list,
+        "agents": agents_dict,
+        "version": COPILOTKIT_SDK_VERSION,  # Frontend expects 'version' not 'sdkVersion'
+    }
+
+
 def add_copilotkit_routes(app: FastAPI, prefix: str = "/api/copilotkit") -> None:
     """
     Add CopilotKit routes to the FastAPI application.
+
+    Adds a custom /info endpoint that transforms the response format for
+    frontend v1.x compatibility, then adds the SDK's other routes.
 
     Args:
         app: FastAPI application instance
         prefix: URL prefix for CopilotKit endpoints
     """
     sdk = create_copilotkit_sdk()
+
+    # Add custom info endpoint BEFORE SDK routes (to take precedence)
+    @app.post(f"{prefix}/info")
+    async def copilotkit_info(request: Request) -> JSONResponse:
+        """
+        Custom info endpoint with response transformation for frontend v1.x.
+
+        The SDK returns agents as an array, but frontend v1.x expects a dict
+        keyed by agent ID. This endpoint transforms the response accordingly.
+        """
+        response = transform_info_response(sdk)
+        logger.debug(f"[CopilotKit] Info response: agents={list(response['agents'].keys())}")
+        return JSONResponse(content=response)
+
+    # Add SDK routes (main chat endpoint)
     add_fastapi_endpoint(app, sdk, prefix)
-    logger.info(f"[CopilotKit] Routes added at {prefix}")
+    logger.info(f"[CopilotKit] Routes added at {prefix} (with custom info transformer)")
 
 
 # =============================================================================
