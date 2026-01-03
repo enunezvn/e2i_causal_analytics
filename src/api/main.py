@@ -46,6 +46,7 @@ from src.api.routes.memory import router as memory_router
 from src.api.routes.monitoring import router as monitoring_router
 from src.api.routes.predictions import router as predictions_router
 from src.api.routes.rag import router as rag_router
+from src.api.routes.copilotkit import add_copilotkit_routes, router as copilotkit_router
 
 # Configure logging
 logging.basicConfig(
@@ -310,6 +311,12 @@ app.include_router(causal_router)
 
 # Audit chain endpoints (tamper-evident logging)
 app.include_router(audit_router)
+
+# CopilotKit status endpoints
+app.include_router(copilotkit_router, prefix="/api")
+
+# CopilotKit runtime endpoints (for AI chat)
+add_copilotkit_routes(app, prefix="/api/copilotkit")
 
 # TODO: Add additional routers as they're developed:
 # - Agent orchestration: /api/agents
