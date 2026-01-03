@@ -6,16 +6,36 @@ import path from 'path'
 export default defineConfig({
   plugins: [react()],
   resolve: {
-    alias: {
-      '@': path.resolve(__dirname, './src'),
+    alias: [
+      { find: '@', replacement: path.resolve(__dirname, './src') },
+      { find: /\.css$/, replacement: path.resolve(__dirname, './src/test/css-stub.ts') },
+    ],
+  },
+  css: {
+    // Ignore CSS files in tests
+    modules: {
+      classNameStrategy: 'non-scoped',
     },
   },
   test: {
+    css: true,
     globals: true,
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
     include: ['src/**/*.{test,spec}.{ts,tsx}'],
     exclude: ['node_modules', 'dist', 'e2e'],
+    deps: {
+      optimizer: {
+        web: {
+          include: ['katex', '@copilotkit/react-ui'],
+        },
+      },
+    },
+    server: {
+      deps: {
+        inline: ['katex', '@copilotkit/react-ui', '@copilotkit/react-core'],
+      },
+    },
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
