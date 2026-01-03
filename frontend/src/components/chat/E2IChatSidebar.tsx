@@ -27,7 +27,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
-import { useE2ICopilot } from '@/providers/E2ICopilotProvider';
+import { useE2ICopilot, useCopilotEnabled } from '@/providers/E2ICopilotProvider';
 import { AgentStatusPanel } from './AgentStatusPanel';
 
 // =============================================================================
@@ -66,16 +66,21 @@ export function E2IChatSidebar({
   showAgentStatus = true,
   className,
 }: E2IChatSidebarProps) {
+  const copilotEnabled = useCopilotEnabled();
   const { chatOpen, setChatOpen, agents, filters } = useE2ICopilot();
   const [showAgents, setShowAgents] = React.useState(false);
 
   // Initialize with defaultOpen
   React.useEffect(() => {
-    setChatOpen(defaultOpen);
-  }, [defaultOpen, setChatOpen]);
+    if (copilotEnabled) {
+      setChatOpen(defaultOpen);
+    }
+  }, [defaultOpen, setChatOpen, copilotEnabled]);
 
   // Keyboard shortcut: Cmd/Ctrl + /
   React.useEffect(() => {
+    if (!copilotEnabled) return;
+
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === '/') {
         e.preventDefault();
@@ -85,7 +90,12 @@ export function E2IChatSidebar({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [setChatOpen]);
+  }, [setChatOpen, copilotEnabled]);
+
+  // If CopilotKit is not enabled, don't render the sidebar
+  if (!copilotEnabled) {
+    return null;
+  }
 
   // Count active agents
   const activeAgentCount = agents.filter((a) => a.status === 'active' || a.status === 'processing').length;
