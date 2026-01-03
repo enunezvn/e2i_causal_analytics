@@ -23,7 +23,7 @@ async function initApp() {
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
       <QueryClientProvider client={queryClient}>
-        <CopilotKitWrapper runtimeUrl="/api/copilotkit">
+        <CopilotKitWrapper runtimeUrl="/api/copilotkit" enabled={true}>
           <AppRouter />
         </CopilotKitWrapper>
       </QueryClientProvider>
