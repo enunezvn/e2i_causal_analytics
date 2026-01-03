@@ -1,14 +1,18 @@
 import { createBrowserRouter, RouterProvider, Outlet } from 'react-router-dom';
 import { routes } from './routes';
 import { Layout } from '@/components/layout/Layout';
+import { E2ICopilotProvider } from '@/providers';
 
 // Root layout component that wraps all routes
 // Uses the Layout component with Header, Sidebar, and Footer
+// Wrapped with E2ICopilotProvider for AI readables/actions (requires router context)
 function RootLayout() {
   return (
-    <Layout>
-      <Outlet />
-    </Layout>
+    <E2ICopilotProvider>
+      <Layout>
+        <Outlet />
+      </Layout>
+    </E2ICopilotProvider>
   );
 }
 

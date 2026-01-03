@@ -28,3 +28,6 @@ export * from './explain';
 
 // Hybrid RAG types
 export * from './rag';
+
+// Digital Twin types
+export * from './digital-twin';

@@ -17,6 +17,7 @@ import { useSidebarState } from '@/stores/ui-store';
 import { Header } from './Header';
 import { Sidebar } from './Sidebar';
 import { Footer } from './Footer';
+import { E2IChatSidebar } from '@/components/chat';
 
 /**
  * Layout props interface
@@ -94,6 +95,9 @@ export function Layout({
         {/* Footer - at bottom */}
         {!hideFooter && <Footer />}
       </div>
+
+      {/* E2I Chat Sidebar - AI Assistant */}
+      <E2IChatSidebar position="right" showAgentStatus />
     </div>
   );
 }
