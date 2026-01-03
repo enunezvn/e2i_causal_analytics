@@ -213,6 +213,78 @@ export const queryKeys = {
     all: () => [...queryKeys.all, 'health'] as const,
     api: () => [...queryKeys.health.all(), 'api'] as const,
   },
+
+  /**
+   * Monitoring-related queries (drift, alerts, health, performance)
+   */
+  monitoring: {
+    all: () => [...queryKeys.all, 'monitoring'] as const,
+    // Drift detection
+    driftLatest: (modelId: string) =>
+      [...queryKeys.monitoring.all(), 'drift', 'latest', modelId] as const,
+    driftHistory: (modelId: string) =>
+      [...queryKeys.monitoring.all(), 'drift', 'history', modelId] as const,
+    driftStatus: (taskId: string) =>
+      [...queryKeys.monitoring.all(), 'drift', 'status', taskId] as const,
+    // Alerts
+    alerts: () => [...queryKeys.monitoring.all(), 'alerts'] as const,
+    alert: (alertId: string) =>
+      [...queryKeys.monitoring.all(), 'alerts', alertId] as const,
+    // Runs
+    runs: () => [...queryKeys.monitoring.all(), 'runs'] as const,
+    // Model health
+    modelHealth: (modelId: string) =>
+      [...queryKeys.monitoring.all(), 'health', modelId] as const,
+    // Performance
+    performanceTrend: (modelId: string) =>
+      [...queryKeys.monitoring.all(), 'performance', 'trend', modelId] as const,
+    performanceAlerts: (modelId: string) =>
+      [...queryKeys.monitoring.all(), 'performance', 'alerts', modelId] as const,
+    performanceCompare: (modelId: string, otherModelId: string) =>
+      [...queryKeys.monitoring.all(), 'performance', 'compare', modelId, otherModelId] as const,
+    // Retraining
+    retrainingStatus: (jobId: string) =>
+      [...queryKeys.monitoring.all(), 'retraining', 'status', jobId] as const,
+    retrainingEvaluate: (modelId: string) =>
+      [...queryKeys.monitoring.all(), 'retraining', 'evaluate', modelId] as const,
+  },
+
+  /**
+   * KPI-related queries
+   */
+  kpi: {
+    all: () => [...queryKeys.all, 'kpi'] as const,
+    list: () => [...queryKeys.kpi.all(), 'list'] as const,
+    workstreams: () => [...queryKeys.kpi.all(), 'workstreams'] as const,
+    health: () => [...queryKeys.kpi.all(), 'health'] as const,
+    detail: (kpiId: string) =>
+      [...queryKeys.kpi.all(), 'detail', kpiId] as const,
+  },
+
+  /**
+   * Model predictions queries
+   */
+  predictions: {
+    all: () => [...queryKeys.all, 'predictions'] as const,
+    modelHealth: (modelName: string) =>
+      [...queryKeys.predictions.all(), 'health', modelName] as const,
+    modelInfo: (modelName: string) =>
+      [...queryKeys.predictions.all(), 'info', modelName] as const,
+    modelsStatus: () =>
+      [...queryKeys.predictions.all(), 'status'] as const,
+  },
+
+  /**
+   * Digital Twin simulation queries
+   */
+  digitalTwin: {
+    all: () => [...queryKeys.all, 'digital-twin'] as const,
+    simulation: (simulationId: string) =>
+      [...queryKeys.digitalTwin.all(), 'simulation', simulationId] as const,
+    history: (brand?: string) =>
+      [...queryKeys.digitalTwin.all(), 'history', brand ?? 'all'] as const,
+    health: () => [...queryKeys.digitalTwin.all(), 'health'] as const,
+  },
 } as const;
 
 export default queryClient;
