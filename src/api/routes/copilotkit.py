@@ -16,13 +16,59 @@ import os
 from datetime import datetime, timezone
 from typing import Annotated, Any, Dict, List, Optional, Sequence, TypedDict
 
-from copilotkit import CopilotKitSDK, LangGraphAGUIAgent, Action as CopilotAction
+from copilotkit import CopilotKitRemoteEndpoint, LangGraphAGUIAgent, Action as CopilotAction
 from copilotkit.integrations.fastapi import add_fastapi_endpoint
 from fastapi import APIRouter, FastAPI
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, StateGraph
 
 logger = logging.getLogger(__name__)
+
+# =============================================================================
+# MONKEY-PATCH: Fix missing dict_repr on LangGraphAGUIAgent
+# This is a workaround for a bug in copilotkit where LangGraphAGUIAgent
+# doesn't inherit from copilotkit.Agent and lacks dict_repr() method.
+# =============================================================================
+if not hasattr(LangGraphAGUIAgent, 'dict_repr'):
+    def _dict_repr(self):
+        """Dict representation of the agent for CopilotKit info endpoint."""
+        return {
+            'id': self.name,  # Frontend v1.x expects 'id' field
+            'name': self.name,
+            'description': self.description or ''
+        }
+    LangGraphAGUIAgent.dict_repr = _dict_repr
+    logger.info("[CopilotKit] Applied dict_repr monkey-patch to LangGraphAGUIAgent")
+
+# =============================================================================
+# MONKEY-PATCH: Fix info() to return agents as dict (not list)
+# Frontend v1.x expects agents as {agentId: {description: "..."}} not [{id, name, description}]
+# =============================================================================
+from copilotkit.sdk import CopilotKitRemoteEndpoint, COPILOTKIT_SDK_VERSION
+_original_info = CopilotKitRemoteEndpoint.info
+
+def _patched_info(self, *, context):
+    """Patched info method that returns agents as a dict keyed by agent ID."""
+    actions = self.actions(context) if callable(self.actions) else self.actions
+    agents = self.agents(context) if callable(self.agents) else self.agents
+
+    actions_list = [action.dict_repr() for action in actions]
+
+    # Convert agents list to dict keyed by agent ID (for frontend v1.x compatibility)
+    agents_dict = {}
+    for agent in agents:
+        agent_repr = agent.dict_repr()
+        agent_id = agent_repr.get('id') or agent_repr.get('name')
+        agents_dict[agent_id] = {'description': agent_repr.get('description', '')}
+
+    return {
+        "actions": actions_list,
+        "agents": agents_dict,
+        "version": COPILOTKIT_SDK_VERSION  # Frontend expects 'version' not 'sdkVersion'
+    }
+
+CopilotKitRemoteEndpoint.info = _patched_info
+logger.info("[CopilotKit] Applied info() monkey-patch for frontend v1.x compatibility")
 
 # =============================================================================
 # E2I BACKEND ACTIONS
@@ -480,14 +526,14 @@ e2i_chat_graph = create_e2i_chat_agent()
 # =============================================================================
 
 
-def create_copilotkit_sdk() -> CopilotKitSDK:
+def create_copilotkit_sdk() -> CopilotKitRemoteEndpoint:
     """
-    Create and configure the CopilotKit SDK.
+    Create and configure the CopilotKit Remote Endpoint.
 
     Returns:
-        Configured CopilotKitSDK instance with agents and actions
+        Configured CopilotKitRemoteEndpoint instance with agents and actions
     """
-    sdk = CopilotKitSDK(
+    sdk = CopilotKitRemoteEndpoint(
         agents=[
             LangGraphAGUIAgent(
                 name="default",
@@ -498,7 +544,7 @@ def create_copilotkit_sdk() -> CopilotKitSDK:
         actions=COPILOT_ACTIONS,
     )
 
-    logger.info(f"[CopilotKit] SDK initialized with 1 agent and {len(COPILOT_ACTIONS)} actions")
+    logger.info(f"[CopilotKit] Remote endpoint initialized with 1 agent and {len(COPILOT_ACTIONS)} actions")
     return sdk
 
 
