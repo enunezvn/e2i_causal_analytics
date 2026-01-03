@@ -141,6 +141,13 @@ const SAMPLE_AGENTS: AgentInfo[] = [
 // Context to track if CopilotKit is enabled
 const CopilotEnabledContext = React.createContext<boolean>(false);
 
+/**
+ * Hook to check if CopilotKit is enabled
+ */
+export function useCopilotEnabled(): boolean {
+  return React.useContext(CopilotEnabledContext);
+}
+
 // =============================================================================
 // INTERNAL CONTEXT PROVIDER (without CopilotKit hooks)
 // =============================================================================

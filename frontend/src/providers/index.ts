@@ -11,6 +11,7 @@ export {
   E2ICopilotProvider,
   CopilotKitWrapper,
   useE2ICopilot,
+  useCopilotEnabled,
 } from './E2ICopilotProvider';
 export type {
   E2ICopilotProviderProps,
