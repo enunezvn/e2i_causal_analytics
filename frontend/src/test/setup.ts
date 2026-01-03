@@ -11,6 +11,28 @@ import { afterAll, afterEach, beforeAll, vi } from 'vitest';
 import { server } from '@/mocks/server';
 
 // =============================================================================
+// COPILOTKIT MOCKS
+// =============================================================================
+// Mock CopilotKit to avoid CSS import issues from katex
+vi.mock('@copilotkit/react-core', () => ({
+  CopilotKit: ({ children }: { children: React.ReactNode }) => children,
+  useCopilotReadable: () => undefined,
+  useCopilotAction: () => undefined,
+  useCopilotChat: () => ({
+    messages: [],
+    isLoading: false,
+    sendMessage: () => Promise.resolve(),
+    resetMessages: () => {},
+  }),
+}));
+
+vi.mock('@copilotkit/react-ui', () => ({
+  CopilotPopup: () => null,
+  CopilotSidebar: () => null,
+  CopilotChat: () => null,
+}));
+
+// =============================================================================
 // BROWSER API POLYFILLS
 // =============================================================================
 
