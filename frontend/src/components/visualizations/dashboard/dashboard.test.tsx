@@ -80,6 +80,36 @@ describe('KPICard', () => {
     render(<KPICard title="Status" value="Active" />);
     expect(screen.getByText('Active')).toBeInTheDocument();
   });
+
+  it('renders with warning status color', () => {
+    const { container } = render(<KPICard title="Warning KPI" value={50} status="warning" />);
+    // Should have amber-500 border-left color
+    expect(container.querySelector('.border-l-amber-500')).toBeInTheDocument();
+  });
+
+  it('renders with critical status color', () => {
+    const { container } = render(<KPICard title="Critical KPI" value={10} status="critical" />);
+    // Should have rose-500 border-left color
+    expect(container.querySelector('.border-l-rose-500')).toBeInTheDocument();
+  });
+
+  it('renders with healthy status color', () => {
+    const { container } = render(<KPICard title="Healthy KPI" value={95} status="healthy" />);
+    // Should have emerald-500 border-left color
+    expect(container.querySelector('.border-l-emerald-500')).toBeInTheDocument();
+  });
+
+  it('formats decimal values correctly', () => {
+    render(<KPICard title="Rate" value={0.75} />);
+    // Decimal value should show 0.75
+    expect(screen.getByText('0.75')).toBeInTheDocument();
+  });
+
+  it('formats small decimal values correctly', () => {
+    render(<KPICard title="Precision" value={0.8523} />);
+    // Should show 0.85 (2 decimal places)
+    expect(screen.getByText('0.85')).toBeInTheDocument();
+  });
 });
 
 // =============================================================================
@@ -332,6 +362,31 @@ describe('AlertCard', () => {
       expect(screen.getByText(`${severity} alert`)).toBeInTheDocument();
       unmount();
     });
+  });
+
+  it('renders timestamp in hours format', () => {
+    const hoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000); // 3 hours ago
+    render(<AlertCard severity="info" title="Hours ago" timestamp={hoursAgo} />);
+    expect(screen.getByText('3h ago')).toBeInTheDocument();
+  });
+
+  it('renders timestamp in days format', () => {
+    const daysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000); // 2 days ago
+    render(<AlertCard severity="info" title="Days ago" timestamp={daysAgo} />);
+    expect(screen.getByText('2d ago')).toBeInTheDocument();
+  });
+
+  it('renders timestamp as date for older alerts', () => {
+    const oldDate = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000); // 10 days ago
+    render(<AlertCard severity="info" title="Old alert" timestamp={oldDate} />);
+    // Should show localized date format
+    expect(screen.getByText(oldDate.toLocaleDateString())).toBeInTheDocument();
+  });
+
+  it('renders timestamp as Just now for very recent alerts', () => {
+    const justNow = new Date(Date.now() - 30 * 1000); // 30 seconds ago
+    render(<AlertCard severity="info" title="Recent Alert" timestamp={justNow} />);
+    expect(screen.getByText('Just now')).toBeInTheDocument();
   });
 });
 

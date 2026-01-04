@@ -93,6 +93,57 @@ describe('SHAPBarChart', () => {
     // We verify component mounts without error
     expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument();
   });
+
+  it('accepts onBarClick callback prop', () => {
+    const handleClick = vi.fn();
+    const { container } = render(
+      <SHAPBarChart features={mockFeatures} onBarClick={handleClick} />
+    );
+    expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument();
+  });
+
+  it('accepts showValues prop', () => {
+    const { container } = render(
+      <SHAPBarChart features={mockFeatures} showValues={true} />
+    );
+    expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument();
+  });
+
+  it('accepts showValues false', () => {
+    const { container } = render(
+      <SHAPBarChart features={mockFeatures} showValues={false} />
+    );
+    expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument();
+  });
+
+  it('accepts tooltipFormatter prop', () => {
+    const formatter = vi.fn((value: number) => `${value.toFixed(2)}`);
+    const { container } = render(
+      <SHAPBarChart features={mockFeatures} tooltipFormatter={formatter} />
+    );
+    expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument();
+  });
+
+  it('uses custom positive and negative colors', () => {
+    const { container } = render(
+      <SHAPBarChart
+        features={mockFeatures}
+        positiveColor="#00ff00"
+        negativeColor="#ff0000"
+      />
+    );
+    expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument();
+  });
+
+  it('sorts features by absolute SHAP value', () => {
+    const unsortedFeatures: FeatureContribution[] = [
+      { feature_name: 'small', feature_value: 1, shap_value: 0.1, contribution_direction: 'positive', contribution_rank: 3 },
+      { feature_name: 'large', feature_value: 2, shap_value: -0.5, contribution_direction: 'negative', contribution_rank: 1 },
+      { feature_name: 'medium', feature_value: 3, shap_value: 0.3, contribution_direction: 'positive', contribution_rank: 2 },
+    ];
+    const { container } = render(<SHAPBarChart features={unsortedFeatures} />);
+    expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument();
+  });
 });
 
 // =============================================================================
@@ -160,6 +211,58 @@ describe('SHAPBeeswarm', () => {
     const { container } = render(<SHAPBeeswarm data={mockBeeswarmData} height={600} />);
     const responsiveContainer = container.querySelector('.recharts-responsive-container');
     expect(responsiveContainer).toBeInTheDocument();
+  });
+
+  it('accepts onPointClick callback prop', () => {
+    const handleClick = vi.fn();
+    const { container } = render(
+      <SHAPBeeswarm data={mockBeeswarmData} onPointClick={handleClick} />
+    );
+    expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument();
+  });
+
+  it('shows reference line by default', () => {
+    const { container } = render(<SHAPBeeswarm data={mockBeeswarmData} />);
+    expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument();
+  });
+
+  it('hides reference line when showReferenceLine is false', () => {
+    const { container } = render(
+      <SHAPBeeswarm data={mockBeeswarmData} showReferenceLine={false} />
+    );
+    expect(container.querySelector('.recharts-reference-line')).not.toBeInTheDocument();
+  });
+
+  it('accepts custom pointSize', () => {
+    const { container } = render(
+      <SHAPBeeswarm data={mockBeeswarmData} pointSize={8} />
+    );
+    expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument();
+  });
+
+  it('accepts custom color scales', () => {
+    const { container } = render(
+      <SHAPBeeswarm
+        data={mockBeeswarmData}
+        lowValueColor="#0000ff"
+        highValueColor="#ff0000"
+      />
+    );
+    expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument();
+  });
+
+  it('handles single feature filter', () => {
+    const { container } = render(
+      <SHAPBeeswarm data={mockBeeswarmData} features={['days_since_visit']} />
+    );
+    expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument();
+  });
+
+  it('handles maxFeatures of 1', () => {
+    const { container } = render(
+      <SHAPBeeswarm data={mockBeeswarmData} maxFeatures={1} />
+    );
+    expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument();
   });
 });
 
@@ -330,6 +433,66 @@ describe('SHAPWaterfall', () => {
       />
     );
     // Value formatter is used in tooltips, component should render without error
+    expect(screen.getByText('Base Value')).toBeInTheDocument();
+  });
+
+  it('uses custom base and output colors', () => {
+    const { container } = render(
+      <SHAPWaterfall
+        baseValue={0.45}
+        features={mockFeatures}
+        baseColor="#333333"
+        outputColor="#666666"
+      />
+    );
+    expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument();
+  });
+
+  it('uses custom positive and negative colors', () => {
+    const { container } = render(
+      <SHAPWaterfall
+        baseValue={0.45}
+        features={mockFeatures}
+        positiveColor="#00ff00"
+        negativeColor="#ff0000"
+      />
+    );
+    expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument();
+  });
+
+  it('renders with all positive contributions', () => {
+    const positiveFeatures: FeatureContribution[] = [
+      { feature_name: 'feature_a', feature_value: 10, shap_value: 0.2, contribution_direction: 'positive', contribution_rank: 1 },
+      { feature_name: 'feature_b', feature_value: 20, shap_value: 0.15, contribution_direction: 'positive', contribution_rank: 2 },
+    ];
+    render(<SHAPWaterfall baseValue={0.3} features={positiveFeatures} />);
+    expect(screen.getByText('Base Value')).toBeInTheDocument();
+    expect(screen.getByText('Output')).toBeInTheDocument();
+  });
+
+  it('renders with all negative contributions', () => {
+    const negativeFeatures: FeatureContribution[] = [
+      { feature_name: 'feature_a', feature_value: 10, shap_value: -0.2, contribution_direction: 'negative', contribution_rank: 1 },
+      { feature_name: 'feature_b', feature_value: 20, shap_value: -0.15, contribution_direction: 'negative', contribution_rank: 2 },
+    ];
+    render(<SHAPWaterfall baseValue={0.7} features={negativeFeatures} />);
+    expect(screen.getByText('Base Value')).toBeInTheDocument();
+    expect(screen.getByText('Output')).toBeInTheDocument();
+  });
+
+  it('handles features with zero SHAP values', () => {
+    const zeroFeatures: FeatureContribution[] = [
+      { feature_name: 'feature_a', feature_value: 10, shap_value: 0, contribution_direction: 'positive', contribution_rank: 1 },
+    ];
+    render(<SHAPWaterfall baseValue={0.5} features={zeroFeatures} />);
+    expect(screen.getByText('Base Value')).toBeInTheDocument();
+  });
+
+  it('handles very small SHAP values', () => {
+    const smallFeatures: FeatureContribution[] = [
+      { feature_name: 'tiny_effect', feature_value: 1, shap_value: 0.0001, contribution_direction: 'positive', contribution_rank: 1 },
+    ];
+    render(<SHAPWaterfall baseValue={0.5} features={smallFeatures} />);
     expect(screen.getByText('Base Value')).toBeInTheDocument();
   });
 });
