@@ -30,8 +30,6 @@ import {
   Scatter,
 } from 'recharts';
 import {
-  TrendingUp,
-  TrendingDown,
   Calendar,
   RefreshCw,
   Download,
@@ -39,9 +37,7 @@ import {
   Activity,
   BarChart3,
   Waves,
-  Target,
   Clock,
-  Zap,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -445,50 +441,41 @@ function TimeSeries() {
         <KPICard
           title="Current Value"
           value={summaryMetrics.current.toLocaleString()}
-          icon={Activity}
-          trend={summaryMetrics.change > 0 ? 'up' : 'down'}
-          trendValue={`${summaryMetrics.change > 0 ? '+' : ''}${summaryMetrics.change.toFixed(1)}%`}
-          subtitle="vs 7 days ago"
+          description="vs 7 days ago"
         />
         <KPICard
           title="Average"
           value={Math.round(summaryMetrics.average).toLocaleString()}
-          icon={BarChart3}
-          subtitle="Over period"
+          description="Over period"
         />
         <KPICard
           title="Maximum"
           value={summaryMetrics.max.toLocaleString()}
-          icon={TrendingUp}
-          status="success"
-          subtitle="Peak value"
+          status="healthy"
+          description="Peak value"
         />
         <KPICard
           title="Minimum"
           value={summaryMetrics.min.toLocaleString()}
-          icon={TrendingDown}
-          subtitle="Lowest value"
+          description="Lowest value"
         />
         <KPICard
           title="Anomalies"
           value={summaryMetrics.anomalyCount}
-          icon={AlertTriangle}
-          status={summaryMetrics.anomalyCount > 3 ? 'warning' : 'success'}
-          subtitle="Detected"
+          status={summaryMetrics.anomalyCount > 3 ? 'warning' : 'healthy'}
+          description="Detected"
         />
         <KPICard
           title="Forecast MAPE"
           value={`${summaryMetrics.forecastAccuracy.toFixed(1)}%`}
-          icon={Target}
-          status={summaryMetrics.forecastAccuracy < 5 ? 'success' : 'warning'}
-          subtitle="Accuracy"
+          status={summaryMetrics.forecastAccuracy < 5 ? 'healthy' : 'warning'}
+          description="Accuracy"
         />
         <KPICard
           title="Forecast R²"
           value={SAMPLE_FORECAST_METRICS.r2.toFixed(2)}
-          icon={Zap}
-          status={SAMPLE_FORECAST_METRICS.r2 > 0.9 ? 'success' : 'warning'}
-          subtitle="Model fit"
+          status={SAMPLE_FORECAST_METRICS.r2 > 0.9 ? 'healthy' : 'warning'}
+          description="Model fit"
         />
       </div>
 
@@ -610,12 +597,13 @@ function TimeSeries() {
                   <Scatter
                     dataKey="value"
                     fill="hsl(var(--destructive))"
-                    shape={(props: { cx: number; cy: number; payload: TimeSeriesDataPoint }) => {
-                      if (props.payload.isAnomaly) {
+                    shape={(props: unknown) => {
+                      const { cx, cy, payload } = props as { cx: number; cy: number; payload: TimeSeriesDataPoint };
+                      if (payload?.isAnomaly) {
                         return (
                           <circle
-                            cx={props.cx}
-                            cy={props.cy}
+                            cx={cx}
+                            cy={cy}
                             r={6}
                             fill="hsl(var(--destructive))"
                             stroke="white"
@@ -623,7 +611,7 @@ function TimeSeries() {
                           />
                         );
                       }
-                      return null;
+                      return <circle cx={0} cy={0} r={0} />;
                     }}
                     name="Anomalies"
                   />
@@ -651,7 +639,7 @@ function TimeSeries() {
               <CardContent>
                 <div className="flex items-end gap-2">
                   <span className="text-2xl font-bold">{SAMPLE_FORECAST_METRICS.mape.toFixed(2)}%</span>
-                  <StatusBadge status="success" size="sm">Excellent</StatusBadge>
+                  <StatusBadge status="success" size="sm" label="Excellent" />
                 </div>
                 <p className="text-xs text-muted-foreground mt-1">Mean Absolute Percentage Error</p>
               </CardContent>
@@ -665,7 +653,7 @@ function TimeSeries() {
               <CardContent>
                 <div className="flex items-end gap-2">
                   <span className="text-2xl font-bold">{SAMPLE_FORECAST_METRICS.rmse.toFixed(2)}</span>
-                  <StatusBadge status="success" size="sm">Good</StatusBadge>
+                  <StatusBadge status="success" size="sm" label="Good" />
                 </div>
                 <p className="text-xs text-muted-foreground mt-1">Root Mean Square Error</p>
               </CardContent>
@@ -679,7 +667,7 @@ function TimeSeries() {
               <CardContent>
                 <div className="flex items-end gap-2">
                   <span className="text-2xl font-bold">{SAMPLE_FORECAST_METRICS.mae.toFixed(2)}</span>
-                  <StatusBadge status="success" size="sm">Good</StatusBadge>
+                  <StatusBadge status="success" size="sm" label="Good" />
                 </div>
                 <p className="text-xs text-muted-foreground mt-1">Mean Absolute Error</p>
               </CardContent>
@@ -693,7 +681,7 @@ function TimeSeries() {
               <CardContent>
                 <div className="flex items-end gap-2">
                   <span className="text-2xl font-bold">{SAMPLE_FORECAST_METRICS.r2.toFixed(3)}</span>
-                  <StatusBadge status="success" size="sm">Excellent</StatusBadge>
+                  <StatusBadge status="success" size="sm" label="Excellent" />
                 </div>
                 <p className="text-xs text-muted-foreground mt-1">Coefficient of Determination</p>
               </CardContent>
@@ -717,7 +705,7 @@ function TimeSeries() {
                     <XAxis dataKey="date" tickFormatter={formatDate} fontSize={10} tickLine={false} />
                     <YAxis fontSize={10} tickLine={false} axisLine={false} />
                     <Tooltip
-                      formatter={(value: number) => value.toFixed(0)}
+                      formatter={(value) => value !== undefined ? Number(value).toFixed(0) : '-'}
                       labelFormatter={formatDate}
                     />
                     <Line
@@ -746,7 +734,7 @@ function TimeSeries() {
                     <XAxis dataKey="date" tickFormatter={formatDate} fontSize={10} tickLine={false} />
                     <YAxis fontSize={10} tickLine={false} axisLine={false} />
                     <Tooltip
-                      formatter={(value: number) => value.toFixed(2)}
+                      formatter={(value) => value !== undefined ? Number(value).toFixed(2) : '-'}
                       labelFormatter={formatDate}
                     />
                     <Area
@@ -776,7 +764,7 @@ function TimeSeries() {
                     <XAxis dataKey="date" tickFormatter={formatDate} fontSize={10} tickLine={false} />
                     <YAxis fontSize={10} tickLine={false} axisLine={false} />
                     <Tooltip
-                      formatter={(value: number) => value.toFixed(2)}
+                      formatter={(value) => value !== undefined ? Number(value).toFixed(2) : '-'}
                       labelFormatter={formatDate}
                     />
                     <Bar
@@ -803,7 +791,7 @@ function TimeSeries() {
                     <XAxis dataKey="date" tickFormatter={formatDate} fontSize={10} tickLine={false} />
                     <YAxis fontSize={10} tickLine={false} axisLine={false} />
                     <Tooltip
-                      formatter={(value: number) => value.toFixed(0)}
+                      formatter={(value) => value !== undefined ? Number(value).toFixed(0) : '-'}
                       labelFormatter={formatDate}
                     />
                     <Legend />
@@ -888,7 +876,7 @@ function TimeSeries() {
                   <XAxis dataKey="date" tickFormatter={formatDate} fontSize={12} tickLine={false} />
                   <YAxis fontSize={12} tickLine={false} axisLine={false} />
                   <Tooltip
-                    formatter={(value: number) => value.toLocaleString()}
+                    formatter={(value) => value !== undefined ? Number(value).toLocaleString() : '-'}
                     labelFormatter={formatDate}
                   />
                   <Line
@@ -902,20 +890,21 @@ function TimeSeries() {
                   <Scatter
                     dataKey="value"
                     fill="hsl(var(--destructive))"
-                    shape={(props: { cx: number; cy: number; payload: TimeSeriesDataPoint }) => {
-                      if (props.payload.isAnomaly) {
+                    shape={(props: unknown) => {
+                      const { cx, cy, payload } = props as { cx: number; cy: number; payload: TimeSeriesDataPoint };
+                      if (payload?.isAnomaly) {
                         return (
                           <g>
                             <circle
-                              cx={props.cx}
-                              cy={props.cy}
+                              cx={cx}
+                              cy={cy}
                               r={8}
                               fill="hsl(var(--destructive))"
                               fillOpacity={0.3}
                             />
                             <circle
-                              cx={props.cx}
-                              cy={props.cy}
+                              cx={cx}
+                              cy={cy}
                               r={5}
                               fill="hsl(var(--destructive))"
                               stroke="white"
@@ -924,7 +913,7 @@ function TimeSeries() {
                           </g>
                         );
                       }
-                      return null;
+                      return <circle cx={0} cy={0} r={0} />;
                     }}
                     name="Anomalies"
                   />

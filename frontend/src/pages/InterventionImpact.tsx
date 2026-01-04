@@ -14,7 +14,6 @@
 import { useState, useMemo } from 'react';
 import {
   ComposedChart,
-  LineChart,
   BarChart,
   Line,
   Bar,
@@ -29,12 +28,10 @@ import {
 } from 'recharts';
 import {
   TrendingUp,
-  TrendingDown,
   RefreshCw,
   Download,
   Target,
   Activity,
-  Zap,
   Beaker,
   GitBranch,
   ArrowRight,
@@ -51,7 +48,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { cn } from '@/lib/utils';
-import { KPICard, StatusBadge } from '@/components/visualizations';
+import { KPICard } from '@/components/visualizations';
 import { SimulationPanel, ScenarioResults, RecommendationCards } from '@/components/digital-twin';
 import { useRunSimulation } from '@/hooks/api/use-digital-twin';
 import type { SimulationRequest, SimulationResponse } from '@/types/digital-twin';
@@ -327,7 +324,6 @@ function InterventionImpact() {
   // Calculate summary metrics
   const summaryMetrics = useMemo(() => {
     const impactData = SAMPLE_IMPACT_DATA;
-    const preInterventionData = impactData.slice(0, 30);
     const postInterventionData = impactData.slice(30);
 
     const avgActual = postInterventionData.reduce((a, b) => a + b.actual, 0) / postInterventionData.length;
@@ -486,30 +482,26 @@ function InterventionImpact() {
         <KPICard
           title="Average Treatment Effect"
           value={`+${summaryMetrics.avgATE.toFixed(1)}`}
-          icon={Target}
-          status="success"
-          subtitle="Across significant outcomes"
+          status="healthy"
+          description="Across significant outcomes"
         />
         <KPICard
           title="Significant Effects"
           value={`${summaryMetrics.significantEffects}/${summaryMetrics.totalEffects}`}
-          icon={CheckCircle2}
-          status={summaryMetrics.significantEffects > summaryMetrics.totalEffects / 2 ? 'success' : 'warning'}
-          subtitle="p < 0.05"
+          status={summaryMetrics.significantEffects > summaryMetrics.totalEffects / 2 ? 'healthy' : 'warning'}
+          description="p < 0.05"
         />
         <KPICard
           title="Cumulative Impact"
           value={`+${(summaryMetrics.cumulativeEffect / 1000).toFixed(1)}K`}
-          icon={TrendingUp}
-          status="success"
-          subtitle="Total incremental units"
+          status="healthy"
+          description="Total incremental units"
         />
         <KPICard
           title="ROI Estimate"
           value="3.2x"
-          icon={Zap}
-          status="success"
-          subtitle="Return on investment"
+          status="healthy"
+          description="Return on investment"
         />
       </div>
 
@@ -878,8 +870,9 @@ function InterventionImpact() {
                   <XAxis type="number" fontSize={12} tickLine={false} />
                   <YAxis dataKey="segment" type="category" fontSize={12} tickLine={false} width={110} />
                   <Tooltip
-                    formatter={(value: number, name: string) => {
-                      if (name === 'effect') return [`+${value.toFixed(1)}`, 'Treatment Effect'];
+                    formatter={(value, name) => {
+                      if (value === undefined) return ['-', name];
+                      if (name === 'effect') return [`+${Number(value).toFixed(1)}`, 'Treatment Effect'];
                       return [value, name];
                     }}
                   />
