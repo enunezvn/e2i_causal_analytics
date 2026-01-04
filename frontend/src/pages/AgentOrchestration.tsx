@@ -16,7 +16,7 @@ import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Progress } from '@/components/ui/progress';
 import { useE2ICopilot } from '@/providers/E2ICopilotProvider';
-import { TierOverview } from '@/components/visualizations/agents/AgentTierBadge';
+import { TierOverview, type AgentTier } from '@/components/visualizations/agents/AgentTierBadge';
 import { AgentStatusPanel } from '@/components/chat/AgentStatusPanel';
 import {
   Activity,
@@ -295,10 +295,10 @@ function TierMetricsCard({ metrics }: { metrics: TierMetrics }) {
 
 export default function AgentOrchestration() {
   const { agents } = useE2ICopilot();
-  const [selectedTier, setSelectedTier] = React.useState<number | null>(null);
+  const [selectedTier, setSelectedTier] = React.useState<AgentTier | null>(null);
 
   // Fetch agent status from API (with fallback to context data)
-  const { data: agentStatus, isLoading } = useQuery({
+  const { data: agentStatus, isLoading: _isLoading } = useQuery({
     queryKey: ['agent-status'],
     queryFn: async () => {
       const response = await fetch('/api/agents/status');
@@ -406,7 +406,7 @@ export default function AgentOrchestration() {
               <CardContent>
                 <TierOverview
                   activeTier={selectedTier ?? undefined}
-                  onTierClick={(tier) => setSelectedTier(tier === selectedTier ? null : tier)}
+                  onTierSelect={(tier: AgentTier) => setSelectedTier(tier === selectedTier ? null : tier)}
                 />
               </CardContent>
             </Card>
@@ -419,8 +419,8 @@ export default function AgentOrchestration() {
               </CardHeader>
               <CardContent>
                 <AgentStatusPanel
+                  agents={filteredAgents}
                   compact={true}
-                  onAgentClick={(agentId) => console.log('Agent clicked:', agentId)}
                 />
               </CardContent>
             </Card>
@@ -509,7 +509,7 @@ export default function AgentOrchestration() {
                   <select
                     className="px-3 py-1.5 text-sm border rounded-md"
                     value={selectedTier ?? ''}
-                    onChange={(e) => setSelectedTier(e.target.value ? Number(e.target.value) : null)}
+                    onChange={(e) => setSelectedTier(e.target.value ? (Number(e.target.value) as AgentTier) : null)}
                   >
                     <option value="">All Tiers</option>
                     <option value="0">Tier 0 - ML Foundation</option>

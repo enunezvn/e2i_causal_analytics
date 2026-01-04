@@ -14,7 +14,6 @@
  * @module components/chat/ValidationBadge
  */
 
-import * as React from 'react';
 import { CheckCircle, AlertTriangle, XCircle, Info } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';

@@ -9,6 +9,18 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import * as React from 'react';
+import type {
+  SessionResponse,
+  CognitiveQueryResponse,
+  CreateSessionResponse,
+  DeleteSessionResponse,
+  CognitiveRAGResponse,
+} from '@/types/cognitive';
+import {
+  QueryType,
+  SessionState,
+  CognitivePhase,
+} from '@/types/cognitive';
 
 // Mock the API functions
 vi.mock('@/api/cognitive', () => ({
@@ -84,48 +96,83 @@ const mockStatusResponse = {
   agents: ['orchestrator', 'causal_impact', 'gap_analyzer'],
 };
 
-const mockSession = {
-  session_id: 'sess_abc123',
-  user_id: 'user_001',
-  brand: 'Kisqali',
-  created_at: '2024-01-15T10:00:00Z',
-  updated_at: '2024-01-15T12:00:00Z',
-  message_count: 5,
-  status: 'active',
+const mockSession: SessionResponse = {
+  context: {
+    session_id: 'sess_abc123',
+    user_id: 'user_001',
+    brand: 'Kisqali',
+    state: SessionState.ACTIVE,
+    created_at: '2024-01-15T10:00:00Z',
+    last_activity: '2024-01-15T12:00:00Z',
+    message_count: 5,
+  },
+  messages: [
+    {
+      role: 'user',
+      content: 'What factors are driving TRx decline?',
+      timestamp: '2024-01-15T10:00:00Z',
+    },
+  ],
+  evidence_trail: [],
+  memory_stats: {},
 };
 
-const mockSessionsResponse = {
+const mockSessionsResponse: { sessions: SessionResponse[]; total: number } = {
   sessions: [mockSession],
   total: 1,
 };
 
-const mockQueryResponse = {
+const mockQueryResponse: CognitiveQueryResponse = {
+  session_id: 'sess_abc123',
+  query: 'What factors are driving TRx decline?',
   response: 'TRx is declining due to increased competition and market saturation.',
-  agent: 'causal_impact',
+  query_type: QueryType.CAUSAL,
   confidence: 0.85,
-  evidence: [{ source: 'trend_analysis', relevance: 0.9 }],
-  session_id: 'sess_abc123',
-  processing_time_ms: 1500,
-};
-
-const mockCreateSessionResponse = {
-  session_id: 'sess_new123',
-  created_at: '2024-01-16T10:00:00Z',
-  status: 'active',
-};
-
-const mockDeleteSessionResponse = {
-  deleted: true,
-  session_id: 'sess_abc123',
-};
-
-const mockRAGResponse = {
-  answer: 'TRx trends show a 15% increase in Q4.',
-  sources: [
-    { document_id: 'doc1', chunk: 'Q4 analysis shows growth', relevance: 0.92 },
+  agent_used: 'causal_impact',
+  evidence: [
+    {
+      content: 'Market analysis shows increased competition',
+      source: 'trend_analysis',
+      relevance_score: 0.9,
+      retrieval_method: 'semantic_search',
+    },
   ],
-  conversation_id: 'conv_123',
-  reasoning_trace: ['Retrieved context', 'Synthesized answer'],
+  phases_completed: [CognitivePhase.SUMMARIZE, CognitivePhase.EXECUTE],
+  processing_time_ms: 1500,
+  timestamp: '2024-01-15T12:00:00Z',
+};
+
+const mockCreateSessionResponse: CreateSessionResponse = {
+  session_id: 'sess_new123',
+  state: SessionState.ACTIVE,
+  created_at: '2024-01-16T10:00:00Z',
+  expires_at: '2024-01-17T10:00:00Z',
+};
+
+const mockDeleteSessionResponse: DeleteSessionResponse = {
+  session_id: 'sess_abc123',
+  deleted: true,
+  timestamp: '2024-01-16T11:00:00Z',
+};
+
+const mockRAGResponse: CognitiveRAGResponse = {
+  response: 'TRx trends show a 15% increase in Q4.',
+  evidence: [
+    {
+      content: 'Q4 analysis shows growth',
+      source: 'doc1',
+      score: 0.92,
+    },
+  ],
+  hop_count: 2,
+  visualization_config: {},
+  routed_agents: ['causal_impact'],
+  entities: ['TRx', 'Q4'],
+  intent: 'trend_analysis',
+  rewritten_query: 'TRx trend Kisqali Q4 2024',
+  dspy_signals: [],
+  worth_remembering: true,
+  latency_ms: 500,
 };
 
 // =============================================================================

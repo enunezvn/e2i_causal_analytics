@@ -83,49 +83,61 @@ function createWrapper() {
 // MOCK DATA
 // =============================================================================
 
-const mockModelHealthResponse = {
+import type {
+  ModelHealthResponse,
+  ModelInfoResponse,
+  ModelsStatusResponse,
+  PredictionResponse,
+  BatchPredictionResponse,
+} from '@/types/predictions';
+
+const mockModelHealthResponse: ModelHealthResponse = {
   model_name: 'churn_model',
   status: 'healthy',
-  last_inference_time: '2024-01-15T12:00:00Z',
-  error: null,
+  endpoint: 'http://localhost:8080/predictions/churn_model',
+  last_check: '2024-01-15T12:00:00Z',
+  error: undefined,
 };
 
-const mockModelInfoResponse = {
+const mockModelInfoResponse: ModelInfoResponse = {
   name: 'churn_model',
   version: '2.1.0',
   type: 'classification',
   metrics: { accuracy: 0.92, f1_score: 0.89 },
-  features: ['hcp_id', 'territory', 'engagement_score'],
-  created_at: '2024-01-01T00:00:00Z',
 };
 
-const mockModelsStatusResponse = {
+const mockModelsStatusResponse: ModelsStatusResponse = {
   total_models: 5,
   healthy_count: 4,
   unhealthy_count: 1,
   models: [
-    { name: 'churn_model', status: 'healthy' },
-    { name: 'propensity_model', status: 'healthy' },
-    { name: 'conversion_model', status: 'unhealthy' },
+    { model_name: 'churn_model', status: 'healthy', endpoint: 'http://localhost:8080/predictions/churn_model', last_check: '2024-01-15T12:00:00Z' },
+    { model_name: 'propensity_model', status: 'healthy', endpoint: 'http://localhost:8080/predictions/propensity_model', last_check: '2024-01-15T12:00:00Z' },
+    { model_name: 'conversion_model', status: 'unhealthy', endpoint: 'http://localhost:8080/predictions/conversion_model', last_check: '2024-01-15T12:00:00Z', error: 'Connection refused' },
   ],
+  timestamp: '2024-01-15T12:00:00Z',
 };
 
-const mockPredictionResponse = {
+const mockPredictionResponse: PredictionResponse = {
+  model_name: 'churn_model',
   prediction: 0.85,
   probabilities: { churn: 0.85, retain: 0.15 },
   model_version: '2.1.0',
-  inference_time_ms: 15,
+  latency_ms: 15,
+  timestamp: '2024-01-15T12:00:00Z',
 };
 
-const mockBatchPredictionResponse = {
+const mockBatchPredictionResponse: BatchPredictionResponse = {
+  model_name: 'churn_model',
   predictions: [
-    { id: 'HCP001', prediction: 0.85, probabilities: { churn: 0.85, retain: 0.15 } },
-    { id: 'HCP002', prediction: 0.32, probabilities: { churn: 0.32, retain: 0.68 } },
+    { model_name: 'churn_model', prediction: 0.85, probabilities: { churn: 0.85, retain: 0.15 }, latency_ms: 12, timestamp: '2024-01-15T12:00:00Z' },
+    { model_name: 'churn_model', prediction: 0.32, probabilities: { churn: 0.32, retain: 0.68 }, latency_ms: 13, timestamp: '2024-01-15T12:00:00Z' },
   ],
   total_count: 2,
   success_count: 2,
-  error_count: 0,
-  processing_time_ms: 45,
+  failed_count: 0,
+  total_latency_ms: 45,
+  timestamp: '2024-01-15T12:00:00Z',
 };
 
 // =============================================================================
@@ -391,7 +403,7 @@ describe('useBatchPredict', () => {
   });
 
   it('handles partial failures', async () => {
-    const partialResponse = { ...mockBatchPredictionResponse, error_count: 1, success_count: 1 };
+    const partialResponse: BatchPredictionResponse = { ...mockBatchPredictionResponse, failed_count: 1, success_count: 1 };
     vi.mocked(predictionsApi.predictBatch).mockResolvedValueOnce(partialResponse);
     const { wrapper } = createWrapper();
 
@@ -404,7 +416,7 @@ describe('useBatchPredict', () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
-    expect(result.current.data?.error_count).toBe(1);
+    expect(result.current.data?.failed_count).toBe(1);
   });
 });
 

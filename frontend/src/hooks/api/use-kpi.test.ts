@@ -88,60 +88,122 @@ function createWrapper() {
 }
 
 // =============================================================================
+// TYPE IMPORTS
+// =============================================================================
+
+import type {
+  KPIListResponse,
+  WorkstreamListResponse,
+  KPIHealthResponse,
+  KPIMetadata,
+  KPIResult,
+  BatchKPICalculationResponse,
+  CacheInvalidationResponse,
+  WorkstreamInfo,
+} from '@/types/kpi';
+
+// =============================================================================
 // MOCK DATA
 // =============================================================================
 
-const mockKPIListResponse = {
-  kpis: [
-    { id: 'WS1-DQ-001', name: 'Data Freshness', workstream: 'ws1_data_quality' },
-    { id: 'WS2-TRX-001', name: 'TRx Volume', workstream: 'ws2_trx' },
-  ],
-  total: 2,
-};
-
-const mockWorkstreamsResponse = {
-  workstreams: [
-    { id: 'ws1_data_quality', name: 'Data Quality', kpi_count: 10 },
-    { id: 'ws2_trx', name: 'TRx Metrics', kpi_count: 8 },
-  ],
-};
-
-const mockKPIHealthResponse = {
-  status: 'healthy',
-  cache_size: 150,
-  last_refresh: '2024-01-15T10:00:00Z',
-  stale_count: 0,
-};
-
-const mockKPIMetadata = {
+const mockKPIMetadata1: KPIMetadata = {
   id: 'WS1-DQ-001',
   name: 'Data Freshness',
   definition: 'Measures how current the data is',
   formula: 'current_date - last_update_date',
+  calculation_type: 'direct',
   workstream: 'ws1_data_quality',
+  tables: ['data_sources'],
+  columns: ['last_update_date'],
+  frequency: 'daily',
+  primary_causal_library: 'none',
   threshold: { warning: 24, critical: 48 },
   unit: 'hours',
 };
 
-const mockKPIResult = {
+const mockKPIMetadata2: KPIMetadata = {
+  id: 'WS2-TRX-001',
+  name: 'TRx Volume',
+  definition: 'Total prescription volume',
+  formula: 'SUM(trx_count)',
+  calculation_type: 'direct',
+  workstream: 'ws2_triggers',
+  tables: ['prescriptions'],
+  columns: ['trx_count'],
+  frequency: 'weekly',
+  primary_causal_library: 'dowhy',
+};
+
+const mockKPIListResponse: KPIListResponse = {
+  kpis: [mockKPIMetadata1, mockKPIMetadata2],
+  total: 2,
+};
+
+const mockWorkstreamInfo1: WorkstreamInfo = {
+  id: 'ws1_data_quality',
+  name: 'Data Quality',
+  kpi_count: 10,
+  description: 'Data quality metrics',
+};
+
+const mockWorkstreamInfo2: WorkstreamInfo = {
+  id: 'ws2_triggers',
+  name: 'Trigger Metrics',
+  kpi_count: 8,
+  description: 'Trigger-related metrics',
+};
+
+const mockWorkstreamsResponse: WorkstreamListResponse = {
+  workstreams: [mockWorkstreamInfo1, mockWorkstreamInfo2],
+  total: 2,
+};
+
+const mockKPIHealthResponse: KPIHealthResponse = {
+  status: 'healthy',
+  registry_loaded: true,
+  total_kpis: 46,
+  cache_enabled: true,
+  cache_size: 150,
+  database_connected: true,
+  workstreams_available: ['ws1_data_quality', 'ws2_triggers', 'ws3_business'],
+  last_calculation: '2024-01-15T10:00:00Z',
+};
+
+const mockKPIMetadata: KPIMetadata = {
+  id: 'WS1-DQ-001',
+  name: 'Data Freshness',
+  definition: 'Measures how current the data is',
+  formula: 'current_date - last_update_date',
+  calculation_type: 'direct',
+  workstream: 'ws1_data_quality',
+  tables: ['data_sources'],
+  columns: ['last_update_date'],
+  frequency: 'daily',
+  primary_causal_library: 'none',
+  threshold: { warning: 24, critical: 48 },
+  unit: 'hours',
+};
+
+const mockKPIResult: KPIResult = {
   kpi_id: 'WS1-DQ-001',
   value: 12.5,
   status: 'good',
-  computed_at: '2024-01-15T12:00:00Z',
-  context: { brand: 'remibrutinib' },
+  calculated_at: '2024-01-15T12:00:00Z',
+  cached: false,
+  metadata: { brand: 'remibrutinib' },
 };
 
-const mockBatchCalculationResponse = {
+const mockBatchCalculationResponse: BatchKPICalculationResponse = {
   results: [mockKPIResult],
+  calculated_at: '2024-01-15T12:00:00Z',
   total_kpis: 1,
   successful: 1,
   failed: 0,
-  processing_time_ms: 500,
 };
 
-const mockCacheInvalidationResponse = {
+const mockCacheInvalidationResponse: CacheInvalidationResponse = {
   invalidated_count: 5,
-  cache_size_after: 145,
+  message: 'Successfully invalidated 5 cache entries',
 };
 
 // =============================================================================
@@ -215,7 +277,8 @@ describe('useWorkstreams', () => {
   });
 
   it('handles empty workstreams', async () => {
-    vi.mocked(kpiApi.getWorkstreams).mockResolvedValueOnce({ workstreams: [] });
+    const emptyResponse: WorkstreamListResponse = { workstreams: [], total: 0 };
+    vi.mocked(kpiApi.getWorkstreams).mockResolvedValueOnce(emptyResponse);
     const { wrapper } = createWrapper();
 
     const { result } = renderHook(() => useWorkstreams(), { wrapper });
@@ -244,7 +307,11 @@ describe('useKPIHealth', () => {
   });
 
   it('handles unhealthy status', async () => {
-    const unhealthyResponse = { ...mockKPIHealthResponse, status: 'degraded', stale_count: 10 };
+    const unhealthyResponse: KPIHealthResponse = {
+      ...mockKPIHealthResponse,
+      status: 'degraded',
+      error: 'Cache service unavailable',
+    };
     vi.mocked(kpiApi.getKPIHealth).mockResolvedValueOnce(unhealthyResponse);
     const { wrapper } = createWrapper();
 

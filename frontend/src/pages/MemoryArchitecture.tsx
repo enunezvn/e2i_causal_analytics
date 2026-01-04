@@ -158,24 +158,16 @@ function EpisodicMemoryList({ memories }: { memories: EpisodicMemoryResponse[] }
           className="p-3 bg-[var(--color-background)] rounded border border-[var(--color-border)]"
         >
           <div className="flex items-center justify-between mb-1">
-            <span className="text-xs font-medium text-[var(--color-primary)]">{memory.memory_type}</span>
+            <span className="text-xs font-medium text-[var(--color-primary)]">{memory.event_type}</span>
             <span className="text-xs text-[var(--color-text-tertiary)]">
               {new Date(memory.created_at).toLocaleString()}
             </span>
           </div>
           <p className="text-sm text-[var(--color-text-primary)] line-clamp-2">{memory.content}</p>
-          {memory.importance_score && (
+          {memory.agent_name && (
             <div className="mt-2 flex items-center gap-2">
-              <span className="text-xs text-[var(--color-text-secondary)]">Importance:</span>
-              <div className="flex-1 h-1.5 bg-[var(--color-border)] rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-[var(--color-primary)]"
-                  style={{ width: `${memory.importance_score * 100}%` }}
-                />
-              </div>
-              <span className="text-xs text-[var(--color-text-secondary)]">
-                {(memory.importance_score * 100).toFixed(0)}%
-              </span>
+              <span className="text-xs text-[var(--color-text-secondary)]">Agent:</span>
+              <span className="text-xs text-[var(--color-text-primary)]">{memory.agent_name}</span>
             </div>
           )}
         </div>
@@ -189,13 +181,13 @@ function EpisodicMemoryList({ memories }: { memories: EpisodicMemoryResponse[] }
 // =============================================================================
 
 export default function MemoryArchitecture() {
-  const [refreshKey, setRefreshKey] = useState(0);
+  const [_refreshKey, setRefreshKey] = useState(0);
 
   const { data: statsData, isLoading: statsLoading, error: statsError } = useMemoryStats();
   const { data: episodicData, isLoading: episodicLoading } = useEpisodicMemories({ limit: 5 });
 
   const stats = statsData;
-  const episodicMemories = episodicData?.memories || [];
+  const episodicMemories = episodicData || [];
 
   const handleRefresh = () => {
     setRefreshKey((prev) => prev + 1);

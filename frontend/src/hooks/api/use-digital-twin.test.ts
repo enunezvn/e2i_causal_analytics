@@ -9,6 +9,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import * as React from 'react';
+import type {
+  SimulationResponse,
+  SimulationHistoryResponse,
+  ScenarioComparisonResult,
+} from '@/types/digital-twin';
+import {
+  InterventionType,
+  RecommendationType,
+  ConfidenceLevel,
+} from '@/types/digital-twin';
 
 // Mock the API functions
 vi.mock('@/api/digital-twin', () => ({
@@ -73,26 +83,73 @@ function createWrapper() {
 // MOCK DATA
 // =============================================================================
 
-const mockSimulationResponse = {
+const mockSimulationResponse: SimulationResponse = {
   simulation_id: 'sim_abc123',
-  intervention_type: 'hcp_engagement',
-  brand: 'Remibrutinib',
-  status: 'completed',
-  outcomes: {
-    ate: { estimate: 0.15, std_error: 0.02, p_value: 0.001 },
-    confidence_interval: [0.11, 0.19],
-  },
-  sample_size: 1000,
-  duration_days: 90,
   created_at: '2024-01-15T10:00:00Z',
-  completed_at: '2024-01-15T10:05:00Z',
+  request: {
+    intervention_type: InterventionType.HCP_ENGAGEMENT,
+    brand: 'Remibrutinib',
+    sample_size: 1000,
+    duration_days: 90,
+  },
+  outcomes: {
+    ate: { lower: 0.11, estimate: 0.15, upper: 0.19 },
+    trx_lift: { lower: 50, estimate: 75, upper: 100 },
+    nrx_lift: { lower: 20, estimate: 30, upper: 40 },
+    market_share_change: { lower: 0.01, estimate: 0.02, upper: 0.03 },
+    roi: { lower: 1.5, estimate: 2.0, upper: 2.5 },
+  },
+  fidelity: {
+    overall_score: 0.85,
+    data_coverage: 0.90,
+    calibration: 0.82,
+    temporal_alignment: 0.88,
+    feature_completeness: 0.80,
+    confidence_level: ConfidenceLevel.HIGH,
+  },
+  sensitivity: [
+    {
+      parameter: 'sample_size',
+      base_value: 1000,
+      low_value: 500,
+      high_value: 2000,
+      ate_at_low: 0.12,
+      ate_at_high: 0.18,
+      sensitivity_score: 0.3,
+    },
+  ],
+  recommendation: {
+    type: RecommendationType.DEPLOY,
+    confidence: ConfidenceLevel.HIGH,
+    rationale: 'Strong positive ATE with high confidence',
+    evidence: ['Consistent treatment effect across segments'],
+  },
+  projections: [
+    {
+      date: '2024-02-01',
+      with_intervention: 100,
+      without_intervention: 85,
+      lower_bound: 90,
+      upper_bound: 110,
+    },
+  ],
+  execution_time_ms: 1500,
 };
 
-const mockSimulationHistoryResponse = {
-  simulations: [mockSimulationResponse],
+const mockSimulationHistoryResponse: SimulationHistoryResponse = {
+  simulations: [
+    {
+      simulation_id: 'sim_abc123',
+      created_at: '2024-01-15T10:00:00Z',
+      intervention_type: InterventionType.HCP_ENGAGEMENT,
+      brand: 'Remibrutinib',
+      ate_estimate: 0.15,
+      recommendation_type: RecommendationType.DEPLOY,
+    },
+  ],
   total: 1,
-  page: 1,
-  page_size: 10,
+  offset: 0,
+  limit: 10,
 };
 
 const mockHealthResponse = {
@@ -101,14 +158,25 @@ const mockHealthResponse = {
   last_calibration: '2024-01-10T00:00:00Z',
 };
 
-const mockScenarioComparisonResult = {
+const mockScenarioComparisonResult: ScenarioComparisonResult = {
   base_result: mockSimulationResponse,
   alternative_results: [
-    { ...mockSimulationResponse, simulation_id: 'sim_alt1', intervention_type: 'digital_outreach' },
+    {
+      ...mockSimulationResponse,
+      simulation_id: 'sim_alt1',
+      request: {
+        ...mockSimulationResponse.request,
+        intervention_type: InterventionType.DIGITAL_MARKETING,
+      },
+    },
   ],
   comparison: {
-    best_scenario: 'hcp_engagement',
-    relative_improvement: 0.25,
+    best_scenario_index: 0,
+    metric_comparison: {
+      ate: [0.15, 0.12],
+      roi: [2.0, 1.8],
+    },
+    summary: 'HCP Engagement shows better results than Digital Marketing',
   },
 };
 
@@ -195,7 +263,7 @@ describe('useSimulationHistory', () => {
   });
 
   it('handles empty history', async () => {
-    const emptyResponse = { simulations: [], total: 0, page: 1, page_size: 10 };
+    const emptyResponse: SimulationHistoryResponse = { simulations: [], total: 0, offset: 0, limit: 10 };
     vi.mocked(digitalTwinApi.getSimulationHistory).mockResolvedValueOnce(emptyResponse);
     const { wrapper } = createWrapper();
 
@@ -277,7 +345,7 @@ describe('useRunSimulation', () => {
     const { result } = renderHook(() => useRunSimulation(), { wrapper });
 
     const request = {
-      intervention_type: 'hcp_engagement',
+      intervention_type: InterventionType.HCP_ENGAGEMENT,
       brand: 'Remibrutinib',
       sample_size: 1000,
       duration_days: 90,
@@ -302,8 +370,10 @@ describe('useRunSimulation', () => {
     const { result } = renderHook(() => useRunSimulation(), { wrapper });
 
     result.current.mutate({
-      intervention_type: 'hcp_engagement',
+      intervention_type: InterventionType.HCP_ENGAGEMENT,
       brand: 'Unknown',
+      sample_size: 100,
+      duration_days: 30,
     });
 
     await waitFor(() => expect(result.current.isError).toBe(true));
@@ -317,8 +387,10 @@ describe('useRunSimulation', () => {
     const { result } = renderHook(() => useRunSimulation({ onSuccess }), { wrapper });
 
     result.current.mutate({
-      intervention_type: 'hcp_engagement',
+      intervention_type: InterventionType.HCP_ENGAGEMENT,
       brand: 'Remibrutinib',
+      sample_size: 1000,
+      duration_days: 90,
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
@@ -335,8 +407,10 @@ describe('useRunSimulation', () => {
     const { result } = renderHook(() => useRunSimulation({ onError }), { wrapper });
 
     result.current.mutate({
-      intervention_type: 'hcp_engagement',
+      intervention_type: InterventionType.HCP_ENGAGEMENT,
       brand: 'Unknown',
+      sample_size: 100,
+      duration_days: 30,
     });
 
     await waitFor(() => expect(result.current.isError).toBe(true));
@@ -359,11 +433,13 @@ describe('useCompareScenarios', () => {
 
     const request = {
       base_scenario: {
-        intervention_type: 'hcp_engagement',
+        intervention_type: InterventionType.HCP_ENGAGEMENT,
         brand: 'Remibrutinib',
+        sample_size: 1000,
+        duration_days: 90,
       },
       alternative_scenarios: [
-        { intervention_type: 'digital_outreach', brand: 'Remibrutinib' },
+        { intervention_type: InterventionType.DIGITAL_MARKETING, brand: 'Remibrutinib', sample_size: 1000, duration_days: 90 },
       ],
     };
 
@@ -386,7 +462,7 @@ describe('useCompareScenarios', () => {
     const { result } = renderHook(() => useCompareScenarios(), { wrapper });
 
     result.current.mutate({
-      base_scenario: { intervention_type: 'hcp_engagement', brand: 'Unknown' },
+      base_scenario: { intervention_type: InterventionType.HCP_ENGAGEMENT, brand: 'Unknown', sample_size: 100, duration_days: 30 },
       alternative_scenarios: [],
     });
 
@@ -401,7 +477,7 @@ describe('useCompareScenarios', () => {
     const { result } = renderHook(() => useCompareScenarios({ onSuccess }), { wrapper });
 
     result.current.mutate({
-      base_scenario: { intervention_type: 'hcp_engagement', brand: 'Remibrutinib' },
+      base_scenario: { intervention_type: InterventionType.HCP_ENGAGEMENT, brand: 'Remibrutinib', sample_size: 1000, duration_days: 90 },
       alternative_scenarios: [],
     });
 
@@ -418,8 +494,8 @@ describe('useCompareScenarios', () => {
     const { result } = renderHook(() => useCompareScenarios(), { wrapper });
 
     result.current.mutate({
-      base_scenario: { intervention_type: 'hcp_engagement', brand: 'Remibrutinib' },
-      alternative_scenarios: [{ intervention_type: 'digital_outreach', brand: 'Remibrutinib' }],
+      base_scenario: { intervention_type: InterventionType.HCP_ENGAGEMENT, brand: 'Remibrutinib', sample_size: 1000, duration_days: 90 },
+      alternative_scenarios: [{ intervention_type: InterventionType.DIGITAL_MARKETING, brand: 'Remibrutinib', sample_size: 1000, duration_days: 90 }],
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));

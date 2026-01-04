@@ -5,7 +5,7 @@
  * Tests for CopilotKit integration provider including context, hooks, and actions.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, act, renderHook } from '@testing-library/react';
 import * as React from 'react';
 
@@ -415,14 +415,14 @@ describe('CopilotHooksConnector', () => {
       call[0]?.description?.includes('Current page path')
     );
     expect(pageCall).toBeDefined();
-    expect(pageCall[0].value.currentPath).toBe('/test-path');
+    expect(pageCall![0].value.currentPath).toBe('/test-path');
 
     // Check agents readable
     const agentsCall = mockUseCopilotReadable.mock.calls.find((call) =>
       call[0]?.description?.includes('agent tier hierarchy')
     );
     expect(agentsCall).toBeDefined();
-    expect(agentsCall[0].value.length).toBe(19);
+    expect(agentsCall![0].value.length).toBe(19);
 
     // Check preferences readable
     const prefsCall = mockUseCopilotReadable.mock.calls.find((call) =>

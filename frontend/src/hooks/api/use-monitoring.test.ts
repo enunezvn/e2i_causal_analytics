@@ -9,6 +9,35 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import * as React from 'react';
+import type {
+  DriftDetectionResponse,
+  DriftHistoryResponse,
+  DriftHistoryItem,
+  TaskStatusResponse,
+  AlertListResponse,
+  AlertItem,
+  AlertListParams,
+  MonitoringRunsResponse,
+  MonitoringRunItem,
+  ModelHealthSummary,
+  PerformanceTrendResponse,
+  PerformanceAlertsResponse,
+  ModelComparisonResponse,
+  PerformanceRecordResponse,
+  ProductionSweepResponse,
+  RetrainingDecisionResponse,
+  RetrainingJobResponse,
+  DriftResult,
+  PerformanceMetricItem,
+} from '@/types/monitoring';
+import {
+  AlertStatus,
+  AlertAction,
+  TriggerReason,
+  RetrainingStatus,
+  DriftType,
+  DriftSeverity,
+} from '@/types/monitoring';
 
 // Mock the API functions
 vi.mock('@/api/monitoring', () => ({
@@ -114,127 +143,170 @@ function createWrapper() {
 // MOCK DATA
 // =============================================================================
 
-const mockDriftResponse = {
+const mockDriftResult: DriftResult = {
+  feature: 'engagement_score',
+  drift_type: DriftType.DATA,
+  test_statistic: 0.12,
+  p_value: 0.08,
+  drift_detected: false,
+  severity: DriftSeverity.LOW,
+  baseline_period: '2024-01-01 to 2024-01-07',
+  current_period: '2024-01-08 to 2024-01-15',
+};
+
+const mockDriftResponse: DriftDetectionResponse = {
+  task_id: 'drift_task_001',
   model_id: 'propensity_v2.1.0',
+  status: 'completed',
   overall_drift_score: 0.15,
-  is_drifting: false,
-  features: [
-    { name: 'engagement_score', drift_score: 0.12, is_drifting: false },
-    { name: 'territory', drift_score: 0.18, is_drifting: false },
-  ],
-  detection_time: '2024-01-15T12:00:00Z',
+  features_checked: 10,
+  features_with_drift: [],
+  results: [mockDriftResult],
+  drift_summary: 'No significant drift detected',
+  recommended_actions: [],
+  detection_latency_ms: 150,
+  timestamp: '2024-01-15T12:00:00Z',
 };
 
-const mockDriftHistoryResponse = {
+const mockDriftHistoryItem: DriftHistoryItem = {
+  id: 'drift_history_001',
+  model_version: 'propensity_v2.1.0',
+  feature_name: 'engagement_score',
+  drift_type: 'data',
+  drift_score: 0.12,
+  severity: 'low',
+  detected_at: '2024-01-15T12:00:00Z',
+  baseline_start: '2024-01-01T00:00:00Z',
+  baseline_end: '2024-01-07T23:59:59Z',
+  current_start: '2024-01-08T00:00:00Z',
+  current_end: '2024-01-15T23:59:59Z',
+};
+
+const mockDriftHistoryResponse: DriftHistoryResponse = {
   model_id: 'propensity_v2.1.0',
-  history: [mockDriftResponse],
-  total: 1,
+  total_records: 1,
+  records: [mockDriftHistoryItem],
 };
 
-const mockTaskStatusResponse = {
+const mockTaskStatusResponse: TaskStatusResponse = {
   task_id: 'task_abc123',
   status: 'completed',
   ready: true,
   result: mockDriftResponse,
 };
 
-const mockAlertListResponse = {
-  alerts: [
-    {
-      id: 'alert_001',
-      model_id: 'propensity_v2.1.0',
-      severity: 'warning',
-      status: 'active',
-      message: 'Drift detected',
-      created_at: '2024-01-15T12:00:00Z',
-    },
-  ],
-  total: 1,
-  active_count: 1,
-};
-
-const mockAlertItem = {
+const mockAlertItem: AlertItem = {
   id: 'alert_001',
-  model_id: 'propensity_v2.1.0',
+  model_version: 'propensity_v2.1.0',
+  alert_type: 'drift',
   severity: 'warning',
-  status: 'active',
-  message: 'Drift detected',
-  created_at: '2024-01-15T12:00:00Z',
+  title: 'Drift Detected',
+  description: 'Data drift detected in engagement_score feature',
+  status: AlertStatus.ACTIVE,
+  triggered_at: '2024-01-15T12:00:00Z',
 };
 
-const mockMonitoringRunsResponse = {
-  runs: [
-    {
-      id: 'run_001',
-      model_id: 'propensity_v2.1.0',
-      type: 'drift_detection',
-      status: 'completed',
-      started_at: '2024-01-15T12:00:00Z',
-    },
-  ],
-  total_runs: 1,
+const mockAlertListResponse: AlertListResponse = {
+  total_count: 1,
+  active_count: 1,
+  alerts: [mockAlertItem],
 };
 
-const mockModelHealthSummary = {
+const mockMonitoringRunItem: MonitoringRunItem = {
+  id: 'run_001',
+  model_version: 'propensity_v2.1.0',
+  run_type: 'drift_detection',
+  started_at: '2024-01-15T12:00:00Z',
+  completed_at: '2024-01-15T12:02:00Z',
+  features_checked: 10,
+  drift_detected_count: 0,
+  alerts_generated: 0,
+  duration_ms: 120000,
+};
+
+const mockMonitoringRunsResponse: MonitoringRunsResponse = {
   model_id: 'propensity_v2.1.0',
-  overall_health: 'good',
-  drift_status: 'stable',
-  performance_status: 'good',
-  last_updated: '2024-01-15T12:00:00Z',
+  total_runs: 1,
+  runs: [mockMonitoringRunItem],
+};
+
+const mockModelHealthSummary: ModelHealthSummary = {
+  model_id: 'propensity_v2.1.0',
+  overall_health: 'healthy',
+  last_check: '2024-01-15T12:00:00Z',
+  drift_score: 0.15,
+  active_alerts: 0,
+  performance_trend: 'stable',
   recommendations: [],
 };
 
-const mockPerformanceTrendResponse = {
+const mockPerformanceMetricItem: PerformanceMetricItem = {
+  metric_name: 'accuracy',
+  metric_value: 0.92,
+  recorded_at: '2024-01-15T12:00:00Z',
+};
+
+const mockPerformanceTrendResponse: PerformanceTrendResponse = {
   model_id: 'propensity_v2.1.0',
   metric_name: 'accuracy',
-  data_points: [
-    { timestamp: '2024-01-01', value: 0.92 },
-    { timestamp: '2024-01-15', value: 0.91 },
-  ],
+  current_value: 0.91,
+  baseline_value: 0.92,
+  change_percent: -1.09,
   trend: 'stable',
+  is_significant: false,
+  alert_threshold_breached: false,
+  history: [mockPerformanceMetricItem],
 };
 
-const mockPerformanceAlertsResponse = {
+const mockPerformanceAlertsResponse: PerformanceAlertsResponse = {
   model_id: 'propensity_v2.1.0',
+  alert_count: 0,
   alerts: [],
-  total: 0,
 };
 
-const mockModelComparisonResponse = {
-  model_a: 'propensity_v2.1.0',
-  model_b: 'propensity_v2.0.0',
-  metric: 'accuracy',
-  model_a_value: 0.92,
-  model_b_value: 0.89,
+const mockModelComparisonResponse: ModelComparisonResponse = {
+  model_id: 'propensity_v2.1.0',
+  other_model_id: 'propensity_v2.0.0',
+  metric_name: 'accuracy',
+  model_value: 0.92,
+  other_model_value: 0.89,
   difference: 0.03,
-  significant: true,
+  difference_percent: 3.37,
+  better_model: 'propensity_v2.1.0',
 };
 
-const mockPerformanceRecordResponse = {
-  recorded: true,
+const mockPerformanceRecordResponse: PerformanceRecordResponse = {
   model_id: 'propensity_v2.1.0',
-  metrics_computed: ['accuracy', 'f1_score'],
+  recorded_at: '2024-01-15T12:00:00Z',
+  sample_size: 100,
+  metrics: { accuracy: 0.92, f1_score: 0.88 },
+  alerts_generated: 0,
 };
 
-const mockProductionSweepResponse = {
-  models_checked: 5,
-  issues_found: 1,
+const mockProductionSweepResponse: ProductionSweepResponse = {
   task_id: 'sweep_task_001',
+  status: 'completed',
+  message: 'Production sweep completed successfully',
+  time_window: '7d',
 };
 
-const mockRetrainingDecisionResponse = {
+const mockRetrainingDecisionResponse: RetrainingDecisionResponse = {
   model_id: 'propensity_v2.1.0',
-  needs_retraining: true,
+  should_retrain: true,
   confidence: 0.85,
-  reasons: ['data_drift', 'performance_degradation'],
+  reasons: ['Data drift detected', 'Performance degradation observed'],
+  trigger_factors: { drift_score: 0.35, accuracy_drop: 0.05 },
+  cooldown_active: false,
+  recommended_action: 'Schedule retraining within 7 days',
 };
 
-const mockRetrainingJobResponse = {
+const mockRetrainingJobResponse: RetrainingJobResponse = {
   job_id: 'retrain_job_001',
   model_version: 'propensity_v2.1.0',
-  status: 'pending',
+  status: RetrainingStatus.PENDING,
+  trigger_reason: 'data_drift',
+  triggered_at: '2024-01-15T12:00:00Z',
   triggered_by: 'ui_user',
-  created_at: '2024-01-15T12:00:00Z',
 };
 
 // =============================================================================
@@ -385,7 +457,7 @@ describe('useAlerts', () => {
   it('passes params to API', async () => {
     vi.mocked(monitoringApi.listAlerts).mockResolvedValueOnce(mockAlertListResponse);
     const { wrapper } = createWrapper();
-    const params = { status: 'active', severity: 'critical' };
+    const params: AlertListParams = { status: AlertStatus.ACTIVE, severity: DriftSeverity.CRITICAL };
 
     const { result } = renderHook(() => useAlerts(params), { wrapper });
 
@@ -428,7 +500,7 @@ describe('useUpdateAlert', () => {
   });
 
   it('updates alert successfully', async () => {
-    const updatedAlert = { ...mockAlertItem, status: 'acknowledged' };
+    const updatedAlert: AlertItem = { ...mockAlertItem, status: AlertStatus.ACKNOWLEDGED };
     vi.mocked(monitoringApi.updateAlert).mockResolvedValueOnce(updatedAlert);
     const { wrapper, queryClient } = createWrapper();
     const setQueryDataSpy = vi.spyOn(queryClient, 'setQueryData');
@@ -438,13 +510,13 @@ describe('useUpdateAlert', () => {
 
     result.current.mutate({
       alertId: 'alert_001',
-      request: { action: 'acknowledge', user_id: 'user_123' },
+      request: { action: AlertAction.ACKNOWLEDGE, user_id: 'user_123' },
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
     expect(monitoringApi.updateAlert).toHaveBeenCalledWith('alert_001', {
-      action: 'acknowledge',
+      action: AlertAction.ACKNOWLEDGE,
       user_id: 'user_123',
     });
     expect(setQueryDataSpy).toHaveBeenCalled();
@@ -748,7 +820,7 @@ describe('useTriggerRetraining', () => {
 
     result.current.mutate({
       modelId: 'propensity_v2.1.0',
-      request: { reason: 'data_drift' },
+      request: { reason: TriggerReason.DATA_DRIFT },
       triggeredBy: 'ui_user',
     });
 
@@ -756,7 +828,7 @@ describe('useTriggerRetraining', () => {
 
     expect(monitoringApi.triggerRetraining).toHaveBeenCalledWith(
       'propensity_v2.1.0',
-      { reason: 'data_drift' },
+      { reason: TriggerReason.DATA_DRIFT },
       'ui_user'
     );
     expect(invalidateSpy).toHaveBeenCalled();
@@ -770,14 +842,14 @@ describe('useTriggerRetraining', () => {
 
     result.current.mutate({
       modelId: 'propensity_v2.1.0',
-      request: { reason: 'data_drift' },
+      request: { reason: TriggerReason.DATA_DRIFT },
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
     expect(monitoringApi.triggerRetraining).toHaveBeenCalledWith(
       'propensity_v2.1.0',
-      { reason: 'data_drift' },
+      { reason: TriggerReason.DATA_DRIFT },
       'ui_user'
     );
   });
@@ -816,7 +888,7 @@ describe('useCompleteRetraining', () => {
   });
 
   it('completes retraining successfully', async () => {
-    const completedJob = { ...mockRetrainingJobResponse, status: 'completed' };
+    const completedJob: RetrainingJobResponse = { ...mockRetrainingJobResponse, status: RetrainingStatus.COMPLETED };
     vi.mocked(monitoringApi.completeRetraining).mockResolvedValueOnce(completedJob);
     const { wrapper, queryClient } = createWrapper();
     const setQueryDataSpy = vi.spyOn(queryClient, 'setQueryData');
@@ -846,7 +918,7 @@ describe('useRollbackRetraining', () => {
   });
 
   it('rolls back retraining successfully', async () => {
-    const rolledBackJob = { ...mockRetrainingJobResponse, status: 'rolled_back' };
+    const rolledBackJob: RetrainingJobResponse = { ...mockRetrainingJobResponse, status: RetrainingStatus.ROLLED_BACK };
     vi.mocked(monitoringApi.rollbackRetraining).mockResolvedValueOnce(rolledBackJob);
     const { wrapper, queryClient } = createWrapper();
     const setQueryDataSpy = vi.spyOn(queryClient, 'setQueryData');
@@ -925,7 +997,7 @@ describe('prefetchAlerts', () => {
   it('prefetches with params', async () => {
     vi.mocked(monitoringApi.listAlerts).mockResolvedValueOnce(mockAlertListResponse);
     const queryClient = createTestQueryClient();
-    const params = { status: 'active' };
+    const params: AlertListParams = { status: AlertStatus.ACTIVE };
 
     await prefetchAlerts(queryClient, params);
 

@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { SHAPBarChart } from './SHAPBarChart';
 import { SHAPBeeswarm, type BeeswarmDataPoint } from './SHAPBeeswarm';
 import { SHAPForcePlot } from './SHAPForcePlot';
@@ -244,8 +244,8 @@ describe('SHAPBeeswarm', () => {
     const { container } = render(
       <SHAPBeeswarm
         data={mockBeeswarmData}
-        lowValueColor="#0000ff"
-        highValueColor="#ff0000"
+        lowColor="#0000ff"
+        highColor="#ff0000"
       />
     );
     expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument();
@@ -316,11 +316,11 @@ describe('SHAPForcePlot', () => {
   });
 
   it('limits displayed features', () => {
-    const manyFeatures = Array.from({ length: 15 }, (_, i) => ({
+    const manyFeatures: FeatureContribution[] = Array.from({ length: 15 }, (_, i) => ({
       feature_name: `feature_${i}`,
       feature_value: i,
       shap_value: (i % 2 === 0 ? 1 : -1) * (0.1 + i * 0.01),
-      contribution_direction: i % 2 === 0 ? 'positive' : 'negative' as const,
+      contribution_direction: (i % 2 === 0 ? 'positive' : 'negative') as 'positive' | 'negative',
       contribution_rank: i,
     }));
 

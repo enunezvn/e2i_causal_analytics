@@ -20,8 +20,6 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   MessageSquare,
   X,
-  ChevronLeft,
-  ChevronRight,
   Bot,
   Sparkles,
 } from 'lucide-react';

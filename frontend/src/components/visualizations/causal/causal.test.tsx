@@ -6,7 +6,7 @@
  */
 
 import * as React from 'react';
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
 import { CausalDAG, type CausalNode, type CausalEdge, type CausalDAGRef } from './CausalDAG';
 import { EffectsTable, type CausalEffect } from './EffectsTable';
@@ -578,7 +578,8 @@ describe('EffectsTable', () => {
 
     it('disables sorting when sortable is false', () => {
       render(<EffectsTable effects={mockEffects} sortable={false} />);
-      const estimateHeader = screen.getByText('Estimate');
+      // Verify header exists but no sort icons
+      expect(screen.getByText('Estimate')).toBeInTheDocument();
 
       // Sort icons should not be present
       const sortIcons = document.querySelectorAll('.lucide-arrow-up-down');
@@ -831,7 +832,7 @@ describe('RefutationTests', () => {
 
     it('shows amber for medium pass rate (50-80%)', () => {
       // 3/4 = 75% - should be amber (50-80% range)
-      const { container } = render(<RefutationTests results={mockRefutationResults} />);
+      render(<RefutationTests results={mockRefutationResults} />);
       // The 75% should have warning color
       const passRateText = screen.getByText('75%');
       expect(passRateText).toHaveClass('text-[var(--color-warning)]');

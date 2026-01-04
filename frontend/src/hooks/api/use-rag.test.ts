@@ -80,67 +80,99 @@ function createWrapper() {
 // MOCK DATA
 // =============================================================================
 
-const mockStatsResponse = {
+import type {
+  RAGStatsResponse,
+  RAGHealthResponse,
+  CausalSubgraphResponse,
+  CausalPathResponse,
+  RAGSearchResponse,
+  ExtractedEntities,
+  RAGSearchRequest,
+} from '@/types/rag';
+import { SearchMode } from '@/types/rag';
+
+const mockStatsResponse: RAGStatsResponse = {
   total_searches: 1500,
-  avg_response_time_ms: 250,
-  cache_hit_rate: 0.75,
-  search_by_mode: { vector: 800, sparse: 400, hybrid: 300 },
+  avg_latency_ms: 250,
+  top_queries: [
+    { query: 'Kisqali TRx trends', count: 150 },
+    { query: 'Northeast market share', count: 100 },
+  ],
+  backend_usage: { vector: 800, fulltext: 400, graph: 300 },
+  error_rate: 0.02,
   period_hours: 24,
 };
 
-const mockHealthResponse = {
+const mockHealthResponse: RAGHealthResponse = {
   status: 'healthy',
-  vector_store: 'healthy',
-  sparse_index: 'healthy',
-  graph_store: 'healthy',
-  embedding_model: 'loaded',
+  backends: {
+    vector: { status: 'healthy', latency_ms: 15, last_check: '2024-01-15T12:00:00Z', consecutive_failures: 0 },
+    fulltext: { status: 'healthy', latency_ms: 8, last_check: '2024-01-15T12:00:00Z', consecutive_failures: 0 },
+    graph: { status: 'healthy', latency_ms: 20, last_check: '2024-01-15T12:00:00Z', consecutive_failures: 0 },
+  },
+  monitoring_enabled: true,
+  timestamp: '2024-01-15T12:00:00Z',
 };
 
-const mockSubgraphResponse = {
+const mockSubgraphResponse: CausalSubgraphResponse = {
   entity: 'kisqali',
   nodes: [
-    { id: 'kisqali', type: 'brand', label: 'Kisqali' },
-    { id: 'trx', type: 'kpi', label: 'TRx' },
+    { id: 'kisqali', type: 'brand', label: 'Kisqali', properties: {} },
+    { id: 'trx', type: 'kpi', label: 'TRx', properties: {} },
   ],
-  edges: [{ source: 'kisqali', target: 'trx', relationship: 'IMPACTS' }],
+  edges: [{ source: 'kisqali', target: 'trx', relationship: 'IMPACTS', weight: 1.0, properties: {} }],
   node_count: 2,
   edge_count: 1,
   depth: 2,
+  query_time_ms: 25,
 };
 
-const mockPathsResponse = {
+const mockPathsResponse: CausalPathResponse = {
   source: 'hcp_engagement',
   target: 'trx',
   paths: [
-    {
-      nodes: ['hcp_engagement', 'conversion_rate', 'trx'],
-      relationships: ['CAUSES', 'DRIVES'],
-      confidence: 0.85,
-    },
+    ['hcp_engagement', 'conversion_rate', 'trx'],
   ],
   total_paths: 1,
   shortest_path_length: 3,
+  query_time_ms: 30,
 };
 
-const mockSearchResponse = {
+const mockSearchResponse: RAGSearchResponse = {
+  search_id: 'search_001',
+  query: 'Kisqali TRx',
   results: [
     {
-      id: 'doc_001',
+      document_id: 'doc_001',
       content: 'TRx trends for Kisqali show positive growth',
       score: 0.92,
+      source: 'vector',
       metadata: { source: 'analytics_report', date: '2024-01-15' },
     },
   ],
-  total: 1,
-  query: 'Kisqali TRx',
-  search_time_ms: 150,
+  total_results: 1,
+  entities: {
+    brands: ['Kisqali'],
+    kpis: ['TRx'],
+    regions: [],
+    agents: [],
+    journey_stages: [],
+    time_references: [],
+    hcp_segments: [],
+  },
+  stats: { vector_count: 1 },
+  latency_ms: 150,
+  timestamp: '2024-01-15T12:00:00Z',
 };
 
-const mockEntitiesResponse = {
+const mockEntitiesResponse: ExtractedEntities = {
   brands: ['Kisqali'],
   kpis: ['TRx'],
   regions: ['Northeast'],
+  agents: [],
+  journey_stages: [],
   time_references: ['Q4 2024'],
+  hcp_segments: [],
 };
 
 // =============================================================================
@@ -213,7 +245,7 @@ describe('useRAGHealth', () => {
   });
 
   it('handles unhealthy status', async () => {
-    const unhealthyResponse = { ...mockHealthResponse, status: 'degraded', vector_store: 'unhealthy' };
+    const unhealthyResponse: RAGHealthResponse = { ...mockHealthResponse, status: 'degraded' as const };
     vi.mocked(ragApi.getRAGHealth).mockResolvedValueOnce(unhealthyResponse);
     const { wrapper } = createWrapper();
 
@@ -337,9 +369,9 @@ describe('useRAGSearch', () => {
 
     const { result } = renderHook(() => useRAGSearch(), { wrapper });
 
-    const request = {
+    const request: RAGSearchRequest = {
       query: 'Kisqali TRx trends',
-      mode: 'hybrid',
+      mode: SearchMode.HYBRID,
       top_k: 10,
     };
 
@@ -463,7 +495,15 @@ describe('useExtractEntities', () => {
   });
 
   it('handles empty entities', async () => {
-    const emptyResponse = { brands: [], kpis: [], regions: [], time_references: [] };
+    const emptyResponse: ExtractedEntities = {
+      brands: [],
+      kpis: [],
+      regions: [],
+      time_references: [],
+      agents: [],
+      journey_stages: [],
+      hcp_segments: [],
+    };
     vi.mocked(ragApi.extractEntities).mockResolvedValueOnce(emptyResponse);
     const { wrapper } = createWrapper();
 

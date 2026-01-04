@@ -38,9 +38,9 @@ const createMockCyInstance = () => {
   const mockCollection = (elements: any[]) => {
     const collection: any = {
       length: elements.length,
-      forEach: (fn: Function) => elements.forEach(fn),
-      map: (fn: Function) => elements.map(fn),
-      filter: (fn: Function) => mockCollection(elements.filter(fn)),
+      forEach: (fn: (value: any, index: number, array: any[]) => void) => elements.forEach(fn),
+      map: (fn: (value: any, index: number, array: any[]) => unknown) => elements.map(fn),
+      filter: (fn: (value: any, index: number, array: any[]) => boolean) => mockCollection(elements.filter(fn)),
     };
     // Assign methods that return collection AFTER collection is defined
     // to avoid "Cannot access 'collection' before initialization" error
@@ -156,7 +156,7 @@ import cytoscape from 'cytoscape';
 // TEST UTILITIES
 // =============================================================================
 
-const mockElements = [
+const mockElements: import('cytoscape').ElementDefinition[] = [
   { group: 'nodes', data: { id: 'node1', label: 'Node 1', type: 'kpi' } },
   { group: 'nodes', data: { id: 'node2', label: 'Node 2', type: 'trigger' } },
   { group: 'nodes', data: { id: 'node3', label: 'Node 3', type: 'metric' } },
@@ -277,7 +277,7 @@ describe('useCytoscape', () => {
     });
 
     it('applies initial elements from options', async () => {
-      const initialElements = [
+      const initialElements: import('cytoscape').ElementDefinition[] = [
         { group: 'nodes', data: { id: 'n1', label: 'Test' } },
       ];
 
@@ -417,7 +417,7 @@ describe('useCytoscape', () => {
         result.current.initialize(containerDiv);
       });
 
-      const newElements = [
+      const newElements: import('cytoscape').ElementDefinition[] = [
         { group: 'nodes', data: { id: 'newNode', label: 'New Node' } },
       ];
 

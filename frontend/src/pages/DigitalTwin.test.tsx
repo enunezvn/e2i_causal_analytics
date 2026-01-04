@@ -10,7 +10,7 @@ import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import DigitalTwin from './DigitalTwin';
-import { InterventionType, RecommendationType, ConfidenceLevel } from '@/types/digital-twin';
+import { InterventionType, RecommendationType } from '@/types/digital-twin';
 
 // Mock the digital twin hooks
 vi.mock('@/hooks/api/use-digital-twin', () => ({

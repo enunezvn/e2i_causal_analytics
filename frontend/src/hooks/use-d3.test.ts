@@ -29,7 +29,7 @@ const createMockSelection = () => {
     _data: [] as any[],
     _eventHandlers: {} as Record<string, Function>,
     append: vi.fn().mockImplementation(() => selection),
-    attr: vi.fn().mockImplementation((name: string, value: any) => {
+    attr: vi.fn().mockImplementation((_name: string, value: any) => {
       // If value is a function, call it with each data item to cover callback code
       if (typeof value === 'function' && selection._data.length > 0) {
         selection._data.forEach((d: any) => {
@@ -217,7 +217,7 @@ vi.mock('d3', () => {
       scale: vi.fn().mockReturnThis(),
     },
     zoomTransform: vi.fn().mockReturnValue({ k: 1 }),
-    color: vi.fn().mockImplementation((c: string) => ({
+    color: vi.fn().mockImplementation((_c: string) => ({
       darker: vi.fn().mockReturnValue({
         toString: vi.fn().mockReturnValue('#333'),
       }),
@@ -1207,7 +1207,7 @@ describe('useD3', () => {
         result.current.initialize();
       });
 
-      const svg = result.current.exportSvg();
+      result.current.exportSvg();
       expect(mockSerializeToString).toHaveBeenCalled();
     });
   });
