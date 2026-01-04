@@ -322,4 +322,142 @@ describe('ScenarioResults', () => {
       expect(container.querySelector('.text-emerald-600')).toBeInTheDocument();
     });
   });
+
+  // ===========================================================================
+  // CONFIDENCE LEVEL BADGE COLORS
+  // ===========================================================================
+
+  describe('Confidence Level Badges', () => {
+    it('displays high confidence badge with emerald color', () => {
+      const results = createMockSimulationResponse({
+        fidelity: {
+          ...createMockSimulationResponse().fidelity,
+          confidence_level: ConfidenceLevel.HIGH,
+        },
+      });
+      const { container } = render(<ScenarioResults results={results} />);
+
+      // High confidence should use emerald colors
+      expect(screen.getByText('high confidence')).toBeInTheDocument();
+      expect(container.querySelector('.bg-emerald-100')).toBeInTheDocument();
+    });
+
+    it('displays medium confidence badge with amber color', () => {
+      const results = createMockSimulationResponse({
+        fidelity: {
+          ...createMockSimulationResponse().fidelity,
+          confidence_level: ConfidenceLevel.MEDIUM,
+        },
+      });
+      const { container } = render(<ScenarioResults results={results} />);
+
+      // Medium confidence should use amber colors
+      expect(screen.getByText('medium confidence')).toBeInTheDocument();
+      expect(container.querySelector('.bg-amber-100')).toBeInTheDocument();
+    });
+
+    it('displays low confidence badge with rose color', () => {
+      const results = createMockSimulationResponse({
+        fidelity: {
+          ...createMockSimulationResponse().fidelity,
+          confidence_level: ConfidenceLevel.LOW,
+        },
+      });
+      const { container } = render(<ScenarioResults results={results} />);
+
+      // Low confidence should use rose colors
+      expect(screen.getByText('low confidence')).toBeInTheDocument();
+      expect(container.querySelector('.bg-rose-100')).toBeInTheDocument();
+    });
+  });
+
+  // ===========================================================================
+  // FIDELITY SCORE COLORS
+  // ===========================================================================
+
+  describe('Fidelity Score Colors', () => {
+    it('displays high fidelity score (>=0.8) with emerald color', () => {
+      const results = createMockSimulationResponse({
+        fidelity: {
+          ...createMockSimulationResponse().fidelity,
+          overall_score: 0.85,
+        },
+      });
+      const { container } = render(<ScenarioResults results={results} />);
+
+      // High score should use emerald color
+      expect(screen.getByText('85%')).toBeInTheDocument();
+      expect(container.querySelector('.text-emerald-600')).toBeInTheDocument();
+    });
+
+    it('displays medium fidelity score (0.6-0.8) with amber color', () => {
+      const results = createMockSimulationResponse({
+        fidelity: {
+          ...createMockSimulationResponse().fidelity,
+          overall_score: 0.7,
+        },
+      });
+      const { container } = render(<ScenarioResults results={results} />);
+
+      // Medium score should use amber color
+      expect(screen.getByText('70%')).toBeInTheDocument();
+      expect(container.querySelector('.text-amber-600')).toBeInTheDocument();
+    });
+
+    it('displays low fidelity score (<0.6) with rose color', () => {
+      const results = createMockSimulationResponse({
+        fidelity: {
+          ...createMockSimulationResponse().fidelity,
+          overall_score: 0.5,
+        },
+      });
+      const { container } = render(<ScenarioResults results={results} />);
+
+      // Low score should use rose color
+      expect(screen.getByText('50%')).toBeInTheDocument();
+      expect(container.querySelector('.text-rose-600')).toBeInTheDocument();
+    });
+  });
+
+  // ===========================================================================
+  // CHART RENDERING
+  // ===========================================================================
+
+  describe('Chart Rendering', () => {
+    it('renders chart elements with projections data', () => {
+      const results = createMockSimulationResponse();
+      render(<ScenarioResults results={results} />);
+
+      // Verify chart container is rendered
+      expect(screen.getByTestId('responsive-container')).toBeInTheDocument();
+      expect(screen.getByTestId('composed-chart')).toBeInTheDocument();
+    });
+
+    it('renders chart legend', () => {
+      const results = createMockSimulationResponse();
+      render(<ScenarioResults results={results} />);
+
+      expect(screen.getByTestId('legend')).toBeInTheDocument();
+    });
+
+    it('renders chart axes', () => {
+      const results = createMockSimulationResponse();
+      render(<ScenarioResults results={results} />);
+
+      expect(screen.getByTestId('x-axis')).toBeInTheDocument();
+      expect(screen.getByTestId('y-axis')).toBeInTheDocument();
+    });
+
+    it('renders area and lines in chart', () => {
+      const results = createMockSimulationResponse();
+      render(<ScenarioResults results={results} />);
+
+      // Chart may have multiple area/line elements
+      const areas = screen.getAllByTestId('area');
+      expect(areas.length).toBeGreaterThanOrEqual(1);
+      // Lines for with/without intervention
+      const lines = screen.getAllByTestId('line');
+      expect(lines.length).toBeGreaterThanOrEqual(1);
+    });
+  });
 });

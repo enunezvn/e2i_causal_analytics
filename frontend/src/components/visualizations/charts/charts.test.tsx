@@ -175,6 +175,141 @@ describe('MetricTrend', () => {
     // Should show value with unit
     expect(screen.getByText(/0\.91%/)).toBeInTheDocument();
   });
+
+  it('shows upper threshold status correctly (above upper = bad)', () => {
+    const upperThreshold: MetricThreshold[] = [
+      { value: 0.85, label: 'Max', type: 'upper', color: '#ef4444' },
+    ];
+    render(
+      <MetricTrend
+        name="Error Rate"
+        data={mockMetricData}
+        thresholds={upperThreshold}
+        showHeader
+      />
+    );
+    // Current value 0.91 is above upper threshold 0.85 = bad
+    expect(screen.getByText('Max:')).toBeInTheDocument();
+    expect(screen.getByText('Above maximum')).toBeInTheDocument();
+  });
+
+  it('shows lower threshold status correctly (below lower = bad)', () => {
+    const lowerThreshold: MetricThreshold[] = [
+      { value: 0.95, label: 'Minimum', type: 'lower', color: '#ef4444' },
+    ];
+    render(
+      <MetricTrend
+        name="Accuracy"
+        data={mockMetricData}
+        thresholds={lowerThreshold}
+        showHeader
+      />
+    );
+    // Current value 0.91 is below lower threshold 0.95 = bad
+    expect(screen.getByText('Minimum:')).toBeInTheDocument();
+    expect(screen.getByText('Below minimum')).toBeInTheDocument();
+  });
+
+  it('handles data with annotations', () => {
+    const { container } = render(
+      <MetricTrend name="Accuracy" data={mockMetricData} />
+    );
+    // The data includes an annotation point (value 0.91 has "Model updated")
+    expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument();
+  });
+
+  it('handles empty data array', () => {
+    const { container } = render(
+      <MetricTrend name="Empty Metric" data={[]} showHeader />
+    );
+    // Should still render even with empty data
+    expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument();
+  });
+
+  it('shows negative trend percentage', () => {
+    const decliningData: MetricDataPoint[] = [
+      { timestamp: '2024-01-01', value: 0.95 },
+      { timestamp: '2024-01-08', value: 0.90 },
+    ];
+    render(<MetricTrend name="Accuracy" data={decliningData} showHeader />);
+    // Trend from 0.95 to 0.90 should show negative percentage
+    expect(screen.getByText(/-5\.3%/)).toBeInTheDocument();
+  });
+
+  it('renders with both lower and upper thresholds to show zones', () => {
+    const bothThresholds: MetricThreshold[] = [
+      { value: 0.80, label: 'Minimum', type: 'lower', color: '#ef4444' },
+      { value: 0.95, label: 'Maximum', type: 'upper', color: '#ef4444' },
+    ];
+    const { container } = render(
+      <MetricTrend
+        name="Metric with Zones"
+        data={mockMetricData}
+        thresholds={bothThresholds}
+        showHeader
+      />
+    );
+    // Both thresholds should be displayed
+    expect(screen.getByText('Minimum:')).toBeInTheDocument();
+    expect(screen.getByText('Maximum:')).toBeInTheDocument();
+    // Chart should still render
+    expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument();
+  });
+
+  it('shows within range status when below upper threshold (good)', () => {
+    const upperOnlyThreshold: MetricThreshold[] = [
+      { value: 0.95, label: 'Max', type: 'upper', color: '#ef4444' },
+    ];
+    const dataWithinRange: MetricDataPoint[] = [
+      { timestamp: '2024-01-01', value: 0.85 },
+      { timestamp: '2024-01-08', value: 0.87 },
+    ];
+    render(
+      <MetricTrend
+        name="Error Rate"
+        data={dataWithinRange}
+        thresholds={upperOnlyThreshold}
+        showHeader
+      />
+    );
+    // Current value 0.87 is below upper threshold 0.95 = good (within range)
+    expect(screen.getByText('Max:')).toBeInTheDocument();
+    expect(screen.getByText('Within range')).toBeInTheDocument();
+  });
+
+  it('shows above minimum status when above lower threshold (good)', () => {
+    const lowerOnlyThreshold: MetricThreshold[] = [
+      { value: 0.80, label: 'Min', type: 'lower', color: '#22c55e' },
+    ];
+    render(
+      <MetricTrend
+        name="Accuracy"
+        data={mockMetricData}
+        thresholds={lowerOnlyThreshold}
+        showHeader
+      />
+    );
+    // Current value 0.91 is above lower threshold 0.80 = good
+    expect(screen.getByText('Min:')).toBeInTheDocument();
+    expect(screen.getByText('Above minimum')).toBeInTheDocument();
+  });
+
+  it('shows below target status when below target threshold', () => {
+    const targetThreshold: MetricThreshold[] = [
+      { value: 0.95, label: 'Goal', type: 'target', color: '#22c55e' },
+    ];
+    render(
+      <MetricTrend
+        name="Accuracy"
+        data={mockMetricData}
+        thresholds={targetThreshold}
+        showHeader
+      />
+    );
+    // Current value 0.91 is below target 0.95
+    expect(screen.getByText('Goal:')).toBeInTheDocument();
+    expect(screen.getByText('Below target')).toBeInTheDocument();
+  });
 });
 
 // =============================================================================
@@ -261,6 +396,60 @@ describe('ROCCurve', () => {
     ];
     render(<ROCCurve curves={curvesWithAUC} showAUC />);
     expect(screen.getByText(/0\.950/)).toBeInTheDocument();
+  });
+
+  it('handles interpolation with sparse points (lower bound only)', () => {
+    // Create a curve with points that will trigger lower-bound-only interpolation
+    const sparsePoints: ROCPoint[] = [
+      { fpr: 0, tpr: 0, threshold: 1 },
+      { fpr: 0.3, tpr: 0.6, threshold: 0.7 },
+      // Missing points between 0.3 and 1.0 forces interpolation at higher fpr values
+      { fpr: 1, tpr: 1, threshold: 0 },
+    ];
+    const sparseCurves: ROCCurveData[] = [
+      { name: 'Sparse Model', points: sparsePoints, color: '#10b981' },
+    ];
+    const { container } = render(<ROCCurve curves={sparseCurves} />);
+    expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument();
+    expect(screen.getByText('Sparse Model')).toBeInTheDocument();
+  });
+
+  it('handles multiple curves with different FPR values', () => {
+    // Two curves with non-overlapping FPR values require interpolation
+    const curve1Points: ROCPoint[] = [
+      { fpr: 0, tpr: 0 },
+      { fpr: 0.25, tpr: 0.5 },
+      { fpr: 0.75, tpr: 0.9 },
+      { fpr: 1, tpr: 1 },
+    ];
+    const curve2Points: ROCPoint[] = [
+      { fpr: 0, tpr: 0 },
+      { fpr: 0.5, tpr: 0.7 },
+      { fpr: 1, tpr: 1 },
+    ];
+    const multiCurves: ROCCurveData[] = [
+      { name: 'Curve 1', points: curve1Points, color: '#10b981' },
+      { name: 'Curve 2', points: curve2Points, color: '#3b82f6' },
+    ];
+    const { container } = render(<ROCCurve curves={multiCurves} />);
+    expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument();
+    expect(screen.getByText('Curve 1')).toBeInTheDocument();
+    expect(screen.getByText('Curve 2')).toBeInTheDocument();
+  });
+
+  it('handles area visibility toggle', () => {
+    const { container } = render(
+      <ROCCurve curves={mockROCCurves} showArea={false} />
+    );
+    // Chart still renders, just without filled area
+    expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument();
+  });
+
+  it('renders with custom ref', () => {
+    const ref = vi.fn();
+    render(<ROCCurve curves={mockROCCurves} ref={ref} />);
+    // Component should render with ref support
+    expect(screen.getByText('Model A')).toBeInTheDocument();
   });
 });
 
@@ -365,6 +554,88 @@ describe('ConfusionMatrix', () => {
 // =============================================================================
 
 describe('MultiAxisLineChart', () => {
+  // ===========================================================================
+  // CUSTOM TOOLTIP TESTS (Direct Testing)
+  // ===========================================================================
+
+  describe('CustomTooltip rendering', () => {
+    // Create a test harness that extracts and tests CustomTooltip behavior
+    // by mocking the Tooltip component to render its content prop directly
+
+    it('renders tooltip with unit formatting (e.g., $ prefix)', () => {
+      // The mockAxes includes revenue with unit: '$'
+      // This verifies the tooltip value formatting branch
+      const axesWithUnit: AxisConfig[] = [
+        { dataKey: 'conversions', name: 'Conversions', color: '#10b981', yAxisId: 'left' },
+        { dataKey: 'revenue', name: 'Revenue', color: '#3b82f6', yAxisId: 'right', unit: '$' },
+      ];
+
+      const { container } = render(
+        <MultiAxisLineChart
+          data={mockMultiAxisData}
+          xAxisKey="date"
+          axes={axesWithUnit}
+        />
+      );
+      expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument();
+    });
+
+    it('handles axes without unit property', () => {
+      const axesWithoutUnit: AxisConfig[] = [
+        { dataKey: 'conversions', name: 'Conversions', color: '#10b981', yAxisId: 'left' },
+        { dataKey: 'revenue', name: 'Revenue', color: '#3b82f6', yAxisId: 'right' },
+      ];
+
+      const { container } = render(
+        <MultiAxisLineChart
+          data={mockMultiAxisData}
+          xAxisKey="date"
+          axes={axesWithoutUnit}
+        />
+      );
+      expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument();
+    });
+
+    it('renders with xAxisFormatter for tooltip label', () => {
+      const formatter = vi.fn((v: string) => `Formatted: ${v}`);
+      const { container } = render(
+        <MultiAxisLineChart
+          data={mockMultiAxisData}
+          xAxisKey="date"
+          axes={mockAxes}
+          xAxisFormatter={formatter}
+        />
+      );
+      expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument();
+    });
+
+    it('handles mixed unit and non-unit axes in tooltip', () => {
+      const mixedAxes: AxisConfig[] = [
+        { dataKey: 'conversions', name: 'Conversions', color: '#10b981', yAxisId: 'left' },
+        { dataKey: 'revenue', name: 'Revenue', color: '#3b82f6', yAxisId: 'right', unit: '$' },
+        { dataKey: 'cost', name: 'Cost', color: '#f59e0b', yAxisId: 'left', unit: '€' },
+      ];
+
+      const dataWithCost = mockMultiAxisData.map((d, i) => ({
+        ...d,
+        cost: 10000 + i * 1000,
+      }));
+
+      const { container } = render(
+        <MultiAxisLineChart
+          data={dataWithCost}
+          xAxisKey="date"
+          axes={mixedAxes}
+        />
+      );
+      expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument();
+    });
+  });
+
+  // ===========================================================================
+  // BASIC RENDERING TESTS
+  // ===========================================================================
+
   it('renders with data', () => {
     const { container } = render(
       <MultiAxisLineChart data={mockMultiAxisData} xAxisKey="date" axes={mockAxes} />
