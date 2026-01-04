@@ -30,8 +30,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   Target,
   Activity,
-  TrendingUp,
-  BarChart3,
   RefreshCw,
   Download,
   Calendar,
@@ -400,45 +398,30 @@ function ModelPerformance() {
           title="Accuracy"
           value={(metrics.accuracy * 100).toFixed(1)}
           unit="%"
-          trend="up"
-          trendValue="+2.3%"
-          icon={Target}
-          status="success"
+          status="healthy"
         />
         <KPICard
           title="Precision"
           value={(metrics.precision * 100).toFixed(1)}
           unit="%"
-          trend="up"
-          trendValue="+1.8%"
-          icon={Activity}
-          status="success"
+          status="healthy"
         />
         <KPICard
           title="Recall"
           value={(metrics.recall * 100).toFixed(1)}
           unit="%"
-          trend="stable"
-          trendValue="+0.5%"
-          icon={BarChart3}
-          status="success"
+          status="healthy"
         />
         <KPICard
           title="F1 Score"
           value={(metrics.f1Score * 100).toFixed(1)}
           unit="%"
-          trend="up"
-          trendValue="+1.2%"
-          icon={TrendingUp}
-          status="success"
+          status="healthy"
         />
         <KPICard
           title="AUC-ROC"
           value={metrics.auc.toFixed(3)}
-          trend="up"
-          trendValue="+0.015"
-          icon={Activity}
-          status="success"
+          status="healthy"
         />
       </div>
 
