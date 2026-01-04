@@ -220,10 +220,15 @@ export const SHAPBarChart = React.forwardRef<HTMLDivElement, SHAPBarChartProps>(
               dataKey="value"
               radius={[0, 4, 4, 0]}
               cursor={onBarClick ? 'pointer' : 'default'}
-              onClick={(data) => onBarClick?.(data.original)}
+              onClick={(data) => {
+                const chartData = data as unknown as { payload: ChartDataPoint };
+                if (chartData.payload?.original) {
+                  onBarClick?.(chartData.payload.original);
+                }
+              }}
               label={showValues ? {
                 position: 'right',
-                formatter: (v: number) => v.toFixed(3),
+                formatter: (v: unknown) => typeof v === 'number' ? v.toFixed(3) : String(v),
                 fontSize: 10,
               } : undefined}
             >

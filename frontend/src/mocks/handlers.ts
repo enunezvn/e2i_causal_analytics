@@ -903,7 +903,7 @@ const predictionsHandlers = [
     const body = (await request.json()) as { instances: unknown[] };
     return HttpResponse.json({
       model_name: modelName,
-      predictions: body.instances.map((_, i) => ({
+      predictions: body.instances.map((_) => ({
         model_name: modelName,
         prediction: Math.random(),
         confidence: 0.85 + Math.random() * 0.1,

@@ -442,9 +442,12 @@ export function CopilotKitWrapper({
  */
 export function E2ICopilotProvider({
   children,
-  initialFilters,
-  userRole = 'analyst',
+  initialFilters: _initialFilters,
+  userRole: _userRole = 'analyst',
 }: Omit<E2ICopilotProviderProps, 'runtimeUrl'>) {
+  // TODO: Use initialFilters and userRole when filter context is implemented
+  void _initialFilters;
+  void _userRole;
   return (
     <E2ICopilotContextProvider>
       {children}

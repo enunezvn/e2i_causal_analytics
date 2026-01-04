@@ -12,7 +12,6 @@ import {
   MultiAxisLineChart,
   CustomTooltip,
   type AxisConfig,
-  type TooltipPayloadEntry,
 } from './MultiAxisLineChart';
 
 // =============================================================================
@@ -29,11 +28,6 @@ const mockData = [
 const mockAxesWithUnit: AxisConfig[] = [
   { dataKey: 'conversions', name: 'Conversions', color: '#10b981', yAxisId: 'left' },
   { dataKey: 'revenue', name: 'Revenue', color: '#3b82f6', yAxisId: 'right', unit: '$' },
-];
-
-const mockAxesWithoutUnit: AxisConfig[] = [
-  { dataKey: 'conversions', name: 'Conversions', color: '#10b981', yAxisId: 'left' },
-  { dataKey: 'revenue', name: 'Revenue', color: '#3b82f6', yAxisId: 'right' },
 ];
 
 // =============================================================================

@@ -333,9 +333,10 @@ export const SHAPWaterfall = React.forwardRef<HTMLDivElement, SHAPWaterfallProps
               dataKey="end"
               shape={(props: unknown) => <WaterfallBar {...(props as Parameters<typeof WaterfallBar>[0])} />}
               cursor={onBarClick ? 'pointer' : 'default'}
-              onClick={(data: WaterfallDataPoint) =>
-                onBarClick?.(data.original || null)
-              }
+              onClick={(data) => {
+                const chartData = data as unknown as { payload: WaterfallDataPoint };
+                onBarClick?.(chartData.payload?.original || null);
+              }}
             >
               {chartData.map((entry, index) => (
                 <Cell key={`cell-${index}`} fill={getBarColor(entry)} />

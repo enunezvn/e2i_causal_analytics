@@ -8,9 +8,7 @@
  * @module components/digital-twin/ScenarioResults
  */
 
-import { useMemo } from 'react';
 import {
-  LineChart,
   Line,
   XAxis,
   YAxis,
@@ -18,15 +16,12 @@ import {
   Tooltip,
   Legend,
   ResponsiveContainer,
-  ReferenceLine,
   Area,
   ComposedChart,
 } from 'recharts';
 import {
   TrendingUp,
-  TrendingDown,
   AlertTriangle,
-  CheckCircle2,
   Clock,
   Activity,
   Target,
@@ -41,8 +36,6 @@ import { cn } from '@/lib/utils';
 import {
   type SimulationResponse,
   type ConfidenceInterval,
-  type FidelityMetrics,
-  type SensitivityResult,
   ConfidenceLevel,
 } from '@/types/digital-twin';
 

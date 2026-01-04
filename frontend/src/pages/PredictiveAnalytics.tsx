@@ -19,8 +19,6 @@ import {
   Bar,
   ComposedChart,
   Line,
-  ScatterChart,
-  Scatter,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -32,9 +30,7 @@ import {
 } from 'recharts';
 import {
   TrendingUp,
-  TrendingDown,
   Target,
-  Users,
   AlertTriangle,
   CheckCircle2,
   Sparkles,
@@ -321,12 +317,6 @@ function RiskScoreCard({ score }: RiskScoreCardProps) {
     if (value >= 70) return 'text-rose-600';
     if (value >= 40) return 'text-amber-600';
     return 'text-emerald-600';
-  };
-
-  const getRiskBg = (value: number) => {
-    if (value >= 70) return 'bg-rose-100 dark:bg-rose-900/30';
-    if (value >= 40) return 'bg-amber-100 dark:bg-amber-900/30';
-    return 'bg-emerald-100 dark:bg-emerald-900/30';
   };
 
   const getCategoryLabel = (category: RiskScore['riskCategory']) => {
@@ -682,35 +672,28 @@ function PredictiveAnalytics() {
         <KPICard
           title="High Risk Entities"
           value={summaryMetrics.highRiskCount}
-          suffix=" entities"
-          change={-2}
-          changeLabel="vs last week"
-          icon={<AlertTriangle className="h-5 w-5" />}
+          unit=" entities"
+          description="vs last week"
           status="warning"
         />
         <KPICard
           title="Avg Model Confidence"
           value={summaryMetrics.avgConfidence * 100}
-          suffix="%"
-          change={3.5}
-          changeLabel="vs last week"
-          icon={<Target className="h-5 w-5" />}
+          unit="%"
+          description="vs last week"
           status="healthy"
         />
         <KPICard
           title="Avg Uplift Potential"
           value={summaryMetrics.avgUplift * 100}
-          suffix="%"
-          change={1.2}
-          changeLabel="vs last week"
-          icon={<TrendingUp className="h-5 w-5" />}
+          unit="%"
+          description="vs last week"
           status="healthy"
         />
         <KPICard
           title="High Priority Actions"
           value={summaryMetrics.topRecommendations}
-          suffix=" actions"
-          icon={<Sparkles className="h-5 w-5" />}
+          unit=" actions"
           status="warning"
         />
       </div>
@@ -901,7 +884,7 @@ function PredictiveAnalytics() {
                     <XAxis type="number" domain={[0, 1]} tickFormatter={(v) => `${(v * 100).toFixed(0)}%`} />
                     <YAxis type="category" dataKey="name" width={150} tick={{ fontSize: 12 }} />
                     <Tooltip
-                      formatter={(value: number) => `${(value * 100).toFixed(1)}%`}
+                      formatter={(value) => value !== undefined ? `${(Number(value) * 100).toFixed(1)}%` : '-'}
                     />
                     <Legend />
                     <Bar
@@ -946,7 +929,7 @@ function PredictiveAnalytics() {
                     <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
                     <XAxis dataKey="name" tick={{ fontSize: 11 }} angle={-15} textAnchor="end" height={80} />
                     <YAxis tickFormatter={(v) => `${v}x`} />
-                    <Tooltip formatter={(value: number) => `${value.toFixed(1)}x`} />
+                    <Tooltip formatter={(value) => value !== undefined ? `${Number(value).toFixed(1)}x` : '-'} />
                     <Bar dataKey="roi" name="ROI Multiple" radius={[4, 4, 0, 0]}>
                       {upliftSegments.map((entry, index) => (
                         <Cell

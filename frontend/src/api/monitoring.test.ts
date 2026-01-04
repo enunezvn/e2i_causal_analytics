@@ -29,7 +29,7 @@ import {
   rollbackRetraining,
   triggerRetrainingSweep,
 } from './monitoring';
-import { AlertAction } from '@/types/monitoring';
+import { AlertAction, DriftSeverity, TriggerReason } from '@/types/monitoring';
 
 describe('Monitoring API Client', () => {
   describe('Drift Detection', () => {
@@ -86,7 +86,7 @@ describe('Monitoring API Client', () => {
     });
 
     it('listAlerts - should filter by severity', async () => {
-      const result = await listAlerts({ severity: 'critical' });
+      const result = await listAlerts({ severity: DriftSeverity.CRITICAL });
 
       expect(result).toBeDefined();
       expect(Array.isArray(result.alerts)).toBe(true);
@@ -202,7 +202,7 @@ describe('Monitoring API Client', () => {
 
     it('triggerRetraining - should trigger retraining', async () => {
       const result = await triggerRetraining('propensity_v2.1.0', {
-        reason: 'data_drift',
+        reason: TriggerReason.DATA_DRIFT,
         notes: 'Significant drift detected',
         auto_approve: false,
       });
@@ -220,6 +220,7 @@ describe('Monitoring API Client', () => {
 
     it('completeRetraining - should mark complete', async () => {
       const result = await completeRetraining('job-uuid-123', {
+        performance_after: 0.92,
         success: true,
         notes: 'Model retrained successfully',
       });

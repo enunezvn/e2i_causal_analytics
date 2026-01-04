@@ -7,10 +7,10 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, act } from '@testing-library/react';
 import * as React from 'react';
 import { CytoscapeGraph, type CytoscapeGraphRef } from './CytoscapeGraph';
-import type { ElementDefinition } from 'cytoscape';
+import type { Core, ElementDefinition } from 'cytoscape';
 
 // =============================================================================
 // MOCK SETUP
@@ -218,11 +218,11 @@ describe('CytoscapeGraph', () => {
     });
 
     it('passes layout to useCytoscape', () => {
-      render(<CytoscapeGraph elements={mockElements} layout="dagre" />);
+      render(<CytoscapeGraph elements={mockElements} layout="breadthfirst" />);
 
       expect(mockedUseCytoscape).toHaveBeenCalledWith(
         expect.objectContaining({
-          layout: 'dagre',
+          layout: 'breadthfirst',
         }),
         expect.any(Object)
       );
@@ -423,10 +423,10 @@ describe('CytoscapeGraph', () => {
       render(<CytoscapeGraph ref={ref} elements={mockElements} />);
 
       act(() => {
-        ref.current?.runLayout('dagre');
+        ref.current?.runLayout('breadthfirst');
       });
 
-      expect(mockUseCytoscape.runLayout).toHaveBeenCalledWith('dagre');
+      expect(mockUseCytoscape.runLayout).toHaveBeenCalledWith('breadthfirst');
     });
 
     it('exposes exportPng method', () => {
@@ -492,7 +492,7 @@ describe('CytoscapeGraph', () => {
 
     it('exposes highlightNode fallback when no cyInstance', () => {
       const ref = React.createRef<CytoscapeGraphRef>();
-      mockUseCytoscape.cyInstance = null;
+      mockUseCytoscape.cyInstance = null as unknown as typeof mockCyInstance;
 
       render(<CytoscapeGraph ref={ref} elements={mockElements} />);
 
@@ -519,7 +519,7 @@ describe('CytoscapeGraph', () => {
 
     it('exposes clearHighlights fallback when no cyInstance', () => {
       const ref = React.createRef<CytoscapeGraphRef>();
-      mockUseCytoscape.cyInstance = null;
+      mockUseCytoscape.cyInstance = null as unknown as typeof mockCyInstance;
 
       render(<CytoscapeGraph ref={ref} elements={mockElements} />);
 
@@ -555,11 +555,11 @@ describe('CytoscapeGraph', () => {
 
       // Get the wrapped handler that was passed to useCytoscape
       const hookCall = mockedUseCytoscape.mock.calls[0];
-      const handlers = hookCall[1];
+      const handlers = hookCall[1]!;
 
       // Call the wrapped handler
       act(() => {
-        handlers.onNodeMouseOver('a', { id: 'a', label: 'Node A' });
+        handlers.onNodeMouseOver!('a', { id: 'a', label: 'Node A' });
       });
 
       // Should have called the user's handler
@@ -578,10 +578,10 @@ describe('CytoscapeGraph', () => {
       );
 
       const hookCall = mockedUseCytoscape.mock.calls[0];
-      const handlers = hookCall[1];
+      const handlers = hookCall[1]!;
 
       act(() => {
-        handlers.onNodeMouseOut('a');
+        handlers.onNodeMouseOut!('a');
       });
 
       expect(onNodeMouseOut).toHaveBeenCalledWith('a');
@@ -591,13 +591,13 @@ describe('CytoscapeGraph', () => {
       render(<CytoscapeGraph elements={mockElements} enableHoverHighlight={false} />);
 
       const hookCall = mockedUseCytoscape.mock.calls[0];
-      const handlers = hookCall[1];
+      const handlers = hookCall[1]!;
 
       // Reset mock to track new calls
       mockCyInstance.getElementById.mockClear();
 
       act(() => {
-        handlers.onNodeMouseOver('a', { id: 'a' });
+        handlers.onNodeMouseOver!('a', { id: 'a' });
       });
 
       // Should not call getElementById for highlighting
@@ -618,11 +618,11 @@ describe('CytoscapeGraph', () => {
       );
 
       const hookCall = mockedUseCytoscape.mock.calls[0];
-      const handlers = hookCall[1];
+      const handlers = hookCall[1]!;
 
       // Simulate onReady callback
       act(() => {
-        handlers.onReady(mockCyInstance);
+        handlers.onReady!(mockCyInstance as unknown as Core);
       });
 
       // Should have registered edge hover handlers
@@ -642,10 +642,10 @@ describe('CytoscapeGraph', () => {
       );
 
       const hookCall = mockedUseCytoscape.mock.calls[0];
-      const handlers = hookCall[1];
+      const handlers = hookCall[1]!;
 
       act(() => {
-        handlers.onReady(mockCyInstance);
+        handlers.onReady!(mockCyInstance as unknown as Core);
       });
 
       expect(onReady).toHaveBeenCalledWith(mockCyInstance);
@@ -719,11 +719,11 @@ describe('CytoscapeGraph', () => {
       render(<CytoscapeGraph elements={mockElements} enableHoverHighlight={true} />);
 
       const hookCall = mockedUseCytoscape.mock.calls[0];
-      const handlers = hookCall[1];
+      const handlers = hookCall[1]!;
 
       // Trigger onReady to register edge handlers
       act(() => {
-        handlers.onReady(mockCyInstance);
+        handlers.onReady!(mockCyInstance as unknown as Core);
       });
 
       // Get the edge mouseover handler
@@ -761,11 +761,11 @@ describe('CytoscapeGraph', () => {
       render(<CytoscapeGraph elements={mockElements} enableHoverHighlight={true} />);
 
       const hookCall = mockedUseCytoscape.mock.calls[0];
-      const handlers = hookCall[1];
+      const handlers = hookCall[1]!;
 
       // Trigger onReady to register edge handlers
       act(() => {
-        handlers.onReady(mockCyInstance);
+        handlers.onReady!(mockCyInstance as unknown as Core);
       });
 
       // Get the edge mouseover handler
@@ -805,11 +805,11 @@ describe('CytoscapeGraph', () => {
       );
 
       const hookCall = mockedUseCytoscape.mock.calls[0];
-      const handlers = hookCall[1];
+      const handlers = hookCall[1]!;
 
       // Trigger onReady to register edge handlers
       act(() => {
-        handlers.onReady(mockCyInstance);
+        handlers.onReady!(mockCyInstance as unknown as Core);
       });
 
       // Get the edge mouseout handler

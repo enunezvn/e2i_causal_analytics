@@ -82,8 +82,8 @@ export interface TooltipPayloadEntry {
 
 export interface CustomTooltipProps {
   active?: boolean;
-  payload?: TooltipPayloadEntry[];
-  label?: string;
+  payload?: readonly TooltipPayloadEntry[] | TooltipPayloadEntry[];
+  label?: string | number;
   axes: AxisConfig[];
   xAxisFormatter?: (value: string) => string;
 }
@@ -101,10 +101,11 @@ export function CustomTooltip({
 }: CustomTooltipProps) {
   if (!active || !payload || !payload.length) return null;
 
+  const labelStr = label != null ? String(label) : '';
   return (
     <div className="bg-[var(--color-popover)] border border-[var(--color-border)] rounded-md shadow-lg p-3">
       <p className="font-medium text-[var(--color-foreground)] mb-2">
-        {xAxisFormatter ? xAxisFormatter(label || '') : label}
+        {xAxisFormatter ? xAxisFormatter(labelStr) : labelStr}
       </p>
       {payload.map((entry, index) => {
         const axisConfig = axes.find((a) => a.dataKey === entry.dataKey);

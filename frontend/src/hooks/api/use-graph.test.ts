@@ -9,6 +9,20 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import * as React from 'react';
+import type {
+  ListNodesResponse,
+  GraphNode,
+  NodeNetworkResponse,
+  ListRelationshipsResponse,
+  GraphStatsResponse,
+  GraphHealthResponse,
+  SearchGraphResponse,
+  TraverseResponse,
+  CausalChainResponse,
+  CypherQueryResponse,
+  AddEpisodeResponse,
+} from '@/types/graph';
+import { EntityType, RelationshipType } from '@/types/graph';
 
 // Mock the API functions
 vi.mock('@/api/graph', () => ({
@@ -90,98 +104,129 @@ function createWrapper() {
 // MOCK DATA
 // =============================================================================
 
-const mockNodesResponse = {
-  nodes: [
-    { id: 'node1', entity_type: 'HCP', name: 'Dr. Smith', properties: {} },
-    { id: 'node2', entity_type: 'Brand', name: 'Kisqali', properties: {} },
-  ],
-  total: 2,
-  page: 1,
-  limit: 20,
-};
-
-const mockNode = {
+const mockNode: GraphNode = {
   id: 'node1',
-  entity_type: 'HCP',
+  type: EntityType.HCP,
   name: 'Dr. Smith',
   properties: { specialty: 'Oncology' },
+  created_at: '2024-01-15T10:00:00Z',
+  updated_at: '2024-01-15T10:00:00Z',
 };
 
-const mockNetworkResponse = {
-  central_node: mockNode,
+const mockNodesResponse: ListNodesResponse = {
+  nodes: [
+    mockNode,
+    { id: 'node2', type: EntityType.BRAND, name: 'Kisqali', properties: {}, created_at: '2024-01-15T10:00:00Z', updated_at: '2024-01-15T10:00:00Z' },
+  ],
+  offset: 0,
+  limit: 20,
+  total_count: 2,
+  has_more: false,
+  query_latency_ms: 15,
+  timestamp: '2024-01-15T10:00:00Z',
+};
+
+const mockNetworkResponse: NodeNetworkResponse = {
+  node_id: 'node1',
+  node_type: EntityType.HCP,
   connected_nodes: {
     HCP: [],
-    Brand: [{ id: 'brand1', name: 'Kisqali' }],
+    Brand: [{ id: 'brand1', properties: { name: 'Kisqali' } }],
   },
-  relationships: [],
   total_connections: 1,
+  max_depth: 2,
+  query_latency_ms: 20,
+  timestamp: '2024-01-15T10:00:00Z',
 };
 
-const mockRelationshipsResponse = {
+const mockRelationshipsResponse: ListRelationshipsResponse = {
   relationships: [
-    { id: 'rel1', source_id: 'node1', target_id: 'node2', type: 'PRESCRIBES', confidence: 0.9 },
+    { id: 'rel1', source_id: 'node1', target_id: 'node2', type: RelationshipType.PRESCRIBES, properties: {}, confidence: 0.9 },
   ],
-  total: 1,
-  page: 1,
+  offset: 0,
   limit: 20,
+  total_count: 1,
+  has_more: false,
+  query_latency_ms: 10,
+  timestamp: '2024-01-15T10:00:00Z',
 };
 
-const mockStatsResponse = {
+const mockStatsResponse: GraphStatsResponse = {
   total_nodes: 1000,
   total_relationships: 5000,
-  node_types: { HCP: 500, Brand: 100, Patient: 400 },
-  relationship_types: { PRESCRIBES: 2000, CAUSES: 3000 },
+  nodes_by_type: { HCP: 500, Brand: 100, Patient: 400 },
+  relationships_by_type: { PRESCRIBES: 2000, CAUSES: 3000 },
   total_episodes: 150,
   total_communities: 25,
+  timestamp: '2024-01-15T10:00:00Z',
 };
 
-const mockHealthResponse = {
+const mockHealthResponse: GraphHealthResponse = {
   status: 'healthy',
-  graphiti_available: true,
-  falkordb_connected: true,
-  websocket_clients: 3,
+  graphiti: 'connected',
+  falkordb: 'connected',
+  websocket_connections: 3,
+  timestamp: '2024-01-15T10:00:00Z',
 };
 
-const mockSearchResponse = {
+const mockSearchResponse: SearchGraphResponse = {
   results: [
-    { id: 'node1', entity_type: 'HCP', name: 'Dr. Smith', score: 0.95 },
+    { id: 'node1', type: 'HCP', name: 'Dr. Smith', score: 0.95 },
   ],
-  total: 1,
+  total_results: 1,
   query: 'oncology specialists',
+  query_latency_ms: 25,
+  timestamp: '2024-01-15T10:00:00Z',
 };
 
-const mockTraverseResponse = {
+const mockTraverseResponse: TraverseResponse = {
+  subgraph: {
+    nodes: [mockNode],
+    relationships: [],
+  },
   nodes: [mockNode],
   relationships: [],
   paths: [],
-  total_nodes: 1,
-  total_relationships: 0,
+  max_depth_reached: 2,
+  query_latency_ms: 30,
+  timestamp: '2024-01-15T10:00:00Z',
 };
 
-const mockCausalChainResponse = {
+const mockCausalChainResponse: CausalChainResponse = {
   chains: [
     {
-      id: 'chain1',
-      nodes: ['kpi_trx', 'hcp_targeting'],
-      confidence: 0.85,
-      chain_length: 2,
+      nodes: [mockNode],
+      relationships: [],
+      path_length: 2,
+      total_confidence: 0.85,
     },
   ],
-  total: 1,
+  total_chains: 1,
+  query_latency_ms: 40,
+  timestamp: '2024-01-15T10:00:00Z',
 };
 
-const mockCypherResponse = {
+const mockCypherResponse: CypherQueryResponse = {
   results: [{ h: { id: 'hcp1', name: 'Dr. Smith' } }],
   columns: ['h'],
   row_count: 1,
-  execution_time_ms: 15,
+  read_only: true,
+  query_latency_ms: 15,
+  timestamp: '2024-01-15T10:00:00Z',
 };
 
-const mockEpisodeResponse = {
+const mockEpisodeResponse: AddEpisodeResponse = {
   episode_id: 'ep_123',
-  entities_extracted: 3,
-  relationships_created: 2,
+  extracted_entities: [
+    { type: 'HCP', name: 'Dr. Smith', confidence: 0.95 },
+    { type: 'Brand', name: 'Kisqali', confidence: 0.92 },
+  ],
+  extracted_relationships: [
+    { type: 'PRESCRIBES', source_id: 'hcp1', target_id: 'brand1', confidence: 0.88 },
+  ],
   content_summary: 'Prescription event recorded',
+  processing_latency_ms: 50,
+  timestamp: '2024-01-15T10:00:00Z',
 };
 
 // =============================================================================
@@ -405,7 +450,7 @@ describe('useGraphSearch', () => {
   it('passes additional request params', async () => {
     vi.mocked(graphApi.searchGraph).mockResolvedValueOnce(mockSearchResponse);
     const { wrapper } = createWrapper();
-    const request = { entity_types: ['HCP'], k: 10 };
+    const request = { entity_types: [EntityType.HCP], k: 10 };
 
     const { result } = renderHook(() => useGraphSearch('oncology', request), { wrapper });
 
@@ -413,7 +458,7 @@ describe('useGraphSearch', () => {
 
     expect(graphApi.searchGraph).toHaveBeenCalledWith({
       query: 'oncology',
-      entity_types: ['HCP'],
+      entity_types: [EntityType.HCP],
       k: 10,
     });
   });
@@ -440,7 +485,7 @@ describe('useGraphSearch', () => {
     vi.mocked(graphApi.searchGraph).mockResolvedValueOnce(mockSearchResponse);
     const { wrapper } = createWrapper();
 
-    const { result } = renderHook(() => useGraphSearch('ab'), { wrapper });
+    renderHook(() => useGraphSearch('ab'), { wrapper });
 
     await waitFor(() => expect(graphApi.searchGraph).toHaveBeenCalled());
   });
@@ -463,7 +508,7 @@ describe('useTraverseGraph', () => {
 
     const request = {
       start_node_id: 'kpi_trx',
-      relationship_types: ['CAUSES', 'IMPACTS'],
+      relationship_types: [RelationshipType.CAUSES, RelationshipType.IMPACTS],
       max_depth: 3,
     };
 

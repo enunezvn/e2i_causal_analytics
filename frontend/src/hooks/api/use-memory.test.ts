@@ -75,60 +75,78 @@ function createWrapper() {
 }
 
 // =============================================================================
+// TYPE IMPORTS
+// =============================================================================
+
+import type {
+  MemoryStatsResponse,
+  EpisodicMemoryResponse,
+  MemorySearchResponse,
+  MemorySearchResult,
+  ProceduralFeedbackResponse,
+  SemanticPathResponse,
+  EpisodicMemoryInput,
+  ProceduralFeedbackRequest,
+} from '@/types/memory';
+
+// =============================================================================
 // MOCK DATA
 // =============================================================================
 
-const mockStatsResponse = {
+const mockStatsResponse: MemoryStatsResponse = {
   episodic: {
     total_memories: 1500,
-    memories_by_type: { interaction: 800, insight: 400, analysis: 300 },
+    recent_24h: 45,
   },
   semantic: {
-    total_concepts: 250,
+    total_entities: 250,
     total_relationships: 1200,
   },
   procedural: {
     total_procedures: 45,
-    avg_success_rate: 0.87,
+    average_success_rate: 0.87,
   },
-  working: {
-    active_contexts: 12,
-    max_contexts: 50,
-  },
+  last_updated: '2024-01-15T10:00:00Z',
 };
 
-const mockEpisodicMemory = {
-  memory_id: 'mem_abc123',
+const mockEpisodicMemory: EpisodicMemoryResponse = {
+  id: 'mem_abc123',
   content: 'Dr. Smith showed interest in Kisqali.',
   event_type: 'hcp_interaction',
   brand: 'Kisqali',
-  timestamp: '2024-01-15T10:00:00Z',
   session_id: 'sess_123',
-  embedding_id: 'emb_xyz',
+  created_at: '2024-01-15T10:00:00Z',
 };
 
-const mockEpisodicMemories = [mockEpisodicMemory];
+const mockEpisodicMemories: EpisodicMemoryResponse[] = [mockEpisodicMemory];
 
-const mockSearchResponse = {
-  results: [
-    {
-      memory_id: 'mem_abc123',
-      content: 'Dr. Smith showed interest in Kisqali.',
-      score: 0.95,
-      memory_type: 'episodic',
-    },
-  ],
-  total: 1,
+const mockSearchResult: MemorySearchResult = {
+  content: 'Dr. Smith showed interest in Kisqali.',
+  source: 'episodic',
+  source_id: 'mem_abc123',
+  score: 0.95,
+  retrieval_method: 'hybrid',
+  metadata: { brand: 'Kisqali' },
+};
+
+const mockSearchResponse: MemorySearchResponse = {
   query: 'HCP interaction Kisqali',
+  results: [mockSearchResult],
+  total_results: 1,
+  retrieval_method: 'hybrid',
+  search_latency_ms: 50,
+  timestamp: '2024-01-15T10:00:00Z',
 };
 
-const mockProceduralFeedbackResponse = {
+const mockProceduralFeedbackResponse: ProceduralFeedbackResponse = {
   procedure_id: 'proc_hcp_outreach',
   feedback_recorded: true,
-  updated_success_rate: 0.92,
+  new_success_rate: 0.92,
+  message: 'Feedback recorded successfully',
+  timestamp: '2024-01-15T10:00:00Z',
 };
 
-const mockSemanticPathResponse = {
+const mockSemanticPathResponse: SemanticPathResponse = {
   paths: [
     {
       nodes: ['TRx', 'HCP_Targeting', 'Brand_Awareness'],
@@ -137,6 +155,9 @@ const mockSemanticPathResponse = {
     },
   ],
   total_paths: 1,
+  max_depth_searched: 3,
+  query_latency_ms: 25,
+  timestamp: '2024-01-15T10:00:00Z',
 };
 
 // =============================================================================
@@ -349,7 +370,8 @@ describe('useCreateEpisodicMemory', () => {
 
     const { result } = renderHook(() => useCreateEpisodicMemory({ onSuccess }), { wrapper });
 
-    result.current.mutate({ content: 'Test content' });
+    const input: EpisodicMemoryInput = { content: 'Test content', event_type: 'test' };
+    result.current.mutate(input);
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
@@ -363,7 +385,8 @@ describe('useCreateEpisodicMemory', () => {
 
     const { result } = renderHook(() => useCreateEpisodicMemory(), { wrapper });
 
-    result.current.mutate({ content: 'Test content' });
+    const input: EpisodicMemoryInput = { content: 'Test content', event_type: 'test' };
+    result.current.mutate(input);
 
     await waitFor(() => expect(result.current.isError).toBe(true));
   });
@@ -381,7 +404,7 @@ describe('useProceduralFeedback', () => {
 
     const { result } = renderHook(() => useProceduralFeedback(), { wrapper });
 
-    const request = {
+    const request: ProceduralFeedbackRequest = {
       procedure_id: 'proc_hcp_outreach',
       outcome: 'success',
       score: 0.95,
@@ -404,7 +427,12 @@ describe('useProceduralFeedback', () => {
 
     const { result } = renderHook(() => useProceduralFeedback({ onSuccess }), { wrapper });
 
-    result.current.mutate({ procedure_id: 'proc_test' });
+    const request: ProceduralFeedbackRequest = {
+      procedure_id: 'proc_test',
+      outcome: 'success',
+      score: 0.85,
+    };
+    result.current.mutate(request);
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 

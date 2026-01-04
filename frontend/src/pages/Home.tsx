@@ -15,7 +15,6 @@
  * @module pages/Home
  */
 
-import * as React from 'react';
 import { useState, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
@@ -33,7 +32,6 @@ import {
   Clock,
   ArrowRight,
   Pill,
-  Building2,
   MapPin,
   CalendarDays,
   Sparkles,
@@ -56,8 +54,6 @@ import { Progress } from '@/components/ui/progress';
 import {
   KPICard,
   StatusBadge,
-  ProgressRing,
-  AlertCard,
 } from '@/components/visualizations/dashboard';
 import { getNavigationRoutes } from '@/router/routes';
 
