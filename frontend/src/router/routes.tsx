@@ -14,6 +14,10 @@ const DataQuality = lazy(() => import('@/pages/DataQuality'));
 const SystemHealth = lazy(() => import('@/pages/SystemHealth'));
 const Monitoring = lazy(() => import('@/pages/Monitoring'));
 const NotFound = lazy(() => import('@/pages/NotFound'));
+const AgentOrchestration = lazy(() => import('@/pages/AgentOrchestration'));
+const KPIDictionary = lazy(() => import('@/pages/KPIDictionary'));
+const MemoryArchitecture = lazy(() => import('@/pages/MemoryArchitecture'));
+const DigitalTwin = lazy(() => import('@/pages/DigitalTwin'));
 
 // Loading fallback component for lazy-loaded routes
 function PageLoadingFallback() {
@@ -116,6 +120,34 @@ export const routeConfigs: RouteConfig[] = [
     icon: 'monitor',
     showInNav: true,
   },
+  {
+    path: '/agent-orchestration',
+    title: 'Agent Orchestration',
+    description: '18-agent tiered orchestration system',
+    icon: 'bot',
+    showInNav: true,
+  },
+  {
+    path: '/kpi-dictionary',
+    title: 'KPI Dictionary',
+    description: '46 KPIs across 6 workstreams',
+    icon: 'book-open',
+    showInNav: true,
+  },
+  {
+    path: '/memory-architecture',
+    title: 'Memory Architecture',
+    description: 'Tri-memory cognitive system',
+    icon: 'brain',
+    showInNav: true,
+  },
+  {
+    path: '/digital-twin',
+    title: 'Digital Twin',
+    description: 'Intervention simulation & pre-screening',
+    icon: 'flask-conical',
+    showInNav: true,
+  },
 ];
 
 // React Router route definitions
@@ -205,6 +237,38 @@ export const routes: RouteObject[] = [
     element: (
       <LazyPage>
         <Monitoring />
+      </LazyPage>
+    ),
+  },
+  {
+    path: '/agent-orchestration',
+    element: (
+      <LazyPage>
+        <AgentOrchestration />
+      </LazyPage>
+    ),
+  },
+  {
+    path: '/kpi-dictionary',
+    element: (
+      <LazyPage>
+        <KPIDictionary />
+      </LazyPage>
+    ),
+  },
+  {
+    path: '/memory-architecture',
+    element: (
+      <LazyPage>
+        <MemoryArchitecture />
+      </LazyPage>
+    ),
+  },
+  {
+    path: '/digital-twin',
+    element: (
+      <LazyPage>
+        <DigitalTwin />
       </LazyPage>
     ),
   },
