@@ -1,9 +1,4 @@
 {
-  "enabledPlugins": {
-    "ai-ml-toolkit@claude-code-templates": true,
-    "documentation-generator@claude-code-templates": true,
-    "testing-suite@claude-code-templates": true
-  },
   "permissions": {
     "allow": [
       "mcp__github__get_file_contents",
@@ -63,6 +58,12 @@
   "statusLine": {
     "type": "command",
     "command": "python3 .claude/scripts/context-monitor.py"
+  },
+  "enabledPlugins": {
+    "ai-ml-toolkit@claude-code-templates": true,
+    "documentation-generator@claude-code-templates": true,
+    "testing-suite@claude-code-templates": true,
+    "context-engineering-fundamentals@context-engineering-marketplace": true
   },
   "description": "E2I Causal Analytics - Claude Code Framework settings. Base permissions for ML/MLOps development. User-specific overrides in settings.local.json"
 }

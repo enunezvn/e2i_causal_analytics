@@ -211,6 +211,7 @@ function CopilotHooksConnector({ children }: { children: React.ReactNode }) {
         '/time-series',
         '/intervention-impact',
         '/predictive-analytics',
+        '/agent-orchestration',
       ],
     },
   });
