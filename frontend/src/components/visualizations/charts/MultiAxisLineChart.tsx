@@ -70,6 +70,63 @@ export interface MultiAxisLineChartProps {
 }
 
 // =============================================================================
+// TOOLTIP COMPONENT (Extracted for testability)
+// =============================================================================
+
+export interface TooltipPayloadEntry {
+  dataKey: string;
+  value: number;
+  color: string;
+  name: string;
+}
+
+export interface CustomTooltipProps {
+  active?: boolean;
+  payload?: TooltipPayloadEntry[];
+  label?: string;
+  axes: AxisConfig[];
+  xAxisFormatter?: (value: string) => string;
+}
+
+/**
+ * Custom tooltip component for MultiAxisLineChart.
+ * Displays formatted values with optional unit prefixes.
+ */
+export function CustomTooltip({
+  active,
+  payload,
+  label,
+  axes,
+  xAxisFormatter,
+}: CustomTooltipProps) {
+  if (!active || !payload || !payload.length) return null;
+
+  return (
+    <div className="bg-[var(--color-popover)] border border-[var(--color-border)] rounded-md shadow-lg p-3">
+      <p className="font-medium text-[var(--color-foreground)] mb-2">
+        {xAxisFormatter ? xAxisFormatter(label || '') : label}
+      </p>
+      {payload.map((entry, index) => {
+        const axisConfig = axes.find((a) => a.dataKey === entry.dataKey);
+        const value = axisConfig?.unit
+          ? `${axisConfig.unit}${entry.value.toLocaleString()}`
+          : entry.value.toLocaleString();
+        return (
+          <div key={index} className="flex items-center gap-2 text-sm">
+            <div
+              className="w-3 h-3 rounded-full"
+              style={{ backgroundColor: entry.color }}
+            />
+            <span className="text-[var(--color-muted-foreground)]">{entry.name}:</span>
+            <span className="font-medium">{value}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// =============================================================================
 // SAMPLE DATA
 // =============================================================================
 
@@ -149,43 +206,6 @@ export const MultiAxisLineChart = React.forwardRef<HTMLDivElement, MultiAxisLine
       };
     }, [data, axes]);
 
-    // Custom tooltip
-    const CustomTooltip = ({
-      active,
-      payload,
-      label,
-    }: {
-      active?: boolean;
-      payload?: Array<{ dataKey: string; value: number; color: string; name: string }>;
-      label?: string;
-    }) => {
-      if (!active || !payload || !payload.length) return null;
-
-      return (
-        <div className="bg-[var(--color-popover)] border border-[var(--color-border)] rounded-md shadow-lg p-3">
-          <p className="font-medium text-[var(--color-foreground)] mb-2">
-            {xAxisFormatter ? xAxisFormatter(label || '') : label}
-          </p>
-          {payload.map((entry, index) => {
-            const axisConfig = axes.find((a) => a.dataKey === entry.dataKey);
-            const value = axisConfig?.unit
-              ? `${axisConfig.unit}${entry.value.toLocaleString()}`
-              : entry.value.toLocaleString();
-            return (
-              <div key={index} className="flex items-center gap-2 text-sm">
-                <div
-                  className="w-3 h-3 rounded-full"
-                  style={{ backgroundColor: entry.color }}
-                />
-                <span className="text-[var(--color-muted-foreground)]">{entry.name}:</span>
-                <span className="font-medium">{value}</span>
-              </div>
-            );
-          })}
-        </div>
-      );
-    };
-
     // Loading skeleton
     if (isLoading) {
       return (
@@ -244,7 +264,15 @@ export const MultiAxisLineChart = React.forwardRef<HTMLDivElement, MultiAxisLine
               tickLine={false}
               axisLine={false}
             />
-            <Tooltip content={<CustomTooltip />} />
+            <Tooltip
+              content={(props) => (
+                <CustomTooltip
+                  {...props}
+                  axes={axes}
+                  xAxisFormatter={xAxisFormatter}
+                />
+              )}
+            />
             {showLegend && (
               <Legend
                 wrapperStyle={{ paddingTop: 10 }}
