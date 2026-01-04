@@ -6,8 +6,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, act } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import MemoryArchitecture from './MemoryArchitecture';
 
@@ -51,31 +50,28 @@ const mockMemoryStats = {
   last_updated: '2026-01-04T10:30:00Z',
 };
 
-// Sample episodic memories
+// Sample episodic memories (matches EpisodicMemoryResponse type)
 const mockEpisodicMemories = [
   {
     id: 'mem-001',
-    memory_type: 'conversation',
+    event_type: 'conversation',
     content: 'User asked about Remibrutinib prescription trends in Q4',
-    importance_score: 0.85,
+    agent_name: 'orchestrator',
     created_at: '2026-01-04T10:00:00Z',
-    metadata: {},
   },
   {
     id: 'mem-002',
-    memory_type: 'insight',
+    event_type: 'insight',
     content: 'Causal analysis revealed positive correlation between rep visits and NRx',
-    importance_score: 0.92,
+    agent_name: 'causal_impact',
     created_at: '2026-01-04T09:30:00Z',
-    metadata: {},
   },
   {
     id: 'mem-003',
-    memory_type: 'action',
+    event_type: 'action',
     content: 'Gap Analyzer identified underperforming territory: Northeast region',
-    importance_score: 0.78,
+    agent_name: 'gap_analyzer',
     created_at: '2026-01-04T09:00:00Z',
-    metadata: {},
   },
 ];
 
@@ -90,7 +86,7 @@ describe('MemoryArchitecture', () => {
       error: null,
     });
     (useEpisodicMemories as ReturnType<typeof vi.fn>).mockReturnValue({
-      data: { memories: mockEpisodicMemories },
+      data: mockEpisodicMemories,
       isLoading: false,
     });
   });

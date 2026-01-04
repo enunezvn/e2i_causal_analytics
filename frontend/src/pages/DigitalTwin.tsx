@@ -316,7 +316,7 @@ export default function DigitalTwin() {
   const [selectedSimulation, setSelectedSimulation] = useState<SimulationResponse | null>(SAMPLE_SIMULATION);
   const [activeTab, setActiveTab] = useState<'results' | 'history'>('results');
 
-  const { data: healthData, isLoading: healthLoading } = useDigitalTwinHealth();
+  const { data: healthData, isLoading: _healthLoading } = useDigitalTwinHealth();
   const { data: historyData } = useSimulationHistory({ limit: 10 });
   const { mutate: runSim, isPending: isRunning } = useRunSimulation({
     onSuccess: (data) => {

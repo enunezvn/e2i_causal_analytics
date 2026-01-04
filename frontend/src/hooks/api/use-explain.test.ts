@@ -9,6 +9,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import * as React from 'react';
+import type {
+  ListExplainableModelsResponse,
+  ExplanationHistoryResponse,
+  ExplainHealthResponse,
+  ExplainResponse,
+  BatchExplainResponse,
+} from '@/types/explain';
+import { ModelType } from '@/types/explain';
 
 // Mock the API functions
 vi.mock('@/api/explain', () => ({
@@ -74,55 +82,59 @@ function createWrapper() {
 // MOCK DATA
 // =============================================================================
 
-const mockModelsResponse = {
-  models: [
-    { model_id: 'propensity_v1', model_type: 'propensity', version: '1.0.0' },
-    { model_id: 'churn_v1', model_type: 'churn', version: '1.0.0' },
+const mockModelsResponse: ListExplainableModelsResponse = {
+  supported_models: [
+    { model_type: ModelType.PROPENSITY, latest_version: '1.0.0', explainer_type: 'TreeExplainer', avg_latency_ms: 50 },
+    { model_type: ModelType.CHURN_PREDICTION, latest_version: '1.0.0', explainer_type: 'TreeExplainer', avg_latency_ms: 45 },
   ],
   total_models: 2,
 };
 
-const mockHistoryResponse = {
-  explanations: [
-    {
-      explanation_id: 'exp_001',
-      patient_id: 'patient_123',
-      model_type: 'propensity',
-      created_at: '2024-01-15T10:00:00Z',
-      top_features: [
-        { feature: 'visit_frequency', importance: 0.35 },
-        { feature: 'engagement_score', importance: 0.28 },
-      ],
-    },
-  ],
-  total: 1,
-};
-
-const mockHealthResponse = {
-  status: 'healthy',
-  shap_available: true,
-  models_loaded: 2,
-  cache_size: 150,
-};
-
-const mockExplanationResponse = {
+const mockExplanationResponse: ExplainResponse = {
   explanation_id: 'exp_new001',
+  request_timestamp: '2024-01-15T10:00:00Z',
   patient_id: 'patient_123',
-  model_type: 'propensity',
-  prediction: 0.85,
+  model_type: ModelType.PROPENSITY,
+  model_version_id: 'propensity_v1',
+  prediction_class: 'high_propensity',
+  prediction_probability: 0.85,
   base_value: 0.45,
   top_features: [
-    { feature: 'visit_frequency', importance: 0.35, value: 12, contribution: 0.15 },
-    { feature: 'engagement_score', importance: 0.28, value: 0.8, contribution: 0.12 },
+    { feature_name: 'visit_frequency', feature_value: 12, shap_value: 0.15, contribution_direction: 'positive', contribution_rank: 1 },
+    { feature_name: 'engagement_score', feature_value: 0.8, shap_value: 0.12, contribution_direction: 'positive', contribution_rank: 2 },
   ],
+  shap_sum: 0.27,
   computation_time_ms: 250,
+  audit_stored: true,
 };
 
-const mockBatchExplanationResponse = {
+const mockHistoryResponse: ExplanationHistoryResponse = {
+  patient_id: 'patient_123',
+  total_explanations: 1,
   explanations: [mockExplanationResponse],
-  total: 1,
+};
+
+const mockHealthResponse: ExplainHealthResponse = {
+  status: 'healthy',
+  service: 'explain-service',
+  version: '1.0.0',
+  timestamp: '2024-01-15T10:00:00Z',
+  dependencies: {
+    bentoml: 'connected',
+    feast: 'connected',
+    shap_explainer: 'loaded',
+    ml_shap_analyses_db: 'connected',
+  },
+};
+
+const mockBatchExplanationResponse: BatchExplainResponse = {
+  batch_id: 'batch_001',
+  total_requests: 1,
+  successful: 1,
   failed: 0,
-  processing_time_ms: 500,
+  explanations: [mockExplanationResponse],
+  errors: [],
+  total_time_ms: 500,
 };
 
 // =============================================================================
@@ -200,7 +212,7 @@ describe('useExplanationHistory', () => {
 
     expect(explainApi.getExplanationHistory).toHaveBeenCalledWith({
       patient_id: 'patient_123',
-      model_type: 'propensity',
+      model_type: ModelType.PROPENSITY,
       limit: 5,
     });
   });
@@ -215,17 +227,19 @@ describe('useExplanationHistory', () => {
   });
 
   it('handles empty history', async () => {
-    vi.mocked(explainApi.getExplanationHistory).mockResolvedValueOnce({
+    const emptyHistoryResponse: ExplanationHistoryResponse = {
+      patient_id: 'patient_123',
+      total_explanations: 0,
       explanations: [],
-      total: 0,
-    });
+    };
+    vi.mocked(explainApi.getExplanationHistory).mockResolvedValueOnce(emptyHistoryResponse);
     const { wrapper } = createWrapper();
 
     const { result } = renderHook(() => useExplanationHistory('patient_123'), { wrapper });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
-    expect(result.current.data?.total).toBe(0);
+    expect(result.current.data?.total_explanations).toBe(0);
   });
 });
 
@@ -274,7 +288,7 @@ describe('useExplain', () => {
 
     const request = {
       patient_id: 'patient_123',
-      model_type: 'propensity',
+      model_type: ModelType.PROPENSITY,
       top_k: 5,
     };
 
@@ -294,7 +308,7 @@ describe('useExplain', () => {
 
     const { result } = renderHook(() => useExplain(), { wrapper });
 
-    result.current.mutate({ patient_id: 'invalid', model_type: 'unknown' });
+    result.current.mutate({ patient_id: 'invalid', model_type: ModelType.PROPENSITY });
 
     await waitFor(() => expect(result.current.isError).toBe(true));
   });
@@ -306,7 +320,7 @@ describe('useExplain', () => {
 
     const { result } = renderHook(() => useExplain({ onSuccess }), { wrapper });
 
-    result.current.mutate({ patient_id: 'patient_123', model_type: 'propensity' });
+    result.current.mutate({ patient_id: 'patient_123', model_type: ModelType.PROPENSITY });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
@@ -321,7 +335,7 @@ describe('useExplain', () => {
 
     const { result } = renderHook(() => useExplain({ onError }), { wrapper });
 
-    result.current.mutate({ patient_id: 'patient_123', model_type: 'propensity' });
+    result.current.mutate({ patient_id: 'patient_123', model_type: ModelType.PROPENSITY });
 
     await waitFor(() => expect(result.current.isError).toBe(true));
 
@@ -342,8 +356,8 @@ describe('useBatchExplain', () => {
 
     const request = {
       requests: [
-        { patient_id: 'p1', model_type: 'propensity' },
-        { patient_id: 'p2', model_type: 'propensity' },
+        { patient_id: 'p1', model_type: ModelType.PROPENSITY },
+        { patient_id: 'p2', model_type: ModelType.PROPENSITY },
       ],
       parallel: true,
     };
@@ -370,11 +384,14 @@ describe('useBatchExplain', () => {
   });
 
   it('handles partial failures', async () => {
-    const partialResponse = {
-      explanations: [mockExplanationResponse],
-      total: 2,
+    const partialResponse: BatchExplainResponse = {
+      batch_id: 'batch_partial',
+      total_requests: 2,
+      successful: 1,
       failed: 1,
-      processing_time_ms: 500,
+      explanations: [mockExplanationResponse],
+      errors: [{ patient_id: 'p2', error: 'Model unavailable' }],
+      total_time_ms: 500,
     };
     vi.mocked(explainApi.getBatchExplanations).mockResolvedValueOnce(partialResponse);
     const { wrapper } = createWrapper();
@@ -383,8 +400,8 @@ describe('useBatchExplain', () => {
 
     result.current.mutate({
       requests: [
-        { patient_id: 'p1', model_type: 'propensity' },
-        { patient_id: 'p2', model_type: 'propensity' },
+        { patient_id: 'p1', model_type: ModelType.PROPENSITY },
+        { patient_id: 'p2', model_type: ModelType.PROPENSITY },
       ],
     });
 

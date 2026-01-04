@@ -206,7 +206,7 @@ export function useTriggerDriftDetection(
   >({
     mutationFn: ({ request, asyncMode = true }) =>
       triggerDriftDetection(request, asyncMode),
-    onSuccess: (data, variables) => {
+    onSuccess: (_data, variables) => {
       // Invalidate drift queries for this model
       queryClient.invalidateQueries({
         queryKey: queryKeys.monitoring.driftLatest(variables.request.model_id),
@@ -551,7 +551,7 @@ export function useRecordPerformance(
   >({
     mutationFn: ({ request, asyncMode = true }) =>
       recordPerformance(request, asyncMode),
-    onSuccess: (data, variables) => {
+    onSuccess: (_data, variables) => {
       // Invalidate performance queries for this model
       queryClient.invalidateQueries({
         queryKey: queryKeys.monitoring.performanceTrend(
@@ -661,7 +661,7 @@ export function useTriggerRetraining(
   >({
     mutationFn: ({ modelId, request, triggeredBy = 'ui_user' }) =>
       triggerRetraining(modelId, request, triggeredBy),
-    onSuccess: (data, variables) => {
+    onSuccess: (_data, variables) => {
       // Invalidate model health since retraining affects it
       queryClient.invalidateQueries({
         queryKey: queryKeys.monitoring.modelHealth(variables.modelId),

@@ -14,7 +14,7 @@ export default defineConfig({
   css: {
     // Ignore CSS files in tests
     modules: {
-      classNameStrategy: 'non-scoped',
+      scopeBehaviour: 'global',
     },
   },
   test: {

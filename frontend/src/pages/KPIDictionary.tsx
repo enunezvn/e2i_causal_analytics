@@ -23,7 +23,6 @@ import {
   Database,
   Clock,
   AlertTriangle,
-  CheckCircle,
   XCircle,
   Filter,
   Info,
@@ -32,18 +31,10 @@ import {
   Activity,
   TrendingUp,
   Beaker,
-  Users,
 } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from '@/components/ui/tooltip';
 import { useKPIList, useWorkstreams, useKPIHealth } from '@/hooks/api/use-kpi';
-import type { KPIMetadata, KPIThreshold, WorkstreamInfo } from '@/types/kpi';
-import { Workstream } from '@/types/kpi';
+import type { KPIMetadata, KPIThreshold } from '@/types/kpi';
 
 // =============================================================================
 // TYPES

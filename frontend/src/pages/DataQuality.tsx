@@ -40,7 +40,6 @@ import {
   KPICard,
   ProgressRing,
   StatusBadge,
-  AlertCard,
   AlertList,
 } from '@/components/visualizations';
 

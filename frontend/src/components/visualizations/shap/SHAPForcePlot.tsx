@@ -99,7 +99,7 @@ export const SHAPForcePlot = React.forwardRef<HTMLDivElement, SHAPForcePlotProps
     );
 
     // Process features and calculate layout
-    const { positiveFeatures, negativeFeatures, totalWidth, scale } = useMemo(() => {
+    const { positiveFeatures, negativeFeatures, scale } = useMemo(() => {
       const sorted = [...features]
         .sort((a, b) => Math.abs(b.shap_value) - Math.abs(a.shap_value))
         .slice(0, maxFeatures);

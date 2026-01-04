@@ -210,9 +210,10 @@ export async function get<T>(
  */
 export async function post<T, D = unknown>(
   endpoint: string,
-  data?: D
+  data?: D,
+  config?: { params?: Record<string, unknown> }
 ): Promise<T> {
-  const response = await apiClient.post<T>(endpoint, data);
+  const response = await apiClient.post<T>(endpoint, data, config);
   return response.data;
 }
 
