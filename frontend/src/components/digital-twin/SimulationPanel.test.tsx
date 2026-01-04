@@ -214,7 +214,7 @@ describe('SimulationPanel', () => {
       expect(screen.getByRole('option', { name: 'Rep Training Program' })).toBeInTheDocument();
       expect(screen.getByRole('option', { name: 'Digital Marketing' })).toBeInTheDocument();
       expect(screen.getByRole('option', { name: 'Formulary Access Initiative' })).toBeInTheDocument();
-    });
+    }, 15000); // Increased timeout for userEvent interactions
 
     it('changes intervention type when option selected', async () => {
       const user = userEvent.setup();

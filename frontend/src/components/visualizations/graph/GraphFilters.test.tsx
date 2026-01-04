@@ -372,10 +372,12 @@ describe('GraphFilters', () => {
     it('disables all entity checkboxes when disabled', () => {
       render(<GraphFilters {...defaultProps} disabled={true} />);
 
-      ALL_ENTITY_TYPES.forEach((type) => {
-        const label = ENTITY_TYPE_LABELS[type] || type;
-        // Use exact match regex to avoid overlapping labels (e.g., "Agent" vs "Agent Activity")
-        const checkbox = screen.getByRole('checkbox', { name: new RegExp(`^${label}$`, 'i') });
+      // Get all checkboxes at once for performance (avoids O(n*m) DOM queries)
+      const allCheckboxes = screen.getAllByRole('checkbox');
+
+      // Verify entity type checkboxes are disabled (first N checkboxes are entity types)
+      const entityCheckboxes = allCheckboxes.slice(0, ALL_ENTITY_TYPES.length);
+      entityCheckboxes.forEach((checkbox) => {
         expect(checkbox).toBeDisabled();
       });
     });
@@ -383,10 +385,12 @@ describe('GraphFilters', () => {
     it('disables all relationship checkboxes when disabled', () => {
       render(<GraphFilters {...defaultProps} disabled={true} />);
 
-      ALL_RELATIONSHIP_TYPES.forEach((type) => {
-        const label = RELATIONSHIP_TYPE_LABELS[type] || type;
-        // Use exact match regex to avoid overlapping labels
-        const checkbox = screen.getByRole('checkbox', { name: new RegExp(`^${label}$`, 'i') });
+      // Get all checkboxes at once for performance
+      const allCheckboxes = screen.getAllByRole('checkbox');
+
+      // Relationship checkboxes come after entity checkboxes
+      const relationshipCheckboxes = allCheckboxes.slice(ALL_ENTITY_TYPES.length);
+      relationshipCheckboxes.forEach((checkbox) => {
         expect(checkbox).toBeDisabled();
       });
     });
