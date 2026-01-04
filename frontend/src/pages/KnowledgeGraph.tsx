@@ -13,11 +13,39 @@
  */
 
 import { useState, useMemo, useCallback } from 'react';
+import { Search, X } from 'lucide-react';
 import { KnowledgeGraph as KnowledgeGraphViz } from '@/components/visualizations/KnowledgeGraph';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { useNodes, useRelationships, useGraphStats } from '@/hooks/api/use-graph';
 import type { GraphNode, GraphRelationship } from '@/types/graph';
+
+// =============================================================================
+// CONSTANTS
+// =============================================================================
+
+/**
+ * Entity type color mapping for the legend
+ * Must match the colors in KnowledgeGraph visualization component
+ */
+const ENTITY_TYPE_COLORS: Record<string, string> = {
+  Patient: '#3b82f6', // blue-500
+  HCP: '#10b981', // emerald-500
+  Brand: '#f59e0b', // amber-500
+  Region: '#8b5cf6', // violet-500
+  KPI: '#ef4444', // red-500
+  CausalPath: '#06b6d4', // cyan-500
+  Trigger: '#f97316', // orange-500
+  Agent: '#ec4899', // pink-500
+  Episode: '#6366f1', // indigo-500
+  Community: '#14b8a6', // teal-500
+  Treatment: '#84cc16', // lime-500
+  Prediction: '#a855f7', // purple-500
+  Experiment: '#22c55e', // green-500
+  AgentActivity: '#64748b', // slate-500
+};
 
 
 // =============================================================================
@@ -28,6 +56,9 @@ function KnowledgeGraphPage() {
   // State for selected elements
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
   const [selectedEdge, setSelectedEdge] = useState<GraphRelationship | null>(null);
+
+  // Search state
+  const [searchQuery, setSearchQuery] = useState('');
 
   // Fetch nodes from API with pagination (get first 100 nodes)
   const {
@@ -65,11 +96,35 @@ function KnowledgeGraphPage() {
   }, [nodesError, relationshipsError, refetchNodes, refetchRelationships]);
 
   // Extract nodes and relationships from API response (memoized to prevent unnecessary re-renders)
-  const nodes = useMemo(() => nodesData?.nodes ?? [], [nodesData?.nodes]);
-  const relationships = useMemo(
+  const allNodes = useMemo(() => nodesData?.nodes ?? [], [nodesData?.nodes]);
+  const allRelationships = useMemo(
     () => relationshipsData?.relationships ?? [],
     [relationshipsData?.relationships]
   );
+
+  // Filter nodes based on search query
+  const filteredNodes = useMemo(() => {
+    if (!searchQuery.trim()) return allNodes;
+    const query = searchQuery.toLowerCase();
+    return allNodes.filter(
+      (node) =>
+        node.name.toLowerCase().includes(query) ||
+        node.type.toLowerCase().includes(query)
+    );
+  }, [allNodes, searchQuery]);
+
+  // Filter relationships to only include those connecting filtered nodes
+  const filteredRelationships = useMemo(() => {
+    if (!searchQuery.trim()) return allRelationships;
+    const nodeIds = new Set(filteredNodes.map((n) => n.id));
+    return allRelationships.filter(
+      (rel) => nodeIds.has(rel.source_id) && nodeIds.has(rel.target_id)
+    );
+  }, [allRelationships, filteredNodes, searchQuery]);
+
+  // Use filtered data for display
+  const nodes = filteredNodes;
+  const relationships = filteredRelationships;
 
   // Calculate stats from API data or use graph stats if available
   const stats = useMemo(() => {
@@ -101,13 +156,68 @@ function KnowledgeGraphPage() {
   return (
     <div className="container mx-auto px-4 py-8">
       {/* Page Header */}
-      <div className="mb-8">
+      <div className="mb-6">
         <h1 className="text-3xl font-bold mb-2">Knowledge Graph</h1>
         <p className="text-[var(--color-muted-foreground)]">
           Explore the knowledge graph visualization with interactive nodes and edges.
           Click on nodes to see details, drag to pan, and scroll to zoom.
         </p>
       </div>
+
+      {/* Search and Legend Row */}
+      <div className="flex flex-col md:flex-row gap-4 mb-6">
+        {/* Search Input */}
+        <div className="relative flex-1 max-w-md">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[var(--color-muted-foreground)]" />
+          <Input
+            placeholder="Search nodes by name or type..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="pl-10 pr-10"
+          />
+          {searchQuery && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 p-0"
+              onClick={() => setSearchQuery('')}
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
+
+        {/* Search Results Info */}
+        {searchQuery && (
+          <div className="flex items-center text-sm text-[var(--color-muted-foreground)]">
+            Found {filteredNodes.length} nodes, {filteredRelationships.length} relationships
+          </div>
+        )}
+      </div>
+
+      {/* Legend */}
+      <Card className="mb-6">
+        <CardHeader className="py-3">
+          <CardTitle className="text-sm font-medium">Node Type Legend</CardTitle>
+        </CardHeader>
+        <CardContent className="py-3">
+          <div className="flex flex-wrap gap-3">
+            {Object.entries(ENTITY_TYPE_COLORS).map(([type, color]) => (
+              <div
+                key={type}
+                className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity"
+                onClick={() => setSearchQuery(type)}
+              >
+                <div
+                  className="h-3 w-3 rounded-full border border-white/20"
+                  style={{ backgroundColor: color }}
+                />
+                <span className="text-xs text-[var(--color-foreground)]">{type}</span>
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
