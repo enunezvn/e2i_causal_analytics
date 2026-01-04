@@ -258,11 +258,27 @@ function getImpactBadge(impact: AgentInsight['impact']) {
 // COMPONENT
 // =============================================================================
 
+// Quick Stats Data
+const QUICK_STATS = [
+  { label: 'Total TRx (MTD)', value: '125,430', change: '+6.1%', isPositive: true },
+  { label: 'Active Campaigns', value: '24', change: '+3', isPositive: true },
+  { label: 'HCPs Reached', value: '12,450', change: '-2.3%', isPositive: false },
+  { label: 'Model Accuracy', value: '94.2%', change: '+0.8%', isPositive: true },
+];
+
+// Active Alerts
+const ACTIVE_ALERTS = [
+  { id: 1, severity: 'critical' as const, title: 'Data Pipeline Delay', message: 'Claims data feed delayed by 4 hours', time: '15 min ago' },
+  { id: 2, severity: 'warning' as const, title: 'Model Drift Detected', message: 'Kisqali conversion model requires retraining', time: '2 hours ago' },
+  { id: 3, severity: 'info' as const, title: 'New Insights Available', message: '3 new Gap Analyzer recommendations ready', time: '4 hours ago' },
+];
+
 function Home() {
   const navigate = useNavigate();
   const [selectedBrand, setSelectedBrand] = useState<Brand>('All');
   const [selectedCategory, setSelectedCategory] = useState('commercial');
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [dismissedAlerts, setDismissedAlerts] = useState<number[]>([]);
 
   // Get navigation routes for quick actions
   const navRoutes = getNavigationRoutes().filter((route) => route.path !== '/');
@@ -282,6 +298,17 @@ function Home() {
     const criticalCount = kpis.filter((k) => k.status === 'critical').length;
     return { total: kpis.length, healthy: healthyCount, warning: warningCount, critical: criticalCount };
   }, [selectedBrand]);
+
+  // Filter visible alerts
+  const visibleAlerts = useMemo(() =>
+    ACTIVE_ALERTS.filter(a => !dismissedAlerts.includes(a.id)),
+    [dismissedAlerts]
+  );
+
+  // Dismiss alert handler
+  const handleDismissAlert = (id: number) => {
+    setDismissedAlerts(prev => [...prev, id]);
+  };
 
   // Simulate refresh
   const handleRefresh = () => {
@@ -333,6 +360,87 @@ function Home() {
           </Button>
         </div>
       </div>
+
+      {/* Quick Stats Bar */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        {QUICK_STATS.map((stat, idx) => (
+          <div
+            key={idx}
+            className="bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg p-4 flex items-center justify-between"
+          >
+            <div>
+              <p className="text-xs text-[var(--color-muted-foreground)]">{stat.label}</p>
+              <p className="text-xl font-bold text-[var(--color-foreground)]">{stat.value}</p>
+            </div>
+            <div className={cn(
+              'text-sm font-medium flex items-center gap-1',
+              stat.isPositive ? 'text-emerald-500' : 'text-rose-500'
+            )}>
+              {stat.isPositive ? (
+                <TrendingUp className="h-4 w-4" />
+              ) : (
+                <TrendingDown className="h-4 w-4" />
+              )}
+              {stat.change}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Active Alerts */}
+      {visibleAlerts.length > 0 && (
+        <div className="space-y-2">
+          <h3 className="text-sm font-medium text-[var(--color-muted-foreground)] flex items-center gap-2">
+            <AlertCircle className="h-4 w-4" />
+            Active Alerts ({visibleAlerts.length})
+          </h3>
+          <div className="space-y-2">
+            {visibleAlerts.map((alert) => (
+              <div
+                key={alert.id}
+                className={cn(
+                  'flex items-center justify-between p-3 rounded-lg border',
+                  alert.severity === 'critical' && 'bg-rose-50 border-rose-200 dark:bg-rose-900/20 dark:border-rose-800',
+                  alert.severity === 'warning' && 'bg-amber-50 border-amber-200 dark:bg-amber-900/20 dark:border-amber-800',
+                  alert.severity === 'info' && 'bg-blue-50 border-blue-200 dark:bg-blue-900/20 dark:border-blue-800'
+                )}
+              >
+                <div className="flex items-center gap-3">
+                  <div className={cn(
+                    'p-1.5 rounded-full',
+                    alert.severity === 'critical' && 'bg-rose-500',
+                    alert.severity === 'warning' && 'bg-amber-500',
+                    alert.severity === 'info' && 'bg-blue-500'
+                  )}>
+                    <AlertCircle className="h-3 w-3 text-white" />
+                  </div>
+                  <div>
+                    <p className={cn(
+                      'font-medium text-sm',
+                      alert.severity === 'critical' && 'text-rose-700 dark:text-rose-300',
+                      alert.severity === 'warning' && 'text-amber-700 dark:text-amber-300',
+                      alert.severity === 'info' && 'text-blue-700 dark:text-blue-300'
+                    )}>
+                      {alert.title}
+                    </p>
+                    <p className="text-xs text-[var(--color-muted-foreground)]">
+                      {alert.message} • {alert.time}
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => handleDismissAlert(alert.id)}
+                  className="text-[var(--color-muted-foreground)] hover:text-[var(--color-foreground)]"
+                >
+                  Dismiss
+                </Button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Brand Context Card */}
       {selectedBrand !== 'All' && (
