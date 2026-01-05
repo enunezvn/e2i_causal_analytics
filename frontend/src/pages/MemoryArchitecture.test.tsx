@@ -185,12 +185,12 @@ describe('MemoryArchitecture', () => {
     expect(screen.getByText('action')).toBeInTheDocument();
   });
 
-  it('displays importance scores for memories', () => {
+  it('displays agent names for memories', () => {
     render(<MemoryArchitecture />, { wrapper: createWrapper() });
 
-    // Check for importance labels (multiple instances expected)
-    const importanceLabels = screen.getAllByText('Importance:');
-    expect(importanceLabels.length).toBe(3);
+    // Check for agent labels (the component shows Agent: for each memory)
+    const agentLabels = screen.getAllByText('Agent:');
+    expect(agentLabels.length).toBe(3);
   });
 
   it('renders refresh button', () => {
@@ -271,7 +271,7 @@ describe('MemoryArchitecture', () => {
 
   it('shows empty state when no episodic memories', () => {
     (useEpisodicMemories as ReturnType<typeof vi.fn>).mockReturnValue({
-      data: { memories: [] },
+      data: [],
       isLoading: false,
     });
 
