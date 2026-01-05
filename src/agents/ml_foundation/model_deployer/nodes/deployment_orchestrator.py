@@ -302,6 +302,8 @@ async def deploy_to_endpoint(state: Dict[str, Any]) -> Dict[str, Any]:
             "deployment_id": deployment_id,
             "endpoint_name": endpoint_name,
             "endpoint_url": endpoint_url,
+            "deployment_url": endpoint_url,  # Alias for contract compatibility
+            "deployment_environment": target_environment,  # Include environment
             "replicas": replicas,
             "cpu_limit": resources.get("cpu", "2"),
             "memory_limit": resources.get("memory", "4Gi"),
