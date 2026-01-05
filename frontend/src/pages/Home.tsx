@@ -62,6 +62,8 @@ import { getNavigationRoutes } from '@/router/routes';
 // =============================================================================
 
 type Brand = 'All' | 'Remibrutinib' | 'Fabhalta' | 'Kisqali';
+type Region = 'All US' | 'Northeast' | 'Southeast' | 'Midwest' | 'West' | 'Southwest';
+type DateRange = 'Q4 2025' | 'Q3 2025' | 'Q2 2025' | 'Q1 2025' | 'YTD 2025' | 'Last 12 Months';
 
 interface KPIMetric {
   id: string;
@@ -107,6 +109,24 @@ const BRANDS: { value: Brand; label: string; indication: string; color: string }
   { value: 'Remibrutinib', label: 'Remibrutinib', indication: 'CSU', color: 'bg-blue-500' },
   { value: 'Fabhalta', label: 'Fabhalta', indication: 'PNH', color: 'bg-purple-500' },
   { value: 'Kisqali', label: 'Kisqali', indication: 'HR+/HER2- BC', color: 'bg-rose-500' },
+];
+
+const REGIONS: { value: Region; label: string }[] = [
+  { value: 'All US', label: 'All US Regions' },
+  { value: 'Northeast', label: 'Northeast' },
+  { value: 'Southeast', label: 'Southeast' },
+  { value: 'Midwest', label: 'Midwest' },
+  { value: 'West', label: 'West' },
+  { value: 'Southwest', label: 'Southwest' },
+];
+
+const DATE_RANGES: { value: DateRange; label: string; description: string }[] = [
+  { value: 'Q4 2025', label: 'Q4 2025', description: 'Oct - Dec 2025' },
+  { value: 'Q3 2025', label: 'Q3 2025', description: 'Jul - Sep 2025' },
+  { value: 'Q2 2025', label: 'Q2 2025', description: 'Apr - Jun 2025' },
+  { value: 'Q1 2025', label: 'Q1 2025', description: 'Jan - Mar 2025' },
+  { value: 'YTD 2025', label: 'Year to Date', description: 'Jan - Dec 2025' },
+  { value: 'Last 12 Months', label: 'Last 12 Months', description: 'Rolling 12 months' },
 ];
 
 const KPI_CATEGORIES = [
@@ -272,6 +292,8 @@ const ACTIVE_ALERTS = [
 function Home() {
   const navigate = useNavigate();
   const [selectedBrand, setSelectedBrand] = useState<Brand>('All');
+  const [selectedRegion, setSelectedRegion] = useState<Region>('All US');
+  const [selectedDateRange, setSelectedDateRange] = useState<DateRange>('Q4 2025');
   const [selectedCategory, setSelectedCategory] = useState('commercial');
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [dismissedAlerts, setDismissedAlerts] = useState<number[]>([]);
@@ -328,10 +350,10 @@ function Home() {
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           {/* Brand Selector */}
           <Select value={selectedBrand} onValueChange={(v) => setSelectedBrand(v as Brand)}>
-            <SelectTrigger className="w-[200px]">
+            <SelectTrigger className="w-[180px]">
               <div className="flex items-center gap-2">
                 <Pill className="h-4 w-4" />
                 <SelectValue placeholder="Select Brand" />
@@ -344,6 +366,43 @@ function Home() {
                     <div className={cn('w-2 h-2 rounded-full', brand.color)} />
                     <span>{brand.label}</span>
                     <span className="text-xs text-muted-foreground">({brand.indication})</span>
+                  </div>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          {/* Region Selector */}
+          <Select value={selectedRegion} onValueChange={(v) => setSelectedRegion(v as Region)}>
+            <SelectTrigger className="w-[160px]">
+              <div className="flex items-center gap-2">
+                <MapPin className="h-4 w-4" />
+                <SelectValue placeholder="Select Region" />
+              </div>
+            </SelectTrigger>
+            <SelectContent>
+              {REGIONS.map((region) => (
+                <SelectItem key={region.value} value={region.value}>
+                  {region.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          {/* Date Range Selector */}
+          <Select value={selectedDateRange} onValueChange={(v) => setSelectedDateRange(v as DateRange)}>
+            <SelectTrigger className="w-[160px]">
+              <div className="flex items-center gap-2">
+                <CalendarDays className="h-4 w-4" />
+                <SelectValue placeholder="Select Period" />
+              </div>
+            </SelectTrigger>
+            <SelectContent>
+              {DATE_RANGES.map((range) => (
+                <SelectItem key={range.value} value={range.value}>
+                  <div className="flex flex-col">
+                    <span>{range.label}</span>
+                    <span className="text-xs text-muted-foreground">{range.description}</span>
                   </div>
                 </SelectItem>
               ))}
@@ -676,21 +735,25 @@ function Home() {
             </CardContent>
           </Card>
 
-          {/* Date Context */}
+          {/* Filter Summary */}
           <Card>
             <CardContent className="py-4">
               <div className="flex items-center gap-3">
                 <CalendarDays className="h-5 w-5 text-muted-foreground" />
                 <div>
                   <div className="text-sm font-medium">Reporting Period</div>
-                  <div className="text-xs text-muted-foreground">Q4 2025 (Oct - Dec)</div>
+                  <div className="text-xs text-muted-foreground">
+                    {DATE_RANGES.find((r) => r.value === selectedDateRange)?.description || selectedDateRange}
+                  </div>
                 </div>
               </div>
               <div className="flex items-center gap-3 mt-3 pt-3 border-t">
                 <MapPin className="h-5 w-5 text-muted-foreground" />
                 <div>
                   <div className="text-sm font-medium">Territory</div>
-                  <div className="text-xs text-muted-foreground">All US Regions</div>
+                  <div className="text-xs text-muted-foreground">
+                    {REGIONS.find((r) => r.value === selectedRegion)?.label || selectedRegion}
+                  </div>
                 </div>
               </div>
             </CardContent>
