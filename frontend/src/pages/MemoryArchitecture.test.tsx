@@ -121,9 +121,9 @@ describe('MemoryArchitecture', () => {
     render(<MemoryArchitecture />, { wrapper: createWrapper() });
 
     expect(screen.getByText('Redis Cache')).toBeInTheDocument();
-    expect(screen.getByText('Supabase PostgreSQL')).toBeInTheDocument();
+    // Architecture diagram shows pgvector for episodic/procedural memory
+    expect(screen.getAllByText('Supabase + pgvector').length).toBeGreaterThan(0);
     expect(screen.getByText('FalkorDB Graph')).toBeInTheDocument();
-    expect(screen.getByText('Learned Patterns')).toBeInTheDocument();
   });
 
   it('displays episodic memory statistics', () => {
@@ -131,8 +131,8 @@ describe('MemoryArchitecture', () => {
 
     expect(screen.getByText('Total Memories')).toBeInTheDocument();
     expect(screen.getByText('1,250')).toBeInTheDocument();
-    expect(screen.getByText('Recent (24h)')).toBeInTheDocument();
-    expect(screen.getByText('45')).toBeInTheDocument();
+    // Updated component shows backend info instead of recent count
+    expect(screen.getByText('Historical interactions')).toBeInTheDocument();
   });
 
   it('displays semantic memory statistics', () => {
@@ -140,8 +140,8 @@ describe('MemoryArchitecture', () => {
 
     expect(screen.getByText('Entities')).toBeInTheDocument();
     expect(screen.getByText('3,420')).toBeInTheDocument();
-    expect(screen.getByText('Relationships')).toBeInTheDocument();
-    expect(screen.getByText('8,750')).toBeInTheDocument();
+    // Updated component shows backend info instead of relationship count
+    expect(screen.getByText('Knowledge nodes')).toBeInTheDocument();
   });
 
   it('displays procedural memory statistics', () => {
@@ -149,14 +149,16 @@ describe('MemoryArchitecture', () => {
 
     expect(screen.getByText('Procedures')).toBeInTheDocument();
     expect(screen.getByText('89')).toBeInTheDocument();
-    expect(screen.getByText('Success Rate')).toBeInTheDocument();
-    expect(screen.getByText('92.3%')).toBeInTheDocument();
+    // Updated component shows backend info instead of success rate
+    expect(screen.getByText('Learned patterns')).toBeInTheDocument();
   });
 
   it('displays working memory info', () => {
     render(<MemoryArchitecture />, { wrapper: createWrapper() });
 
-    expect(screen.getByText('Backend')).toBeInTheDocument();
+    // Backend appears in each memory card, so use getAllByText
+    const backendLabels = screen.getAllByText('Backend');
+    expect(backendLabels.length).toBeGreaterThan(0);
     expect(screen.getByText('Redis')).toBeInTheDocument();
     expect(screen.getByText('TTL')).toBeInTheDocument();
     expect(screen.getByText('24h')).toBeInTheDocument();
