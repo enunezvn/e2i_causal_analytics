@@ -14,6 +14,7 @@
 import { useState } from 'react';
 import { Brain, Database, Network, Cog, Clock, Activity, RefreshCw, AlertCircle } from 'lucide-react';
 import { useMemoryStats, useEpisodicMemories } from '@/hooks/api/use-memory';
+import { QueryProcessingFlow } from '@/components/visualizations/QueryProcessingFlow';
 import type { EpisodicMemoryResponse } from '@/types/memory';
 
 // =============================================================================
@@ -92,6 +93,9 @@ function ArchitectureDiagram() {
           <Clock className="h-8 w-8 text-blue-600 dark:text-blue-400 mb-2" />
           <span className="font-medium text-blue-900 dark:text-blue-300">Working Memory</span>
           <span className="text-xs text-blue-700 dark:text-blue-400 mt-1">Redis Cache</span>
+          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 dark:bg-blue-800 text-blue-800 dark:text-blue-200 mt-2">
+            &lt;50ms latency
+          </span>
           <span className="text-xs text-blue-600 dark:text-blue-500 mt-2 text-center">
             Short-term context, active session state
           </span>
@@ -101,7 +105,10 @@ function ArchitectureDiagram() {
         <div className="flex flex-col items-center p-4 bg-purple-50 dark:bg-purple-900/20 rounded-lg border border-purple-200 dark:border-purple-800">
           <Database className="h-8 w-8 text-purple-600 dark:text-purple-400 mb-2" />
           <span className="font-medium text-purple-900 dark:text-purple-300">Episodic Memory</span>
-          <span className="text-xs text-purple-700 dark:text-purple-400 mt-1">Supabase PostgreSQL</span>
+          <span className="text-xs text-purple-700 dark:text-purple-400 mt-1">Supabase + pgvector</span>
+          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 dark:bg-purple-800 text-purple-800 dark:text-purple-200 mt-2">
+            &lt;200ms latency
+          </span>
           <span className="text-xs text-purple-600 dark:text-purple-500 mt-2 text-center">
             Historical interactions, past experiences
           </span>
@@ -112,6 +119,9 @@ function ArchitectureDiagram() {
           <Network className="h-8 w-8 text-emerald-600 dark:text-emerald-400 mb-2" />
           <span className="font-medium text-emerald-900 dark:text-emerald-300">Semantic Memory</span>
           <span className="text-xs text-emerald-700 dark:text-emerald-400 mt-1">FalkorDB Graph</span>
+          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 dark:bg-emerald-800 text-emerald-800 dark:text-emerald-200 mt-2">
+            &lt;500ms latency
+          </span>
           <span className="text-xs text-emerald-600 dark:text-emerald-500 mt-2 text-center">
             Knowledge graph, entity relationships
           </span>
@@ -123,7 +133,10 @@ function ArchitectureDiagram() {
         <div className="flex flex-col items-center p-4 bg-orange-50 dark:bg-orange-900/20 rounded-lg border border-orange-200 dark:border-orange-800 w-full md:w-1/2">
           <Cog className="h-8 w-8 text-orange-600 dark:text-orange-400 mb-2" />
           <span className="font-medium text-orange-900 dark:text-orange-300">Procedural Memory</span>
-          <span className="text-xs text-orange-700 dark:text-orange-400 mt-1">Learned Patterns</span>
+          <span className="text-xs text-orange-700 dark:text-orange-400 mt-1">Supabase + pgvector</span>
+          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 dark:bg-orange-800 text-orange-800 dark:text-orange-200 mt-2">
+            &lt;200ms latency
+          </span>
           <span className="text-xs text-orange-600 dark:text-orange-500 mt-2 text-center">
             Optimized procedures, behavioral patterns
           </span>
@@ -247,6 +260,9 @@ export default function MemoryArchitecture() {
       {/* Architecture Diagram */}
       <ArchitectureDiagram />
 
+      {/* Query Processing Flow */}
+      <QueryProcessingFlow animate={true} animationSpeed={1000} />
+
       {/* Stats Cards Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Working Memory */}
@@ -260,6 +276,11 @@ export default function MemoryArchitecture() {
               label="Backend"
               value="Redis"
               subtext="In-memory cache"
+            />
+            <StatItem
+              label="Target Latency"
+              value="<50ms"
+              subtext="P95 response time"
             />
             <StatItem
               label="TTL"
@@ -282,14 +303,19 @@ export default function MemoryArchitecture() {
         >
           <div className="space-y-4">
             <StatItem
+              label="Backend"
+              value="Supabase"
+              subtext="pgvector embeddings"
+            />
+            <StatItem
+              label="Target Latency"
+              value="<200ms"
+              subtext="P95 response time"
+            />
+            <StatItem
               label="Total Memories"
               value={statsLoading ? '...' : (stats?.episodic?.total_memories || 0).toLocaleString()}
               subtext="Historical interactions"
-            />
-            <StatItem
-              label="Recent (24h)"
-              value={statsLoading ? '...' : (stats?.episodic?.recent_24h || 0).toLocaleString()}
-              subtext="New memories today"
             />
             <div className="pt-2 border-t border-[var(--color-border)]">
               <p className="text-xs text-[var(--color-text-secondary)]">
@@ -307,14 +333,19 @@ export default function MemoryArchitecture() {
         >
           <div className="space-y-4">
             <StatItem
+              label="Backend"
+              value="FalkorDB"
+              subtext="Graph database"
+            />
+            <StatItem
+              label="Target Latency"
+              value="<500ms"
+              subtext="P95 response time"
+            />
+            <StatItem
               label="Entities"
               value={statsLoading ? '...' : (stats?.semantic?.total_entities || 0).toLocaleString()}
               subtext="Knowledge nodes"
-            />
-            <StatItem
-              label="Relationships"
-              value={statsLoading ? '...' : (stats?.semantic?.total_relationships || 0).toLocaleString()}
-              subtext="Graph edges"
             />
             <div className="pt-2 border-t border-[var(--color-border)]">
               <p className="text-xs text-[var(--color-text-secondary)]">
@@ -332,14 +363,19 @@ export default function MemoryArchitecture() {
         >
           <div className="space-y-4">
             <StatItem
+              label="Backend"
+              value="Supabase"
+              subtext="pgvector embeddings"
+            />
+            <StatItem
+              label="Target Latency"
+              value="<200ms"
+              subtext="P95 response time"
+            />
+            <StatItem
               label="Procedures"
               value={statsLoading ? '...' : (stats?.procedural?.total_procedures || 0).toLocaleString()}
               subtext="Learned patterns"
-            />
-            <StatItem
-              label="Success Rate"
-              value={statsLoading ? '...' : `${((stats?.procedural?.average_success_rate || 0) * 100).toFixed(1)}%`}
-              subtext="Avg. effectiveness"
             />
             <div className="pt-2 border-t border-[var(--color-border)]">
               <p className="text-xs text-[var(--color-text-secondary)]">
