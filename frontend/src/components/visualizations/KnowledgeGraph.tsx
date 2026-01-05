@@ -561,7 +561,7 @@ const KnowledgeGraph = React.forwardRef<HTMLDivElement, KnowledgeGraphProps>(
               disabled={isLoading}
               onEntityTypesChange={setSelectedEntityTypes}
               onRelationshipTypesChange={setSelectedRelationshipTypes}
-              className="w-64 shrink-0"
+              className="w-80 shrink-0"
             />
           )}
 

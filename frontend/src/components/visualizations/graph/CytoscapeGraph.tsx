@@ -388,19 +388,21 @@ const CytoscapeGraph = React.forwardRef<CytoscapeGraphRef, CytoscapeGraphProps>(
           'relative w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] overflow-hidden',
           className
         )}
-        style={{ minHeight: heightStyle }}
+        style={{ height: heightStyle, minHeight: heightStyle }}
       >
         {/* Loading Overlay */}
         {showLoading && isLoading && (loadingComponent || <LoadingSpinner />)}
 
-        {/* Graph Container */}
-        <div
-          ref={containerRef as React.RefObject<HTMLDivElement>}
-          className="absolute inset-0"
-          role="img"
-          aria-label={ariaLabel}
-          tabIndex={0}
-        />
+        {/* Graph Container - Wrapper needed because Cytoscape sets position:relative inline */}
+        <div className="absolute inset-0">
+          <div
+            ref={containerRef as React.RefObject<HTMLDivElement>}
+            className="w-full h-full"
+            role="img"
+            aria-label={ariaLabel}
+            tabIndex={0}
+          />
+        </div>
       </div>
     );
   }
