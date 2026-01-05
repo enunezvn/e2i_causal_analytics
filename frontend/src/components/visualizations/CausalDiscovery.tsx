@@ -24,6 +24,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { CausalDAG, type CausalDAGRef, type CausalNode, type CausalEdge } from './causal/CausalDAG';
 import { EffectsTable, type CausalEffect } from './causal/EffectsTable';
+import { RefutationTests, type RefutationResult } from './causal/RefutationTests';
 import { ZoomIn, ZoomOut, Maximize2, Download, RotateCcw } from 'lucide-react';
 
 // =============================================================================
@@ -37,6 +38,8 @@ export interface CausalDiscoveryProps {
   edges?: CausalEdge[];
   /** Causal effect estimates (uses sample data if not provided) */
   effects?: CausalEffect[];
+  /** Refutation test results (uses sample data if not provided) */
+  refutationResults?: RefutationResult[];
   /** Whether data is loading */
   isLoading?: boolean;
   /** Error object */
@@ -49,6 +52,8 @@ export interface CausalDiscoveryProps {
   showDetails?: boolean;
   /** Whether to show effects table */
   showEffectsTable?: boolean;
+  /** Whether to show refutation tests */
+  showRefutationTests?: boolean;
   /** Additional CSS classes */
   className?: string;
   /** Called when a node is selected */
@@ -169,6 +174,53 @@ const SAMPLE_EFFECTS: CausalEffect[] = [
   },
 ];
 
+/**
+ * Sample refutation test results for demonstration
+ */
+const SAMPLE_REFUTATION_RESULTS: RefutationResult[] = [
+  {
+    id: 'refute-1',
+    method: 'random_common_cause',
+    originalEstimate: 0.45,
+    refutedEstimate: 0.43,
+    pValue: 0.72,
+    passed: true,
+  },
+  {
+    id: 'refute-2',
+    method: 'placebo_treatment',
+    originalEstimate: 0.45,
+    refutedEstimate: 0.02,
+    pValue: 0.89,
+    passed: true,
+  },
+  {
+    id: 'refute-3',
+    method: 'data_subset',
+    originalEstimate: 0.45,
+    refutedEstimate: 0.42,
+    pValue: 0.65,
+    passed: true,
+  },
+  {
+    id: 'refute-4',
+    method: 'bootstrap',
+    originalEstimate: 0.45,
+    refutedEstimate: 0.44,
+    pValue: 0.78,
+    passed: true,
+  },
+  {
+    id: 'refute-5',
+    method: 'add_unobserved_common_cause',
+    originalEstimate: 0.45,
+    refutedEstimate: 0.28,
+    pValue: 0.03,
+    passed: false,
+    description: 'Estimate sensitive to unmeasured confounding with effect 0.5',
+  },
+];
+
 // =============================================================================
 // NODE TYPE COLORS
 // =============================================================================
@@ -213,12 +265,14 @@ const CausalDiscovery = React.forwardRef<HTMLDivElement, CausalDiscoveryProps>(
       nodes: propNodes,
       edges: propEdges,
       effects: propEffects,
+      refutationResults: propRefutationResults,
       isLoading = false,
       error = null,
       onRetry,
       showControls = true,
       showDetails = true,
       showEffectsTable = true,
+      showRefutationTests = true,
       className,
       onNodeSelect,
       onEdgeSelect,
@@ -236,6 +290,10 @@ const CausalDiscovery = React.forwardRef<HTMLDivElement, CausalDiscoveryProps>(
     const nodes = useMemo(() => propNodes ?? SAMPLE_NODES, [propNodes]);
     const edges = useMemo(() => propEdges ?? SAMPLE_EDGES, [propEdges]);
     const effects = useMemo(() => propEffects ?? SAMPLE_EFFECTS, [propEffects]);
+    const refutationResults = useMemo(
+      () => propRefutationResults ?? SAMPLE_REFUTATION_RESULTS,
+      [propRefutationResults]
+    );
 
     // Handle node click
     const handleNodeClick = useCallback(
@@ -547,6 +605,26 @@ const CausalDiscovery = React.forwardRef<HTMLDivElement, CausalDiscoveryProps>(
                 selectedEffectId={selectedEffect?.id}
                 showCIBars
                 sortable
+              />
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Refutation Tests */}
+        {showRefutationTests && (
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">Refutation Test Results</CardTitle>
+              <CardDescription>
+                Validation tests for causal estimate robustness
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="p-0">
+              <RefutationTests
+                results={refutationResults}
+                isLoading={isLoading}
+                showSummary
+                showChart
               />
             </CardContent>
           </Card>
