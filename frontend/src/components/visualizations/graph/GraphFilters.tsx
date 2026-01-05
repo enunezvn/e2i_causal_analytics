@@ -288,7 +288,7 @@ const GraphFilters = React.forwardRef<HTMLDivElement, GraphFiltersProps>(
                 />
                 <Label
                   htmlFor={`entity-${type}`}
-                  className="flex items-center gap-2 text-sm cursor-pointer"
+                  className="flex items-center gap-2 text-sm cursor-pointer whitespace-nowrap"
                 >
                   <span
                     className="w-3 h-3 rounded-full"
@@ -353,7 +353,7 @@ const GraphFilters = React.forwardRef<HTMLDivElement, GraphFiltersProps>(
                 />
                 <Label
                   htmlFor={`rel-${type}`}
-                  className="text-sm cursor-pointer"
+                  className="text-sm cursor-pointer whitespace-nowrap"
                 >
                   {RELATIONSHIP_TYPE_LABELS[type] || type}
                 </Label>
