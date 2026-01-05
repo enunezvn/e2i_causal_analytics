@@ -216,6 +216,11 @@ export const defaultCytoscapeStyles: StylesheetStyle[] = [
 // =============================================================================
 
 /**
+ * Stable empty object for default layoutOptions to prevent re-renders
+ */
+const EMPTY_LAYOUT_OPTIONS: Partial<LayoutOptions> = {};
+
+/**
  * Get default options for a layout algorithm
  */
 function getLayoutOptions(name: LayoutName): LayoutOptions {
@@ -322,7 +327,7 @@ export function useCytoscape(
     elements = [],
     style = defaultCytoscapeStyles,
     layout = 'cose',
-    layoutOptions = {},
+    layoutOptions = EMPTY_LAYOUT_OPTIONS,
     autoFit = true,
     minZoom = 0.1,
     maxZoom = 3,
@@ -406,8 +411,11 @@ export function useCytoscape(
 
       cyRef.current = cy;
     },
+    // Note: `elements` is intentionally excluded from dependencies to prevent
+    // re-initialization when data changes. Element updates are handled separately
+    // via setElements() and runLayout() in consuming components.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [
-      elements,
       style,
       layout,
       layoutOptions,
