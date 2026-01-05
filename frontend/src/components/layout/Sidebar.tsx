@@ -84,6 +84,30 @@ function NavIcon({ icon, className = 'h-5 w-5' }: { icon?: string; className?: s
         <path strokeLinecap="round" strokeLinejoin="round" d="M8 21h8M12 17v4" />
       </svg>
     ),
+    bot: (
+      <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <rect x="3" y="11" width="18" height="10" rx="2" />
+        <circle cx="12" cy="5" r="2" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 7v4M7 15h.01M17 15h.01" />
+      </svg>
+    ),
+    'book-open': (
+      <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+      </svg>
+    ),
+    brain: (
+      <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 1 7.92 12.446a9 9 0 1 1 -16.626 0a7.5 7.5 0 0 1 7.92 -12.446c.13 0 .261 0 .393 0z" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v9m0 0l-3 -2m3 2l3 -2" />
+      </svg>
+    ),
+    'flask-conical': (
+      <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M9 3h6M10 3v6.172a2 2 0 0 1-.586 1.414l-5.828 5.828a2 2 0 0 0-.586 1.414V20a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-1.172a2 2 0 0 0-.586-1.414l-5.828-5.828a2 2 0 0 1-.586-1.414V3" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M6 15h12" />
+      </svg>
+    ),
   };
 
   return iconMap[icon ?? 'home'] ?? iconMap.home;

@@ -25,3 +25,6 @@ export type { CausalDiscoveryProps } from './CausalDiscovery';
 
 export { KnowledgeGraph } from './KnowledgeGraph';
 export type { KnowledgeGraphProps } from './KnowledgeGraph';
+
+export { QueryProcessingFlow } from './QueryProcessingFlow';
+export type { QueryProcessingFlowProps } from './QueryProcessingFlow';
