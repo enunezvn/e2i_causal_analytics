@@ -31,6 +31,24 @@ from src.rag.retriever import hybrid_search
 
 logger = logging.getLogger(__name__)
 
+# Orchestrator singleton for agent routing
+_orchestrator_instance = None
+
+
+def get_orchestrator():
+    """Get or create OrchestratorAgent singleton."""
+    global _orchestrator_instance
+    if _orchestrator_instance is None:
+        try:
+            from src.agents.orchestrator import OrchestratorAgent
+
+            _orchestrator_instance = OrchestratorAgent()
+            logger.info("OrchestratorAgent initialized for cognitive workflow")
+        except Exception as e:
+            logger.warning(f"OrchestratorAgent initialization failed: {e}")
+            return None
+    return _orchestrator_instance
+
 router = APIRouter(prefix="/cognitive", tags=["Cognitive Workflow"])
 
 
@@ -288,11 +306,45 @@ async def process_cognitive_query(
         query_type = request.query_type or _detect_query_type(request.query)
         agent_name = _route_to_agent(query_type)
 
-        # For now, generate a placeholder response
-        # In production, this would route to the actual agent
-        response_text = _generate_placeholder_response(
-            query=request.query, query_type=query_type, evidence=evidence, brand=request.brand
-        )
+        # Execute via OrchestratorAgent (with fallback to placeholder)
+        orchestrator = get_orchestrator()
+        response_confidence = 0.85  # Default confidence
+
+        if orchestrator:
+            try:
+                orchestrator_result = await orchestrator.run({
+                    "query": request.query,
+                    "session_id": session_id,
+                    "user_id": request.user_id,
+                    "user_context": {
+                        "brand": request.brand,
+                        "region": request.region,
+                        "evidence": [e.content for e in evidence] if evidence else [],
+                    },
+                })
+
+                response_text = orchestrator_result.get("response_text", "")
+                response_confidence = orchestrator_result.get("response_confidence", 0.85)
+                agents_dispatched = orchestrator_result.get("agents_dispatched", [])
+
+                if agents_dispatched:
+                    agent_name = agents_dispatched[0]  # Primary agent used
+
+                logger.info(
+                    f"Orchestrator processed query: agents={agents_dispatched}, "
+                    f"confidence={response_confidence:.2f}"
+                )
+
+            except Exception as e:
+                logger.warning(f"Orchestrator execution failed, using fallback: {e}")
+                response_text = _generate_placeholder_response(
+                    query=request.query, query_type=query_type, evidence=evidence, brand=request.brand
+                )
+        else:
+            # Fallback to placeholder if orchestrator not available
+            response_text = _generate_placeholder_response(
+                query=request.query, query_type=query_type, evidence=evidence, brand=request.brand
+            )
 
         # Phase 4: Reflect - Store response and learn
         phases_completed.append(CognitivePhase.REFLECT)
@@ -315,7 +367,7 @@ async def process_cognitive_query(
             query=request.query,
             response=response_text,
             query_type=query_type,
-            confidence=0.85,  # Placeholder
+            confidence=response_confidence,
             agent_used=agent_name,
             evidence=evidence,
             phases_completed=phases_completed,
@@ -324,6 +376,7 @@ async def process_cognitive_query(
                 "brand": request.brand,
                 "region": request.region,
                 "memory_results_count": len(memory_results),
+                "orchestrator_used": orchestrator is not None,
             },
         )
 

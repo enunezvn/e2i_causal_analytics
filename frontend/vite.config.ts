@@ -11,6 +11,7 @@ export default defineConfig({
     },
   },
   server: {
+    port: 5174,
     proxy: {
       // Proxy API requests to FastAPI backend
       '/api': {
