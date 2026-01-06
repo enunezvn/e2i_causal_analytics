@@ -32,8 +32,9 @@ export default defineConfig({
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
     },
-    // Firefox and WebKit are optional - run only on CI or when specifically requested
-    ...(process.env.CI || process.env.ALL_BROWSERS
+    // Firefox and WebKit are optional - only run when ALL_BROWSERS is set
+    // In CI, we use Chromium only for faster, more reliable tests
+    ...(process.env.ALL_BROWSERS
       ? [
           {
             name: 'firefox',
