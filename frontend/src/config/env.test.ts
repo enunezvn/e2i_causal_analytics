@@ -215,6 +215,7 @@ describe('EnvConfig type', () => {
       isDev: true,
       isProd: false,
       appVersion: '1.0.0',
+      copilotEnabled: true,
     };
 
     expect(config.apiUrl).toBe('http://localhost:8000');

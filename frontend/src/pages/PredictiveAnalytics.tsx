@@ -530,17 +530,24 @@ function RecommendationCard({ recommendation }: RecommendationCardProps) {
   );
 }
 
+// Recharts tooltip payload entry type
+interface TooltipPayloadEntry {
+  name?: string;
+  value?: number;
+  color?: string;
+}
+
 // Custom tooltip for probability distribution
-function ProbabilityTooltip({ active, payload, label }: { active?: boolean; payload?: any[]; label?: string }) {
+function ProbabilityTooltip({ active, payload, label }: { active?: boolean; payload?: TooltipPayloadEntry[]; label?: string }) {
   if (!active || !payload || payload.length === 0) return null;
 
   return (
     <div className="bg-popover border rounded-lg shadow-lg p-3">
       <p className="font-semibold mb-2">{label}</p>
-      {payload.map((entry: any, index: number) => (
+      {payload.map((entry, index) => (
         <div key={index} className="flex items-center justify-between gap-4 text-sm">
           <span style={{ color: entry.color }}>{entry.name}</span>
-          <span className="font-medium">{entry.value.toLocaleString()}</span>
+          <span className="font-medium">{entry.value?.toLocaleString()}</span>
         </div>
       ))}
     </div>

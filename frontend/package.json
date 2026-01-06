@@ -73,6 +73,7 @@
     "msw": "^2.12.4",
     "playwright": "^1.57.0",
     "postcss": "^8.5.6",
+    "serve": "^14.2.5",
     "tailwindcss": "^4.1.18",
     "typescript": "~5.6.2",
     "typescript-eslint": "^8.18.2",
