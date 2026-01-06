@@ -154,7 +154,9 @@ function ArchitectureDiagram() {
 }
 
 function EpisodicMemoryList({ memories }: { memories: EpisodicMemoryResponse[] }) {
-  if (memories.length === 0) {
+  // Ensure memories is an array
+  const memoryList = Array.isArray(memories) ? memories : [];
+  if (memoryList.length === 0) {
     return (
       <div className="text-center py-4 text-[var(--color-text-secondary)]">
         No recent episodic memories

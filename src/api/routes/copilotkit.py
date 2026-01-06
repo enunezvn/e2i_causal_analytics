@@ -7,9 +7,10 @@ Exposes backend actions for querying KPIs, running analyses,
 and interacting with the E2I agent system.
 
 Author: E2I Causal Analytics Team
-Version: 1.2.0
+Version: 1.3.0
 
 Changelog:
+    1.3.0 - Connected to real repositories (BusinessMetricRepository, AgentRegistryRepository)
     1.2.0 - Refactored from monkey-patches to response transformer middleware
     1.1.0 - Added SDK compatibility patches for frontend v1.x
     1.0.0 - Initial CopilotKit integration
@@ -31,12 +32,43 @@ from langgraph.graph import END, StateGraph
 
 logger = logging.getLogger(__name__)
 
+
+# =============================================================================
+# REPOSITORY HELPERS
+# =============================================================================
+
+
+def _get_business_metric_repository():
+    """Get BusinessMetricRepository instance with Supabase client."""
+    try:
+        from src.api.dependencies.supabase_client import get_supabase
+        from src.repositories.business_metric import BusinessMetricRepository
+
+        client = get_supabase()
+        return BusinessMetricRepository(client=client) if client else None
+    except Exception as e:
+        logger.warning(f"Failed to get BusinessMetricRepository: {e}")
+        return None
+
+
+def _get_agent_registry_repository():
+    """Get AgentRegistryRepository instance with Supabase client."""
+    try:
+        from src.api.dependencies.supabase_client import get_supabase
+        from src.repositories.agent_registry import AgentRegistryRepository
+
+        client = get_supabase()
+        return AgentRegistryRepository(client=client) if client else None
+    except Exception as e:
+        logger.warning(f"Failed to get AgentRegistryRepository: {e}")
+        return None
+
 # =============================================================================
 # E2I BACKEND ACTIONS
 # =============================================================================
 
-# Sample KPI data for demonstration (would connect to real DB in production)
-SAMPLE_KPIS = {
+# Fallback sample data when database is unavailable
+_FALLBACK_KPIS = {
     "Remibrutinib": {
         "trx_volume": 15420,
         "nrx_volume": 3250,
@@ -63,7 +95,7 @@ SAMPLE_KPIS = {
     },
 }
 
-SAMPLE_AGENTS = [
+_FALLBACK_AGENTS = [
     {"id": "orchestrator", "name": "Orchestrator", "tier": 1, "status": "active"},
     {"id": "causal-impact", "name": "Causal Impact", "tier": 2, "status": "idle"},
     {"id": "gap-analyzer", "name": "Gap Analyzer", "tier": 2, "status": "idle"},
@@ -73,9 +105,53 @@ SAMPLE_AGENTS = [
 ]
 
 
+async def _fetch_kpis_from_db(brand: str) -> Optional[Dict[str, Any]]:
+    """
+    Fetch KPI data from database for a brand.
+
+    Returns:
+        KPI metrics dict or None if unavailable
+    """
+    repo = _get_business_metric_repository()
+    if not repo:
+        return None
+
+    try:
+        # Define KPI mappings to metric_name in database
+        kpi_mappings = {
+            "trx_volume": "TRx",
+            "nrx_volume": "NRx",
+            "market_share": "market_share",
+            "conversion_rate": "conversion_rate",
+            "hcp_reach": "hcp_reach",
+            "patient_starts": "patient_starts",
+        }
+
+        metrics = {}
+        for metric_key, db_metric_name in kpi_mappings.items():
+            results = await repo.get_by_kpi(
+                kpi_name=db_metric_name,
+                brand=brand if brand != "All" else None,
+                limit=1,
+            )
+            if results:
+                # Get most recent value
+                metrics[metric_key] = results[0].get("value", 0)
+            else:
+                metrics[metric_key] = 0
+
+        return metrics if any(metrics.values()) else None
+
+    except Exception as e:
+        logger.warning(f"Failed to fetch KPIs from database: {e}")
+        return None
+
+
 async def get_kpi_summary(brand: str) -> Dict[str, Any]:
     """
     Get KPI summary for a specific brand.
+
+    Attempts to fetch real data from database, falls back to sample data if unavailable.
 
     Args:
         brand: Brand name (Remibrutinib, Fabhalta, Kisqali, or All)
@@ -85,47 +161,114 @@ async def get_kpi_summary(brand: str) -> Dict[str, Any]:
     """
     logger.info(f"[CopilotKit] Fetching KPI summary for brand: {brand}")
 
-    if brand == "All":
-        # Aggregate all brands
-        total = {
-            "trx_volume": sum(b["trx_volume"] for b in SAMPLE_KPIS.values()),
-            "nrx_volume": sum(b["nrx_volume"] for b in SAMPLE_KPIS.values()),
-            "market_share": sum(b["market_share"] for b in SAMPLE_KPIS.values()) / 3,
-            "conversion_rate": sum(b["conversion_rate"] for b in SAMPLE_KPIS.values()) / 3,
-            "hcp_reach": sum(b["hcp_reach"] for b in SAMPLE_KPIS.values()),
-            "patient_starts": sum(b["patient_starts"] for b in SAMPLE_KPIS.values()),
-            "brands_included": list(SAMPLE_KPIS.keys()),
-        }
-        return {"brand": "All", "period": "Last 90 days", "metrics": total}
+    valid_brands = ["Remibrutinib", "Fabhalta", "Kisqali", "All"]
+    if brand not in valid_brands:
+        return {"error": f"Unknown brand: {brand}. Available: {valid_brands[:-1]}"}
 
-    if brand not in SAMPLE_KPIS:
-        return {"error": f"Unknown brand: {brand}. Available: {list(SAMPLE_KPIS.keys())}"}
+    # Try to fetch from database first
+    db_metrics = await _fetch_kpis_from_db(brand)
+    data_source = "database"
+
+    if db_metrics:
+        metrics = db_metrics
+    else:
+        # Fall back to sample data
+        data_source = "fallback"
+        if brand == "All":
+            metrics = {
+                "trx_volume": sum(b["trx_volume"] for b in _FALLBACK_KPIS.values()),
+                "nrx_volume": sum(b["nrx_volume"] for b in _FALLBACK_KPIS.values()),
+                "market_share": sum(b["market_share"] for b in _FALLBACK_KPIS.values()) / 3,
+                "conversion_rate": sum(b["conversion_rate"] for b in _FALLBACK_KPIS.values()) / 3,
+                "hcp_reach": sum(b["hcp_reach"] for b in _FALLBACK_KPIS.values()),
+                "patient_starts": sum(b["patient_starts"] for b in _FALLBACK_KPIS.values()),
+                "brands_included": list(_FALLBACK_KPIS.keys()),
+            }
+        else:
+            metrics = _FALLBACK_KPIS.get(brand, {})
 
     return {
         "brand": brand,
         "period": "Last 90 days",
-        "metrics": SAMPLE_KPIS[brand],
+        "metrics": metrics,
+        "data_source": data_source,
     }
+
+
+async def _fetch_agents_from_db() -> Optional[List[Dict[str, Any]]]:
+    """
+    Fetch agent status from database.
+
+    Returns:
+        List of agent dicts or None if unavailable
+    """
+    repo = _get_agent_registry_repository()
+    if not repo:
+        return None
+
+    try:
+        # Fetch all active agents
+        all_agents = []
+        for tier in range(1, 6):  # Tiers 1-5
+            tier_agents = await repo.get_by_tier(tier)
+            for agent in tier_agents:
+                all_agents.append({
+                    "id": agent.get("agent_name", "unknown"),
+                    "name": agent.get("display_name", agent.get("agent_name", "Unknown")),
+                    "tier": agent.get("tier", tier),
+                    "status": "active" if agent.get("is_active", True) else "idle",
+                    "description": agent.get("description", ""),
+                })
+
+        return all_agents if all_agents else None
+
+    except Exception as e:
+        logger.warning(f"Failed to fetch agents from database: {e}")
+        return None
 
 
 async def get_agent_status() -> Dict[str, Any]:
     """
     Get the status of all E2I agents.
 
+    Attempts to fetch real data from database, falls back to sample data if unavailable.
+
     Returns:
         Dictionary with agent status information
     """
     logger.info("[CopilotKit] Fetching agent status")
 
-    active_count = sum(1 for a in SAMPLE_AGENTS if a["status"] == "active")
+    # Try to fetch from database first
+    db_agents = await _fetch_agents_from_db()
+    data_source = "database"
+
+    if db_agents:
+        agents = db_agents
+    else:
+        # Fall back to sample data
+        data_source = "fallback"
+        agents = _FALLBACK_AGENTS
+
+    active_count = sum(1 for a in agents if a.get("status") == "active")
 
     return {
-        "total_agents": len(SAMPLE_AGENTS),
+        "total_agents": len(agents),
         "active_agents": active_count,
-        "idle_agents": len(SAMPLE_AGENTS) - active_count,
-        "agents": SAMPLE_AGENTS,
+        "idle_agents": len(agents) - active_count,
+        "agents": agents,
+        "data_source": data_source,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
+
+
+def _get_orchestrator():
+    """Get OrchestratorAgent singleton for causal analysis."""
+    try:
+        from src.api.routes.cognitive import get_orchestrator
+        return get_orchestrator()
+    except Exception as e:
+        logger.warning(f"Failed to get orchestrator: {e}")
+        return None
 
 
 async def run_causal_analysis(
@@ -135,6 +278,8 @@ async def run_causal_analysis(
 ) -> Dict[str, Any]:
     """
     Run a causal impact analysis.
+
+    Attempts to use the orchestrator for real causal analysis, falls back to simulated results.
 
     Args:
         intervention: Type of intervention (e.g., "HCP Engagement", "Marketing Campaign")
@@ -146,8 +291,46 @@ async def run_causal_analysis(
     """
     logger.info(f"[CopilotKit] Running causal analysis: {intervention} -> {target_kpi} for {brand}")
 
-    # Simulated causal analysis results
+    # Try to run through orchestrator for real causal analysis
+    orchestrator = _get_orchestrator()
+    data_source = "orchestrator"
+
+    if orchestrator:
+        try:
+            query = f"What is the causal impact of {intervention} on {target_kpi} for {brand}?"
+            result = await orchestrator.run({
+                "query": query,
+                "user_context": {
+                    "brand": brand,
+                    "intervention": intervention,
+                    "target_kpi": target_kpi,
+                },
+            })
+
+            # Extract causal results if available
+            if result and result.get("response_text"):
+                return {
+                    "intervention": intervention,
+                    "target_kpi": target_kpi,
+                    "brand": brand,
+                    "results": result.get("causal_results", {
+                        "average_treatment_effect": result.get("ate", 0.0),
+                        "confidence_interval": result.get("ci", [0.0, 0.0]),
+                        "p_value": result.get("p_value", 0.0),
+                        "statistical_significance": result.get("significant", False),
+                    }),
+                    "interpretation": result.get("response_text", ""),
+                    "data_source": data_source,
+                    "agents_used": result.get("agents_dispatched", []),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+
+        except Exception as e:
+            logger.warning(f"Orchestrator causal analysis failed: {e}")
+
+    # Fallback to simulated results
     import random
+    data_source = "simulated"
     ate = random.uniform(0.05, 0.25)
 
     return {
@@ -162,6 +345,7 @@ async def run_causal_analysis(
             "sample_size": random.randint(500, 2000),
         },
         "interpretation": f"The {intervention} shows a statistically significant positive effect on {target_kpi}, with an estimated {round(ate * 100, 1)}% lift.",
+        "data_source": data_source,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 

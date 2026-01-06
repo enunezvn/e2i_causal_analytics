@@ -37,6 +37,21 @@ from src.api.dependencies.bentoml_client import (
     configure_bentoml_endpoints,
     get_bentoml_client,
 )
+from src.api.dependencies.falkordb_client import (
+    close_falkordb,
+    falkordb_health_check,
+    init_falkordb,
+)
+from src.api.dependencies.redis_client import (
+    close_redis,
+    init_redis,
+    redis_health_check,
+)
+from src.api.dependencies.supabase_client import (
+    close_supabase,
+    init_supabase,
+    supabase_health_check,
+)
 
 # Import routers
 from src.api.routes.explain import router as explain_router
@@ -73,7 +88,7 @@ async def lifespan(app: FastAPI):
     logger.info("Version: 4.1.0")
     logger.info("Timestamp: %s", datetime.now(timezone.utc).isoformat())
 
-    # Initialize BentoML client
+    # Initialize BentoML client (optional - for ML model serving)
     try:
         bentoml_client = await get_bentoml_client()
         logger.info("BentoML client initialized successfully")
@@ -87,13 +102,40 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"BentoML client initialization failed (non-critical): {e}")
 
-    # TODO: Initialize other connections
-    # - Redis connection pool
-    # - FalkorDB client
-    # - Supabase client
-    # - MLflow client
-    # - Feast client
-    # - Opik client
+    # Initialize Redis connection pool (required for caching/sessions)
+    try:
+        await init_redis()
+        app.state.redis_available = True
+        logger.info("Redis connection pool initialized")
+    except Exception as e:
+        app.state.redis_available = False
+        logger.warning(f"Redis initialization failed (degraded mode): {e}")
+
+    # Initialize FalkorDB client (optional - for knowledge graph)
+    try:
+        await init_falkordb()
+        app.state.falkordb_available = True
+        logger.info("FalkorDB client initialized")
+    except Exception as e:
+        app.state.falkordb_available = False
+        logger.warning(f"FalkorDB initialization failed (non-critical): {e}")
+
+    # Initialize Supabase client (required for database)
+    try:
+        supabase = init_supabase()
+        app.state.supabase_available = supabase is not None
+        if supabase:
+            logger.info("Supabase client initialized")
+        else:
+            logger.warning("Supabase not configured - database features unavailable")
+    except Exception as e:
+        app.state.supabase_available = False
+        logger.warning(f"Supabase initialization failed (degraded mode): {e}")
+
+    # TODO: Initialize optional MLOps services
+    # - MLflow client (experiment tracking)
+    # - Feast client (feature store)
+    # - Opik client (LLM observability)
 
     logger.info("API server ready to accept connections")
 
@@ -109,10 +151,26 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"BentoML client cleanup failed: {e}")
 
-    # TODO: Cleanup other connections
-    # - Close Redis connections
-    # - Close database connections
-    # - Flush pending logs
+    # Cleanup Redis connections
+    try:
+        await close_redis()
+        logger.info("Redis connection closed")
+    except Exception as e:
+        logger.warning(f"Redis cleanup failed: {e}")
+
+    # Cleanup FalkorDB connections
+    try:
+        await close_falkordb()
+        logger.info("FalkorDB connection closed")
+    except Exception as e:
+        logger.warning(f"FalkorDB cleanup failed: {e}")
+
+    # Cleanup Supabase client
+    try:
+        close_supabase()
+        logger.info("Supabase client closed")
+    except Exception as e:
+        logger.warning(f"Supabase cleanup failed: {e}")
 
     logger.info("Shutdown complete")
 
@@ -253,22 +311,61 @@ async def readiness_check() -> Dict[str, Any]:
     """
     Readiness check - determines if service can accept traffic.
 
+    Checks:
+    - Redis connectivity (required)
+    - Supabase connectivity (required)
+    - FalkorDB connectivity (optional)
+
     Returns:
         200 if ready to serve requests
-        503 if dependencies are unavailable
+        503 if required dependencies are unavailable
     """
-    # TODO: Add actual dependency checks
-    # - Redis connectivity
-    # - Supabase connectivity
-    # - MLflow connectivity
+    checks = {}
+    all_required_ready = True
 
-    ready = True  # Placeholder
+    # Check Redis (required)
+    try:
+        redis_status = await redis_health_check()
+        checks["redis"] = redis_status
+        if redis_status.get("status") != "healthy":
+            all_required_ready = False
+    except Exception as e:
+        checks["redis"] = {"status": "unhealthy", "error": str(e)}
+        all_required_ready = False
 
-    if ready:
-        return {"status": "ready", "timestamp": datetime.now(timezone.utc).isoformat()}
+    # Check Supabase (required)
+    try:
+        supabase_status = await supabase_health_check()
+        checks["supabase"] = supabase_status
+        if supabase_status.get("status") not in ("healthy", "unavailable"):
+            # "unavailable" means not configured, which is acceptable in some envs
+            if supabase_status.get("status") == "unhealthy":
+                all_required_ready = False
+    except Exception as e:
+        checks["supabase"] = {"status": "unhealthy", "error": str(e)}
+        all_required_ready = False
+
+    # Check FalkorDB (optional - doesn't affect readiness)
+    try:
+        falkordb_status = await falkordb_health_check()
+        checks["falkordb"] = falkordb_status
+    except Exception as e:
+        checks["falkordb"] = {"status": "unavailable", "error": str(e)}
+
+    if all_required_ready:
+        return {
+            "status": "ready",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "checks": checks,
+        }
     else:
         return JSONResponse(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, content={"status": "not_ready"}
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "status": "not_ready",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "checks": checks,
+            },
         )
 
 

@@ -28,6 +28,8 @@ export interface EnvConfig {
   isProd: boolean;
   /** App version from package.json */
   appVersion: string;
+  /** Whether CopilotKit AI chat is enabled (requires backend) */
+  copilotEnabled: boolean;
 }
 
 /**
@@ -86,6 +88,10 @@ export const env: EnvConfig = {
 
   // App Version
   appVersion: import.meta.env.VITE_APP_VERSION ?? '0.1.0',
+
+  // CopilotKit Configuration
+  // Disabled by default in development (requires backend), enabled in production
+  copilotEnabled: import.meta.env.VITE_COPILOT_ENABLED === 'true' || import.meta.env.PROD,
 };
 
 /**
