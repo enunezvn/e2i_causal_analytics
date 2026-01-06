@@ -9,7 +9,7 @@ export default defineConfig({
   testMatch: ['**/specs/**/*.spec.ts', '**/e2e/**/*.spec.ts'],
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 2 : 0,
+  retries: process.env.CI ? 0 : 0,  // Disable retries to fail fast and get clear results
   workers: process.env.CI ? 1 : 4,
   reporter: [
     ['html', { open: 'never' }],
