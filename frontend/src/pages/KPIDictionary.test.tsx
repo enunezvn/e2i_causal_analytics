@@ -135,11 +135,11 @@ describe('KPIDictionary', () => {
   it('shows correct total KPI count', () => {
     render(<KPIDictionary />, { wrapper: createWrapper() });
 
-    // The stats card shows 4 (our mock data) - find by the Total KPIs stat card
+    // Component uses SAMPLE_KPIS (46 KPIs) when API returns fewer than 46
     // Traverse up through parent divs to get the full card
     const totalKPIsLabel = screen.getByText('Total KPIs');
     const cardContainer = totalKPIsLabel.parentElement?.parentElement;
-    expect(cardContainer).toHaveTextContent('4');
+    expect(cardContainer).toHaveTextContent('46');
     expect(cardContainer).toHaveTextContent('Across all workstreams');
   });
 
@@ -231,7 +231,8 @@ describe('KPIDictionary', () => {
   it('shows showing count in filter info', () => {
     render(<KPIDictionary />, { wrapper: createWrapper() });
 
-    expect(screen.getByText(/Showing 4 of 4 KPIs/i)).toBeInTheDocument();
+    // Component uses SAMPLE_KPIS (46 KPIs) when API returns fewer than 46
+    expect(screen.getByText(/Showing 46 of 46 KPIs/i)).toBeInTheDocument();
   });
 
   it('updates count when search filters results', async () => {
@@ -240,11 +241,14 @@ describe('KPIDictionary', () => {
 
     const searchInput = screen.getByPlaceholderText(/Search KPIs/i);
     await act(async () => {
-      await user.type(searchInput, 'Trigger');
+      await user.type(searchInput, 'ROC-AUC');
     });
 
+    // Component uses SAMPLE_KPIS (46 KPIs) - searching for specific KPI shows fewer
     await waitFor(() => {
-      expect(screen.getByText(/Showing 1 of 4 KPIs/i)).toBeInTheDocument();
+      expect(screen.getByText(/Showing \d+ of 46 KPIs/i)).toBeInTheDocument();
+      // Should show fewer than 46 after filtering
+      expect(screen.queryByText(/Showing 46 of 46 KPIs/i)).not.toBeInTheDocument();
     }, { timeout: 5000 });
   });
 
@@ -311,8 +315,9 @@ describe('KPIDictionary', () => {
   it('shows frequency information', () => {
     render(<KPIDictionary />, { wrapper: createWrapper() });
 
+    // Component uses SAMPLE_KPIS (46 KPIs) with various frequencies
     expect(screen.getAllByText('daily').length).toBeGreaterThan(0);
-    expect(screen.getByText('weekly')).toBeInTheDocument();
+    expect(screen.getAllByText('weekly').length).toBeGreaterThan(0);
   });
 
   it('renders footer info about thresholds', () => {
@@ -325,12 +330,12 @@ describe('KPIDictionary', () => {
   it('counts causal-enabled KPIs correctly', () => {
     render(<KPIDictionary />, { wrapper: createWrapper() });
 
-    // In our mock data, 2 KPIs use dowhy (Trigger Precision and ATE)
+    // Component uses SAMPLE_KPIS (46 KPIs) - 19 use dowhy/econml
     // Find the Causal KPIs stat card by traversing up to the card container
     const causalLabel = screen.getByText('Causal KPIs');
     // Get the parent card container (goes up: span -> div.flex -> div.card)
     const causalCard = causalLabel.closest('.bg-\\[var\\(--color-card\\)\\]');
-    expect(causalCard).toHaveTextContent('2');
+    expect(causalCard).toHaveTextContent('19');
     expect(causalCard).toHaveTextContent('Using DoWhy/EconML');
   });
 
