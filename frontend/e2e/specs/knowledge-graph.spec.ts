@@ -163,10 +163,19 @@ test.describe('Knowledge Graph Page', () => {
     })
 
     test('should show total nodes count', async () => {
-      const nodesCount = graphPage.totalNodesCount
-      if (await nodesCount.isVisible()) {
-        const text = await nodesCount.textContent()
-        expect(text).toContain('node')
+      // The totalNodesCard contains "Total Nodes" label + a numeric count
+      const nodesCard = graphPage.totalNodesCard
+      if (await nodesCard.isVisible()) {
+        // Verify the card shows the "Total Nodes" label
+        const cardText = await nodesCard.textContent()
+        expect(cardText).toContain('Total Nodes')
+        // The count element should have numeric content (can be 0 or more)
+        const nodesCount = graphPage.totalNodesCount
+        if (await nodesCount.isVisible()) {
+          const countText = await nodesCount.textContent()
+          // Count should be a number (might be empty string if loading, so be flexible)
+          expect(countText === '' || /^\d+$/.test(countText?.trim() || '')).toBeTruthy()
+        }
       }
     })
   })
