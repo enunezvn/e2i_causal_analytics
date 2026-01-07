@@ -18,6 +18,7 @@ const AgentOrchestration = lazy(() => import('@/pages/AgentOrchestration'));
 const KPIDictionary = lazy(() => import('@/pages/KPIDictionary'));
 const MemoryArchitecture = lazy(() => import('@/pages/MemoryArchitecture'));
 const DigitalTwin = lazy(() => import('@/pages/DigitalTwin'));
+const AIAgentInsights = lazy(() => import('@/pages/AIAgentInsights'));
 
 // Loading fallback component for lazy-loaded routes
 function PageLoadingFallback() {
@@ -148,6 +149,13 @@ export const routeConfigs: RouteConfig[] = [
     icon: 'flask-conical',
     showInNav: true,
   },
+  {
+    path: '/ai-insights',
+    title: 'AI Insights',
+    description: 'GPT-powered briefs, recommendations & alerts',
+    icon: 'brain',
+    showInNav: true,
+  },
 ];
 
 // React Router route definitions
@@ -269,6 +277,14 @@ export const routes: RouteObject[] = [
     element: (
       <LazyPage>
         <DigitalTwin />
+      </LazyPage>
+    ),
+  },
+  {
+    path: '/ai-insights',
+    element: (
+      <LazyPage>
+        <AIAgentInsights />
       </LazyPage>
     ),
   },
