@@ -376,6 +376,50 @@ function E2ICopilotContextProvider({ children }: { children: React.ReactNode }) 
 }
 
 // =============================================================================
+// COPILOTKIT ERROR BOUNDARY
+// =============================================================================
+
+interface CopilotErrorBoundaryState {
+  hasError: boolean;
+  error?: Error;
+}
+
+/**
+ * Error boundary that catches CopilotKit errors and gracefully degrades
+ * to rendering children without CopilotKit functionality.
+ */
+class CopilotGracefulErrorBoundary extends React.Component<
+  { children: React.ReactNode; fallback: React.ReactNode },
+  CopilotErrorBoundaryState
+> {
+  constructor(props: { children: React.ReactNode; fallback: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError(error: Error): CopilotErrorBoundaryState {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    // Log the error but don't crash the app
+    console.warn(
+      'CopilotKit failed to initialize. Running without AI features.',
+      error.message
+    );
+    console.debug('CopilotKit error details:', errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      // Fall back to rendering without CopilotKit
+      return this.props.fallback;
+    }
+    return this.props.children;
+  }
+}
+
+// =============================================================================
 // COPILOTKIT WRAPPER (for main.tsx - outside router)
 // =============================================================================
 
@@ -390,6 +434,7 @@ export interface CopilotKitWrapperProps {
  * Use this in main.tsx to wrap the router.
  *
  * Set enabled=false to disable CopilotKit when backend is not available.
+ * When enabled, gracefully degrades to non-AI mode if backend is unavailable.
  *
  * @example
  * ```tsx
@@ -403,25 +448,31 @@ export function CopilotKitWrapper({
   runtimeUrl = '/api/copilotkit',
   enabled = false, // Disabled by default until backend is available
 }: CopilotKitWrapperProps) {
+  // Fallback content when CopilotKit is disabled or fails
+  const disabledFallback = (
+    <CopilotEnabledContext.Provider value={false}>
+      {children}
+    </CopilotEnabledContext.Provider>
+  );
+
   // In development without backend, just render children with disabled context
   if (!enabled) {
-    return (
-      <CopilotEnabledContext.Provider value={false}>
-        {children}
-      </CopilotEnabledContext.Provider>
-    );
+    return disabledFallback;
   }
 
+  // When enabled, wrap with error boundary for graceful degradation
   return (
-    <CopilotEnabledContext.Provider value={true}>
-      <CopilotKit
-        runtimeUrl={runtimeUrl}
-        transcribeAudioUrl="/api/transcribe"
-        textToSpeechUrl="/api/tts"
-      >
-        {children}
-      </CopilotKit>
-    </CopilotEnabledContext.Provider>
+    <CopilotGracefulErrorBoundary fallback={disabledFallback}>
+      <CopilotEnabledContext.Provider value={true}>
+        <CopilotKit
+          runtimeUrl={runtimeUrl}
+          transcribeAudioUrl="/api/transcribe"
+          textToSpeechUrl="/api/tts"
+        >
+          {children}
+        </CopilotKit>
+      </CopilotEnabledContext.Provider>
+    </CopilotGracefulErrorBoundary>
   );
 }
 
