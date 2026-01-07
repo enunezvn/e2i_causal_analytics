@@ -254,7 +254,7 @@ describe('CytoscapeGraph', () => {
     it('passes custom styles to useCytoscape', () => {
       const customStyles = [{ selector: 'node', style: { 'background-color': 'red' } }];
 
-      render(<CytoscapeGraph elements={mockElements} style={customStyles as any} />);
+      render(<CytoscapeGraph elements={mockElements} style={customStyles as cytoscape.Stylesheet[]} />);
 
       expect(mockedUseCytoscape).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -728,11 +728,11 @@ describe('CytoscapeGraph', () => {
 
       // Get the edge mouseover handler
       const edgeMouseoverCall = mockCyInstance.on.mock.calls.find(
-        (c: any[]) => c[0] === 'mouseover' && c[1] === 'edge'
+        (c: unknown[]) => c[0] === 'mouseover' && c[1] === 'edge'
       );
 
       if (edgeMouseoverCall) {
-        const handler = edgeMouseoverCall[2];
+        const handler = edgeMouseoverCall[2] as (evt: unknown) => void;
         const mockEvt = {
           target: {
             id: vi.fn().mockReturnValue('nonexistent'),
@@ -770,11 +770,11 @@ describe('CytoscapeGraph', () => {
 
       // Get the edge mouseover handler
       const edgeMouseoverCall = mockCyInstance.on.mock.calls.find(
-        (c: any[]) => c[0] === 'mouseover' && c[1] === 'edge'
+        (c: unknown[]) => c[0] === 'mouseover' && c[1] === 'edge'
       );
 
       if (edgeMouseoverCall) {
-        const handler = edgeMouseoverCall[2];
+        const handler = edgeMouseoverCall[2] as (evt: unknown) => void;
         const mockEvt = {
           target: {
             id: vi.fn().mockReturnValue('ab'),

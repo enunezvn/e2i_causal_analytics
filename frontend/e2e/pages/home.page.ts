@@ -209,7 +209,7 @@ export class HomePage extends BasePage {
   // Assertions / Helpers
   // ========================================================================
 
-  async verifyKpiCardsDisplayed(minCount = 1): Promise<boolean> {
+  async verifyKpiCardsDisplayed(_minCount = 1): Promise<boolean> {
     // Wait for KPI section to render - look for the Key Performance Indicators heading
     try {
       await this.page.getByText('Key Performance Indicators').first().waitFor({ state: 'visible', timeout: 5000 })
