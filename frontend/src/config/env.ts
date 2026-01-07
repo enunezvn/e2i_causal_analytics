@@ -90,9 +90,13 @@ export const env: EnvConfig = {
   appVersion: import.meta.env.VITE_APP_VERSION ?? '0.1.0',
 
   // CopilotKit Configuration
-  // Disabled by default - only enable when explicitly set via VITE_COPILOT_ENABLED=true
-  // This ensures E2E tests can run without a backend
-  copilotEnabled: import.meta.env.VITE_COPILOT_ENABLED === 'true',
+  // Enabled by default in production, can be disabled via VITE_COPILOT_ENABLED=false
+  // In development, disabled by default (requires backend running)
+  // CI E2E tests build with VITE_COPILOT_ENABLED=false to test without backend
+  copilotEnabled:
+    import.meta.env.VITE_COPILOT_ENABLED !== undefined
+      ? import.meta.env.VITE_COPILOT_ENABLED === 'true'
+      : import.meta.env.PROD, // Default: enabled in prod, disabled in dev
 };
 
 /**
