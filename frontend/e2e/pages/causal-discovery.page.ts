@@ -299,8 +299,8 @@ export class CausalDiscoveryPage extends BasePage {
       // Wait for content to load
       await this.page.waitForTimeout(1500)
 
-      // Wait for main content to be visible first
-      const mainContent = this.page.locator('main').first()
+      // Wait for main content to be visible first (uses container or space-y-6 div)
+      const mainContent = this.page.locator('.container, div.space-y-6, div.p-6').first()
       await mainContent.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {})
 
       // Look for Refutation Test Results heading
@@ -355,7 +355,7 @@ export class CausalDiscoveryPage extends BasePage {
       await this.page.waitForTimeout(1500)
 
       // Wait for main content to be visible first
-      const mainContent = this.page.locator('main').first()
+      const mainContent = this.page.locator('.container, div.space-y-6, div.p-6').first()
       await mainContent.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {})
 
       // Check for badges using exact matching to avoid false positives from page text

@@ -177,8 +177,8 @@ export class InterventionImpactPage extends BasePage {
       // Wait for page to fully render (intervention data can take time to load)
       await this.page.waitForTimeout(2000)
 
-      // Wait for main content to be visible first
-      const mainContent = this.page.locator('main').first()
+      // Wait for main content to be visible first (uses container or space-y-6 div)
+      const mainContent = this.page.locator('.container, div.space-y-6, div.p-6').first()
       await mainContent.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {})
 
       // Look for intervention name/title in summary card (h2 element)
