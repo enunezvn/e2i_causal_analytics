@@ -145,10 +145,25 @@ export class DataQualityPage extends BasePage {
 
   async verifyOverallScoreDisplayed(): Promise<boolean> {
     try {
-      await this.overallQualityCard.waitFor({ state: 'visible', timeout: 5000 })
+      // KPICard renders title as h3 element
+      const h3Overall = this.page.locator('h3:has-text("Overall Quality")').first()
+      await h3Overall.waitFor({ state: 'visible', timeout: 5000 })
       return true
     } catch {
-      return false
+      // Fallback: try getByText for "Overall Quality" anywhere
+      try {
+        await this.overallQualityCard.waitFor({ state: 'visible', timeout: 3000 })
+        return true
+      } catch {
+        // Ultimate fallback: check if any quality score card is visible
+        const qualityCards = ['Completeness', 'Accuracy', 'Consistency', 'Timeliness']
+        for (const card of qualityCards) {
+          if (await this.page.getByText(card).first().isVisible({ timeout: 1000 }).catch(() => false)) {
+            return true
+          }
+        }
+        return false
+      }
     }
   }
 

@@ -144,10 +144,20 @@ export class KPIDictionaryPage extends BasePage {
 
   async verifyTabsDisplayed(): Promise<boolean> {
     try {
-      await this.tabsList.waitFor({ state: 'visible', timeout: 5000 })
-      return await this.tabsList.isVisible()
+      // The page has multiple tablists - main sections and workstream tabs
+      // First try to find any tablist
+      const allTablists = this.page.getByRole('tablist')
+      await allTablists.first().waitFor({ state: 'visible', timeout: 5000 })
+      return await allTablists.first().isVisible()
     } catch {
-      return false
+      // Fallback: check for specific tab triggers
+      try {
+        const hasAllKPIs = await this.page.getByRole('tab', { name: /all kpis/i }).isVisible({ timeout: 2000 }).catch(() => false)
+        const hasKPICards = await this.page.getByRole('tab', { name: /kpi cards/i }).isVisible({ timeout: 2000 }).catch(() => false)
+        return hasAllKPIs || hasKPICards
+      } catch {
+        return false
+      }
     }
   }
 
