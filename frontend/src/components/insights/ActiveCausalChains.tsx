@@ -38,15 +38,15 @@ interface SelectedNode {
 // =============================================================================
 
 const SAMPLE_ELEMENTS: ElementDefinition[] = [
-  // Nodes
-  { data: { id: 'detailing', label: 'Detailing Frequency', type: 'intervention' } },
-  { data: { id: 'awareness', label: 'HCP Awareness', type: 'mediator' } },
-  { data: { id: 'prescribing', label: 'Prescribing Intent', type: 'mediator' } },
-  { data: { id: 'trx', label: 'TRx Volume', type: 'outcome' } },
-  { data: { id: 'samples', label: 'Sample Distribution', type: 'intervention' } },
-  { data: { id: 'formulary', label: 'Formulary Status', type: 'moderator' } },
-  { data: { id: 'access', label: 'Patient Access', type: 'mediator' } },
-  { data: { id: 'adherence', label: 'Adherence Rate', type: 'outcome' } },
+  // Nodes - using vizType for styling selectors
+  { data: { id: 'detailing', label: 'Detailing Frequency', type: 'intervention', vizType: 'intervention' } },
+  { data: { id: 'awareness', label: 'HCP Awareness', type: 'mediator', vizType: 'mediator' } },
+  { data: { id: 'prescribing', label: 'Prescribing Intent', type: 'mediator', vizType: 'mediator' } },
+  { data: { id: 'trx', label: 'TRx Volume', type: 'outcome', vizType: 'outcome' } },
+  { data: { id: 'samples', label: 'Sample Distribution', type: 'intervention', vizType: 'intervention' } },
+  { data: { id: 'formulary', label: 'Formulary Status', type: 'moderator', vizType: 'moderator' } },
+  { data: { id: 'access', label: 'Patient Access', type: 'mediator', vizType: 'mediator' } },
+  { data: { id: 'adherence', label: 'Adherence Rate', type: 'outcome', vizType: 'outcome' } },
   // Edges
   { data: { id: 'e1', source: 'detailing', target: 'awareness', weight: 0.72 } },
   { data: { id: 'e2', source: 'awareness', target: 'prescribing', weight: 0.65 } },
@@ -58,34 +58,74 @@ const SAMPLE_ELEMENTS: ElementDefinition[] = [
 ];
 
 // =============================================================================
+// NODE TYPE MAPPING
+// =============================================================================
+
+/**
+ * Maps API node types to visualization categories for styling.
+ * - intervention: Actions/triggers that start causal chains (blue)
+ * - mediator: Intermediate entities that transmit effects (violet)
+ * - moderator: Factors that modify effect strength (amber)
+ * - outcome: End results/metrics (emerald)
+ */
+const NODE_TYPE_MAP: Record<string, string> = {
+  // API types → visualization types
+  Trigger: 'intervention',
+  Action: 'intervention',
+  Campaign: 'intervention',
+  HCP: 'mediator',
+  Brand: 'mediator',
+  Treatment: 'mediator',
+  Patient: 'moderator',
+  Region: 'moderator',
+  Segment: 'moderator',
+  KPI: 'outcome',
+  Metric: 'outcome',
+  Conversion: 'outcome',
+  // Sample data types (already correct)
+  intervention: 'intervention',
+  mediator: 'mediator',
+  moderator: 'moderator',
+  outcome: 'outcome',
+};
+
+/**
+ * Get the visualization type for a node, with fallback to 'mediator'
+ */
+function getNodeVisualizationType(apiType: string | undefined): string {
+  if (!apiType) return 'mediator';
+  return NODE_TYPE_MAP[apiType] ?? 'mediator';
+}
+
+// =============================================================================
 // CUSTOM STYLES
 // =============================================================================
 
 const customStyles: StylesheetStyle[] = [
   ...defaultCytoscapeStyles,
   {
-    selector: 'node[type="intervention"]',
+    selector: 'node[vizType="intervention"]',
     style: {
       'background-color': '#3b82f6', // blue-500
       'border-color': '#2563eb',
     },
   },
   {
-    selector: 'node[type="mediator"]',
+    selector: 'node[vizType="mediator"]',
     style: {
       'background-color': '#8b5cf6', // violet-500
       'border-color': '#7c3aed',
     },
   },
   {
-    selector: 'node[type="moderator"]',
+    selector: 'node[vizType="moderator"]',
     style: {
       'background-color': '#f59e0b', // amber-500
       'border-color': '#d97706',
     },
   },
   {
-    selector: 'node[type="outcome"]',
+    selector: 'node[vizType="outcome"]',
     style: {
       'background-color': '#10b981', // emerald-500
       'border-color': '#059669',
@@ -154,11 +194,13 @@ export function ActiveCausalChains({ className }: ActiveCausalChainsProps) {
         chain.nodes.forEach((node) => {
           if (!nodeIds.has(node.id)) {
             nodeIds.add(node.id);
+            const apiType = node.type || 'entity';
             elements.push({
               data: {
                 id: node.id,
                 label: node.name || node.id,
-                type: node.type || 'entity',
+                type: apiType,
+                vizType: getNodeVisualizationType(apiType),
               },
             });
           }
