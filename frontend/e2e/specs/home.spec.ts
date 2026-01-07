@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test'
 import { HomePage } from '../pages/home.page'
 import { mockApiRoutes } from '../fixtures/api-mocks'
-import { BRANDS, DATE_RANGES, TIMEOUTS } from '../fixtures/test-data'
+import { TIMEOUTS } from '../fixtures/test-data'
 import { assertNotLoading, assertNoErrors } from '../utils/assertions'
 
 test.describe('Home Page', () => {

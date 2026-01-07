@@ -100,9 +100,12 @@ jobs:
         working-directory: frontend
         run: npm ci
 
-      - name: Build for production
+      - name: Build for production (CopilotKit disabled for E2E testing)
         working-directory: frontend
         run: npm run build
+        env:
+          # Disable CopilotKit in E2E test builds since there's no backend
+          VITE_COPILOT_ENABLED: 'false'
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
