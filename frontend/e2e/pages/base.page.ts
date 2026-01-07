@@ -66,7 +66,9 @@ export abstract class BasePage {
   }
 
   get mainContent(): Locator {
-    return this.page.locator('main, [data-testid="main-content"], [role="main"]')
+    // Pages use div containers with various class patterns, not semantic <main> elements
+    // Look for common container patterns: container class, p-6, space-y-6, or flex layouts
+    return this.page.locator('main, [data-testid="main-content"], [role="main"], .container, div.p-6, div.space-y-6').first()
   }
 
   // Wait utilities
