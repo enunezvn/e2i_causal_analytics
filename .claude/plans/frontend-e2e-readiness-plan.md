@@ -1,8 +1,8 @@
 # Frontend E2E Testing Readiness Plan
 
 **Created**: 2026-01-06
-**Updated**: 2026-01-06
-**Status**: ✅ INFRASTRUCTURE COMPLETE (E2E Tests Need UI Alignment)
+**Updated**: 2026-01-07
+**Status**: ✅ COMPLETE (380/381 E2E Tests Passing - 99.7%)
 **Objective**: Prepare backend, validate test suite, then build comprehensive frontend E2E tests
 
 ---
@@ -434,20 +434,23 @@ npm run test:e2e -- --project=chromium
   - [x] Unit tests: 1706 passed (52 files)
   - [x] Lint: 0 errors, 153 warnings (acceptable)
   - [x] Build: Successful
-  - ✅ **CI Workflow**: Infrastructure Complete (Run #20765384161)
+  - ✅ **CI Workflow**: Complete
     - ✅ lint-and-typecheck: Passed (35s)
     - ✅ build: Passed (1m27s)
     - ✅ unit-tests: Passed (3m13s) with coverage report
-    - ⚠️ e2e-tests: Tests complete within timeout (25-30m per shard)
-      - Timeout increased from 30m to 45m
-      - Shards increased from 3 to 4
-      - Retries disabled for faster feedback
-    - ⚠️ **E2E Test Status**: Tests need UI alignment
-      - Test infrastructure is working correctly
-      - API mocking is set up and functional
-      - Tests fail because selectors don't match actual UI
-      - ~20-25% of tests pass (varies by page)
-      - **Next step**: Align test selectors with actual page implementations
+    - ✅ e2e-tests: **380/381 tests passing (99.7%)**
+  - ✅ **E2E Test Selector Alignment**: Complete (2026-01-07)
+    - **Root Cause 1**: POM selectors used `'main'` but pages use `<div className="space-y-6">` containers
+    - **Root Cause 2**: CopilotKit was enabled by default in production builds, causing blank pages in CI
+    - **Fixes Applied**:
+      1. `frontend/e2e/pages/base.page.ts`: Updated `mainContent` selector from `'main'` to `.container, div.space-y-6, div.p-6`
+      2. `frontend/e2e/pages/causal-discovery.page.ts`: Fixed `verifyBadgesDisplayed()` method (line 358)
+      3. `frontend/e2e/pages/data-quality.page.ts`: Updated `verifyDimensionCardsDisplayed()` method
+      4. `frontend/e2e/pages/time-series.page.ts`: Updated `verifyTrendChartDisplayed()` method
+      5. `frontend/e2e/pages/feature-importance.page.ts`: Updated verify methods
+      6. `frontend/e2e/pages/intervention-impact.page.ts`: Updated verify methods
+      7. `frontend/src/config/env.ts`: Changed `copilotEnabled` default from `true` in PROD to explicit opt-in only
+    - **1 Remaining Failure**: `data-quality.spec.ts › should show no errors on load` (console error unrelated to selectors)
 
 ---
 

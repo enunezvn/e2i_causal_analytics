@@ -247,8 +247,8 @@ export class TimeSeriesPage extends BasePage {
       // Wait for page to fully render (charts can take time to load)
       await this.page.waitForTimeout(2000)
 
-      // Wait for main content to be visible first
-      const mainContent = this.page.locator('main').first()
+      // Wait for main content to be visible first (uses container or space-y-6 div)
+      const mainContent = this.page.locator('.container, div.space-y-6, div.p-6').first()
       await mainContent.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {})
 
       // Look for the time series chart title
