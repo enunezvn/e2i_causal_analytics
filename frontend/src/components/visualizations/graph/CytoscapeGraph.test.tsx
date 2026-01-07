@@ -254,7 +254,7 @@ describe('CytoscapeGraph', () => {
     it('passes custom styles to useCytoscape', () => {
       const customStyles = [{ selector: 'node', style: { 'background-color': 'red' } }];
 
-      render(<CytoscapeGraph elements={mockElements} style={customStyles as cytoscape.StylesheetJsonBlock[]} />);
+      render(<CytoscapeGraph elements={mockElements} style={customStyles as cytoscape.StylesheetStyle[]} />);
 
       expect(mockedUseCytoscape).toHaveBeenCalledWith(
         expect.objectContaining({
