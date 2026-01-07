@@ -18,3 +18,9 @@ export type { ProgressRingProps, ProgressRingGroupProps } from './ProgressRing';
 
 export { AlertCard, AlertList } from './AlertCard';
 export type { AlertCardProps, AlertListProps, AlertSeverity, AlertAction } from './AlertCard';
+
+export { StatusLegend } from './StatusLegend';
+export type { StatusLegendProps } from './StatusLegend';
+
+export { KPITable } from './KPITable';
+export type { KPITableProps, KPITableRow } from './KPITable';

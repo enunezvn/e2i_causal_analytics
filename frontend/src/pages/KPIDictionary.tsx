@@ -31,10 +31,14 @@ import {
   Activity,
   TrendingUp,
   Beaker,
+  Gauge,
+  Lightbulb,
 } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useKPIList, useWorkstreams, useKPIHealth } from '@/hooks/api/use-kpi';
 import type { KPIMetadata, KPIThreshold } from '@/types/kpi';
+import { StatusLegend } from '@/components/visualizations/dashboard/StatusLegend';
+import { KeyConcepts } from '@/components/kpi/KeyConcepts';
 
 // =============================================================================
 // TYPES
@@ -199,6 +203,22 @@ const SAMPLE_KPIS: KPIMetadata[] = [
     frequency: 'daily',
     primary_causal_library: 'none',
     note: 'Drift detection',
+  },
+  {
+    id: 'WS1-DQ-009',
+    name: 'Time-to-Release (TTR)',
+    definition: 'Hours from source data timestamp to pipeline completion',
+    formula: 'run_completed_at - source_data_timestamp',
+    calculation_type: 'direct',
+    workstream: 'ws1_data_quality',
+    tables: ['etl_pipeline_metrics'],
+    columns: ['source_data_timestamp', 'run_completed_at', 'time_to_release_hours'],
+    view: 'v_kpi_time_to_release',
+    threshold: { target: 24, warning: 48, critical: 72 },
+    unit: 'hours',
+    frequency: 'daily',
+    primary_causal_library: 'none',
+    note: 'NEW in V3',
   },
   // WS1: Model Performance
   {
@@ -440,20 +460,6 @@ const SAMPLE_KPIS: KPIMetadata[] = [
     frequency: 'weekly',
     primary_causal_library: 'dowhy',
   },
-  {
-    id: 'WS2-TR-009',
-    name: 'Override Rate',
-    definition: 'Percentage of alerts manually overridden or marked "not relevant"',
-    formula: '#overridden / #presented',
-    calculation_type: 'direct',
-    workstream: 'ws2_triggers',
-    tables: ['triggers'],
-    columns: ['trigger_status'],
-    threshold: { target: 10, warning: 20, critical: 30 },
-    unit: '%',
-    frequency: 'weekly',
-    primary_causal_library: 'none',
-  },
   // WS3: Business
   {
     id: 'WS3-BI-001',
@@ -610,6 +616,23 @@ const SAMPLE_KPIS: KPIMetadata[] = [
     brand: 'remibrutinib',
   },
   {
+    id: 'BR-002',
+    name: 'Remi - Intent-to-Prescribe Δ',
+    definition: 'Change in HCP intent-to-prescribe score after intervention',
+    formula: 'post_intent - pre_intent',
+    calculation_type: 'direct',
+    workstream: 'brand_specific',
+    tables: ['hcp_intent_surveys'],
+    columns: ['intent_to_prescribe_score', 'intent_to_prescribe_change'],
+    view: 'v_kpi_intent_to_prescribe',
+    threshold: { target: 0.5, warning: 0.3, critical: 0.0 },
+    unit: 'points',
+    frequency: 'monthly',
+    primary_causal_library: 'none',
+    brand: 'remibrutinib',
+    note: 'NEW in V3',
+  },
+  {
     id: 'BR-003',
     name: 'Fabhalta - % PNH Tested',
     definition: 'Percentage of eligible patients tested for PNH',
@@ -623,6 +646,36 @@ const SAMPLE_KPIS: KPIMetadata[] = [
     frequency: 'weekly',
     primary_causal_library: 'none',
     brand: 'fabhalta',
+  },
+  {
+    id: 'BR-004',
+    name: 'Kisqali - Dx Adoption',
+    definition: 'Time from diagnosis to first Kisqali prescription',
+    formula: 'median(first_kisqali_date - diagnosis_date)',
+    calculation_type: 'derived',
+    workstream: 'brand_specific',
+    tables: ['patient_journeys', 'treatment_events'],
+    columns: ['diagnosis_date', 'event_date'],
+    threshold: { target: 30, warning: 45, critical: 60 },
+    unit: 'days',
+    frequency: 'weekly',
+    primary_causal_library: 'none',
+    brand: 'kisqali',
+  },
+  {
+    id: 'BR-005',
+    name: 'Kisqali - Oncologist Reach',
+    definition: 'Percentage of oncologists with Kisqali engagement',
+    formula: 'engaged_oncologists / total_oncologists',
+    calculation_type: 'derived',
+    workstream: 'brand_specific',
+    tables: ['hcp_profiles', 'triggers'],
+    columns: ['specialty', 'hcp_id'],
+    threshold: { target: 70, warning: 55, critical: 40 },
+    unit: '%',
+    frequency: 'weekly',
+    primary_causal_library: 'none',
+    brand: 'kisqali',
   },
   // Causal Metrics
   {
@@ -663,134 +716,27 @@ const SAMPLE_KPIS: KPIMetadata[] = [
   },
   {
     id: 'CM-004',
-    name: 'Propensity Score Matching',
-    definition: 'Balance score for treatment/control matching',
-    formula: 'P(T=1|X) estimated via logistic regression',
-    calculation_type: 'derived',
+    name: 'Counterfactual Outcome',
+    definition: 'Predicted outcome under alternative treatment',
+    formula: "E[Y(a') | do(A=a), X]",
+    calculation_type: 'direct',
     workstream: 'causal_metrics',
     tables: ['ml_predictions'],
-    columns: ['propensity_score', 'treatment_assignment'],
+    columns: ['counterfactual_outcome'],
     frequency: 'on-demand',
     primary_causal_library: 'dowhy',
-    note: 'Matching method',
   },
   {
     id: 'CM-005',
-    name: 'Inverse Probability Weighting (IPW)',
-    definition: 'Weighted average treatment effect using inverse propensity weights',
-    formula: 'ATE_IPW = E[Y*T/e(X)] - E[Y*(1-T)/(1-e(X))]',
-    calculation_type: 'derived',
-    workstream: 'causal_metrics',
-    tables: ['ml_predictions'],
-    columns: ['ipw_weights', 'outcome'],
-    frequency: 'on-demand',
-    primary_causal_library: 'dowhy',
-    note: 'Weighting method',
-  },
-  {
-    id: 'CM-006',
-    name: 'Doubly Robust Estimator',
-    definition: 'Combines outcome modeling and propensity weighting for robustness',
-    formula: 'DR = E[μ₁(X) - μ₀(X) + T(Y-μ₁)/e - (1-T)(Y-μ₀)/(1-e)]',
-    calculation_type: 'derived',
-    workstream: 'causal_metrics',
-    tables: ['ml_predictions'],
-    columns: ['outcome_model', 'propensity_score'],
-    frequency: 'on-demand',
-    primary_causal_library: 'econml',
-    note: 'Robust estimation',
-  },
-  {
-    id: 'CM-007',
-    name: 'Difference-in-Differences (DiD)',
-    definition: 'Treatment effect via parallel trends assumption',
-    formula: 'DiD = (Ȳ₁ᵗ - Ȳ₁⁰) - (Ȳ₀ᵗ - Ȳ₀⁰)',
-    calculation_type: 'derived',
-    workstream: 'causal_metrics',
-    tables: ['business_metrics'],
-    columns: ['outcome', 'treatment_group', 'period'],
-    frequency: 'on-demand',
-    primary_causal_library: 'dowhy',
-    note: 'Panel method',
-  },
-  {
-    id: 'CM-008',
-    name: 'Regression Discontinuity (RD)',
-    definition: 'Treatment effect at cutoff threshold',
-    formula: 'RD = lim(E[Y|X=c⁺]) - lim(E[Y|X=c⁻])',
-    calculation_type: 'derived',
-    workstream: 'causal_metrics',
-    tables: ['ml_predictions'],
-    columns: ['running_variable', 'outcome'],
-    frequency: 'on-demand',
-    primary_causal_library: 'econml',
-    note: 'Quasi-experimental',
-  },
-  {
-    id: 'CM-009',
-    name: 'Instrumental Variables (IV)',
-    definition: 'Causal effect using exogenous instrument',
-    formula: 'β_IV = Cov(Y,Z) / Cov(T,Z)',
-    calculation_type: 'derived',
-    workstream: 'causal_metrics',
-    tables: ['ml_predictions'],
-    columns: ['instrument', 'treatment', 'outcome'],
-    frequency: 'on-demand',
-    primary_causal_library: 'econml',
-    note: '2SLS estimator',
-  },
-  {
-    id: 'CM-010',
-    name: 'Synthetic Control',
-    definition: 'Counterfactual estimation via weighted donor pool',
-    formula: 'Y₁ᵗ - Σwⱼ * Yⱼᵗ (synthetic counterfactual)',
-    calculation_type: 'derived',
-    workstream: 'causal_metrics',
-    tables: ['business_metrics'],
-    columns: ['outcome', 'region', 'period'],
-    frequency: 'on-demand',
-    primary_causal_library: 'dowhy',
-    note: 'Abadie method',
-  },
-  {
-    id: 'CM-011',
-    name: 'Causal Forest',
-    definition: 'Heterogeneous treatment effect via random forest',
-    formula: 'τ(x) = E[Y(1) - Y(0) | X=x] via GRF',
-    calculation_type: 'derived',
-    workstream: 'causal_metrics',
-    tables: ['ml_predictions'],
-    columns: ['cate_estimate', 'feature_vector'],
-    frequency: 'on-demand',
-    primary_causal_library: 'econml',
-    note: 'GRF method',
-  },
-  {
-    id: 'CM-012',
-    name: 'Double Machine Learning (DML)',
-    definition: 'Orthogonalized ML for treatment effect estimation',
-    formula: 'θ via Neyman-orthogonal score + cross-fitting',
-    calculation_type: 'derived',
-    workstream: 'causal_metrics',
-    tables: ['ml_predictions'],
-    columns: ['nuisance_estimates', 'treatment_effect'],
-    frequency: 'on-demand',
-    primary_causal_library: 'econml',
-    note: 'Chernozhukov method',
-  },
-  {
-    id: 'CM-013',
-    name: 'Refutation p-value',
-    definition: 'Robustness check for causal estimates via sensitivity analysis',
-    formula: 'p(refutation) across placebo, subset, and random common cause tests',
+    name: 'Mediation Effect',
+    definition: 'Effect mediated through intermediate variables',
+    formula: 'indirect_effect / total_effect',
     calculation_type: 'derived',
     workstream: 'causal_metrics',
     tables: ['causal_paths'],
-    columns: ['refutation_results'],
-    threshold: { target: 0.05, warning: 0.10, critical: 0.20 },
+    columns: ['mediators_identified', 'pathway_details'],
     frequency: 'on-demand',
     primary_causal_library: 'dowhy',
-    note: 'Validation metric',
   },
 ];
 
@@ -985,8 +931,11 @@ export default function KPIDictionary() {
   const { data: workstreamsData } = useWorkstreams();
   const { data: health } = useKPIHealth();
 
-  // Use sample data if API not available
-  const kpis = kpiData?.kpis ?? SAMPLE_KPIS;
+  // Use sample data if API not available or returns incomplete data
+  // SAMPLE_KPIS has 46 KPIs - use it if API returns fewer (e.g., mock data)
+  const kpis = (kpiData?.kpis && kpiData.kpis.length >= SAMPLE_KPIS.length)
+    ? kpiData.kpis
+    : SAMPLE_KPIS;
   const workstreams = workstreamsData?.workstreams ?? Object.keys(WORKSTREAM_DISPLAY).map((id) => ({
     id,
     name: WORKSTREAM_DISPLAY[id]?.name ?? id,
@@ -1035,6 +984,9 @@ export default function KPIDictionary() {
     };
   }, [kpis]);
 
+  // State for main section tabs
+  const [activeSection, setActiveSection] = useState<string>('tables');
+
   return (
     <div className="p-6 max-w-7xl mx-auto">
       {/* Page Header */}
@@ -1052,117 +1004,150 @@ export default function KPIDictionary() {
         </div>
       </div>
 
-      {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <StatCard
-          title="Total KPIs"
-          value={stats.total}
-          icon={<BarChart3 className="h-4 w-4" />}
-          description="Across all workstreams"
-        />
-        <StatCard
-          title="Workstreams"
-          value={workstreams.length}
-          icon={<Database className="h-4 w-4" />}
-          description="Category groups"
-        />
-        <StatCard
-          title="Causal KPIs"
-          value={stats.causalEnabled}
-          icon={<Calculator className="h-4 w-4" />}
-          description="Using DoWhy/EconML"
-          variant="success"
-        />
-        <StatCard
-          title="System Status"
-          value={health?.status === 'healthy' ? 'Healthy' : health?.status ?? 'Unknown'}
-          icon={<Activity className="h-4 w-4" />}
-          description={`Registry: ${health?.registry_loaded ? 'Loaded' : 'Unknown'}`}
-          variant={health?.status === 'healthy' ? 'success' : health?.status === 'degraded' ? 'warning' : 'default'}
-        />
-      </div>
-
-      {/* Search and Filter */}
-      <div className="flex flex-col sm:flex-row gap-4 mb-6">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[var(--color-muted-foreground)]" />
-          <input
-            type="text"
-            placeholder="Search KPIs by ID, name, definition, or formula..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-10 pr-4 py-2 bg-[var(--color-background)] border border-[var(--color-border)] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-          />
-        </div>
-        <div className="flex items-center gap-2 text-sm text-[var(--color-muted-foreground)]">
-          <Filter className="h-4 w-4" />
-          <span>Showing {filteredKPIs.length} of {stats.total} KPIs</span>
-        </div>
-      </div>
-
-      {/* Workstream Tabs */}
-      <Tabs value={activeWorkstream} onValueChange={setActiveWorkstream} className="w-full">
-        <TabsList className="w-full flex-wrap h-auto gap-1 p-1 mb-6">
-          <TabsTrigger value="all" className="flex items-center gap-2">
+      {/* Main Section Tabs */}
+      <Tabs value={activeSection} onValueChange={setActiveSection} className="w-full mb-6">
+        <TabsList className="w-full flex h-auto gap-1 p-1 bg-[var(--color-muted)] rounded-lg">
+          <TabsTrigger value="tables" className="flex items-center gap-2 flex-1 py-2.5">
             <BarChart3 className="h-4 w-4" />
-            <span>All KPIs</span>
-            <span className="ml-1 text-xs bg-[var(--color-muted)] px-1.5 py-0.5 rounded">{stats.total}</span>
+            <span>KPI Cards</span>
           </TabsTrigger>
-          {workstreams.map((ws) => {
-            const display = WORKSTREAM_DISPLAY[ws.id];
-            return (
-              <TabsTrigger key={ws.id} value={ws.id} className="flex items-center gap-2">
-                {display?.icon}
-                <span>{display?.name ?? ws.name}</span>
-                <span className="ml-1 text-xs bg-[var(--color-muted)] px-1.5 py-0.5 rounded">
-                  {ws.kpi_count}
-                </span>
-              </TabsTrigger>
-            );
-          })}
+          <TabsTrigger value="legend" className="flex items-center gap-2 flex-1 py-2.5">
+            <Gauge className="h-4 w-4" />
+            <span>Status Legend</span>
+          </TabsTrigger>
+          <TabsTrigger value="concepts" className="flex items-center gap-2 flex-1 py-2.5">
+            <Lightbulb className="h-4 w-4" />
+            <span>Key Concepts</span>
+          </TabsTrigger>
         </TabsList>
 
-        {/* KPI Grid */}
-        <TabsContent value={activeWorkstream} className="mt-0">
-          {isLoadingKPIs ? (
-            <div className="flex items-center justify-center py-12">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
+        {/* Tables Tab Content */}
+        <TabsContent value="tables" className="mt-6">
+          {/* Stats Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+            <StatCard
+              title="Total KPIs"
+              value={stats.total}
+              icon={<BarChart3 className="h-4 w-4" />}
+              description="Across all workstreams"
+            />
+            <StatCard
+              title="Workstreams"
+              value={workstreams.length}
+              icon={<Database className="h-4 w-4" />}
+              description="Category groups"
+            />
+            <StatCard
+              title="Causal KPIs"
+              value={stats.causalEnabled}
+              icon={<Calculator className="h-4 w-4" />}
+              description="Using DoWhy/EconML"
+              variant="success"
+            />
+            <StatCard
+              title="System Status"
+              value={health?.status === 'healthy' ? 'Healthy' : health?.status ?? 'Unknown'}
+              icon={<Activity className="h-4 w-4" />}
+              description={`Registry: ${health?.registry_loaded ? 'Loaded' : 'Unknown'}`}
+              variant={health?.status === 'healthy' ? 'success' : health?.status === 'degraded' ? 'warning' : 'default'}
+            />
+          </div>
+
+          {/* Search and Filter */}
+          <div className="mb-6">
+            <div className="flex flex-col sm:flex-row gap-4 mb-6">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[var(--color-muted-foreground)]" />
+                <input
+                  type="text"
+                  placeholder="Search KPIs by ID, name, definition, or formula..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2 bg-[var(--color-background)] border border-[var(--color-border)] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                />
+              </div>
+              <div className="flex items-center gap-2 text-sm text-[var(--color-muted-foreground)]">
+                <Filter className="h-4 w-4" />
+                <span>Showing {filteredKPIs.length} of {stats.total} KPIs</span>
+              </div>
             </div>
-          ) : filteredKPIs.length === 0 ? (
-            <div className="text-center py-12">
-              <Search className="h-12 w-12 text-[var(--color-muted-foreground)] mx-auto mb-4" />
-              <h3 className="text-lg font-medium text-[var(--color-foreground)] mb-2">
-                No KPIs found
-              </h3>
-              <p className="text-[var(--color-muted-foreground)]">
-                Try adjusting your search or filter criteria
-              </p>
+
+            {/* Workstream Tabs */}
+            <Tabs value={activeWorkstream} onValueChange={setActiveWorkstream} className="w-full">
+              <TabsList className="w-full flex-wrap h-auto gap-1 p-1 mb-6">
+                <TabsTrigger value="all" className="flex items-center gap-2">
+                  <BarChart3 className="h-4 w-4" />
+                  <span>All KPIs</span>
+                  <span className="ml-1 text-xs bg-[var(--color-muted)] px-1.5 py-0.5 rounded">{stats.total}</span>
+                </TabsTrigger>
+                {workstreams.map((ws) => {
+                  const display = WORKSTREAM_DISPLAY[ws.id];
+                  return (
+                    <TabsTrigger key={ws.id} value={ws.id} className="flex items-center gap-2">
+                      {display?.icon}
+                      <span>{display?.name ?? ws.name}</span>
+                      <span className="ml-1 text-xs bg-[var(--color-muted)] px-1.5 py-0.5 rounded">
+                        {ws.kpi_count}
+                      </span>
+                    </TabsTrigger>
+                  );
+                })}
+              </TabsList>
+
+              {/* KPI Grid */}
+              <TabsContent value={activeWorkstream} className="mt-0">
+                {isLoadingKPIs ? (
+                  <div className="flex items-center justify-center py-12">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
+                  </div>
+                ) : filteredKPIs.length === 0 ? (
+                  <div className="text-center py-12">
+                    <Search className="h-12 w-12 text-[var(--color-muted-foreground)] mx-auto mb-4" />
+                    <h3 className="text-lg font-medium text-[var(--color-foreground)] mb-2">
+                      No KPIs found
+                    </h3>
+                    <p className="text-[var(--color-muted-foreground)]">
+                      Try adjusting your search or filter criteria
+                    </p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    {filteredKPIs.map((kpi) => (
+                      <KPICardDetailed key={kpi.id} kpi={kpi} />
+                    ))}
+                  </div>
+                )}
+              </TabsContent>
+            </Tabs>
+          </div>
+
+          {/* Footer info */}
+          <div className="mt-8 p-4 bg-[var(--color-muted)] rounded-lg">
+            <div className="flex items-start gap-3">
+              <Info className="h-5 w-5 text-[var(--color-muted-foreground)] mt-0.5 flex-shrink-0" />
+              <div className="text-sm text-[var(--color-muted-foreground)]">
+                <p className="font-medium mb-1">About KPI Thresholds</p>
+                <p>
+                  Each KPI has configurable thresholds: <span className="text-emerald-600 font-medium">Target</span> (ideal performance),
+                  <span className="text-amber-600 font-medium"> Warning</span> (needs attention), and
+                  <span className="text-rose-600 font-medium"> Critical</span> (requires immediate action).
+                  Thresholds are used for alerting and dashboard status indicators.
+                </p>
+              </div>
             </div>
-          ) : (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              {filteredKPIs.map((kpi) => (
-                <KPICardDetailed key={kpi.id} kpi={kpi} />
-              ))}
-            </div>
-          )}
+          </div>
+        </TabsContent>
+
+        {/* Status Legend Tab Content */}
+        <TabsContent value="legend" className="mt-6">
+          <StatusLegend />
+        </TabsContent>
+
+        {/* Key Concepts Tab Content */}
+        <TabsContent value="concepts" className="mt-6">
+          <KeyConcepts />
         </TabsContent>
       </Tabs>
-
-      {/* Footer info */}
-      <div className="mt-8 p-4 bg-[var(--color-muted)] rounded-lg">
-        <div className="flex items-start gap-3">
-          <Info className="h-5 w-5 text-[var(--color-muted-foreground)] mt-0.5 flex-shrink-0" />
-          <div className="text-sm text-[var(--color-muted-foreground)]">
-            <p className="font-medium mb-1">About KPI Thresholds</p>
-            <p>
-              Each KPI has configurable thresholds: <span className="text-emerald-600 font-medium">Target</span> (ideal performance),
-              <span className="text-amber-600 font-medium"> Warning</span> (needs attention), and
-              <span className="text-rose-600 font-medium"> Critical</span> (requires immediate action).
-              Thresholds are used for alerting and dashboard status indicators.
-            </p>
-          </div>
-        </div>
-      </div>
     </div>
   );
 }
