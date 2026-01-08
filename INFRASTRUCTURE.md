@@ -170,6 +170,75 @@ ssh root@159.89.180.27
 
 **Status**: ✅ SSH key successfully configured on droplet
 
+### SSH Tunneling (Corporate Proxy Bypass)
+
+When behind a corporate proxy (e.g., Novartis Netskope), direct access to web UIs on non-standard ports is blocked. Use SSH tunneling to access services via localhost.
+
+#### Available Services
+
+| Service | Remote Port | Local URL (via tunnel) |
+|---------|-------------|------------------------|
+| MLflow | 5000 | http://localhost:5000 |
+| Opik UI | 5173 | http://localhost:5173 |
+| Opik Backend | 8080 | http://localhost:8080 |
+| E2I API | 8001 | http://localhost:8001 |
+
+#### Start SSH Tunnel
+
+```bash
+# Forward MLflow and Opik UI (most common)
+ssh -i ~/.ssh/replit -L 5000:localhost:5000 -L 5173:localhost:5173 -N -f root@159.89.180.27
+
+# Forward all services
+ssh -i ~/.ssh/replit \
+    -L 5000:localhost:5000 \
+    -L 5173:localhost:5173 \
+    -L 8080:localhost:8080 \
+    -L 8001:localhost:8001 \
+    -N -f root@159.89.180.27
+```
+
+**Flags:**
+- `-L [local_port]:[remote_host]:[remote_port]` - Forward local port to remote
+- `-N` - Don't execute remote command (tunnel only)
+- `-f` - Run in background
+
+#### Verify Tunnel
+
+```bash
+# Check if tunnel is working
+curl -s -o /dev/null -w "MLflow: HTTP %{http_code}\n" http://localhost:5000/
+curl -s -o /dev/null -w "Opik: HTTP %{http_code}\n" http://localhost:5173/
+```
+
+#### Stop SSH Tunnel
+
+```bash
+# Kill all SSH tunnels to the droplet
+pkill -f "ssh.*-L 5000:localhost:5000"
+
+# Or find and kill specific tunnel
+ps aux | grep "ssh.*-L" | grep -v grep
+kill <PID>
+```
+
+#### Persistent Tunnel (Optional)
+
+Add to `~/.ssh/config` for easier access:
+
+```
+Host e2i-tunnel
+    HostName 159.89.180.27
+    User root
+    IdentityFile ~/.ssh/replit
+    LocalForward 5000 localhost:5000
+    LocalForward 5173 localhost:5173
+    LocalForward 8080 localhost:8080
+    LocalForward 8001 localhost:8001
+```
+
+Then connect with: `ssh -N -f e2i-tunnel`
+
 ### Notes
 
 - Droplet is running in a VPC for private networking
