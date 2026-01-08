@@ -66,6 +66,7 @@ from src.api.routes.copilotkit import add_copilotkit_routes, router as copilotki
 # Import middleware
 from src.api.dependencies.auth import is_auth_enabled
 from src.api.middleware.auth_middleware import JWTAuthMiddleware, get_public_paths
+from src.api.middleware.rate_limit_middleware import RateLimitMiddleware
 from src.api.middleware.security_middleware import SecurityHeadersMiddleware
 
 # Configure logging
@@ -222,6 +223,11 @@ logger.info(f"JWT Authentication: {'ENABLED' if is_auth_enabled() else 'DISABLED
 # Adds X-Content-Type-Options, X-Frame-Options, CSP, etc.
 app.add_middleware(SecurityHeadersMiddleware)
 logger.info("Security Headers: ENABLED")
+
+# Rate Limiting middleware
+# Protects API from abuse with configurable limits per endpoint
+app.add_middleware(RateLimitMiddleware, use_redis=True)
+logger.info("Rate Limiting: ENABLED")
 
 # =============================================================================
 # ROOT ENDPOINTS
