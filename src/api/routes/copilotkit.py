@@ -16,19 +16,22 @@ Changelog:
     1.0.0 - Initial CopilotKit integration
 """
 
+import asyncio
+import json
 import logging
 import operator
 import os
 from datetime import datetime, timezone
-from typing import Annotated, Any, Dict, List, Optional, Sequence, TypedDict
+from typing import Annotated, Any, AsyncGenerator, Dict, List, Optional, Sequence, TypedDict
 
 from copilotkit import CopilotKitRemoteEndpoint, LangGraphAGUIAgent, Action as CopilotAction
 from copilotkit.integrations.fastapi import add_fastapi_endpoint
 from copilotkit.sdk import COPILOTKIT_SDK_VERSION
 from fastapi import APIRouter, FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, StateGraph
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
@@ -783,3 +786,211 @@ async def get_copilotkit_status() -> Dict[str, Any]:
         "llm_configured": bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("OPENAI_API_KEY")),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
+
+
+# =============================================================================
+# E2I CHATBOT STREAMING ENDPOINTS
+# =============================================================================
+
+
+class ChatRequest(BaseModel):
+    """Request schema for chatbot endpoints."""
+
+    query: str = Field(..., description="User's query text")
+    user_id: str = Field(..., description="User UUID")
+    request_id: str = Field(..., description="Unique request identifier")
+    session_id: Optional[str] = Field(
+        default=None, description="Session ID (generated if not provided)"
+    )
+    brand_context: Optional[str] = Field(
+        default=None, description="Brand filter (Kisqali, Fabhalta, Remibrutinib)"
+    )
+    region_context: Optional[str] = Field(
+        default=None, description="Region filter (US, EU, APAC)"
+    )
+
+
+class ChatResponse(BaseModel):
+    """Response schema for non-streaming chatbot endpoint."""
+
+    success: bool
+    session_id: str
+    response: str
+    conversation_title: Optional[str] = None
+    agent_name: Optional[str] = None
+    error: Optional[str] = None
+
+
+async def _stream_chat_response(request: ChatRequest) -> AsyncGenerator[str, None]:
+    """
+    Generate SSE stream for chatbot response.
+
+    Yields JSON-formatted SSE events:
+    - {"type": "session_id", "data": "..."}
+    - {"type": "text", "data": "..."}
+    - {"type": "conversation_title", "data": "..."}
+    - {"type": "tool_call", "data": "..."}
+    - {"type": "done", "data": ""}
+    - {"type": "error", "data": "..."}
+    """
+    try:
+        from src.api.routes.chatbot_graph import stream_chatbot
+
+        # Yield session_id first
+        session_id = request.session_id
+        if not session_id:
+            import uuid
+            session_id = f"{request.user_id}~{uuid.uuid4()}"
+
+        yield f"data: {json.dumps({'type': 'session_id', 'data': session_id})}\n\n"
+
+        response_text = ""
+        conversation_title = None
+
+        # Stream through chatbot workflow
+        async for state_update in stream_chatbot(
+            query=request.query,
+            user_id=request.user_id,
+            request_id=request.request_id,
+            session_id=session_id,
+            brand_context=request.brand_context,
+            region_context=request.region_context,
+        ):
+            # Extract response from state updates
+            if isinstance(state_update, dict):
+                # Check for node outputs
+                for node_name, node_output in state_update.items():
+                    if isinstance(node_output, dict):
+                        # Get response text from finalize node
+                        if "response_text" in node_output and node_output["response_text"]:
+                            text_chunk = node_output["response_text"]
+                            if text_chunk and text_chunk != response_text:
+                                # Yield new text
+                                new_text = text_chunk[len(response_text):] if response_text else text_chunk
+                                if new_text:
+                                    yield f"data: {json.dumps({'type': 'text', 'data': new_text})}\n\n"
+                                    response_text = text_chunk
+
+                        # Get conversation title
+                        if "conversation_title" in node_output and node_output["conversation_title"]:
+                            title = node_output["conversation_title"]
+                            if title != conversation_title:
+                                conversation_title = title
+                                yield f"data: {json.dumps({'type': 'conversation_title', 'data': title})}\n\n"
+
+                        # Handle messages (for AIMessage content)
+                        if "messages" in node_output:
+                            for msg in node_output["messages"]:
+                                if isinstance(msg, AIMessage) and msg.content:
+                                    if msg.content != response_text:
+                                        new_text = msg.content[len(response_text):] if response_text else msg.content
+                                        if new_text:
+                                            yield f"data: {json.dumps({'type': 'text', 'data': new_text})}\n\n"
+                                            response_text = msg.content
+
+        # Generate title if not set
+        if not conversation_title and response_text:
+            # Simple title generation from query
+            title = request.query[:50] + "..." if len(request.query) > 50 else request.query
+            yield f"data: {json.dumps({'type': 'conversation_title', 'data': title})}\n\n"
+
+        yield f"data: {json.dumps({'type': 'done', 'data': ''})}\n\n"
+
+    except Exception as e:
+        logger.error(f"Streaming chat error: {e}")
+        yield f"data: {json.dumps({'type': 'error', 'data': str(e)})}\n\n"
+
+
+@router.post("/chat/stream")
+async def stream_chat(request: ChatRequest) -> StreamingResponse:
+    """
+    Stream chatbot response as Server-Sent Events (SSE).
+
+    Returns an SSE stream with events:
+    - session_id: The conversation session ID
+    - text: Response text chunks
+    - conversation_title: Auto-generated conversation title
+    - tool_call: Tool invocation notifications
+    - done: Stream completion signal
+    - error: Error messages
+
+    Usage:
+        POST /api/copilotkit/chat/stream
+        Content-Type: application/json
+
+        {
+            "query": "What is the TRx for Kisqali?",
+            "user_id": "user-uuid",
+            "request_id": "req-123",
+            "session_id": "",  // Optional, generated if empty
+            "brand_context": "Kisqali"  // Optional
+        }
+    """
+    logger.info(f"[Chatbot] Streaming request: query={request.query[:50]}..., user={request.user_id}")
+
+    return StreamingResponse(
+        _stream_chat_response(request),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.post("/chat")
+async def chat(request: ChatRequest) -> ChatResponse:
+    """
+    Non-streaming chatbot endpoint.
+
+    Returns the complete response in a single JSON object.
+
+    Usage:
+        POST /api/copilotkit/chat
+        Content-Type: application/json
+
+        {
+            "query": "Show agent status",
+            "user_id": "user-uuid",
+            "request_id": "req-456",
+            "session_id": ""
+        }
+    """
+    logger.info(f"[Chatbot] Chat request: query={request.query[:50]}..., user={request.user_id}")
+
+    try:
+        from src.api.routes.chatbot_graph import run_chatbot
+
+        result = await run_chatbot(
+            query=request.query,
+            user_id=request.user_id,
+            request_id=request.request_id,
+            session_id=request.session_id,
+            brand_context=request.brand_context,
+            region_context=request.region_context,
+        )
+
+        response_text = result.get("response_text", "")
+        session_id = result.get("session_id", "")
+        agent_name = result.get("agent_name")
+
+        # Generate title from query
+        title = request.query[:50] + "..." if len(request.query) > 50 else request.query
+
+        return ChatResponse(
+            success=True,
+            session_id=session_id,
+            response=response_text,
+            conversation_title=title,
+            agent_name=agent_name,
+        )
+
+    except Exception as e:
+        logger.error(f"Chat error: {e}")
+        return ChatResponse(
+            success=False,
+            session_id=request.session_id or "",
+            response="",
+            error=str(e),
+        )

@@ -1,0 +1,704 @@
+"""
+E2I Chatbot LangGraph Workflow.
+
+Builds a LangGraph agent workflow for the E2I chatbot with:
+- Multi-node processing pipeline
+- E2I-specific tool integration
+- RAG retrieval for context
+- Intent classification
+- Streaming response support
+
+Workflow:
+    init → load_context → retrieve_rag → classify_intent → generate → [tools] → finalize
+"""
+
+import logging
+import os
+from datetime import datetime
+from typing import Any, Dict, List, Literal, Optional
+
+from langchain_anthropic import ChatAnthropic
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.prompts import ChatPromptTemplate
+from langgraph.graph import END, StateGraph
+from langgraph.prebuilt import ToolNode
+
+from src.api.routes.chatbot_state import ChatbotState, IntentType, create_initial_state
+from src.api.routes.chatbot_tools import E2I_CHATBOT_TOOLS
+from src.rag.retriever import hybrid_search
+from src.repositories import get_supabase_client
+from src.repositories.chatbot_conversation import (
+    ChatbotConversationRepository,
+    get_chatbot_conversation_repository,
+)
+from src.repositories.chatbot_message import (
+    ChatbotMessageRepository,
+    get_chatbot_message_repository,
+)
+
+logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# SYSTEM PROMPT
+# =============================================================================
+
+E2I_CHATBOT_SYSTEM_PROMPT = """You are the E2I Analytics Assistant, an intelligent AI specialized in pharmaceutical commercial analytics for Novartis brands.
+
+## Your Expertise
+
+You help users with:
+1. **KPI Analysis** - TRx, NRx, market share, conversion rates, patient starts
+2. **Causal Analysis** - Understanding WHY metrics change and what drives performance
+3. **Agent System** - Information about the 18-agent tiered architecture
+4. **Recommendations** - AI-powered suggestions for HCP targeting and market access
+5. **Insights Search** - Finding trends, causal paths, and historical patterns
+
+## Brands You Support
+
+- **Kisqali** - HR+/HER2- breast cancer
+- **Fabhalta** - PNH (Paroxysmal Nocturnal Hemoglobinuria)
+- **Remibrutinib** - CSU (Chronic Spontaneous Urticaria)
+
+## Guidelines
+
+1. **Data-Driven Responses**: Always use the available tools to fetch real data before answering
+2. **Source Attribution**: Cite the data source when presenting metrics or insights
+3. **Commercial Focus**: This is pharmaceutical COMMERCIAL analytics (sales, marketing, market access) - NOT clinical or medical advice
+4. **Causal Clarity**: When discussing causation, be clear about confidence levels and methodology
+5. **Actionable Insights**: Provide recommendations that can drive business decisions
+
+## Tool Usage
+
+Use tools proactively:
+- Use `e2i_data_query_tool` for KPI metrics, causal chains, agent analyses
+- Use `causal_analysis_tool` for understanding metric drivers
+- Use `document_retrieval_tool` for searching the knowledge base
+- Use `conversation_memory_tool` to reference previous conversation context
+
+## Response Format
+
+- Be concise but comprehensive
+- Use bullet points for lists
+- Highlight key metrics with **bold**
+- Include confidence scores for causal claims
+- Suggest follow-up questions when appropriate
+
+{context}
+"""
+
+
+# =============================================================================
+# INTENT CLASSIFICATION
+# =============================================================================
+
+
+def _matches_pattern(query_lower: str, patterns: list[str]) -> bool:
+    """
+    Check if query matches any pattern using word boundaries.
+
+    For multi-word patterns (e.g., "good morning"), checks substring match.
+    For single-word patterns, checks word boundary match to avoid false positives
+    like "hi" matching "this".
+    """
+    import re
+
+    for pattern in patterns:
+        if " " in pattern:
+            # Multi-word pattern: use substring match
+            if pattern in query_lower:
+                return True
+        else:
+            # Single-word pattern: use word boundary regex
+            if re.search(rf"\b{re.escape(pattern)}\b", query_lower):
+                return True
+    return False
+
+
+def classify_intent(query: str) -> str:
+    """
+    Classify the user's query intent.
+
+    Args:
+        query: User's query text
+
+    Returns:
+        Intent classification string
+    """
+    query_lower = query.lower()
+
+    # Greeting patterns
+    if _matches_pattern(query_lower, ["hello", "hi", "hey", "good morning", "good afternoon"]):
+        return IntentType.GREETING
+
+    # Help patterns
+    if _matches_pattern(query_lower, ["help", "what can you", "how do i", "guide me"]):
+        return IntentType.HELP
+
+    # KPI patterns
+    if _matches_pattern(query_lower, ["kpi", "trx", "nrx", "market share", "conversion", "metric", "volume"]):
+        return IntentType.KPI_QUERY
+
+    # Causal patterns (including past tense variations)
+    if _matches_pattern(query_lower, ["why", "cause", "caused", "impact", "effect", "driver", "causal", "because"]):
+        return IntentType.CAUSAL_ANALYSIS
+
+    # Agent patterns
+    if _matches_pattern(query_lower, ["agent", "tier", "orchestrator", "status", "system"]):
+        return IntentType.AGENT_STATUS
+
+    # Recommendation patterns
+    if _matches_pattern(query_lower, ["recommend", "suggest", "improve", "optimize", "strategy"]):
+        return IntentType.RECOMMENDATION
+
+    # Search patterns
+    if _matches_pattern(query_lower, ["search", "find", "look for", "show me", "trend"]):
+        return IntentType.SEARCH
+
+    return IntentType.GENERAL
+
+
+# =============================================================================
+# WORKFLOW NODES
+# =============================================================================
+
+
+async def init_node(state: ChatbotState) -> Dict[str, Any]:
+    """
+    Initialize the conversation state.
+
+    Sets up initial context, creates conversation if new session,
+    and prepares for processing.
+    """
+    session_id = state.get("session_id")
+    user_id = state.get("user_id")
+    query = state.get("query", "")
+    brand = state.get("brand_context")
+    region = state.get("region_context")
+
+    logger.info(f"Init node: session={session_id}, query={query[:50]}...")
+
+    # Try to create or verify conversation exists in database
+    is_new_conversation = False
+    try:
+        client = await get_supabase_client()
+        if client:
+            conv_repo = get_chatbot_conversation_repository(client)
+
+            # Check if conversation exists
+            existing_conv = await conv_repo.get_by_session_id(session_id)
+
+            if not existing_conv:
+                # Create new conversation
+                await conv_repo.create_conversation(
+                    user_id=user_id,
+                    session_id=session_id,
+                    brand_context=brand,
+                    region_context=region,
+                    query_type="general",
+                )
+                is_new_conversation = True
+                logger.debug(f"Created new conversation: {session_id}")
+    except Exception as e:
+        logger.warning(f"Failed to create/verify conversation: {e}")
+
+    # Add human message to state
+    human_msg = HumanMessage(content=query)
+
+    return {
+        "messages": [human_msg],
+        "metadata": {
+            "init_timestamp": str(datetime.utcnow()),
+            "is_new_conversation": is_new_conversation,
+        },
+    }
+
+
+async def load_context_node(state: ChatbotState) -> Dict[str, Any]:
+    """
+    Load conversation context from previous messages.
+
+    Retrieves conversation history from database if session exists.
+    """
+    session_id = state.get("session_id")
+    brand = state.get("brand_context")
+    region = state.get("region_context")
+
+    logger.debug(f"Loading context for session: {session_id}")
+
+    # Load previous messages from database
+    previous_messages: List[Dict[str, Any]] = []
+    conversation_title = None
+
+    try:
+        client = await get_supabase_client()
+        if client:
+            msg_repo = get_chatbot_message_repository(client)
+            conv_repo = get_chatbot_conversation_repository(client)
+
+            # Get conversation metadata
+            conv = await conv_repo.get_by_session_id(session_id)
+            if conv:
+                conversation_title = conv.get("title")
+                # Use conversation's brand/region if not provided in request
+                if not brand:
+                    brand = conv.get("brand_context")
+                if not region:
+                    region = conv.get("region_context")
+
+            # Get recent messages for context
+            recent_msgs = await msg_repo.get_recent_messages(session_id, count=10)
+            previous_messages = recent_msgs
+            logger.debug(f"Loaded {len(previous_messages)} previous messages")
+
+    except Exception as e:
+        logger.warning(f"Failed to load conversation context: {e}")
+
+    # Convert previous messages to LangChain message format
+    history_messages = []
+    for msg in previous_messages:
+        role = msg.get("role", "")
+        content = msg.get("content", "")
+        if role == "user":
+            history_messages.append(HumanMessage(content=content))
+        elif role == "assistant":
+            history_messages.append(AIMessage(content=content))
+
+    return {
+        "messages": history_messages,  # Prepend history
+        "conversation_title": conversation_title,
+        "brand_context": brand,
+        "region_context": region,
+        "metadata": {
+            **state.get("metadata", {}),
+            "context_loaded": True,
+            "previous_message_count": len(previous_messages),
+        },
+    }
+
+
+async def retrieve_rag_node(state: ChatbotState) -> Dict[str, Any]:
+    """
+    Retrieve relevant context using hybrid RAG.
+
+    Performs semantic + sparse + graph retrieval.
+    """
+    query = state.get("query", "")
+    brand = state.get("brand_context")
+    intent = state.get("intent")
+
+    logger.debug(f"RAG retrieval: query={query[:50]}..., intent={intent}")
+
+    try:
+        # Adjust retrieval based on intent
+        kpi_name = None
+        if intent == IntentType.KPI_QUERY:
+            # Extract KPI name from query if present
+            for kpi in ["trx", "nrx", "market share", "conversion"]:
+                if kpi in query.lower():
+                    kpi_name = kpi
+                    break
+
+        results = await hybrid_search(
+            query=query,
+            k=5,
+            kpi_name=kpi_name,
+            filters={"brand": brand} if brand else None,
+        )
+
+        rag_context = [
+            {
+                "source_id": r.source_id,
+                "content": r.content[:500],  # Truncate for context window
+                "score": r.score,
+                "source": r.source,
+            }
+            for r in results
+        ]
+
+        rag_sources = [r.source_id for r in results]
+
+        return {
+            "rag_context": rag_context,
+            "rag_sources": rag_sources,
+        }
+
+    except Exception as e:
+        logger.error(f"RAG retrieval failed: {e}")
+        return {
+            "rag_context": [],
+            "rag_sources": [],
+            "error": f"RAG retrieval error: {str(e)}",
+        }
+
+
+async def classify_intent_node(state: ChatbotState) -> Dict[str, Any]:
+    """
+    Classify the user's query intent.
+    """
+    query = state.get("query", "")
+    intent = classify_intent(query)
+    logger.debug(f"Intent classified: {intent}")
+
+    return {"intent": intent}
+
+
+async def generate_node(state: ChatbotState) -> Dict[str, Any]:
+    """
+    Generate response using Claude with tools.
+
+    This is the main generation node that can invoke tools.
+    """
+    messages = list(state.get("messages", []))
+    rag_context = state.get("rag_context", [])
+    brand = state.get("brand_context")
+    region = state.get("region_context")
+
+    # Build context string for system prompt
+    context_parts = []
+    if brand:
+        context_parts.append(f"Current Brand Filter: {brand}")
+    if region:
+        context_parts.append(f"Current Region Filter: {region}")
+    if rag_context:
+        context_parts.append("\n## Retrieved Context\n")
+        for ctx in rag_context[:3]:  # Top 3 for context window
+            context_parts.append(f"- [{ctx['source']}] {ctx['content'][:200]}...")
+
+    context_str = "\n".join(context_parts) if context_parts else ""
+
+    # Create system message
+    system_prompt = E2I_CHATBOT_SYSTEM_PROMPT.format(context=context_str)
+    system_msg = SystemMessage(content=system_prompt)
+
+    # Prepare messages for LLM
+    llm_messages = [system_msg] + messages
+
+    # Get Claude model
+    model_name = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+
+    if not api_key:
+        logger.warning("ANTHROPIC_API_KEY not set, using fallback response")
+        return _generate_fallback_response(state)
+
+    try:
+        llm = ChatAnthropic(
+            model=model_name,
+            api_key=api_key,
+            temperature=0.3,
+            max_tokens=1024,
+        )
+
+        # Bind tools to the model
+        llm_with_tools = llm.bind_tools(E2I_CHATBOT_TOOLS)
+
+        # Generate response
+        response = await llm_with_tools.ainvoke(llm_messages)
+
+        return {
+            "messages": [response],
+            "agent_name": "chatbot",
+            "agent_tier": 1,
+        }
+
+    except Exception as e:
+        logger.error(f"LLM generation failed: {e}")
+        return _generate_fallback_response(state)
+
+
+def _generate_fallback_response(state: ChatbotState) -> Dict[str, Any]:
+    """Generate a fallback response when LLM is unavailable."""
+    intent = state.get("intent", IntentType.GENERAL)
+    query = state.get("query", "")
+
+    responses = {
+        IntentType.GREETING: "Hello! I'm the E2I Analytics Assistant. I can help you with KPI analysis, causal inference, and insights for pharmaceutical brands. What would you like to know?",
+        IntentType.HELP: "I can help you with:\n\n1. **KPI Analysis** - Get metrics like TRx, NRx, market share\n2. **Causal Analysis** - Understand why metrics change\n3. **Agent Status** - Check the 18-agent system\n4. **Recommendations** - Get AI-powered suggestions\n5. **Search** - Find trends and insights\n\nTry asking about a specific brand (Kisqali, Fabhalta, Remibrutinib) or metric!",
+        IntentType.KPI_QUERY: "I can help with KPI analysis! I track metrics like TRx volume, NRx volume, market share, conversion rates, HCP reach, and patient starts. Which brand and metric would you like to explore?",
+        IntentType.CAUSAL_ANALYSIS: "For causal analysis, I use DoWhy/EconML to identify factors driving your metrics. Tell me which KPI you'd like to analyze and I'll find the key drivers.",
+        IntentType.AGENT_STATUS: "The E2I platform uses an 18-agent tiered architecture across 6 tiers. I can show you agent status and recent analyses. Which agent or tier interests you?",
+        IntentType.RECOMMENDATION: "I can provide AI-powered recommendations for HCP targeting, patient journey optimization, and market access strategies. Which brand would you like recommendations for?",
+        IntentType.SEARCH: "I can search the E2I knowledge base for insights, causal paths, and trends. What would you like me to find?",
+    }
+
+    response_text = responses.get(
+        intent,
+        "I'm the E2I Analytics Assistant. I can help with KPI analysis, causal inference, and pharmaceutical commercial analytics. What would you like to explore?",
+    )
+
+    return {
+        "messages": [AIMessage(content=response_text)],
+        "response_text": response_text,
+        "agent_name": "chatbot_fallback",
+    }
+
+
+async def tool_node(state: ChatbotState) -> Dict[str, Any]:
+    """
+    Execute tools based on LLM tool calls.
+
+    This is handled by LangGraph's ToolNode.
+    """
+    # ToolNode handles this automatically
+    pass
+
+
+async def finalize_node(state: ChatbotState) -> Dict[str, Any]:
+    """
+    Finalize the response and prepare for output.
+
+    Persists both user and assistant messages to the database.
+    """
+    messages = state.get("messages", [])
+    session_id = state.get("session_id")
+    query = state.get("query", "")
+    agent_name = state.get("agent_name")
+    agent_tier = state.get("agent_tier")
+    tool_results = state.get("tool_results", [])
+    rag_context = state.get("rag_context", [])
+    rag_sources = state.get("rag_sources", [])
+
+    # Get the last AI message as response
+    response_text = ""
+    tool_calls = []
+    for msg in reversed(messages):
+        if isinstance(msg, AIMessage):
+            response_text = msg.content
+            # Extract tool calls if present
+            if hasattr(msg, "tool_calls") and msg.tool_calls:
+                tool_calls = [
+                    {"tool_name": tc.get("name", ""), "args": tc.get("args", {})}
+                    for tc in msg.tool_calls
+                ]
+            break
+
+    # Persist messages to database
+    try:
+        client = await get_supabase_client()
+        if client:
+            msg_repo = get_chatbot_message_repository(client)
+
+            # Save user message
+            await msg_repo.add_message(
+                session_id=session_id,
+                role="user",
+                content=query,
+                metadata={"request_id": state.get("request_id")},
+            )
+
+            # Save assistant message with full context
+            model_used = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+            await msg_repo.add_message(
+                session_id=session_id,
+                role="assistant",
+                content=response_text,
+                agent_name=agent_name,
+                agent_tier=agent_tier,
+                tool_calls=tool_calls,
+                tool_results=tool_results,
+                rag_context=rag_context,
+                rag_sources=rag_sources,
+                model_used=model_used,
+                metadata={
+                    "request_id": state.get("request_id"),
+                    "intent": state.get("intent"),
+                    "brand_context": state.get("brand_context"),
+                    "region_context": state.get("region_context"),
+                },
+            )
+
+            logger.debug(f"Persisted messages for session: {session_id}")
+
+    except Exception as e:
+        logger.warning(f"Failed to persist messages: {e}")
+
+    return {
+        "response_text": response_text,
+        "streaming_complete": True,
+    }
+
+
+# =============================================================================
+# CONDITIONAL EDGES
+# =============================================================================
+
+
+def should_use_tools(state: ChatbotState) -> Literal["tools", "finalize"]:
+    """
+    Determine if tool execution is needed based on LLM response.
+    """
+    messages = state.get("messages", [])
+
+    if not messages:
+        return "finalize"
+
+    last_message = messages[-1]
+
+    # Check if the last message has tool calls
+    if isinstance(last_message, AIMessage) and last_message.tool_calls:
+        return "tools"
+
+    return "finalize"
+
+
+def after_tools(state: ChatbotState) -> Literal["generate", "finalize"]:
+    """
+    Determine next step after tool execution.
+    """
+    messages = state.get("messages", [])
+
+    # If we have tool results, go back to generate for final response
+    # Otherwise, finalize
+    for msg in reversed(messages):
+        if hasattr(msg, "type") and msg.type == "tool":
+            return "generate"
+
+    return "finalize"
+
+
+# =============================================================================
+# GRAPH CONSTRUCTION
+# =============================================================================
+
+
+def create_e2i_chatbot_graph() -> StateGraph:
+    """
+    Create the E2I chatbot LangGraph workflow.
+
+    Workflow:
+        init → load_context → classify_intent → retrieve_rag → generate
+            ↓                                                      ↓
+            ↓                                            [tools] ←→ ↑
+            ↓                                                      ↓
+            └──────────────────────────────────────────→ finalize → END
+
+    Returns:
+        Compiled LangGraph StateGraph
+    """
+    # Create the graph
+    workflow = StateGraph(ChatbotState)
+
+    # Add nodes
+    workflow.add_node("init", init_node)
+    workflow.add_node("load_context", load_context_node)
+    workflow.add_node("classify_intent", classify_intent_node)
+    workflow.add_node("retrieve_rag", retrieve_rag_node)
+    workflow.add_node("generate", generate_node)
+    workflow.add_node("tools", ToolNode(E2I_CHATBOT_TOOLS))
+    workflow.add_node("finalize", finalize_node)
+
+    # Set entry point
+    workflow.set_entry_point("init")
+
+    # Add edges
+    workflow.add_edge("init", "load_context")
+    workflow.add_edge("load_context", "classify_intent")
+    workflow.add_edge("classify_intent", "retrieve_rag")
+    workflow.add_edge("retrieve_rag", "generate")
+
+    # Conditional edge: generate → tools or finalize
+    workflow.add_conditional_edges(
+        "generate",
+        should_use_tools,
+        {
+            "tools": "tools",
+            "finalize": "finalize",
+        },
+    )
+
+    # After tools, go back to generate for response synthesis
+    workflow.add_conditional_edges(
+        "tools",
+        after_tools,
+        {
+            "generate": "generate",
+            "finalize": "finalize",
+        },
+    )
+
+    # Finalize ends the workflow
+    workflow.add_edge("finalize", END)
+
+    return workflow.compile()
+
+
+# =============================================================================
+# EXPORTS
+# =============================================================================
+
+
+# Create the compiled graph
+e2i_chatbot_graph = create_e2i_chatbot_graph()
+
+
+async def run_chatbot(
+    query: str,
+    user_id: str,
+    request_id: str,
+    session_id: str = None,
+    brand_context: str = None,
+    region_context: str = None,
+) -> Dict[str, Any]:
+    """
+    Run the E2I chatbot workflow.
+
+    Args:
+        query: User's query text
+        user_id: User UUID
+        request_id: Request identifier
+        session_id: Optional session ID (generated if not provided)
+        brand_context: Optional brand filter
+        region_context: Optional region filter
+
+    Returns:
+        Final state with response
+    """
+    initial_state = create_initial_state(
+        user_id=user_id,
+        query=query,
+        request_id=request_id,
+        session_id=session_id,
+        brand_context=brand_context,
+        region_context=region_context,
+    )
+
+    result = await e2i_chatbot_graph.ainvoke(initial_state)
+    return result
+
+
+async def stream_chatbot(
+    query: str,
+    user_id: str,
+    request_id: str,
+    session_id: str = None,
+    brand_context: str = None,
+    region_context: str = None,
+):
+    """
+    Stream the E2I chatbot workflow.
+
+    Yields state updates as they occur.
+
+    Args:
+        query: User's query text
+        user_id: User UUID
+        request_id: Request identifier
+        session_id: Optional session ID
+        brand_context: Optional brand filter
+        region_context: Optional region filter
+
+    Yields:
+        State updates from each node
+    """
+    initial_state = create_initial_state(
+        user_id=user_id,
+        query=query,
+        request_id=request_id,
+        session_id=session_id,
+        brand_context=brand_context,
+        region_context=region_context,
+    )
+
+    async for state_update in e2i_chatbot_graph.astream(initial_state):
+        yield state_update
