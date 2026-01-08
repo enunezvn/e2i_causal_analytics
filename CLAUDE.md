@@ -284,6 +284,58 @@ In addition to the E2I domain-specific agents, the framework provides BMAD-inspi
 - **Module Location**: `src/optimization/gepa/`
 - **Configuration**: `config/gepa_config.yaml`
 
+### Infrastructure
+- **Cloud Provider**: DigitalOcean
+- **Droplet**: ubuntu-s-2vcpu-4gb-120gb-intel-nyc3-01
+- **Region**: NYC3 (New York)
+- **Specs**: 2 vCPU, 4GB RAM, 120GB SSD (Ubuntu 24.04 LTS)
+- **Public IP**: 159.89.180.27
+- **Reference**: See `INFRASTRUCTURE.md` for full details
+
+---
+
+## Infrastructure Reference
+
+This project is deployed on a DigitalOcean droplet. Key details:
+
+| Property | Value |
+|----------|-------|
+| **Droplet Name** | ubuntu-s-2vcpu-4gb-120gb-intel-nyc3-01 |
+| **Droplet ID** | 538064298 |
+| **Public IPv4** | 159.89.180.27 |
+| **Private IPv4** | 10.108.0.2 |
+| **Region** | NYC3 (New York) |
+| **OS** | Ubuntu 24.04 LTS x64 |
+| **Specs** | 2 vCPU, 4GB RAM, 120GB SSD |
+
+### SSH Access
+```bash
+# Using configured SSH key
+ssh -i ~/.ssh/replit root@159.89.180.27
+
+# Or with default config
+ssh root@159.89.180.27
+```
+
+### Common doctl Commands
+```bash
+# Authenticate (token in .env as DIGITALOCEAN_TOKEN)
+source .env && doctl auth init --access-token "$DIGITALOCEAN_TOKEN"
+
+# Droplet status
+doctl compute droplet get 538064298
+
+# Reboot/power cycle
+doctl compute droplet-action reboot 538064298
+doctl compute droplet-action power-off 538064298
+doctl compute droplet-action power-on 538064298
+
+# Create snapshot backup
+doctl compute droplet-action snapshot 538064298 --snapshot-name "backup-$(date +%Y%m%d)"
+```
+
+**Full documentation**: See `INFRASTRUCTURE.md` for complete reference including firewall setup, SSH key management, and cost information.
+
 ---
 
 ## GEPA Prompt Optimization (V4.3)
