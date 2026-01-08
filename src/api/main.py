@@ -259,6 +259,7 @@ async def health_check() -> Dict[str, Any]:
     """
     # Check BentoML status (non-blocking, with fallback)
     bentoml_status = "unknown"
+    bentoml_message = None
     try:
         client = await get_bentoml_client()
         health = await client.health_check()
@@ -266,18 +267,37 @@ async def health_check() -> Dict[str, Any]:
     except Exception:
         bentoml_status = "unavailable"
 
-    return {
+    # Add explanatory message when BentoML is not healthy
+    if bentoml_status in ("unhealthy", "unavailable", "unknown"):
+        bentoml_message = (
+            "Expected: No ML models are currently deployed to BentoML. "
+            "Start BentoML services with trained models to enable model serving."
+        )
+
+    # Build components dict
+    components = {
+        "api": "operational",
+        "workers": "available",
+        "memory_systems": "connected",
+        "bentoml": bentoml_status,
+    }
+
+    # Build response
+    response = {
         "status": "healthy",
         "service": "e2i-causal-analytics-api",
         "version": "4.1.0",
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "components": {
-            "api": "operational",
-            "workers": "available",
-            "memory_systems": "connected",
-            "bentoml": bentoml_status,
-        },
+        "components": components,
     }
+
+    # Add notes for non-critical unhealthy components
+    if bentoml_message:
+        response["notes"] = {
+            "bentoml": bentoml_message,
+        }
+
+    return response
 
 
 @app.get("/healthz", tags=["Health"])
