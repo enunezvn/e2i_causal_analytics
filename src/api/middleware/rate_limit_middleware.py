@@ -130,6 +130,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         "/metrics",
     }
 
+    # Path prefixes that are exempt from rate limiting
+    EXEMPT_PREFIXES = (
+        "/api/copilotkit",  # CopilotKit AI assistant - needs frequent requests
+    )
+
     def __init__(
         self,
         app: Callable,
@@ -229,6 +234,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         # Skip rate limiting for exempt paths
         if path in self.EXEMPT_PATHS:
+            return await call_next(request)
+
+        # Skip rate limiting for exempt path prefixes
+        if path.startswith(self.EXEMPT_PREFIXES):
             return await call_next(request)
 
         # Get client identifier and limits

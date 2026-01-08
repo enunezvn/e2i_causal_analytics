@@ -42,8 +42,11 @@ PUBLIC_PATHS: List[Tuple[str, str]] = [
     ("GET", "/causal/health"),
     # Graph health - public
     ("GET", "/graph/health"),
-    # CopilotKit status - public for frontend checks
+    # CopilotKit endpoints - public for frontend integration
     ("GET", "/api/copilotkit/status"),
+    ("POST", "/api/copilotkit/info"),
+    ("POST", "/api/copilotkit"),  # Main CopilotKit runtime endpoint
+    ("POST", "/api/copilotkit/"),  # With trailing slash
     # Chatbot endpoints - public for testing
     ("POST", "/api/copilotkit/chat"),
     ("POST", "/api/copilotkit/chat/stream"),
@@ -53,6 +56,10 @@ PUBLIC_PATHS: List[Tuple[str, str]] = [
 PUBLIC_PATH_PATTERNS: List[Tuple[str, str]] = [
     # KPI metadata by ID is public
     ("GET", r"^/api/kpis/[^/]+/metadata$"),
+    # CopilotKit agent and action execution - public for chatbot
+    ("POST", r"^/api/copilotkit/agent/"),
+    ("POST", r"^/api/copilotkit/action/"),
+    ("GET", r"^/api/copilotkit/agent/"),
 ]
 
 

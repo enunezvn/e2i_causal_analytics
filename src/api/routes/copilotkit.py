@@ -7,9 +7,15 @@ Exposes backend actions for querying KPIs, running analyses,
 and interacting with the E2I agent system.
 
 Author: E2I Causal Analytics Team
-Version: 1.3.0
+Version: 1.6.3
 
 Changelog:
+    1.6.3 - Fixed AG-UI event serialization: serialize Pydantic events to JSON strings for StreamingResponse
+    1.6.2 - Added MemorySaver checkpointer to LangGraph graph (required by ag_ui_langgraph)
+    1.6.1 - Fixed run_id validation error: auto-generate UUID when SDK doesn't provide run_id
+    1.6.0 - Fixed SDK incompatibility: wrapper class adds execute() method to LangGraphAGUIAgent
+    1.5.0 - (Reverted) Attempted switch to LangGraphAgent (SDK rejects it)
+    1.4.0 - Replaced middleware with custom handler (cleaner SDK delegation with info transformation)
     1.3.0 - Connected to real repositories (BusinessMetricRepository, AgentRegistryRepository)
     1.2.0 - Refactored from monkey-patches to response transformer middleware
     1.1.0 - Added SDK compatibility patches for frontend v1.x
@@ -21,19 +27,113 @@ import json
 import logging
 import operator
 import os
+import uuid
 from datetime import datetime, timezone
 from typing import Annotated, Any, AsyncGenerator, Dict, List, Optional, Sequence, TypedDict
 
-from copilotkit import CopilotKitRemoteEndpoint, LangGraphAGUIAgent, Action as CopilotAction
-from copilotkit.integrations.fastapi import add_fastapi_endpoint
-from copilotkit.sdk import COPILOTKIT_SDK_VERSION
+from copilotkit import CopilotKitRemoteEndpoint, Action as CopilotAction
+from copilotkit.langgraph_agui_agent import LangGraphAGUIAgent as _LangGraphAGUIAgent
+from ag_ui.core import RunAgentInput
+from copilotkit.integrations.fastapi import (
+    handler as sdk_handler,
+    handle_execute_action,
+    handle_execute_agent,
+    handle_get_agent_state,
+)
+from copilotkit.sdk import COPILOTKIT_SDK_VERSION, CopilotKitContext
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# SDK COMPATIBILITY: LangGraphAGUIAgent with execute() method
+# =============================================================================
+# The CopilotKit SDK (v0.1.74) has a bug: it enforces using LangGraphAGUIAgent
+# but calls agent.execute() which doesn't exist on that class (only run() exists).
+# This wrapper bridges the gap by adding execute() that delegates to run().
+
+
+class LangGraphAgent(_LangGraphAGUIAgent):
+    """
+    Extended LangGraphAGUIAgent that adds the execute() method required by SDK.
+
+    The SDK's CopilotKitRemoteEndpoint.execute_agent() calls agent.execute(),
+    but LangGraphAGUIAgent only has run() inherited from ag_ui_langgraph.
+    This wrapper provides the missing execute() method.
+    """
+
+    def dict_repr(self) -> Dict[str, Any]:
+        """Return dictionary representation for SDK info endpoint."""
+        return {
+            "name": self.name,
+            "description": getattr(self, "description", "") or "",
+        }
+
+    async def execute(
+        self,
+        *,
+        thread_id: str,
+        state: dict,
+        messages: List[Any],
+        config: Optional[dict] = None,
+        actions: Optional[List[Any]] = None,
+        node_name: Optional[str] = None,
+        meta_events: Optional[List[Any]] = None,
+        **kwargs,
+    ) -> AsyncGenerator[str, None]:
+        """
+        Bridge method: converts execute() parameters to RunAgentInput and calls run().
+
+        The SDK calls execute() with these parameters, but LangGraphAGUIAgent
+        expects run(input: RunAgentInput). This method performs the conversion
+        and serializes the AG-UI events to strings for the StreamingResponse.
+        """
+        # Convert messages to the format expected by RunAgentInput
+        # The SDK passes langchain Message objects, RunAgentInput expects ag_ui messages
+        from ag_ui.core import Message as AGUIMessage
+
+        agui_messages = []
+        for msg in messages or []:
+            if hasattr(msg, "content") and hasattr(msg, "type"):
+                # Convert langchain message to AGUI format
+                role = "user" if msg.type == "human" else "assistant"
+                agui_messages.append(AGUIMessage(role=role, content=msg.content))
+
+        # Build RunAgentInput
+        # Generate run_id if not provided (SDK doesn't always pass it)
+        run_id = kwargs.get("run_id") or str(uuid.uuid4())
+
+        run_input = RunAgentInput(
+            thread_id=thread_id,
+            run_id=run_id,
+            state=state,
+            messages=agui_messages,
+            tools=actions,  # CopilotKit actions become tools
+            context=[],
+            forwarded_props={"node_name": node_name} if node_name else {},
+        )
+
+        # Call parent's run() method and serialize each AG-UI event to string
+        # The run() method yields Pydantic AG-UI event objects that need serialization
+        async for event in self.run(run_input):
+            if isinstance(event, str):
+                # Already a string, yield as-is
+                yield event
+            elif hasattr(event, "model_dump_json"):
+                # Pydantic v2 object - serialize to JSON
+                yield event.model_dump_json()
+            elif hasattr(event, "json"):
+                # Pydantic v1 object - serialize to JSON
+                yield event.json()
+            else:
+                # Fallback - convert to string
+                yield str(event)
 
 
 # =============================================================================
@@ -586,7 +686,9 @@ def create_e2i_chat_agent():
     workflow.set_entry_point("chat")
     workflow.add_edge("chat", END)
 
-    return workflow.compile()
+    # Checkpointer is required by ag_ui_langgraph for state management
+    checkpointer = MemorySaver()
+    return workflow.compile(checkpointer=checkpointer)
 
 
 def generate_e2i_response(query: str) -> str:
@@ -683,7 +785,7 @@ def create_copilotkit_sdk() -> CopilotKitRemoteEndpoint:
     """
     sdk = CopilotKitRemoteEndpoint(
         agents=[
-            LangGraphAGUIAgent(
+            LangGraphAgent(
                 name="default",
                 description="E2I Analytics Assistant for pharmaceutical commercial analytics. Helps with KPI analysis, causal inference, and agent system insights.",
                 graph=e2i_chat_graph,
@@ -735,12 +837,64 @@ def transform_info_response(sdk: CopilotKitRemoteEndpoint) -> Dict[str, Any]:
     }
 
 
+async def copilotkit_custom_handler(request: Request, sdk: CopilotKitRemoteEndpoint, path: str = "") -> JSONResponse:
+    """
+    Custom CopilotKit endpoint handler that transforms info responses for frontend v1.x.
+
+    Delegates to SDK handler functions but overrides info response format.
+    This is cleaner than middleware because transformation happens at the source.
+
+    Args:
+        request: FastAPI request
+        sdk: CopilotKit SDK instance
+        path: Request path (extracted from route)
+
+    Returns:
+        JSONResponse with properly formatted data
+    """
+    from typing import cast
+    from fastapi.encoders import jsonable_encoder
+
+    try:
+        body = await request.json()
+    except:  # noqa: E722
+        body = None
+
+    context = cast(
+        CopilotKitContext,
+        {
+            "properties": (body or {}).get("properties", {}),
+            "frontend_url": (body or {}).get("frontendUrl", None),
+            "headers": request.headers,
+        }
+    )
+
+    method = request.method
+
+    # Handle info request with our custom transformation (root path or /info)
+    if method in ["GET", "POST"] and path in ("", "info"):
+        response = transform_info_response(sdk)
+        logger.debug(f"[CopilotKit] Info response: agents={list(response['agents'].keys())}")
+        return JSONResponse(content=response)
+
+    # For all other paths, delegate to SDK handler
+    # We re-use the SDK's handler which routes based on path
+    return await sdk_handler(request, sdk)
+
+
 def add_copilotkit_routes(app: FastAPI, prefix: str = "/api/copilotkit") -> None:
     """
     Add CopilotKit routes to the FastAPI application.
 
-    Adds a custom /info endpoint that transforms the response format for
-    frontend v1.x compatibility, then adds the SDK's other routes.
+    Uses a custom endpoint handler instead of the SDK's add_fastapi_endpoint
+    to properly transform info responses for frontend v1.x compatibility.
+
+    The SDK's routing expects paths like:
+    - / or /info → info endpoint (we transform this)
+    - /agent/{name} → execute agent
+    - /agent/{name}/state → get agent state
+    - /action/{name} → execute action
+    - /agents/execute, /actions/execute → v1 endpoints
 
     Args:
         app: FastAPI application instance
@@ -748,22 +902,23 @@ def add_copilotkit_routes(app: FastAPI, prefix: str = "/api/copilotkit") -> None
     """
     sdk = create_copilotkit_sdk()
 
-    # Add custom info endpoint BEFORE SDK routes (to take precedence)
-    @app.post(f"{prefix}/info")
-    async def copilotkit_info(request: Request) -> JSONResponse:
-        """
-        Custom info endpoint with response transformation for frontend v1.x.
+    # Normalize prefix (ensure starts with / and no trailing /)
+    normalized_prefix = "/" + prefix.strip("/")
 
-        The SDK returns agents as an array, but frontend v1.x expects a dict
-        keyed by agent ID. This endpoint transforms the response accordingly.
-        """
-        response = transform_info_response(sdk)
-        logger.debug(f"[CopilotKit] Info response: agents={list(response['agents'].keys())}")
-        return JSONResponse(content=response)
+    async def make_handler(request: Request, path: str = ""):
+        """Route handler that extracts path and delegates to custom handler."""
+        return await copilotkit_custom_handler(request, sdk, path)
 
-    # Add SDK routes (main chat endpoint)
-    add_fastapi_endpoint(app, sdk, prefix)
-    logger.info(f"[CopilotKit] Routes added at {prefix} (with custom info transformer)")
+    # Add catch-all route for all CopilotKit paths
+    # This matches the SDK's pattern: {prefix}/{path:path}
+    app.add_api_route(
+        f"{normalized_prefix}/{{path:path}}",
+        make_handler,
+        methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        name="copilotkit_handler",
+    )
+
+    logger.info(f"[CopilotKit] Routes added at {normalized_prefix} (custom handler with info transformation)")
 
 
 # =============================================================================
