@@ -174,7 +174,27 @@ ssh root@159.89.180.27
 
 When behind a corporate proxy (e.g., Novartis Netskope), direct access to web UIs on non-standard ports is blocked. Use SSH tunneling to access services via localhost.
 
-#### Available Services
+#### Quick Start (Recommended)
+
+Use the connection manager script for automated health checks and tunnel setup:
+
+```bash
+# Full check + start tunnel
+./scripts/droplet-connect.sh
+
+# Just check health (no tunnel)
+./scripts/droplet-connect.sh --check-only
+
+# Skip checks, just start tunnel
+./scripts/droplet-connect.sh --tunnel-only
+
+# Stop existing tunnels
+./scripts/droplet-connect.sh --kill-tunnel
+```
+
+#### Manual Setup
+
+**Available Services:**
 
 | Service | Remote Port | Local URL (via tunnel) |
 |---------|-------------|------------------------|
@@ -183,7 +203,7 @@ When behind a corporate proxy (e.g., Novartis Netskope), direct access to web UI
 | Opik Backend | 8080 | http://localhost:8080 |
 | E2I API | 8001 | http://localhost:8001 |
 
-#### Start SSH Tunnel
+**Start SSH Tunnel:**
 
 ```bash
 # Forward MLflow and Opik UI (most common)
@@ -203,7 +223,7 @@ ssh -i ~/.ssh/replit \
 - `-N` - Don't execute remote command (tunnel only)
 - `-f` - Run in background
 
-#### Verify Tunnel
+**Verify Tunnel:**
 
 ```bash
 # Check if tunnel is working
@@ -211,7 +231,7 @@ curl -s -o /dev/null -w "MLflow: HTTP %{http_code}\n" http://localhost:5000/
 curl -s -o /dev/null -w "Opik: HTTP %{http_code}\n" http://localhost:5173/
 ```
 
-#### Stop SSH Tunnel
+**Stop SSH Tunnel:**
 
 ```bash
 # Kill all SSH tunnels to the droplet
@@ -222,7 +242,7 @@ ps aux | grep "ssh.*-L" | grep -v grep
 kill <PID>
 ```
 
-#### Persistent Tunnel (Optional)
+**Persistent Tunnel (Optional):**
 
 Add to `~/.ssh/config` for easier access:
 
