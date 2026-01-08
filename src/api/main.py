@@ -63,9 +63,10 @@ from src.api.routes.predictions import router as predictions_router
 from src.api.routes.rag import router as rag_router
 from src.api.routes.copilotkit import add_copilotkit_routes, router as copilotkit_router
 
-# Import auth middleware
+# Import middleware
 from src.api.dependencies.auth import is_auth_enabled
 from src.api.middleware.auth_middleware import JWTAuthMiddleware, get_public_paths
+from src.api.middleware.security_middleware import SecurityHeadersMiddleware
 
 # Configure logging
 logging.basicConfig(
@@ -216,6 +217,11 @@ app.add_middleware(
 # Protects all routes except public paths (health, docs, read-only endpoints)
 app.add_middleware(JWTAuthMiddleware)
 logger.info(f"JWT Authentication: {'ENABLED' if is_auth_enabled() else 'DISABLED (Supabase not configured)'}")
+
+# Security Headers middleware
+# Adds X-Content-Type-Options, X-Frame-Options, CSP, etc.
+app.add_middleware(SecurityHeadersMiddleware)
+logger.info("Security Headers: ENABLED")
 
 # =============================================================================
 # ROOT ENDPOINTS
