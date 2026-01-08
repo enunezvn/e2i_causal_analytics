@@ -1,8 +1,11 @@
 import { lazy, Suspense } from 'react';
 import type { RouteObject } from 'react-router-dom';
+import { ProtectedRoute } from '@/components/auth';
 
 // Lazy load page components for code splitting
 const Home = lazy(() => import('@/pages/Home'));
+const Login = lazy(() => import('@/pages/Login'));
+const Signup = lazy(() => import('@/pages/Signup'));
 const KnowledgeGraph = lazy(() => import('@/pages/KnowledgeGraph'));
 const CausalDiscovery = lazy(() => import('@/pages/CausalDiscovery'));
 const ModelPerformance = lazy(() => import('@/pages/ModelPerformance'));
@@ -160,132 +163,182 @@ export const routeConfigs: RouteConfig[] = [
 
 // React Router route definitions
 export const routes: RouteObject[] = [
+  // Auth routes (no layout)
+  {
+    path: '/login',
+    element: (
+      <LazyPage>
+        <Login />
+      </LazyPage>
+    ),
+  },
+  {
+    path: '/signup',
+    element: (
+      <LazyPage>
+        <Signup />
+      </LazyPage>
+    ),
+  },
+  // Protected app routes
   {
     path: '/',
     element: (
-      <LazyPage>
-        <Home />
-      </LazyPage>
+      <ProtectedRoute>
+        <LazyPage>
+          <Home />
+        </LazyPage>
+      </ProtectedRoute>
     ),
   },
   {
     path: '/knowledge-graph',
     element: (
-      <LazyPage>
-        <KnowledgeGraph />
-      </LazyPage>
+      <ProtectedRoute>
+        <LazyPage>
+          <KnowledgeGraph />
+        </LazyPage>
+      </ProtectedRoute>
     ),
   },
   {
     path: '/causal-discovery',
     element: (
-      <LazyPage>
-        <CausalDiscovery />
-      </LazyPage>
+      <ProtectedRoute>
+        <LazyPage>
+          <CausalDiscovery />
+        </LazyPage>
+      </ProtectedRoute>
     ),
   },
   {
     path: '/model-performance',
     element: (
-      <LazyPage>
-        <ModelPerformance />
-      </LazyPage>
+      <ProtectedRoute>
+        <LazyPage>
+          <ModelPerformance />
+        </LazyPage>
+      </ProtectedRoute>
     ),
   },
   {
     path: '/feature-importance',
     element: (
-      <LazyPage>
-        <FeatureImportance />
-      </LazyPage>
+      <ProtectedRoute>
+        <LazyPage>
+          <FeatureImportance />
+        </LazyPage>
+      </ProtectedRoute>
     ),
   },
   {
     path: '/time-series',
     element: (
-      <LazyPage>
-        <TimeSeries />
-      </LazyPage>
+      <ProtectedRoute>
+        <LazyPage>
+          <TimeSeries />
+        </LazyPage>
+      </ProtectedRoute>
     ),
   },
   {
     path: '/intervention-impact',
     element: (
-      <LazyPage>
-        <InterventionImpact />
-      </LazyPage>
+      <ProtectedRoute>
+        <LazyPage>
+          <InterventionImpact />
+        </LazyPage>
+      </ProtectedRoute>
     ),
   },
   {
     path: '/predictive-analytics',
     element: (
-      <LazyPage>
-        <PredictiveAnalytics />
-      </LazyPage>
+      <ProtectedRoute>
+        <LazyPage>
+          <PredictiveAnalytics />
+        </LazyPage>
+      </ProtectedRoute>
     ),
   },
   {
     path: '/data-quality',
     element: (
-      <LazyPage>
-        <DataQuality />
-      </LazyPage>
+      <ProtectedRoute>
+        <LazyPage>
+          <DataQuality />
+        </LazyPage>
+      </ProtectedRoute>
     ),
   },
   {
     path: '/system-health',
     element: (
-      <LazyPage>
-        <SystemHealth />
-      </LazyPage>
+      <ProtectedRoute>
+        <LazyPage>
+          <SystemHealth />
+        </LazyPage>
+      </ProtectedRoute>
     ),
   },
   {
     path: '/monitoring',
     element: (
-      <LazyPage>
-        <Monitoring />
-      </LazyPage>
+      <ProtectedRoute>
+        <LazyPage>
+          <Monitoring />
+        </LazyPage>
+      </ProtectedRoute>
     ),
   },
   {
     path: '/agent-orchestration',
     element: (
-      <LazyPage>
-        <AgentOrchestration />
-      </LazyPage>
+      <ProtectedRoute>
+        <LazyPage>
+          <AgentOrchestration />
+        </LazyPage>
+      </ProtectedRoute>
     ),
   },
   {
     path: '/kpi-dictionary',
     element: (
-      <LazyPage>
-        <KPIDictionary />
-      </LazyPage>
+      <ProtectedRoute>
+        <LazyPage>
+          <KPIDictionary />
+        </LazyPage>
+      </ProtectedRoute>
     ),
   },
   {
     path: '/memory-architecture',
     element: (
-      <LazyPage>
-        <MemoryArchitecture />
-      </LazyPage>
+      <ProtectedRoute>
+        <LazyPage>
+          <MemoryArchitecture />
+        </LazyPage>
+      </ProtectedRoute>
     ),
   },
   {
     path: '/digital-twin',
     element: (
-      <LazyPage>
-        <DigitalTwin />
-      </LazyPage>
+      <ProtectedRoute>
+        <LazyPage>
+          <DigitalTwin />
+        </LazyPage>
+      </ProtectedRoute>
     ),
   },
   {
     path: '/ai-insights',
     element: (
-      <LazyPage>
-        <AIAgentInsights />
-      </LazyPage>
+      <ProtectedRoute>
+        <LazyPage>
+          <AIAgentInsights />
+        </LazyPage>
+      </ProtectedRoute>
     ),
   },
   {

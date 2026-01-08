@@ -7,6 +7,10 @@
  * @module hooks
  */
 
+// Authentication hooks
+export { useAuth } from './use-auth';
+export type { UseAuthReturn } from './use-auth';
+
 // Visualization hooks
 export { useD3 } from './use-d3';
 export { useCytoscape } from './use-cytoscape';
