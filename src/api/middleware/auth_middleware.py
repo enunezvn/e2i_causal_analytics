@@ -44,6 +44,9 @@ PUBLIC_PATHS: List[Tuple[str, str]] = [
     ("GET", "/graph/health"),
     # CopilotKit status - public for frontend checks
     ("GET", "/api/copilotkit/status"),
+    # Chatbot endpoints - public for testing
+    ("POST", "/api/copilotkit/chat"),
+    ("POST", "/api/copilotkit/chat/stream"),
 ]
 
 # Paths that match patterns (for dynamic routes)
