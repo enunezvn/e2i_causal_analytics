@@ -21,3 +21,11 @@ export type {
   AgentInfo,
   UserPreferences,
 } from './E2ICopilotProvider';
+
+export { AuthProvider, useAuthContext } from './AuthProvider';
+export type {
+  AuthProviderProps,
+  AuthContextValue,
+  LoginCredentials,
+  SignupCredentials,
+} from './AuthProvider';

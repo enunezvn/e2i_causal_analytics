@@ -17,6 +17,7 @@ import axios, {
   InternalAxiosRequestConfig,
 } from 'axios';
 import { env, buildApiUrl } from '@/config/env';
+import { useAuthStore } from '@/stores/auth-store';
 
 /**
  * Standard API error response structure
@@ -100,13 +101,19 @@ export class ApiError extends Error {
 }
 
 /**
- * Request interceptor for adding common headers and logging
+ * Request interceptor for adding common headers, auth token, and logging
  */
 function requestInterceptor(
   config: InternalAxiosRequestConfig
 ): InternalAxiosRequestConfig {
   // Add common headers
   config.headers = config.headers || {};
+
+  // Add auth token if available
+  const session = useAuthStore.getState().session;
+  if (session?.access_token) {
+    config.headers['Authorization'] = `Bearer ${session.access_token}`;
+  }
 
   // Add request timestamp for latency tracking
   config.headers['X-Request-Time'] = new Date().toISOString();
@@ -122,6 +129,7 @@ function requestInterceptor(
     console.debug(`[API] ${method} ${url}`, {
       correlationId,
       params: config.params,
+      hasAuth: !!session?.access_token,
     });
   }
 
@@ -157,6 +165,16 @@ function errorInterceptor(error: AxiosError<ApiErrorResponse>): Promise<never> {
     console.error(`[API] ${method} ${url} -> ${status}`, {
       error: error.message,
       data: error.response?.data,
+    });
+  }
+
+  // Handle 401 Unauthorized - clear auth state (token expired or invalid)
+  if (error.response?.status === 401) {
+    const { clearAuth, setError } = useAuthStore.getState();
+    clearAuth();
+    setError({
+      code: 'session_expired',
+      message: 'Your session has expired. Please sign in again.',
     });
   }
 

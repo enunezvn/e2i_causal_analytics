@@ -13,6 +13,7 @@
 import { useLocation, Link } from 'react-router-dom';
 import { useSidebarState } from '@/stores/ui-store';
 import { getRouteConfig } from '@/router/routes';
+import { UserMenu } from '@/components/auth';
 
 /**
  * Header props interface
@@ -87,27 +88,6 @@ function BellIcon({ className = 'h-5 w-5' }: { className?: string }) {
   );
 }
 
-/**
- * User icon for profile
- */
-function UserIcon({ className = 'h-5 w-5' }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      fill="none"
-      viewBox="0 0 24 24"
-      stroke="currentColor"
-      strokeWidth={2}
-      aria-hidden="true"
-    >
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
-      />
-    </svg>
-  );
-}
 
 /**
  * Header component
@@ -224,25 +204,8 @@ export function Header({ className = '' }: HeaderProps) {
           <span className="sr-only">You have unread notifications</span>
         </button>
 
-        {/* User menu button */}
-        <button
-          type="button"
-          className="
-            inline-flex items-center justify-center gap-2
-            rounded-md p-2
-            text-[var(--color-muted)]
-            hover:bg-[var(--color-secondary)]
-            hover:text-[var(--color-foreground)]
-            focus-ring
-          "
-          aria-label="User menu"
-          aria-haspopup="menu"
-        >
-          <UserIcon />
-          <span className="hidden lg:inline-block text-sm font-medium">
-            User
-          </span>
-        </button>
+        {/* User menu */}
+        <UserMenu />
       </div>
     </header>
   );
