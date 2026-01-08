@@ -12,7 +12,7 @@ Components:
 - MLOps service connections
 
 Author: E2I Causal Analytics Team
-Version: 4.1.0
+Version: 4.2.0
 """
 
 import logging
@@ -62,6 +62,10 @@ from src.api.routes.monitoring import router as monitoring_router
 from src.api.routes.predictions import router as predictions_router
 from src.api.routes.rag import router as rag_router
 from src.api.routes.copilotkit import add_copilotkit_routes, router as copilotkit_router
+
+# Import auth middleware
+from src.api.dependencies.auth import is_auth_enabled
+from src.api.middleware.auth_middleware import JWTAuthMiddleware, get_public_paths
 
 # Configure logging
 logging.basicConfig(
@@ -182,7 +186,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="E2I Causal Analytics Platform",
     description="18-Agent architecture for causal inference, ML interpretability, and digital twin generation",
-    version="4.1.0",
+    version="4.2.0",
     docs_url="/api/docs",
     redoc_url="/api/redoc",
     openapi_url="/api/openapi.json",
@@ -194,13 +198,24 @@ app = FastAPI(
 # =============================================================================
 
 # CORS middleware for frontend integration
+# TODO: Restrict origins for production deployment
+ALLOWED_ORIGINS = os.environ.get(
+    "ALLOWED_ORIGINS",
+    "http://localhost:3000,http://localhost:5173,http://localhost:8080"
+).split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
+    allow_origins=ALLOWED_ORIGINS if ALLOWED_ORIGINS != ["*"] else ["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# JWT Authentication middleware (Supabase)
+# Protects all routes except public paths (health, docs, read-only endpoints)
+app.add_middleware(JWTAuthMiddleware)
+logger.info(f"JWT Authentication: {'ENABLED' if is_auth_enabled() else 'DISABLED (Supabase not configured)'}")
 
 # =============================================================================
 # ROOT ENDPOINTS
@@ -212,8 +227,9 @@ async def root() -> Dict[str, Any]:
     """Root endpoint with API information."""
     return {
         "service": "E2I Causal Analytics Platform",
-        "version": "4.1.0",
+        "version": "4.2.0",
         "status": "online",
+        "auth_enabled": is_auth_enabled(),
         "docs": "/api/docs",
         "health": "/health",
     }
