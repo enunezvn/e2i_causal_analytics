@@ -38,6 +38,7 @@ from src.api.schemas.kpi import (
     WorkstreamInfo,
     WorkstreamListResponse,
 )
+from src.api.dependencies.supabase_client import get_supabase
 from src.kpi.calculator import KPICalculator
 from src.kpi.models import CausalLibrary, Workstream
 from src.kpi.registry import get_registry
@@ -66,7 +67,7 @@ def get_kpi_calculator() -> KPICalculator:
         KPICalculator instance
     """
     # In production, this would be a singleton or use proper DI
-    return KPICalculator()
+    return KPICalculator(db_connection=get_supabase())
 
 
 # =============================================================================
