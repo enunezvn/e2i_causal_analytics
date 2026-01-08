@@ -294,7 +294,7 @@ class TestCleanupOldDriftHistoryTask:
 
         mock_client = MagicMock()
         mock_client.table = mock_table
-        mock_get_client.return_value = AsyncMock(return_value=mock_client)()
+        mock_get_client.side_effect = AsyncMock(return_value=mock_client)
 
         result = cleanup_old_drift_history(retention_days=90)
 

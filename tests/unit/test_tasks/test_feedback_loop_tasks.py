@@ -138,7 +138,7 @@ class TestRunFeedbackLoopShortWindow:
         """Test that task processes trigger and next_best_action types."""
         from src.tasks.feedback_loop_tasks import run_feedback_loop_short_window
 
-        mock_get_client.return_value = AsyncMock(return_value=mock_supabase_client)()
+        mock_get_client.side_effect = AsyncMock(return_value=mock_supabase_client)
 
         result = run_feedback_loop_short_window()
 
@@ -154,7 +154,7 @@ class TestRunFeedbackLoopShortWindow:
         """Test that task accepts custom prediction types override."""
         from src.tasks.feedback_loop_tasks import run_feedback_loop_short_window
 
-        mock_get_client.return_value = AsyncMock(return_value=mock_supabase_client)()
+        mock_get_client.side_effect = AsyncMock(return_value=mock_supabase_client)
 
         custom_types = ["custom_type_1", "custom_type_2"]
         result = run_feedback_loop_short_window(prediction_types=custom_types)
@@ -167,7 +167,7 @@ class TestRunFeedbackLoopShortWindow:
         """Test graceful handling when no database client."""
         from src.tasks.feedback_loop_tasks import run_feedback_loop_short_window
 
-        mock_get_client.return_value = AsyncMock(return_value=None)()
+        mock_get_client.side_effect = AsyncMock(return_value=None)
 
         result = run_feedback_loop_short_window()
 
@@ -207,7 +207,7 @@ class TestRunFeedbackLoopMediumWindow:
         """Test that task processes churn prediction type."""
         from src.tasks.feedback_loop_tasks import run_feedback_loop_medium_window
 
-        mock_get_client.return_value = AsyncMock(return_value=mock_supabase_client)()
+        mock_get_client.side_effect = AsyncMock(return_value=mock_supabase_client)
 
         result = run_feedback_loop_medium_window()
 
@@ -249,7 +249,7 @@ class TestRunFeedbackLoopLongWindow:
         """Test that task processes market_share_impact and risk types."""
         from src.tasks.feedback_loop_tasks import run_feedback_loop_long_window
 
-        mock_get_client.return_value = AsyncMock(return_value=mock_supabase_client)()
+        mock_get_client.side_effect = AsyncMock(return_value=mock_supabase_client)
 
         result = run_feedback_loop_long_window()
 
@@ -315,7 +315,7 @@ class TestAnalyzeConceptDriftFromTruth:
             return MagicMock(select=mock_select)
 
         mock_client.table = mock_table
-        mock_get_client.return_value = AsyncMock(return_value=mock_client)()
+        mock_get_client.side_effect = AsyncMock(return_value=mock_client)
 
         result = analyze_concept_drift_from_truth()
 
@@ -350,7 +350,7 @@ class TestAnalyzeConceptDriftFromTruth:
             return MagicMock(select=mock_select)
 
         mock_client.table = mock_table
-        mock_get_client.return_value = AsyncMock(return_value=mock_client)()
+        mock_get_client.side_effect = AsyncMock(return_value=mock_client)
 
         result = analyze_concept_drift_from_truth()
 
@@ -381,7 +381,7 @@ class TestAnalyzeConceptDriftFromTruth:
         )
 
         mock_client.table = MagicMock(return_value=MagicMock(select=mock_select))
-        mock_get_client.return_value = AsyncMock(return_value=mock_client)()
+        mock_get_client.side_effect = AsyncMock(return_value=mock_client)
 
         result = analyze_concept_drift_from_truth(prediction_type="churn")
 
@@ -410,7 +410,7 @@ class TestAnalyzeConceptDriftFromTruth:
         )
 
         mock_client.table = MagicMock(return_value=MagicMock(select=mock_select))
-        mock_get_client.return_value = AsyncMock(return_value=mock_client)()
+        mock_get_client.side_effect = AsyncMock(return_value=mock_client)
 
         result = analyze_concept_drift_from_truth(
             baseline_days=120,
@@ -422,11 +422,11 @@ class TestAnalyzeConceptDriftFromTruth:
         assert result.get("current_days") == 14
 
     @patch("src.memory.services.factories.get_supabase_client")
-    def test_task_handles_no_client(self, mock_get_client):
+    def test_task_handles_no_client_drift(self, mock_get_client):
         """Test graceful handling when no database client."""
         from src.tasks.feedback_loop_tasks import analyze_concept_drift_from_truth
 
-        mock_get_client.return_value = AsyncMock(return_value=None)()
+        mock_get_client.side_effect = AsyncMock(return_value=None)
 
         result = analyze_concept_drift_from_truth()
 
@@ -466,7 +466,7 @@ class TestRunFullFeedbackLoop:
         """Test that task runs feedback loop for all prediction types."""
         from src.tasks.feedback_loop_tasks import run_full_feedback_loop
 
-        mock_get_client.return_value = AsyncMock(return_value=mock_supabase_client)()
+        mock_get_client.side_effect = AsyncMock(return_value=mock_supabase_client)
         mock_drift_task.delay = MagicMock(return_value=MagicMock(id="drift-task-123"))
 
         result = run_full_feedback_loop()
@@ -480,7 +480,7 @@ class TestRunFullFeedbackLoop:
         """Test that task triggers drift analysis when include_drift_analysis=True."""
         from src.tasks.feedback_loop_tasks import run_full_feedback_loop
 
-        mock_get_client.return_value = AsyncMock(return_value=mock_supabase_client)()
+        mock_get_client.side_effect = AsyncMock(return_value=mock_supabase_client)
         mock_drift_task.delay = MagicMock(return_value=MagicMock(id="drift-task-123"))
 
         result = run_full_feedback_loop(include_drift_analysis=True)
@@ -497,7 +497,7 @@ class TestRunFullFeedbackLoop:
         """Test that task skips drift analysis when include_drift_analysis=False."""
         from src.tasks.feedback_loop_tasks import run_full_feedback_loop
 
-        mock_get_client.return_value = AsyncMock(return_value=mock_supabase_client)()
+        mock_get_client.side_effect = AsyncMock(return_value=mock_supabase_client)
 
         result = run_full_feedback_loop(include_drift_analysis=False)
 
@@ -603,7 +603,7 @@ class TestTaskErrorHandling:
         mock_client = MagicMock()
         mock_rpc_execute = AsyncMock(side_effect=Exception("RPC call failed"))
         mock_client.rpc = MagicMock(return_value=MagicMock(execute=mock_rpc_execute))
-        mock_get_client.return_value = AsyncMock(return_value=mock_client)()
+        mock_get_client.side_effect = AsyncMock(return_value=mock_client)
 
         result = run_feedback_loop_short_window()
 
@@ -624,7 +624,7 @@ class TestTaskErrorHandling:
                 execute=mock_execute,
             ))
         ))
-        mock_get_client.return_value = AsyncMock(return_value=mock_client)()
+        mock_get_client.side_effect = AsyncMock(return_value=mock_client)
 
         result = analyze_concept_drift_from_truth()
 
