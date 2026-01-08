@@ -6,7 +6,7 @@
  * These handlers intercept HTTP requests and return mock data.
  */
 
-import { http, HttpResponse, delay } from 'msw';
+import { http, HttpResponse, delay, passthrough } from 'msw';
 import { env } from '@/config/env';
 
 // Graph mock data
@@ -1221,63 +1221,15 @@ const digitalTwinHandlers = [
 
 /**
  * CopilotKit API Handlers
- * Note: CopilotKit requests go through Vite proxy (/api -> backend)
- * so we need to intercept both /api/copilotkit/* and ${baseUrl}/copilotkit/* paths
+ * Note: CopilotKit requests are passed through to the real API backend.
+ * MSW passthrough allows the Vite proxy to forward these to the actual backend.
  */
 const copilotKitHandlers = [
-  // GET /api/copilotkit/info - Runtime info for CopilotKit (proxied path)
-  http.get('/api/copilotkit/info', async () => {
-    await simulateDelay();
-    return HttpResponse.json({
-      agents: [
-        { name: 'default', description: 'Default agent for general queries' },
-        { name: 'orchestrator', description: 'Query routing and coordination' },
-        { name: 'causal_impact', description: 'Causal analysis and impact assessment' },
-        { name: 'gap_analyzer', description: 'ROI opportunity detection' },
-        { name: 'drift_monitor', description: 'Data and model drift detection' },
-        { name: 'explainer', description: 'Natural language explanations' },
-      ],
-      actions: [],
-      copilotReadable: [],
-    });
-  }),
-
-  // GET ${baseUrl}/copilotkit/info - Runtime info for CopilotKit (direct path)
-  http.get(`${baseUrl}/copilotkit/info`, async () => {
-    await simulateDelay();
-    return HttpResponse.json({
-      agents: [
-        { name: 'default', description: 'Default agent for general queries' },
-        { name: 'orchestrator', description: 'Query routing and coordination' },
-        { name: 'causal_impact', description: 'Causal analysis and impact assessment' },
-        { name: 'gap_analyzer', description: 'ROI opportunity detection' },
-        { name: 'drift_monitor', description: 'Data and model drift detection' },
-        { name: 'explainer', description: 'Natural language explanations' },
-      ],
-      actions: [],
-      copilotReadable: [],
-    });
-  }),
-
-  // POST /api/copilotkit - Main CopilotKit endpoint (proxied path)
-  http.post('/api/copilotkit', async () => {
-    await simulateDelay();
-    return HttpResponse.json({
-      threadId: `thread_${Date.now()}`,
-      messages: [],
-      agentState: {},
-    });
-  }),
-
-  // POST ${baseUrl}/copilotkit - Main CopilotKit endpoint (direct path)
-  http.post(`${baseUrl}/copilotkit`, async () => {
-    await simulateDelay();
-    return HttpResponse.json({
-      threadId: `thread_${Date.now()}`,
-      messages: [],
-      agentState: {},
-    });
-  }),
+  // Passthrough all CopilotKit requests to real API
+  http.all('/api/copilotkit/*', () => passthrough()),
+  http.all('/api/copilotkit', () => passthrough()),
+  http.all(`${baseUrl}/copilotkit/*`, () => passthrough()),
+  http.all(`${baseUrl}/copilotkit`, () => passthrough()),
 ];
 
 /**
@@ -1315,7 +1267,7 @@ const healthHandlers = [
  * All handlers combined
  */
 export const handlers = [
-  ...copilotKitHandlers,  // CopilotKit handlers MUST be first to prevent runtime errors
+  // NOTE: copilotKitHandlers removed - let Vite proxy handle CopilotKit requests to real backend
   ...graphHandlers,
   ...memoryHandlers,
   ...monitoringHandlers,

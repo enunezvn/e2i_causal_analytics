@@ -438,14 +438,14 @@ export interface CopilotKitWrapperProps {
  *
  * @example
  * ```tsx
- * <CopilotKitWrapper runtimeUrl="/api/copilotkit" enabled={false}>
+ * <CopilotKitWrapper runtimeUrl="/api/copilotkit/" enabled={false}>
  *   <AppRouter />
  * </CopilotKitWrapper>
  * ```
  */
 export function CopilotKitWrapper({
   children,
-  runtimeUrl = '/api/copilotkit',
+  runtimeUrl = '/api/copilotkit/',
   enabled = false, // Disabled by default until backend is available
 }: CopilotKitWrapperProps) {
   // Fallback content when CopilotKit is disabled or fails

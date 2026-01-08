@@ -75,7 +75,9 @@ function getMode(): 'development' | 'production' | 'test' {
  */
 export const env: EnvConfig = {
   // API Configuration
-  apiUrl: getEnvVar('API_URL', 'http://localhost:8000'),
+  // In development, use /api to go through Vite proxy (which forwards to VITE_API_URL)
+  // This avoids CORS issues with direct browser requests
+  apiUrl: import.meta.env.DEV ? '/api' : getEnvVar('API_URL', '/api'),
 
   // Supabase Configuration
   supabaseUrl: getEnvVar('SUPABASE_URL', ''),
