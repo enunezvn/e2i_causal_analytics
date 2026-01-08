@@ -230,3 +230,20 @@ class KPICache:
             return ttl if ttl > 0 else None
         except Exception:
             return None
+
+    def size(self) -> int:
+        """Get the number of cached KPI results.
+
+        Returns:
+            Number of cached KPI entries.
+        """
+        if not self.enabled:
+            return 0
+
+        try:
+            pattern = f"{self.KEY_PREFIX}*"
+            keys = self._redis.keys(pattern)  # type: ignore
+            return len(keys) if keys else 0
+        except Exception as e:
+            logger.warning(f"Cache size check failed: {e}")
+            return 0
