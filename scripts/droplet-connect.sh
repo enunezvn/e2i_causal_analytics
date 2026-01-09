@@ -27,10 +27,11 @@ NC='\033[0m' # No Color
 
 # Services to forward
 declare -A SERVICES=(
+    [5174]="E2I Frontend"
+    [8001]="E2I API"
     [5000]="MLflow"
     [5173]="Opik UI"
     [8080]="Opik Backend"
-    [8001]="E2I API"
 )
 
 # Required healthy containers (core services)
