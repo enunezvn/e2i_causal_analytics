@@ -13,14 +13,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, within } from '@testing-library/react';
-import { BrowserRouter } from 'react-router-dom';
+import { screen, fireEvent, within } from '@testing-library/react';
+import { renderWithAllProviders } from '@/test/utils';
 import Home from './Home';
-
-// Wrapper for Router context
-const renderWithRouter = (component: React.ReactNode) => {
-  return render(<BrowserRouter>{component}</BrowserRouter>);
-};
 
 describe('Home', () => {
   beforeEach(() => {
@@ -32,14 +27,14 @@ describe('Home', () => {
   // =========================================================================
 
   it('renders page header with title and description', () => {
-    renderWithRouter(<Home />);
+    renderWithAllProviders(<Home />);
 
     expect(screen.getByText('E2I Executive Dashboard')).toBeInTheDocument();
     expect(screen.getByText('Causal Analytics for Commercial Operations')).toBeInTheDocument();
   });
 
   it('renders all filter selectors', () => {
-    renderWithRouter(<Home />);
+    renderWithAllProviders(<Home />);
 
     // All three selectors should be present as comboboxes
     const comboboxes = screen.getAllByRole('combobox');
@@ -47,7 +42,7 @@ describe('Home', () => {
   });
 
   it('renders quick stats bar', () => {
-    renderWithRouter(<Home />);
+    renderWithAllProviders(<Home />);
 
     expect(screen.getByText('Total TRx (MTD)')).toBeInTheDocument();
     expect(screen.getByText('Active Campaigns')).toBeInTheDocument();
@@ -61,7 +56,7 @@ describe('Home', () => {
 
   describe('Brand Selector', () => {
     it('displays default brand as All', () => {
-      renderWithRouter(<Home />);
+      renderWithAllProviders(<Home />);
 
       // The first combobox should be the brand selector
       const brandSelector = screen.getAllByRole('combobox')[0];
@@ -69,7 +64,7 @@ describe('Home', () => {
     });
 
     it('shows all brand options when clicked', async () => {
-      renderWithRouter(<Home />);
+      renderWithAllProviders(<Home />);
 
       const brandSelector = screen.getAllByRole('combobox')[0];
       fireEvent.click(brandSelector);
@@ -81,7 +76,7 @@ describe('Home', () => {
     });
 
     it('displays indication labels for brands', async () => {
-      renderWithRouter(<Home />);
+      renderWithAllProviders(<Home />);
 
       const brandSelector = screen.getAllByRole('combobox')[0];
       fireEvent.click(brandSelector);
@@ -98,7 +93,7 @@ describe('Home', () => {
 
   describe('Region Filter', () => {
     it('displays default region as All US', () => {
-      renderWithRouter(<Home />);
+      renderWithAllProviders(<Home />);
 
       // Region is the second combobox
       const regionSelector = screen.getAllByRole('combobox')[1];
@@ -106,7 +101,7 @@ describe('Home', () => {
     });
 
     it('shows all region options when clicked', async () => {
-      renderWithRouter(<Home />);
+      renderWithAllProviders(<Home />);
 
       const regionSelector = screen.getAllByRole('combobox')[1];
       fireEvent.click(regionSelector);
@@ -120,7 +115,7 @@ describe('Home', () => {
     });
 
     it('updates filter summary when region changes', async () => {
-      renderWithRouter(<Home />);
+      renderWithAllProviders(<Home />);
 
       // Find the territory summary card
       const territoryLabel = screen.getByText('Territory');
@@ -131,7 +126,7 @@ describe('Home', () => {
     });
 
     it('has MapPin icon in region selector', () => {
-      renderWithRouter(<Home />);
+      renderWithAllProviders(<Home />);
 
       // The region selector contains a MapPin icon
       const regionSelector = screen.getAllByRole('combobox')[1];
@@ -146,7 +141,7 @@ describe('Home', () => {
 
   describe('Date Range Filter', () => {
     it('displays default date range as Q4 2025', () => {
-      renderWithRouter(<Home />);
+      renderWithAllProviders(<Home />);
 
       // Date range is the third combobox
       const dateSelector = screen.getAllByRole('combobox')[2];
@@ -154,7 +149,7 @@ describe('Home', () => {
     });
 
     it('shows all date range options when clicked', async () => {
-      renderWithRouter(<Home />);
+      renderWithAllProviders(<Home />);
 
       const dateSelector = screen.getAllByRole('combobox')[2];
       fireEvent.click(dateSelector);
@@ -168,7 +163,7 @@ describe('Home', () => {
     });
 
     it('shows date range descriptions in filter summary', () => {
-      renderWithRouter(<Home />);
+      renderWithAllProviders(<Home />);
 
       // The filter summary card shows the description (may appear in multiple places)
       const descriptions = screen.getAllByText('Oct - Dec 2025');
@@ -176,7 +171,7 @@ describe('Home', () => {
     });
 
     it('updates filter summary when date range changes', () => {
-      renderWithRouter(<Home />);
+      renderWithAllProviders(<Home />);
 
       // Find the reporting period summary
       const reportingLabel = screen.getByText('Reporting Period');
@@ -187,7 +182,7 @@ describe('Home', () => {
     });
 
     it('has CalendarDays icon in date selector', () => {
-      renderWithRouter(<Home />);
+      renderWithAllProviders(<Home />);
 
       // The date selector contains a CalendarDays icon
       const dateSelector = screen.getAllByRole('combobox')[2];
@@ -202,20 +197,20 @@ describe('Home', () => {
 
   describe('KPI Display', () => {
     it('renders KPI section with title', () => {
-      renderWithRouter(<Home />);
+      renderWithAllProviders(<Home />);
 
       expect(screen.getByText('Key Performance Indicators')).toBeInTheDocument();
     });
 
     it('renders category tabs', () => {
-      renderWithRouter(<Home />);
+      renderWithAllProviders(<Home />);
 
       // Look for tab elements or category buttons
       expect(screen.getByRole('tablist')).toBeInTheDocument();
     });
 
     it('displays KPIs for selected category', () => {
-      renderWithRouter(<Home />);
+      renderWithAllProviders(<Home />);
 
       // Default should show commercial KPIs
       expect(screen.getByText('Total TRx')).toBeInTheDocument();
@@ -228,28 +223,28 @@ describe('Home', () => {
 
   describe('Agent Insights', () => {
     it('renders agent insights section', () => {
-      renderWithRouter(<Home />);
+      renderWithAllProviders(<Home />);
 
       expect(screen.getByText('Agent Insights')).toBeInTheDocument();
       expect(screen.getByText(/Recent recommendations from the 18-agent system/)).toBeInTheDocument();
     });
 
     it('displays sample insights', () => {
-      renderWithRouter(<Home />);
+      renderWithAllProviders(<Home />);
 
       expect(screen.getByText('High-Value Territory Opportunity')).toBeInTheDocument();
       expect(screen.getByText('Model Performance Drift Detected')).toBeInTheDocument();
     });
 
     it('shows agent tier badges', () => {
-      renderWithRouter(<Home />);
+      renderWithAllProviders(<Home />);
 
       expect(screen.getByText(/Tier 2: Gap Analyzer/)).toBeInTheDocument();
       expect(screen.getByText(/Tier 3: Drift Monitor/)).toBeInTheDocument();
     });
 
     it('shows impact badges', () => {
-      renderWithRouter(<Home />);
+      renderWithAllProviders(<Home />);
 
       const highBadges = screen.getAllByText('high');
       const mediumBadges = screen.getAllByText('medium');
@@ -264,13 +259,13 @@ describe('Home', () => {
 
   describe('System Health', () => {
     it('renders system health section', () => {
-      renderWithRouter(<Home />);
+      renderWithAllProviders(<Home />);
 
       expect(screen.getByText('System Health')).toBeInTheDocument();
     });
 
     it('displays system services', () => {
-      renderWithRouter(<Home />);
+      renderWithAllProviders(<Home />);
 
       expect(screen.getByText('API Gateway')).toBeInTheDocument();
       expect(screen.getByText('PostgreSQL')).toBeInTheDocument();
@@ -279,7 +274,7 @@ describe('Home', () => {
     });
 
     it('shows latency values', () => {
-      renderWithRouter(<Home />);
+      renderWithAllProviders(<Home />);
 
       expect(screen.getByText('45ms')).toBeInTheDocument();
       expect(screen.getByText('12ms')).toBeInTheDocument();
@@ -292,13 +287,13 @@ describe('Home', () => {
 
   describe('Agent Status', () => {
     it('renders agent status section', () => {
-      renderWithRouter(<Home />);
+      renderWithAllProviders(<Home />);
 
       expect(screen.getByText('Agent Status')).toBeInTheDocument();
     });
 
     it('displays tier counts', () => {
-      renderWithRouter(<Home />);
+      renderWithAllProviders(<Home />);
 
       expect(screen.getByText('Tier 0')).toBeInTheDocument();
       expect(screen.getByText('Tier 1')).toBeInTheDocument();
@@ -306,7 +301,7 @@ describe('Home', () => {
     });
 
     it('shows active agent summary', () => {
-      renderWithRouter(<Home />);
+      renderWithAllProviders(<Home />);
 
       expect(screen.getByText('15/19 agents active')).toBeInTheDocument();
     });
@@ -318,14 +313,14 @@ describe('Home', () => {
 
   describe('Alerts', () => {
     it('renders active alerts section', () => {
-      renderWithRouter(<Home />);
+      renderWithAllProviders(<Home />);
 
       // Look for alert count
       expect(screen.getByText(/Active Alerts/)).toBeInTheDocument();
     });
 
     it('displays alert items', () => {
-      renderWithRouter(<Home />);
+      renderWithAllProviders(<Home />);
 
       expect(screen.getByText('Data Pipeline Delay')).toBeInTheDocument();
       expect(screen.getByText('Model Drift Detected')).toBeInTheDocument();
@@ -333,14 +328,14 @@ describe('Home', () => {
     });
 
     it('shows dismiss buttons', () => {
-      renderWithRouter(<Home />);
+      renderWithAllProviders(<Home />);
 
       const dismissButtons = screen.getAllByText('Dismiss');
       expect(dismissButtons.length).toBe(3);
     });
 
     it('can dismiss alerts', () => {
-      renderWithRouter(<Home />);
+      renderWithAllProviders(<Home />);
 
       const dismissButtons = screen.getAllByText('Dismiss');
       fireEvent.click(dismissButtons[0]);
@@ -356,7 +351,7 @@ describe('Home', () => {
 
   describe('Refresh Button', () => {
     it('renders refresh button', () => {
-      renderWithRouter(<Home />);
+      renderWithAllProviders(<Home />);
 
       // Find refresh button by its icon structure
       const buttons = screen.getAllByRole('button');
@@ -371,13 +366,13 @@ describe('Home', () => {
 
   describe('Quick Actions', () => {
     it('renders quick actions section', () => {
-      renderWithRouter(<Home />);
+      renderWithAllProviders(<Home />);
 
       expect(screen.getByText('Quick Actions')).toBeInTheDocument();
     });
 
     it('displays navigation links', () => {
-      renderWithRouter(<Home />);
+      renderWithAllProviders(<Home />);
 
       // Quick actions should have links to other pages
       const quickActionsCard = screen.getByText('Quick Actions').closest('div');
@@ -391,19 +386,19 @@ describe('Home', () => {
 
   describe('Filter Summary Card', () => {
     it('displays reporting period summary', () => {
-      renderWithRouter(<Home />);
+      renderWithAllProviders(<Home />);
 
       expect(screen.getByText('Reporting Period')).toBeInTheDocument();
     });
 
     it('displays territory summary', () => {
-      renderWithRouter(<Home />);
+      renderWithAllProviders(<Home />);
 
       expect(screen.getByText('Territory')).toBeInTheDocument();
     });
 
     it('shows current filter values', () => {
-      renderWithRouter(<Home />);
+      renderWithAllProviders(<Home />);
 
       // Default values - use getAllByText since there might be duplicates
       const octDecText = screen.getAllByText('Oct - Dec 2025');

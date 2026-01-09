@@ -8,6 +8,7 @@
 import { type ReactElement, type ReactNode } from 'react';
 import { render, type RenderOptions } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { BrowserRouter } from 'react-router-dom';
 
 /**
  * Create a fresh QueryClient for each test
@@ -43,6 +44,19 @@ function createWrapper(queryClient: QueryClient) {
 }
 
 /**
+ * Wrapper component that provides all providers including router
+ */
+function createWrapperWithRouter(queryClient: QueryClient) {
+  return function Wrapper({ children }: WrapperProps): ReactElement {
+    return (
+      <QueryClientProvider client={queryClient}>
+        <BrowserRouter>{children}</BrowserRouter>
+      </QueryClientProvider>
+    );
+  };
+}
+
+/**
  * Custom render function that wraps component with providers
  */
 export function renderWithProviders(
@@ -53,6 +67,21 @@ export function renderWithProviders(
   return {
     queryClient,
     ...render(ui, { wrapper: createWrapper(queryClient), ...options }),
+  };
+}
+
+/**
+ * Custom render function that wraps component with all providers including router
+ * Use this for page-level components that need routing
+ */
+export function renderWithAllProviders(
+  ui: ReactElement,
+  options?: Omit<RenderOptions, 'wrapper'>
+) {
+  const queryClient = createTestQueryClient();
+  return {
+    queryClient,
+    ...render(ui, { wrapper: createWrapperWithRouter(queryClient), ...options }),
   };
 }
 

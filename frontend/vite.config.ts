@@ -32,11 +32,11 @@ export default defineConfig(({ mode }) => {
             proxy.on('error', (err, _req, _res) => {
               console.log('[vite proxy] error:', err);
             });
-            proxy.on('proxyReq', (proxyReq, req, _res) => {
+            proxy.on('proxyReq', (_proxyReq, req, _res) => {
               console.log('[vite proxy] sending:', req.method, req.url, '→', apiTarget);
             });
             // Rewrite redirect Location headers to avoid CORS issues
-            proxy.on('proxyRes', (proxyRes, req, _res) => {
+            proxy.on('proxyRes', (proxyRes, _req, _res) => {
               const location = proxyRes.headers['location'];
               if (location && location.startsWith(apiTarget)) {
                 proxyRes.headers['location'] = location.replace(apiTarget, '');
