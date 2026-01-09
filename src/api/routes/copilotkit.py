@@ -7,9 +7,10 @@ Exposes backend actions for querying KPIs, running analyses,
 and interacting with the E2I agent system.
 
 Author: E2I Causal Analytics Team
-Version: 1.6.7
+Version: 1.6.8
 
 Changelog:
+    1.6.8 - Fixed custom event name: use copilotkit_manually_emit_message (not manually_emit_message) for SDK compatibility
     1.6.7 - Fixed text message emission: emit manually_emit_message custom event for AG-UI frontend rendering
     1.6.6 - Fixed streaming lifecycle: bypass SDK handle_execute_agent to properly stream all events
     1.6.5 - Added detailed timing diagnostics to trace 29-second streaming delay
@@ -735,8 +736,8 @@ def create_e2i_chat_agent():
             greeting = "Hello! I'm the E2I Analytics Assistant. I can help you with KPI analysis, causal inference, and insights for pharmaceutical brands. What would you like to know?"
             # Emit custom event for AG-UI to render the text
             dispatch_custom_event(
-                "manually_emit_message",
-                {"message_id": message_id, "message": greeting}
+                "copilotkit_manually_emit_message",
+                {"message_id": message_id, "message": greeting, "role": "assistant"}
             )
             return {
                 "messages": [AIMessage(id=message_id, content=greeting)]
@@ -749,8 +750,8 @@ def create_e2i_chat_agent():
         # Emit custom event for AG-UI to render the text
         # This is required because we're not using a streaming LLM
         dispatch_custom_event(
-            "manually_emit_message",
-            {"message_id": message_id, "message": response}
+            "copilotkit_manually_emit_message",
+            {"message_id": message_id, "message": response, "role": "assistant"}
         )
 
         return {"messages": [AIMessage(id=message_id, content=response)]}
