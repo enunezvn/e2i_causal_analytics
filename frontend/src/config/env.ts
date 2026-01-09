@@ -77,7 +77,12 @@ export const env: EnvConfig = {
   // API Configuration
   // In development, use /api to go through Vite proxy (which forwards to VITE_API_URL)
   // This avoids CORS issues with direct browser requests
-  apiUrl: import.meta.env.DEV ? '/api' : getEnvVar('API_URL', '/api'),
+  // If VITE_API_URL is explicitly set, use it directly (needed for testing and some dev scenarios)
+  apiUrl: import.meta.env.VITE_API_URL
+    ? (import.meta.env.VITE_API_URL as string)
+    : import.meta.env.DEV
+      ? '/api'
+      : getEnvVar('API_URL', '/api'),
 
   // Supabase Configuration
   supabaseUrl: getEnvVar('SUPABASE_URL', ''),
