@@ -30,7 +30,7 @@ async function initApp() {
     <StrictMode>
       <QueryClientProvider client={queryClient}>
         <AuthProvider>
-          <CopilotKitWrapper runtimeUrl="/api/copilotkit/" enabled={env.copilotEnabled}>
+          <CopilotKitWrapper runtimeUrl={`${env.apiUrl.replace(/\/$/, '')}/copilotkit/`} enabled={env.copilotEnabled}>
             <AppRouter />
           </CopilotKitWrapper>
         </AuthProvider>
