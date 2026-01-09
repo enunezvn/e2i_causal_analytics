@@ -13,10 +13,10 @@
 - **Private IPv4**: 10.108.0.2
 - **Region**: NYC3 (New York)
 - **Image**: Ubuntu 24.04 LTS x64
-- **Size**: s-2vcpu-4gb-120gb-intel
-  - 2 vCPUs
-  - 4GB RAM
-  - 120GB SSD
+- **Size**: s-4vcpu-8gb-120gb-intel (resized from s-2vcpu-4gb-120gb-intel)
+  - 4 vCPUs
+  - 8 GB RAM
+  - 120 GB SSD
 - **VPC UUID**: acd58f3d-4e52-4e14-bce4-e5e002521914
 - **Status**: Active
 - **Features**: droplet_agent, private_networking
@@ -130,7 +130,8 @@ doctl compute size list
 ```
 
 Current size specs:
-- `s-2vcpu-4gb-120gb-intel`: 2 vCPU, 4GB RAM, 120GB SSD (Intel)
+- `s-4vcpu-8gb-120gb-intel`: 4 vCPU, 8 GB RAM, 120 GB SSD (Intel) - current
+- `s-2vcpu-4gb-120gb-intel`: 2 vCPU, 4 GB RAM, 120 GB SSD (Intel) - original
 
 ### Firewall & Security
 
@@ -147,8 +148,9 @@ doctl compute firewall create \
 
 ### Cost Information
 
-- **Current Plan**: s-2vcpu-4gb-120gb-intel
-- **Estimated Cost**: ~$24/month (verify current pricing on DigitalOcean)
+- **Current Plan**: s-4vcpu-8gb-120gb-intel
+- **Estimated Cost**: ~$48/month (verify current pricing on DigitalOcean)
+- **Previous Plan**: s-2vcpu-4gb-120gb-intel (~$24/month)
 
 ### SSH Keys
 

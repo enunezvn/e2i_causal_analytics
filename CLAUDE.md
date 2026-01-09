@@ -288,7 +288,7 @@ In addition to the E2I domain-specific agents, the framework provides BMAD-inspi
 - **Cloud Provider**: DigitalOcean
 - **Droplet**: ubuntu-s-2vcpu-4gb-120gb-intel-nyc3-01
 - **Region**: NYC3 (New York)
-- **Specs**: 2 vCPU, 4GB RAM, 120GB SSD (Ubuntu 24.04 LTS)
+- **Specs**: 4 vCPU, 8 GB RAM, 120 GB SSD (Ubuntu 24.04 LTS)
 - **Public IP**: 159.89.180.27
 - **Reference**: See `INFRASTRUCTURE.md` for full details
 
@@ -306,7 +306,7 @@ This project is deployed on a DigitalOcean droplet. Key details:
 | **Private IPv4** | 10.108.0.2 |
 | **Region** | NYC3 (New York) |
 | **OS** | Ubuntu 24.04 LTS x64 |
-| **Specs** | 2 vCPU, 4GB RAM, 120GB SSD |
+| **Specs** | 4 vCPU, 8 GB RAM, 120 GB SSD |
 
 ### SSH Access
 ```bash
