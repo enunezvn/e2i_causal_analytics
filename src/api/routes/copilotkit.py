@@ -7,9 +7,14 @@ Exposes backend actions for querying KPIs, running analyses,
 and interacting with the E2I agent system.
 
 Author: E2I Causal Analytics Team
-Version: 1.9.0
+Version: 1.9.1
 
 Changelog:
+    1.9.1 - Fixed AG-UI event format: use PascalCase event types and camelCase field names
+            per AG-UI protocol specification (https://docs.ag-ui.com/concepts/events)
+            - TextMessageStart (not TEXT_MESSAGE_START)
+            - messageId (not message_id)
+            - rawEvent (not raw_event)
     1.9.0 - Fixed TEXT_MESSAGE events not being emitted: CopilotKit SDK v0.1.74 has a bug where
             _dispatch_event() creates TEXT_MESSAGE events but discards their return values.
             Workaround: manually emit TEXT_MESSAGE_START/CONTENT/END events in execute() method.
@@ -227,15 +232,18 @@ class LangGraphAgent(_LangGraphAGUIAgent):
                         message_id = event_value.get('message_id', str(uuid.uuid4()))
                         message = event_value.get('message', '')
 
-                        print(f"DEBUG execute [{time.time()-start_time:.3f}s]: Emitting TEXT_MESSAGE events for message_id={message_id}")
+                        print(f"DEBUG execute [{time.time()-start_time:.3f}s]: Emitting TEXT_MESSAGE events for messageId={message_id}")
+
+                        # FIX (v1.6.9): AG-UI protocol uses SCREAMING_SNAKE_CASE event types
+                        # Verified via: ag_ui.core.events.TextMessageStartEvent.model_dump_json()
+                        # Produces: {"type":"TEXT_MESSAGE_START","messageId":"...","role":"assistant"}
+                        # NOT PascalCase - the previous fix was incorrect.
 
                         # Emit TEXT_MESSAGE_START
                         text_start = {
                             "type": "TEXT_MESSAGE_START",
-                            "timestamp": None,
-                            "raw_event": None,
+                            "messageId": message_id,
                             "role": "assistant",
-                            "message_id": message_id,
                         }
                         yield json.dumps(text_start) + "\n"
                         event_count += 1
@@ -243,9 +251,7 @@ class LangGraphAgent(_LangGraphAGUIAgent):
                         # Emit TEXT_MESSAGE_CONTENT
                         text_content = {
                             "type": "TEXT_MESSAGE_CONTENT",
-                            "timestamp": None,
-                            "raw_event": None,
-                            "message_id": message_id,
+                            "messageId": message_id,
                             "delta": message,
                         }
                         yield json.dumps(text_content) + "\n"
@@ -254,9 +260,7 @@ class LangGraphAgent(_LangGraphAGUIAgent):
                         # Emit TEXT_MESSAGE_END
                         text_end = {
                             "type": "TEXT_MESSAGE_END",
-                            "timestamp": None,
-                            "raw_event": None,
-                            "message_id": message_id,
+                            "messageId": message_id,
                         }
                         yield json.dumps(text_end) + "\n"
                         event_count += 1
