@@ -6,7 +6,7 @@
  * These handlers intercept HTTP requests and return mock data.
  */
 
-import { http, HttpResponse, delay, passthrough } from 'msw';
+import { http, HttpResponse, delay } from 'msw';
 import { env } from '@/config/env';
 
 // Graph mock data
@@ -1217,19 +1217,6 @@ const digitalTwinHandlers = [
       next_calibration: new Date(Date.now() + 7 * 86400000).toISOString(),
     });
   }),
-];
-
-/**
- * CopilotKit API Handlers
- * Note: CopilotKit requests are passed through to the real API backend.
- * MSW passthrough allows the Vite proxy to forward these to the actual backend.
- */
-const copilotKitHandlers = [
-  // Passthrough all CopilotKit requests to real API
-  http.all('/api/copilotkit/*', () => passthrough()),
-  http.all('/api/copilotkit', () => passthrough()),
-  http.all(`${baseUrl}/copilotkit/*`, () => passthrough()),
-  http.all(`${baseUrl}/copilotkit`, () => passthrough()),
 ];
 
 /**
