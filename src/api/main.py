@@ -54,6 +54,7 @@ from src.api.dependencies.supabase_client import (
 )
 
 # Import routers
+from src.api.routes.agents import router as agents_router
 from src.api.routes.explain import router as explain_router
 from src.api.routes.experiments import router as experiments_router
 from src.api.routes.graph import router as graph_router
@@ -203,7 +204,7 @@ app = FastAPI(
 # TODO: Restrict origins for production deployment
 ALLOWED_ORIGINS = os.environ.get(
     "ALLOWED_ORIGINS",
-    "http://localhost:3000,http://localhost:5173,http://localhost:8080"
+    "http://localhost:3000,http://localhost:5173,http://localhost:5174,http://localhost:8080,http://127.0.0.1:5173,http://127.0.0.1:5174"
 ).split(",")
 
 app.add_middleware(
@@ -420,51 +421,55 @@ async def readiness_check() -> Dict[str, Any]:
 # =============================================================================
 # ROUTER REGISTRATION
 # =============================================================================
+# NOTE: All API endpoints are prefixed with /api for consistency.
+# Some routers have /api prefix built-in (kpi, predictions, rag), others get it here.
 
-# Model interpretability endpoints
-app.include_router(explain_router)
+# Model interpretability endpoints (/api/explain/*)
+app.include_router(explain_router, prefix="/api")
 
-# Memory system endpoints
-app.include_router(memory_router)
+# Memory system endpoints (/api/memory/*)
+app.include_router(memory_router, prefix="/api")
 
-# Cognitive workflow endpoints
-app.include_router(cognitive_router)
+# Cognitive workflow endpoints (/api/cognitive/*)
+app.include_router(cognitive_router, prefix="/api")
 
-# Knowledge graph endpoints
-app.include_router(graph_router)
+# Knowledge graph endpoints (/api/graph/*)
+app.include_router(graph_router, prefix="/api")
 
-# Hybrid RAG endpoints
+# Hybrid RAG endpoints (already has /api/v1/rag prefix)
 app.include_router(rag_router)
 
-# Model monitoring endpoints (Phase 14)
-app.include_router(monitoring_router)
+# Model monitoring endpoints (/api/monitoring/*)
+app.include_router(monitoring_router, prefix="/api")
 
-# A/B testing & experiment execution endpoints (Phase 15)
-app.include_router(experiments_router)
+# A/B testing & experiment execution endpoints (/api/experiments/*)
+app.include_router(experiments_router, prefix="/api")
 
-# Digital Twin pre-screening endpoints (Phase 15)
-app.include_router(digital_twin_router)
+# Digital Twin pre-screening endpoints (/api/digital-twin/*)
+app.include_router(digital_twin_router, prefix="/api")
 
-# Model prediction endpoints (BentoML integration)
+# Model prediction endpoints (already has /api/models prefix)
 app.include_router(predictions_router)
 
-# KPI endpoints (Phase A5)
+# KPI endpoints (already has /api/kpis prefix)
 app.include_router(kpi_router)
 
-# Causal inference endpoints (Phase B10)
-app.include_router(causal_router)
+# Causal inference endpoints (/api/causal/*)
+app.include_router(causal_router, prefix="/api")
 
-# Audit chain endpoints (tamper-evident logging)
-app.include_router(audit_router)
+# Audit chain endpoints (/api/audit/*)
+app.include_router(audit_router, prefix="/api")
 
-# CopilotKit status endpoints
+# CopilotKit status endpoints (/api/copilotkit/*)
 app.include_router(copilotkit_router, prefix="/api")
 
 # CopilotKit runtime endpoints (for AI chat)
 add_copilotkit_routes(app, prefix="/api/copilotkit")
 
+# Agent orchestration endpoints (/api/agents/*)
+app.include_router(agents_router, prefix="/api")
+
 # TODO: Add additional routers as they're developed:
-# - Agent orchestration: /api/agents
 # - Feature engineering: /api/features
 # - Model training: /api/models
 

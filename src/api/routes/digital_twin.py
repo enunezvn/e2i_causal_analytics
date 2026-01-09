@@ -356,6 +356,42 @@ class FidelityReportResponse(BaseModel):
 
 
 # =============================================================================
+# HEALTH ENDPOINTS
+# =============================================================================
+
+
+class DigitalTwinHealthResponse(BaseModel):
+    """Health status for Digital Twin service."""
+
+    status: str = Field(..., description="Service health status")
+    service: str = Field(default="digital-twin", description="Service name")
+    models_available: int = Field(..., description="Number of twin models available")
+    simulations_pending: int = Field(..., description="Number of pending simulations")
+    last_simulation_at: Optional[datetime] = Field(
+        None, description="Timestamp of last simulation"
+    )
+
+
+@router.get("/health", response_model=DigitalTwinHealthResponse)
+async def digital_twin_health() -> DigitalTwinHealthResponse:
+    """
+    Health check for Digital Twin service.
+
+    Returns:
+        Service health status including model availability and simulation stats.
+    """
+    # Return sample health data for now
+    # In production, this would query actual model and simulation status
+    return DigitalTwinHealthResponse(
+        status="healthy",
+        service="digital-twin",
+        models_available=3,
+        simulations_pending=0,
+        last_simulation_at=datetime.now(timezone.utc),
+    )
+
+
+# =============================================================================
 # SIMULATION ENDPOINTS
 # =============================================================================
 
