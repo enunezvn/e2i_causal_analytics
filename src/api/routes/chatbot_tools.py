@@ -25,8 +25,8 @@ from src.repositories import (
     BusinessMetricRepository,
     CausalPathRepository,
     TriggerRepository,
-    get_supabase_client,
 )
+from src.memory.services.factories import get_async_supabase_client
 from src.repositories.chatbot_conversation import (
     ChatbotConversationRepository,
     get_chatbot_conversation_repository,
@@ -210,7 +210,7 @@ async def _query_kpis(
 ) -> Dict[str, Any]:
     """Query KPI metrics from business_metrics table."""
     try:
-        client = await get_supabase_client()
+        client = await get_async_supabase_client()
         repo = BusinessMetricRepository(client)
 
         filters = {}
@@ -245,7 +245,7 @@ async def _query_causal_chains(
 ) -> Dict[str, Any]:
     """Query causal relationships from causal_paths table."""
     try:
-        client = await get_supabase_client()
+        client = await get_async_supabase_client()
         repo = CausalPathRepository(client)
 
         filters = {}
@@ -296,7 +296,7 @@ async def _query_agent_analysis(
 ) -> Dict[str, Any]:
     """Query agent analysis outputs from agent_activities table."""
     try:
-        client = await get_supabase_client()
+        client = await get_async_supabase_client()
         repo = AgentActivityRepository(client)
 
         filters = {}
@@ -327,7 +327,7 @@ async def _query_triggers(
 ) -> Dict[str, Any]:
     """Query triggers/alerts from triggers table."""
     try:
-        client = await get_supabase_client()
+        client = await get_async_supabase_client()
         repo = TriggerRepository(client)
 
         filters = {}
@@ -644,7 +644,7 @@ async def conversation_memory_tool(
     logger.info(f"Conversation memory: session={session_id}, count={message_count}")
 
     try:
-        client = await get_supabase_client()
+        client = await get_async_supabase_client()
         msg_repo = get_chatbot_message_repository(client)
         conv_repo = get_chatbot_conversation_repository(client)
 
