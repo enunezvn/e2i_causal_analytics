@@ -7,9 +7,12 @@ Exposes backend actions for querying KPIs, running analyses,
 and interacting with the E2I agent system.
 
 Author: E2I Causal Analytics Team
-Version: 1.6.3
+Version: 1.6.6
 
 Changelog:
+    1.6.6 - Fixed streaming lifecycle: bypass SDK handle_execute_agent to properly stream all events
+    1.6.5 - Added detailed timing diagnostics to trace 29-second streaming delay
+    1.6.4 - Fixed streaming format: add newline delimiters for proper NDJSON parsing by frontend SDK
     1.6.3 - Fixed AG-UI event serialization: serialize Pydantic events to JSON strings for StreamingResponse
     1.6.2 - Added MemorySaver checkpointer to LangGraph graph (required by ag_ui_langgraph)
     1.6.1 - Fixed run_id validation error: auto-generate UUID when SDK doesn't provide run_id
@@ -94,16 +97,43 @@ class LangGraphAgent(_LangGraphAGUIAgent):
         expects run(input: RunAgentInput). This method performs the conversion
         and serializes the AG-UI events to strings for the StreamingResponse.
         """
+        import time
+        start_time = time.time()
+
         # Convert messages to the format expected by RunAgentInput
-        # The SDK passes langchain Message objects, RunAgentInput expects ag_ui messages
-        from ag_ui.core import Message as AGUIMessage
+        # Messages can come from:
+        # 1. AG-UI protocol: dicts like {"role": "user", "content": "..."}
+        # 2. SDK internals: LangChain message objects with .type and .content attributes
+        # Note: ag_ui.core.Message is a Union type, so we must use specific types
+        from ag_ui.core import UserMessage, AssistantMessage
 
         agui_messages = []
-        for msg in messages or []:
-            if hasattr(msg, "content") and hasattr(msg, "type"):
+        print(f"DEBUG execute [{time.time()-start_time:.3f}s]: Converting {len(messages or [])} messages to AG-UI format")
+        for i, msg in enumerate(messages or []):
+            print(f"DEBUG execute [{time.time()-start_time:.3f}s]: msg[{i}] type={type(msg).__name__} value={msg}")
+
+            if isinstance(msg, dict):
+                # Handle dict format from AG-UI protocol (frontend sends this)
+                role = msg.get("role", "user")
+                content = msg.get("content", "")
+                msg_id = msg.get("id") or f"msg-{uuid.uuid4()}"
+                if content:
+                    if role == "user":
+                        agui_messages.append(UserMessage(id=msg_id, content=content))
+                    else:
+                        agui_messages.append(AssistantMessage(id=msg_id, content=content))
+                    print(f"DEBUG execute [{time.time()-start_time:.3f}s]: Added dict message: role={role}, content={content[:50]}...")
+            elif hasattr(msg, "content") and hasattr(msg, "type"):
                 # Convert langchain message to AGUI format
                 role = "user" if msg.type == "human" else "assistant"
-                agui_messages.append(AGUIMessage(role=role, content=msg.content))
+                msg_id = getattr(msg, "id", None) or f"msg-{uuid.uuid4()}"
+                if role == "user":
+                    agui_messages.append(UserMessage(id=msg_id, content=msg.content))
+                else:
+                    agui_messages.append(AssistantMessage(id=msg_id, content=msg.content))
+                print(f"DEBUG execute [{time.time()-start_time:.3f}s]: Added LangChain message: role={role}, content={msg.content[:50]}...")
+
+        print(f"DEBUG execute [{time.time()-start_time:.3f}s]: Converted to {len(agui_messages)} AG-UI messages")
 
         # Build RunAgentInput
         # Generate run_id if not provided (SDK doesn't always pass it)
@@ -119,21 +149,32 @@ class LangGraphAgent(_LangGraphAGUIAgent):
             forwarded_props={"node_name": node_name} if node_name else {},
         )
 
+        print(f"DEBUG execute [{time.time()-start_time:.3f}s]: Created RunAgentInput, calling self.run()")
+
         # Call parent's run() method and serialize each AG-UI event to string
         # The run() method yields Pydantic AG-UI event objects that need serialization
+        # IMPORTANT: Add newline delimiter after each event for proper NDJSON streaming
+        # CopilotKit frontend SDK expects newline-delimited JSON events
+        event_count = 0
         async for event in self.run(run_input):
+            event_count += 1
+            event_type = getattr(event, 'type', 'unknown') if hasattr(event, 'type') else type(event).__name__
+            print(f"DEBUG execute [{time.time()-start_time:.3f}s]: Yielding event #{event_count} type={event_type}")
+
             if isinstance(event, str):
-                # Already a string, yield as-is
-                yield event
+                # Already a string, ensure newline delimiter
+                yield event if event.endswith("\n") else event + "\n"
             elif hasattr(event, "model_dump_json"):
-                # Pydantic v2 object - serialize to JSON
-                yield event.model_dump_json()
+                # Pydantic v2 object - serialize to JSON with newline
+                yield event.model_dump_json() + "\n"
             elif hasattr(event, "json"):
-                # Pydantic v1 object - serialize to JSON
-                yield event.json()
+                # Pydantic v1 object - serialize to JSON with newline
+                yield event.json() + "\n"
             else:
-                # Fallback - convert to string
-                yield str(event)
+                # Fallback - convert to string with newline
+                yield str(event) + "\n"
+
+        print(f"DEBUG execute [{time.time()-start_time:.3f}s]: Finished yielding {event_count} events")
 
 
 # =============================================================================
@@ -659,17 +700,36 @@ def create_e2i_chat_agent():
         """Process chat messages and generate responses."""
         messages = state.get("messages", [])
 
-        # Get the last human message
+        import time
+        node_start = time.time()
+
+        # Debug: Log what messages look like
+        print(f"DEBUG chat_node [t={node_start:.3f}]: Received {len(messages)} messages")
+        for i, msg in enumerate(messages):
+            print(f"DEBUG chat_node [t={node_start:.3f}]: msg[{i}] type={type(msg).__name__} content={msg if isinstance(msg, dict) else getattr(msg, 'content', str(msg)[:100])}")
+
+        # Get the last human message - handle both dict and HumanMessage formats
         last_message = None
         for msg in reversed(messages):
+            # Handle LangChain message objects
             if isinstance(msg, HumanMessage):
                 last_message = msg.content
+                print(f"DEBUG chat_node: Found HumanMessage: {last_message[:100]}")
                 break
+            # Handle dict format from AG-UI protocol
+            elif isinstance(msg, dict):
+                role = msg.get("role", "")
+                if role == "user":
+                    last_message = msg.get("content", "")
+                    print(f"DEBUG chat_node: Found dict user message: {last_message[:100]}")
+                    break
 
         if not last_message:
+            print("DEBUG chat_node: No user message found, returning greeting")
             return {
                 "messages": [
                     AIMessage(
+                        id=f"ai-{uuid.uuid4()}",
                         content="Hello! I'm the E2I Analytics Assistant. I can help you with KPI analysis, causal inference, and insights for pharmaceutical brands. What would you like to know?"
                     )
                 ]
@@ -678,7 +738,7 @@ def create_e2i_chat_agent():
         # Generate a contextual response based on the query
         response = generate_e2i_response(last_message)
 
-        return {"messages": [AIMessage(content=response)]}
+        return {"messages": [AIMessage(id=f"ai-{uuid.uuid4()}", content=response)]}
 
     # Build the graph
     workflow = StateGraph(E2IAgentState)
@@ -852,33 +912,190 @@ async def copilotkit_custom_handler(request: Request, sdk: CopilotKitRemoteEndpo
     Returns:
         JSONResponse with properly formatted data
     """
+    import json
     from typing import cast
     from fastapi.encoders import jsonable_encoder
 
-    try:
-        body = await request.json()
-    except:  # noqa: E722
-        body = None
-
-    context = cast(
-        CopilotKitContext,
-        {
-            "properties": (body or {}).get("properties", {}),
-            "frontend_url": (body or {}).get("frontendUrl", None),
-            "headers": request.headers,
-        }
-    )
-
     method = request.method
 
-    # Handle info request with our custom transformation (root path or /info)
-    if method in ["GET", "POST"] and path in ("", "info"):
+    # Handle GET info request with our custom transformation
+    if method == "GET" and path in ("", "info"):
         response = transform_info_response(sdk)
-        logger.debug(f"[CopilotKit] Info response: agents={list(response['agents'].keys())}")
+        print(f"DEBUG: GET info response with agents: {list(response['agents'].keys())}")
         return JSONResponse(content=response)
 
+    # Handle POST to root or /info - need to check body to determine request type
+    # IMPORTANT: Read body FIRST before any other operations that might consume it
+    if method == "POST" and path in ("", "info"):
+        try:
+            # Read body bytes FIRST (only do this once!)
+            body_bytes = await request.body()
+            body_str = body_bytes.decode("utf-8") if body_bytes else ""
+            print(f"DEBUG: POST body_str={body_str[:200] if body_str else '(empty)'}")
+
+            # Parse body as JSON if present
+            body_json = None
+            if body_str.strip():
+                try:
+                    body_json = json.loads(body_str)
+                except json.JSONDecodeError:
+                    pass
+
+            # Check if this is an info request:
+            # - Empty body
+            # - Empty JSON object {}
+            # - Explicit getInfo action
+            # - method: "info" (CopilotKit frontend format)
+            is_info_request = (
+                not body_str.strip()
+                or body_str.strip() == "{}"
+                or (body_json and body_json.get("action") == "getInfo")
+                or (body_json and body_json.get("method") == "info")
+            )
+
+            print(f"DEBUG: is_info_request={is_info_request}")
+
+            if is_info_request:
+                response = transform_info_response(sdk)
+                print(f"DEBUG: Returning info response with agents: {list(response['agents'].keys())}")
+                return JSONResponse(content=response)
+
+            # Non-info POST request - check AG-UI protocol method
+            agui_method = body_json.get("method", "") if body_json else ""
+            print(f"DEBUG: AG-UI method={agui_method}")
+
+            # Handle AG-UI protocol: agent/run
+            if agui_method == "agent/run":
+                params = body_json.get("params", {})
+                body_data = body_json.get("body", {})
+                agent_name = params.get("agentId", "default") or body_json.get("agentName", "default")
+
+                print(f"DEBUG: Executing agent '{agent_name}' with AG-UI protocol")
+
+                # Extract parameters - check both nested body and top level (AG-UI protocol varies)
+                # Some SDK versions send {"method": "agent/run", "body": {"threadId": ..., "messages": [...]}}
+                # Others send {"method": "agent/run", "threadId": ..., "messages": [...]}
+                thread_id = body_data.get("threadId") or body_json.get("threadId") or str(uuid.uuid4())
+                state = body_data.get("state") or body_json.get("state") or {}
+                messages = body_data.get("messages") or body_json.get("messages") or []
+                actions = body_data.get("tools") or body_json.get("tools") or []  # AG-UI uses "tools"
+                node_name = body_data.get("nodeName") or body_json.get("nodeName")
+
+                print(f"DEBUG agent/run: thread_id={thread_id}")
+                print(f"DEBUG agent/run: state keys={list(state.keys()) if state else 'empty'}")
+                print(f"DEBUG agent/run: messages count={len(messages)}")
+                for i, m in enumerate(messages):
+                    print(f"DEBUG agent/run: messages[{i}]={m}")
+                print(f"DEBUG agent/run: actions count={len(actions)}")
+                print(f"DEBUG agent/run: node_name={node_name}")
+                print(f"DEBUG agent/run: Full body_data keys={list(body_data.keys())}")
+
+                # CUSTOM STREAMING HANDLER: Bypass SDK's handle_execute_agent to fix
+                # the streaming lifecycle bug where HTTP response completes before all
+                # events are yielded. The SDK handler was closing the connection after
+                # yielding only the first event (RUN_STARTED), causing frontend to miss
+                # MESSAGES_SNAPSHOT and other events generated 28+ seconds later.
+                #
+                # This custom handler:
+                # 1. Gets agent from SDK
+                # 2. Directly calls agent.execute() async generator
+                # 3. Properly iterates and yields all events before closing
+
+                # Get agent from SDK
+                sdk_context: Dict[str, Any] = {}
+                agents = sdk.agents(sdk_context) if callable(sdk.agents) else sdk.agents
+                agent = None
+                for a in agents:
+                    if a.name == agent_name:
+                        agent = a
+                        break
+
+                if agent is None:
+                    return JSONResponse(
+                        status_code=404,
+                        content={"error": f"Agent '{agent_name}' not found"}
+                    )
+
+                async def stream_agent_events():
+                    """
+                    Stream all events from agent.execute() keeping connection alive.
+
+                    This is the key fix: we iterate through ALL events from the async
+                    generator and yield them one by one. The connection stays open
+                    until the generator is exhausted.
+                    """
+                    import time
+                    stream_start = time.time()
+                    print(f"DEBUG stream_agent_events [{time.time()-stream_start:.3f}s]: Starting stream")
+
+                    event_count = 0
+                    try:
+                        async for event in agent.execute(
+                            thread_id=thread_id,
+                            state=state,
+                            messages=messages,
+                            config=None,
+                            actions=actions,
+                            node_name=node_name,
+                        ):
+                            event_count += 1
+                            print(f"DEBUG stream_agent_events [{time.time()-stream_start:.3f}s]: Streaming event #{event_count}")
+                            # Event is already serialized by agent.execute()
+                            yield event
+                    except Exception as e:
+                        print(f"DEBUG stream_agent_events [{time.time()-stream_start:.3f}s]: Error: {e}")
+                        logger.error(f"[CopilotKit] Stream error: {e}")
+                        # Yield error event
+                        yield json.dumps({"type": "error", "error": str(e)}) + "\n"
+
+                    print(f"DEBUG stream_agent_events [{time.time()-stream_start:.3f}s]: Stream complete, yielded {event_count} events")
+
+                return StreamingResponse(
+                    stream_agent_events(),
+                    media_type="application/x-ndjson",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no",  # Disable nginx buffering
+                    },
+                )
+
+            # Handle AG-UI protocol: agent/connect (just acknowledge)
+            if agui_method == "agent/connect":
+                print(f"DEBUG: agent/connect - acknowledging")
+                return JSONResponse(content={"status": "connected"})
+
+            # Fall through to SDK handler for other methods
+            print(f"DEBUG: Non-info POST, delegating to SDK handler")
+
+            async def receive():
+                return {"type": "http.request", "body": body_bytes}
+
+            # Create new request with body restored
+            new_request = Request(request.scope, receive)
+            return await sdk_handler(new_request, sdk)
+
+        except Exception as e:
+            print(f"DEBUG: Error in POST handler: {e}")
+            logger.warning(f"[CopilotKit] Error parsing POST body: {e}")
+            # Fall through to SDK handler on error
+
+    # Build context for SDK handler (for non-root paths)
+    try:
+        body_bytes = await request.body()
+        body = json.loads(body_bytes.decode("utf-8")) if body_bytes else None
+    except:  # noqa: E722
+        body = None
+        body_bytes = b""
+
     # For all other paths, delegate to SDK handler
-    # We re-use the SDK's handler which routes based on path
+    # Reconstruct request if we consumed the body
+    if body_bytes:
+        async def receive():
+            return {"type": "http.request", "body": body_bytes}
+        new_request = Request(request.scope, receive)
+        return await sdk_handler(new_request, sdk)
+
     return await sdk_handler(request, sdk)
 
 
