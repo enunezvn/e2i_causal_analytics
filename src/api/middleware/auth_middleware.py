@@ -51,6 +51,9 @@ PUBLIC_PATHS: List[Tuple[str, str]] = [
     ("GET", "/graph/health"),
     # CopilotKit endpoints - public for frontend integration
     ("GET", "/api/copilotkit/status"),
+    ("GET", "/api/copilotkit"),  # Runtime info endpoint (GET)
+    ("GET", "/api/copilotkit/"),  # Runtime info endpoint with trailing slash
+    ("GET", "/api/copilotkit/info"),  # Explicit info endpoint
     ("POST", "/api/copilotkit/info"),
     ("POST", "/api/copilotkit"),  # Main CopilotKit runtime endpoint
     ("POST", "/api/copilotkit/"),  # With trailing slash
@@ -63,10 +66,10 @@ PUBLIC_PATHS: List[Tuple[str, str]] = [
 PUBLIC_PATH_PATTERNS: List[Tuple[str, str]] = [
     # KPI metadata by ID is public
     ("GET", r"^/api/kpis/[^/]+/metadata$"),
-    # CopilotKit agent and action execution - public for chatbot
-    ("POST", r"^/api/copilotkit/agent/"),
-    ("POST", r"^/api/copilotkit/action/"),
-    ("GET", r"^/api/copilotkit/agent/"),
+    # CopilotKit - all paths public for frontend chatbot integration
+    # The SDK uses dynamic routing with various path formats (agent/, agents/, action/, actions/, info, etc.)
+    ("*", r"^/api/copilotkit/"),
+    ("*", r"^/api/copilotkit$"),  # Exact path without trailing slash
 ]
 
 
