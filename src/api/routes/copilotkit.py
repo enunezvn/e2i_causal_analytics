@@ -7,9 +7,17 @@ Exposes backend actions for querying KPIs, running analyses,
 and interacting with the E2I agent system.
 
 Author: E2I Causal Analytics Team
-Version: 1.6.8
+Version: 1.9.0
 
 Changelog:
+    1.9.0 - Fixed TEXT_MESSAGE events not being emitted: CopilotKit SDK v0.1.74 has a bug where
+            _dispatch_event() creates TEXT_MESSAGE events but discards their return values.
+            Workaround: manually emit TEXT_MESSAGE_START/CONTENT/END events in execute() method.
+    1.8.0 - Fixed "Message ID not found in history" error: use fresh graph/checkpointer per request
+            Root cause: SDK's prepare_stream() triggered regenerate mode when checkpoint had more
+            messages than frontend sent, but frontend message IDs don't exist in checkpoint history.
+    1.7.0 - Fixed custom event dispatch: use adispatch_custom_event with RunnableConfig for proper AG-UI routing
+    1.6.9 - Fixed 307 redirect breaking streaming: add base path route for /api/copilotkit (without trailing slash)
     1.6.8 - Fixed custom event name: use copilotkit_manually_emit_message (not manually_emit_message) for SDK compatibility
     1.6.7 - Fixed text message emission: emit manually_emit_message custom event for AG-UI frontend rendering
     1.6.6 - Fixed streaming lifecycle: bypass SDK handle_execute_agent to properly stream all events
@@ -48,7 +56,9 @@ from copilotkit.integrations.fastapi import (
 from copilotkit.sdk import COPILOTKIT_SDK_VERSION, CopilotKitContext
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
+from langchain_core.callbacks import adispatch_custom_event
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field
@@ -71,7 +81,32 @@ class LangGraphAgent(_LangGraphAGUIAgent):
     The SDK's CopilotKitRemoteEndpoint.execute_agent() calls agent.execute(),
     but LangGraphAGUIAgent only has run() inherited from ag_ui_langgraph.
     This wrapper provides the missing execute() method.
+
+    CRITICAL FIX (v1.6.8): Uses a graph factory to create fresh checkpointer
+    per request, avoiding "Message ID not found in history" error when
+    checkpoint accumulates more messages than frontend sends.
     """
+
+    def __init__(self, name: str, description: str = "", graph=None, graph_factory=None, **kwargs):
+        """
+        Initialize with either a static graph or a factory function.
+
+        Args:
+            name: Agent name
+            description: Agent description
+            graph: Pre-created graph (will be ignored if graph_factory provided)
+            graph_factory: Callable that returns a fresh graph with new checkpointer
+        """
+        self._graph_factory = graph_factory
+        # Initialize parent with a graph (required by parent class)
+        # If factory is provided, this graph is just for initialization
+        super().__init__(name=name, description=description, graph=graph, **kwargs)
+
+    def _get_fresh_graph(self):
+        """Get a fresh graph instance with new checkpointer."""
+        if self._graph_factory:
+            return self._graph_factory()
+        return self.graph
 
     def dict_repr(self) -> Dict[str, Any]:
         """Return dictionary representation for SDK info endpoint."""
@@ -153,28 +188,97 @@ class LangGraphAgent(_LangGraphAGUIAgent):
 
         print(f"DEBUG execute [{time.time()-start_time:.3f}s]: Created RunAgentInput, calling self.run()")
 
+        # CRITICAL FIX (v1.6.8): Use fresh graph with new checkpointer to avoid
+        # "Message ID not found in history" error. The SDK's prepare_stream()
+        # triggers regenerate mode when checkpoint has more messages than input.
+        # By using a fresh checkpointer, the checkpoint is always empty.
+        original_graph = self.graph
+        if self._graph_factory:
+            self.graph = self._graph_factory()
+            print(f"DEBUG execute [{time.time()-start_time:.3f}s]: Created fresh graph with new checkpointer")
+
         # Call parent's run() method and serialize each AG-UI event to string
         # The run() method yields Pydantic AG-UI event objects that need serialization
         # IMPORTANT: Add newline delimiter after each event for proper NDJSON streaming
         # CopilotKit frontend SDK expects newline-delimited JSON events
-        event_count = 0
-        async for event in self.run(run_input):
-            event_count += 1
-            event_type = getattr(event, 'type', 'unknown') if hasattr(event, 'type') else type(event).__name__
-            print(f"DEBUG execute [{time.time()-start_time:.3f}s]: Yielding event #{event_count} type={event_type}")
+        #
+        # FIX (v1.9.0): The CopilotKit SDK v0.1.74 has a bug in _dispatch_event() where
+        # TEXT_MESSAGE events are created but their return values are discarded. The SDK
+        # only returns the original CUSTOM event. To fix this, we manually emit
+        # TEXT_MESSAGE_START, TEXT_MESSAGE_CONTENT, TEXT_MESSAGE_END events when we
+        # detect a CUSTOM event with name="copilotkit_manually_emit_message".
+        from ag_ui.core import EventType
 
-            if isinstance(event, str):
-                # Already a string, ensure newline delimiter
-                yield event if event.endswith("\n") else event + "\n"
-            elif hasattr(event, "model_dump_json"):
-                # Pydantic v2 object - serialize to JSON with newline
-                yield event.model_dump_json() + "\n"
-            elif hasattr(event, "json"):
-                # Pydantic v1 object - serialize to JSON with newline
-                yield event.json() + "\n"
-            else:
-                # Fallback - convert to string with newline
-                yield str(event) + "\n"
+        event_count = 0
+        try:
+            async for event in self.run(run_input):
+                event_count += 1
+                event_type = getattr(event, 'type', 'unknown') if hasattr(event, 'type') else type(event).__name__
+                print(f"DEBUG execute [{time.time()-start_time:.3f}s]: Yielding event #{event_count} type={event_type}")
+
+                # Check if this is a CUSTOM event with copilotkit_manually_emit_message
+                # If so, emit TEXT_MESSAGE events BEFORE the CUSTOM event (SDK bug workaround)
+                is_manual_emit = False
+                if hasattr(event, 'type') and event.type == EventType.CUSTOM:
+                    event_name = getattr(event, 'name', None)
+                    if event_name == "copilotkit_manually_emit_message":
+                        is_manual_emit = True
+                        event_value = getattr(event, 'value', {}) or {}
+                        message_id = event_value.get('message_id', str(uuid.uuid4()))
+                        message = event_value.get('message', '')
+
+                        print(f"DEBUG execute [{time.time()-start_time:.3f}s]: Emitting TEXT_MESSAGE events for message_id={message_id}")
+
+                        # Emit TEXT_MESSAGE_START
+                        text_start = {
+                            "type": "TEXT_MESSAGE_START",
+                            "timestamp": None,
+                            "raw_event": None,
+                            "role": "assistant",
+                            "message_id": message_id,
+                        }
+                        yield json.dumps(text_start) + "\n"
+                        event_count += 1
+
+                        # Emit TEXT_MESSAGE_CONTENT
+                        text_content = {
+                            "type": "TEXT_MESSAGE_CONTENT",
+                            "timestamp": None,
+                            "raw_event": None,
+                            "message_id": message_id,
+                            "delta": message,
+                        }
+                        yield json.dumps(text_content) + "\n"
+                        event_count += 1
+
+                        # Emit TEXT_MESSAGE_END
+                        text_end = {
+                            "type": "TEXT_MESSAGE_END",
+                            "timestamp": None,
+                            "raw_event": None,
+                            "message_id": message_id,
+                        }
+                        yield json.dumps(text_end) + "\n"
+                        event_count += 1
+
+                # Serialize and yield the original event
+                if isinstance(event, str):
+                    # Already a string, ensure newline delimiter
+                    yield event if event.endswith("\n") else event + "\n"
+                elif hasattr(event, "model_dump_json"):
+                    # Pydantic v2 object - serialize to JSON with newline
+                    yield event.model_dump_json() + "\n"
+                elif hasattr(event, "json"):
+                    # Pydantic v1 object - serialize to JSON with newline
+                    yield event.json() + "\n"
+                else:
+                    # Fallback - convert to string with newline
+                    yield str(event) + "\n"
+        finally:
+            # Restore original graph if we swapped it
+            if self._graph_factory:
+                self.graph = original_graph
+                print(f"DEBUG execute [{time.time()-start_time:.3f}s]: Restored original graph")
 
         print(f"DEBUG execute [{time.time()-start_time:.3f}s]: Finished yielding {event_count} events")
 
@@ -698,9 +802,8 @@ def create_e2i_chat_agent():
     to CopilotKit actions.
     """
 
-    async def chat_node(state: E2IAgentState) -> Dict[str, Any]:
+    async def chat_node(state: E2IAgentState, config: RunnableConfig) -> Dict[str, Any]:
         """Process chat messages and generate responses."""
-        from langchain_core.callbacks import dispatch_custom_event
 
         messages = state.get("messages", [])
 
@@ -734,10 +837,11 @@ def create_e2i_chat_agent():
         if not last_message:
             print("DEBUG chat_node: No user message found, returning greeting")
             greeting = "Hello! I'm the E2I Analytics Assistant. I can help you with KPI analysis, causal inference, and insights for pharmaceutical brands. What would you like to know?"
-            # Emit custom event for AG-UI to render the text
-            dispatch_custom_event(
+            # Emit custom event for AG-UI to render the text (with config for proper event routing)
+            await adispatch_custom_event(
                 "copilotkit_manually_emit_message",
-                {"message_id": message_id, "message": greeting, "role": "assistant"}
+                {"message_id": message_id, "message": greeting, "role": "assistant"},
+                config=config
             )
             return {
                 "messages": [AIMessage(id=message_id, content=greeting)]
@@ -747,11 +851,12 @@ def create_e2i_chat_agent():
         response = generate_e2i_response(last_message)
         print(f"DEBUG chat_node: Generated response: {response[:100]}...")
 
-        # Emit custom event for AG-UI to render the text
+        # Emit custom event for AG-UI to render the text (with config for proper event routing)
         # This is required because we're not using a streaming LLM
-        dispatch_custom_event(
+        await adispatch_custom_event(
             "copilotkit_manually_emit_message",
-            {"message_id": message_id, "message": response, "role": "assistant"}
+            {"message_id": message_id, "message": response, "role": "assistant"},
+            config=config
         )
 
         return {"messages": [AIMessage(id=message_id, content=response)]}
@@ -843,7 +948,8 @@ def generate_e2i_response(query: str) -> str:
     )
 
 
-# Create the compiled graph
+# Create a static graph for initialization (used by parent class)
+# The graph_factory creates fresh instances with new checkpointers per request
 e2i_chat_graph = create_e2i_chat_agent()
 
 
@@ -856,6 +962,13 @@ def create_copilotkit_sdk() -> CopilotKitRemoteEndpoint:
     """
     Create and configure the CopilotKit Remote Endpoint.
 
+    IMPORTANT (v1.6.8): Uses graph_factory to create fresh checkpointer per request.
+    This fixes "Message ID not found in history" error that occurs when:
+    1. Checkpoint accumulates messages (user + AI responses)
+    2. Frontend sends only user messages
+    3. SDK's prepare_stream() detects mismatch and triggers regenerate mode
+    4. Regenerate looks for frontend message IDs in checkpoint (they don't exist)
+
     Returns:
         Configured CopilotKitRemoteEndpoint instance with agents and actions
     """
@@ -864,7 +977,8 @@ def create_copilotkit_sdk() -> CopilotKitRemoteEndpoint:
             LangGraphAgent(
                 name="default",
                 description="E2I Analytics Assistant for pharmaceutical commercial analytics. Helps with KPI analysis, causal inference, and agent system insights.",
-                graph=e2i_chat_graph,
+                graph=e2i_chat_graph,  # Initial graph for parent class
+                graph_factory=create_e2i_chat_agent,  # Factory for fresh graphs per request
             ),
         ],
         actions=COPILOT_ACTIONS,
@@ -1142,7 +1256,17 @@ def add_copilotkit_routes(app: FastAPI, prefix: str = "/api/copilotkit") -> None
         """Route handler that extracts path and delegates to custom handler."""
         return await copilotkit_custom_handler(request, sdk, path)
 
-    # Add catch-all route for all CopilotKit paths
+    # Add base path route (WITHOUT trailing slash) to prevent 307 redirect
+    # The frontend sends requests to /api/copilotkit (no trailing slash),
+    # and FastAPI's redirect_slashes=True would cause a 307 redirect that breaks streaming
+    app.add_api_route(
+        normalized_prefix,
+        make_handler,
+        methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        name="copilotkit_handler_base",
+    )
+
+    # Add catch-all route for all CopilotKit sub-paths
     # This matches the SDK's pattern: {prefix}/{path:path}
     app.add_api_route(
         f"{normalized_prefix}/{{path:path}}",
@@ -1151,7 +1275,7 @@ def add_copilotkit_routes(app: FastAPI, prefix: str = "/api/copilotkit") -> None
         name="copilotkit_handler",
     )
 
-    logger.info(f"[CopilotKit] Routes added at {normalized_prefix} (custom handler with info transformation)")
+    logger.info(f"[CopilotKit] Routes added at {normalized_prefix} and {normalized_prefix}/{{path}} (custom handler with info transformation)")
 
 
 # =============================================================================
