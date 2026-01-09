@@ -6,6 +6,7 @@ Usage:
     from src.memory.services.factories import (
         get_redis_client,
         get_supabase_client,
+        get_async_supabase_client,
         get_falkordb_client,
         get_embedding_service,
         get_llm_service,
@@ -15,6 +16,7 @@ Usage:
     # Get clients (cached/pooled)
     redis = get_redis_client()
     supabase = get_supabase_client()
+    async_supabase = await get_async_supabase_client()  # For async contexts
     falkordb = get_falkordb_client()
 
     # Get services
@@ -305,6 +307,7 @@ def get_redis_client():
 
 
 _supabase_client = None
+_async_supabase_client = None
 
 
 def get_supabase_client():
@@ -348,6 +351,58 @@ def get_supabase_client():
         return _supabase_client
     except Exception as e:
         raise ServiceConnectionError("Supabase", f"Failed to create client: {e}", e) from e
+
+
+async def get_async_supabase_client():
+    """
+    Get async Supabase client for use in async contexts.
+
+    This is the async version of get_supabase_client() for use in async functions
+    like LangGraph nodes and tool handlers. Use this when you need to await
+    Supabase operations.
+
+    Requires SUPABASE_URL and SUPABASE_ANON_KEY environment variables.
+    Returns a cached client for connection reuse.
+
+    Returns:
+        AsyncClient: Async Supabase client
+
+    Raises:
+        ServiceConnectionError: If required environment variables are missing or connection fails
+
+    Example:
+        async def my_async_function():
+            client = await get_async_supabase_client()
+            result = await client.table("messages").select("*").execute()
+    """
+    global _async_supabase_client
+    if _async_supabase_client is not None:
+        return _async_supabase_client
+
+    try:
+        from supabase import acreate_client
+    except ImportError as e:
+        raise ServiceConnectionError(
+            "Supabase", "supabase package is not installed. Run: pip install supabase"
+        ) from e
+
+    url = os.environ.get("SUPABASE_URL")
+    key = os.environ.get("SUPABASE_ANON_KEY")
+
+    if not url:
+        raise ServiceConnectionError("Supabase", "SUPABASE_URL environment variable is not set")
+    if not key:
+        raise ServiceConnectionError(
+            "Supabase", "SUPABASE_ANON_KEY environment variable is not set"
+        )
+
+    logger.info(f"Creating async Supabase client for: {url}")
+
+    try:
+        _async_supabase_client = await acreate_client(url, key)
+        return _async_supabase_client
+    except Exception as e:
+        raise ServiceConnectionError("Supabase", f"Failed to create async client: {e}", e) from e
 
 
 _falkordb_client = None
@@ -560,10 +615,11 @@ async def test_all_connections() -> Dict[str, bool]:
 
 def reset_all_clients() -> None:
     """Reset all cached clients. Useful for testing."""
-    global _redis_client, _supabase_client, _falkordb_client
+    global _redis_client, _supabase_client, _async_supabase_client, _falkordb_client
 
     _redis_client = None
     _supabase_client = None
+    _async_supabase_client = None
     _falkordb_client = None
 
     # Clear LRU caches

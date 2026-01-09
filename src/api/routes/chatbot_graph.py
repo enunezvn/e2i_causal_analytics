@@ -25,8 +25,9 @@ from langgraph.prebuilt import ToolNode
 
 from src.api.routes.chatbot_state import ChatbotState, IntentType, create_initial_state
 from src.api.routes.chatbot_tools import E2I_CHATBOT_TOOLS
+from src.memory.services.factories import get_async_supabase_client
+from src.memory.working_memory import get_langgraph_checkpointer
 from src.rag.retriever import hybrid_search
-from src.repositories import get_supabase_client
 from src.repositories.chatbot_conversation import (
     ChatbotConversationRepository,
     get_chatbot_conversation_repository,
@@ -181,7 +182,7 @@ async def init_node(state: ChatbotState) -> Dict[str, Any]:
     # Try to create or verify conversation exists in database
     is_new_conversation = False
     try:
-        client = await get_supabase_client()
+        client = await get_async_supabase_client()
         if client:
             conv_repo = get_chatbot_conversation_repository(client)
 
@@ -231,7 +232,7 @@ async def load_context_node(state: ChatbotState) -> Dict[str, Any]:
     conversation_title = None
 
     try:
-        client = await get_supabase_client()
+        client = await get_async_supabase_client()
         if client:
             msg_repo = get_chatbot_message_repository(client)
             conv_repo = get_chatbot_conversation_repository(client)
@@ -475,7 +476,7 @@ async def finalize_node(state: ChatbotState) -> Dict[str, Any]:
 
     # Persist messages to database
     try:
-        client = await get_supabase_client()
+        client = await get_async_supabase_client()
         if client:
             msg_repo = get_chatbot_message_repository(client)
 
@@ -620,7 +621,10 @@ def create_e2i_chatbot_graph() -> StateGraph:
     # Finalize ends the workflow
     workflow.add_edge("finalize", END)
 
-    return workflow.compile()
+    # Get Redis checkpointer for cross-request memory persistence
+    checkpointer = get_langgraph_checkpointer()
+
+    return workflow.compile(checkpointer=checkpointer)
 
 
 # =============================================================================
