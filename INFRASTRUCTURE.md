@@ -146,6 +146,46 @@ doctl compute firewall create \
     --droplet-ids 538064298
 ```
 
+### Systemd Services
+
+E2I application services managed by systemd:
+
+| Service | Description | Port | Status |
+|---------|-------------|------|--------|
+| `e2i-api.service` | FastAPI backend (uvicorn) | 8001 | Enabled |
+| `e2i-frontend.service` | React frontend (vite preview) | 5174 | Enabled |
+
+**Service Management:**
+
+```bash
+# Check status
+systemctl status e2i-api
+systemctl status e2i-frontend
+
+# Restart services
+systemctl restart e2i-api
+systemctl restart e2i-frontend
+
+# View logs
+journalctl -u e2i-api -f
+journalctl -u e2i-frontend -f
+
+# Stop/Start
+systemctl stop e2i-frontend
+systemctl start e2i-frontend
+```
+
+**Service Files:**
+- `/etc/systemd/system/e2i-api.service`
+- `/etc/systemd/system/e2i-frontend.service`
+
+**Health Check:**
+
+```bash
+curl -s http://localhost:8001/health | jq .status  # API
+curl -s -o /dev/null -w "%{http_code}" http://localhost:5174/  # Frontend
+```
+
 ### Cost Information
 
 - **Current Plan**: s-4vcpu-8gb-120gb-intel
@@ -200,23 +240,25 @@ Use the connection manager script for automated health checks and tunnel setup:
 
 | Service | Remote Port | Local URL (via tunnel) |
 |---------|-------------|------------------------|
+| E2I Frontend | 5174 | http://localhost:5174 |
+| E2I API | 8001 | http://localhost:8001 |
 | MLflow | 5000 | http://localhost:5000 |
 | Opik UI | 5173 | http://localhost:5173 |
 | Opik Backend | 8080 | http://localhost:8080 |
-| E2I API | 8001 | http://localhost:8001 |
 
 **Start SSH Tunnel:**
 
 ```bash
-# Forward MLflow and Opik UI (most common)
-ssh -i ~/.ssh/replit -L 5000:localhost:5000 -L 5173:localhost:5173 -N -f root@159.89.180.27
+# Forward E2I services (frontend + API)
+ssh -i ~/.ssh/replit -L 5174:localhost:5174 -L 8001:localhost:8001 -N -f root@159.89.180.27
 
 # Forward all services
 ssh -i ~/.ssh/replit \
+    -L 5174:localhost:5174 \
+    -L 8001:localhost:8001 \
     -L 5000:localhost:5000 \
     -L 5173:localhost:5173 \
     -L 8080:localhost:8080 \
-    -L 8001:localhost:8001 \
     -N -f root@159.89.180.27
 ```
 
@@ -253,10 +295,11 @@ Host e2i-tunnel
     HostName 159.89.180.27
     User root
     IdentityFile ~/.ssh/replit
+    LocalForward 5174 localhost:5174
+    LocalForward 8001 localhost:8001
     LocalForward 5000 localhost:5000
     LocalForward 5173 localhost:5173
     LocalForward 8080 localhost:8080
-    LocalForward 8001 localhost:8001
 ```
 
 Then connect with: `ssh -N -f e2i-tunnel`
