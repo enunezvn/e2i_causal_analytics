@@ -4,10 +4,11 @@ Protects API routes by validating Supabase JWT tokens.
 Configurable public paths that bypass authentication.
 
 Author: E2I Causal Analytics Team
-Version: 4.2.0
+Version: 4.2.1
 """
 
 import logging
+import os
 import re
 from typing import Callable, List, Set, Tuple
 
@@ -18,6 +19,12 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from src.api.dependencies.auth import is_auth_enabled, verify_supabase_token
 
 logger = logging.getLogger(__name__)
+
+# Get allowed origins for CORS headers on error responses
+ALLOWED_ORIGINS = os.environ.get(
+    "ALLOWED_ORIGINS",
+    "http://localhost:3000,http://localhost:5173,http://localhost:5174,http://localhost:8080,http://127.0.0.1:5173,http://127.0.0.1:5174"
+).split(",")
 
 # Paths that don't require authentication
 # Format: (method_pattern, path_pattern) - use "*" for any method
@@ -92,6 +99,34 @@ def _is_public_path(method: str, path: str) -> bool:
     return False
 
 
+def _get_cors_headers(request: Request) -> dict:
+    """
+    Get CORS headers for error responses.
+
+    Ensures that 401/403 responses include proper CORS headers so browsers
+    can read the error message instead of showing a generic CORS error.
+
+    Args:
+        request: The incoming request
+
+    Returns:
+        Dictionary of CORS headers to add to the response
+    """
+    origin = request.headers.get("origin", "")
+
+    # Check if origin is allowed
+    if origin in ALLOWED_ORIGINS or "*" in ALLOWED_ORIGINS:
+        return {
+            "Access-Control-Allow-Origin": origin or "*",
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
+            "Access-Control-Allow-Headers": "Authorization, Content-Type, Accept, Origin, X-Requested-With",
+        }
+
+    # Default headers if origin not in allowed list
+    return {}
+
+
 class JWTAuthMiddleware(BaseHTTPMiddleware):
     """
     Middleware that enforces JWT authentication on protected routes.
@@ -120,6 +155,9 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
             )
             return await call_next(request)
 
+        # Get CORS headers for error responses
+        cors_headers = _get_cors_headers(request)
+
         # Extract token from Authorization header
         auth_header = request.headers.get("Authorization", "")
 
@@ -131,7 +169,7 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
                     "message": "Missing Authorization header",
                     "hint": "Include 'Authorization: Bearer <token>' header",
                 },
-                headers={"WWW-Authenticate": "Bearer"},
+                headers={"WWW-Authenticate": "Bearer", **cors_headers},
             )
 
         # Parse Bearer token
@@ -144,7 +182,7 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
                     "message": "Invalid Authorization header format",
                     "hint": "Use format: 'Bearer <token>'",
                 },
-                headers={"WWW-Authenticate": "Bearer"},
+                headers={"WWW-Authenticate": "Bearer", **cors_headers},
             )
 
         token = parts[1]
@@ -160,7 +198,7 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
                     "message": "Invalid or expired token",
                     "hint": "Login again to get a fresh token",
                 },
-                headers={"WWW-Authenticate": "Bearer"},
+                headers={"WWW-Authenticate": "Bearer", **cors_headers},
             )
 
         # Attach user to request state for downstream use
