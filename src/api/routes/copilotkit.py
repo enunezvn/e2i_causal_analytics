@@ -7,9 +7,10 @@ Exposes backend actions for querying KPIs, running analyses,
 and interacting with the E2I agent system.
 
 Author: E2I Causal Analytics Team
-Version: 1.6.6
+Version: 1.6.7
 
 Changelog:
+    1.6.7 - Fixed text message emission: emit manually_emit_message custom event for AG-UI frontend rendering
     1.6.6 - Fixed streaming lifecycle: bypass SDK handle_execute_agent to properly stream all events
     1.6.5 - Added detailed timing diagnostics to trace 29-second streaming delay
     1.6.4 - Fixed streaming format: add newline delimiters for proper NDJSON parsing by frontend SDK
@@ -698,6 +699,8 @@ def create_e2i_chat_agent():
 
     async def chat_node(state: E2IAgentState) -> Dict[str, Any]:
         """Process chat messages and generate responses."""
+        from langchain_core.callbacks import dispatch_custom_event
+
         messages = state.get("messages", [])
 
         import time
@@ -724,21 +727,33 @@ def create_e2i_chat_agent():
                     print(f"DEBUG chat_node: Found dict user message: {last_message[:100]}")
                     break
 
+        # Generate message ID for this response
+        message_id = f"ai-{uuid.uuid4()}"
+
         if not last_message:
             print("DEBUG chat_node: No user message found, returning greeting")
+            greeting = "Hello! I'm the E2I Analytics Assistant. I can help you with KPI analysis, causal inference, and insights for pharmaceutical brands. What would you like to know?"
+            # Emit custom event for AG-UI to render the text
+            dispatch_custom_event(
+                "manually_emit_message",
+                {"message_id": message_id, "message": greeting}
+            )
             return {
-                "messages": [
-                    AIMessage(
-                        id=f"ai-{uuid.uuid4()}",
-                        content="Hello! I'm the E2I Analytics Assistant. I can help you with KPI analysis, causal inference, and insights for pharmaceutical brands. What would you like to know?"
-                    )
-                ]
+                "messages": [AIMessage(id=message_id, content=greeting)]
             }
 
         # Generate a contextual response based on the query
         response = generate_e2i_response(last_message)
+        print(f"DEBUG chat_node: Generated response: {response[:100]}...")
 
-        return {"messages": [AIMessage(id=f"ai-{uuid.uuid4()}", content=response)]}
+        # Emit custom event for AG-UI to render the text
+        # This is required because we're not using a streaming LLM
+        dispatch_custom_event(
+            "manually_emit_message",
+            {"message_id": message_id, "message": response}
+        )
+
+        return {"messages": [AIMessage(id=message_id, content=response)]}
 
     # Build the graph
     workflow = StateGraph(E2IAgentState)
