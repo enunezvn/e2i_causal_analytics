@@ -7,13 +7,69 @@ Exposes backend actions for querying KPIs, running analyses,
 and interacting with the E2I agent system.
 
 Author: E2I Causal Analytics Team
-Version: 1.10.0
+Version: 1.18.0
 
 Changelog:
-    1.10.0 - Major refactor: Use SDK's native copilotkit_emit_message() instead of manual TEXT_MESSAGE workarounds.
-             Root cause: Messages not rendering despite correct event emission. Official SDK pattern uses
-             copilotkit_emit_message(config, message) from copilotkit.langgraph, which handles event emission
-             internally. Removed 50+ lines of manual TEXT_MESSAGE_START/CONTENT/END event emission code.
+    1.18.0 - Fixed input field structure in RUN_STARTED event.
+             Root cause: CopilotKit React SDK (v1.50.1) Zod validation expects input to contain
+             the full RunAgentInput structure: {threadId, runId, messages, tools, context}.
+             The v1.17.0 fix set input to {} which still fails Zod validation:
+               "Expected string, received undefined" for input.threadId, input.runId
+               "Expected array, received undefined" for input.messages, input.tools, input.context
+             Fix: Populate input with all required RunAgentInput fields.
+    1.17.0 - Fixed missing required fields in RUN_STARTED/RUN_FINISHED events.
+             Root cause: CopilotKit React SDK (v1.50.1) uses Zod validation that requires
+             timestamp (number), parentRunId (string), and input (object) fields.
+             AG-UI SDK emits these events with null values for optional fields, but Zod
+             validation fails with "Expected number/string/object, received null" errors.
+             Fix: Intercept lifecycle events and ensure all required fields have valid values.
+    1.16.0 - Fixed event type casing: use SCREAMING_SNAKE_CASE for all event types.
+             Root cause: CopilotKit React SDK (v1.50.1) uses Zod validation that expects
+             SCREAMING_SNAKE_CASE event types (TEXT_MESSAGE_START, RUN_STARTED, etc.),
+             not PascalCase. The v1.13.0 change incorrectly converted AG-UI SDK's native
+             SCREAMING_SNAKE_CASE format to PascalCase, causing Zod validation errors:
+               "Invalid discriminator value. Expected 'TEXT_MESSAGE_START' | ..."
+             Fix: Removed _screaming_snake_to_pascal() conversion and use SCREAMING_SNAKE_CASE
+             for all manually constructed events (TEXT_MESSAGE_START, TEXT_MESSAGE_CONTENT, etc.).
+    1.15.0 - Fixed streaming format: use SSE (text/event-stream) instead of NDJSON.
+             Root cause: CopilotKit SDK uses ag-ui EventEncoder which produces SSE format:
+               Content-Type: text/event-stream
+               Event format: data: ${JSON.stringify(event)}\n\n
+             But our backend was using NDJSON format:
+               Content-Type: application/x-ndjson
+               Event format: ${JSON.stringify(event)}\n
+             The SDK's event parser expects SSE format, so events were not being parsed.
+             Fix: Changed media_type to "text/event-stream" and event format to "data: {...}\n\n".
+    1.14.0 - Fixed TextMessageContent field name: use "delta" instead of "content".
+             Root cause: AG-UI protocol spec (https://docs.ag-ui.com/concepts/messages) defines
+             TextMessageContentEvent with { type, messageId, delta } but v1.12.0 incorrectly used
+             "content" field. CopilotKit SDK parses events using AG-UI protocol types which expect
+             "delta" for text content chunks.
+             Fix: Changed TextMessageContent event to use "delta" field for message text.
+    1.13.0 - Fixed ALL event types to use PascalCase for CopilotKit Runtime compatibility.
+             Root cause: AG-UI SDK uses SCREAMING_SNAKE_CASE for ALL event types (RUN_STARTED,
+             TEXT_MESSAGE_START, etc.), but CopilotKit Runtime expects PascalCase (RunStarted,
+             TextMessageStart, etc.). The v1.12.0 fix only converted TEXT_MESSAGE events but
+             missed lifecycle events (RUN_STARTED, RUN_FINISHED) which prevented the SDK from
+             recognizing the run and parsing messages.
+             Fix: Add helper function to convert event types from SCREAMING_SNAKE_CASE to
+             PascalCase, and apply it to ALL events during serialization.
+    1.12.0 - Fixed event TYPE format for CopilotKit Runtime compatibility.
+             Root cause: AG-UI SDK event classes (TextMessageStartEvent, etc.) serialize type to wrong format:
+             - Type: SCREAMING_SNAKE_CASE (TEXT_MESSAGE_START) instead of PascalCase (TextMessageStart)
+             Fix: Replace AG-UI SDK event classes with manual JSON construction using PascalCase types:
+             {"type": "TextMessageStart", "messageId": "...", "role": "assistant"}
+             {"type": "TextMessageContent", "messageId": "...", "delta": "message text"}
+             {"type": "TextMessageEnd", "messageId": "..."}
+             NOTE: v1.12.0 incorrectly used "content" field; fixed in v1.14.0 to use "delta".
+    1.11.0 - Restored TEXT_MESSAGE event conversion in execute() method.
+             Root cause: copilotkit_emit_message() emits CUSTOM events with name "copilotkit_manually_emit_message".
+             The CopilotKit Runtime (TypeScript) normally converts these to TEXT_MESSAGE events, BUT our custom
+             FastAPI endpoint bypasses the Runtime, so the conversion never happens. Frontend receives CUSTOM
+             events which it doesn't render. Fix: Intercept CUSTOM events in execute() and emit TEXT_MESSAGE
+             events ourselves, mimicking what the CopilotKit Runtime does.
+    1.10.0 - (Broken) Major refactor using copilotkit_emit_message() - messages not rendering because
+             custom endpoint bypasses CopilotKit Runtime that would convert CUSTOM to TEXT_MESSAGE events.
     1.9.6 - Fixed TEXT_MESSAGE event serialization: use by_alias=True for camelCase field names.
             Root cause: AG-UI SDK event classes produce snake_case by default (message_id),
             but CopilotKit React SDK v1.50+ uses Zod validation expecting camelCase (messageId).
@@ -87,6 +143,123 @@ from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# EVENT TYPE CONVERSION (DEPRECATED - v1.16.0)
+# =============================================================================
+# NOTE: This function was used in v1.13.0-v1.15.0 but is NO LONGER NEEDED.
+# CopilotKit React SDK (v1.50.1) actually expects SCREAMING_SNAKE_CASE event types
+# (TEXT_MESSAGE_START, RUN_STARTED, etc.) per the AG-UI protocol specification.
+# The v1.13.0 conversion to PascalCase was based on incorrect assumptions.
+# Keeping this function for reference but it is no longer called.
+
+
+def _screaming_snake_to_pascal(event_type: str) -> str:
+    """
+    DEPRECATED: Convert SCREAMING_SNAKE_CASE event type to PascalCase.
+
+    NOTE: This function is no longer used as of v1.16.0.
+    CopilotKit SDK expects SCREAMING_SNAKE_CASE, not PascalCase.
+
+    Examples:
+        RUN_STARTED -> RunStarted
+        TEXT_MESSAGE_START -> TextMessageStart
+        TEXT_MESSAGE_CONTENT -> TextMessageContent
+        RUN_FINISHED -> RunFinished
+
+    Args:
+        event_type: Event type in SCREAMING_SNAKE_CASE format
+
+    Returns:
+        Event type in PascalCase format
+    """
+    # Split by underscore, capitalize each word, join
+    return "".join(word.capitalize() for word in event_type.split("_"))
+
+
+def _fix_lifecycle_event(event_dict: dict, thread_id: str, run_id: str) -> dict:
+    """
+    Fix lifecycle events (RUN_STARTED, RUN_FINISHED) to include required fields.
+
+    CopilotKit React SDK (v1.50.1) uses Zod validation that requires:
+    - timestamp: number (Unix timestamp in milliseconds)
+    - parentRunId: string (can be empty but not null)
+    - input: object (can be empty but not null)
+    - threadId: string
+    - runId: string
+
+    AG-UI SDK emits these with null values, causing Zod validation errors.
+    This function ensures all required fields have valid values.
+
+    Args:
+        event_dict: The serialized event dictionary
+        thread_id: The thread ID for this run
+        run_id: The run ID for this run
+
+    Returns:
+        Fixed event dictionary with all required fields
+    """
+    import time
+
+    event_type = event_dict.get("type", "")
+
+    # Only fix lifecycle events
+    if event_type not in ("RUN_STARTED", "RUN_FINISHED"):
+        return event_dict
+
+    # Ensure timestamp is set (milliseconds since epoch)
+    if event_dict.get("timestamp") is None:
+        event_dict["timestamp"] = int(time.time() * 1000)
+
+    # Ensure parentRunId is a string (empty string if null)
+    if event_dict.get("parentRunId") is None:
+        event_dict["parentRunId"] = ""
+
+    # Ensure threadId is set
+    if event_dict.get("threadId") is None:
+        event_dict["threadId"] = thread_id
+
+    # Ensure runId is set
+    if event_dict.get("runId") is None:
+        event_dict["runId"] = run_id
+
+    # RUN_STARTED specific: ensure input contains full RunAgentInput structure
+    # CopilotKit SDK (v1.50.1) Zod schema requires:
+    #   input.threadId: string
+    #   input.runId: string
+    #   input.messages: array
+    #   input.tools: array
+    #   input.context: array
+    if event_type == "RUN_STARTED":
+        input_obj = event_dict.get("input")
+        if input_obj is None:
+            input_obj = {}
+            event_dict["input"] = input_obj
+        # Ensure all required fields are present
+        if input_obj.get("threadId") is None:
+            input_obj["threadId"] = thread_id
+        if input_obj.get("runId") is None:
+            input_obj["runId"] = run_id
+        if input_obj.get("messages") is None:
+            input_obj["messages"] = []
+        if input_obj.get("tools") is None:
+            input_obj["tools"] = []
+        if input_obj.get("context") is None:
+            input_obj["context"] = []
+
+    # RUN_FINISHED specific: ensure output contains structure
+    # Similar to input, output may need structure for Zod validation
+    if event_type == "RUN_FINISHED":
+        output_obj = event_dict.get("output")
+        if output_obj is None:
+            output_obj = {}
+            event_dict["output"] = output_obj
+        # Ensure messages array exists (SDK may expect this)
+        if output_obj.get("messages") is None:
+            output_obj["messages"] = []
+
+    return event_dict
 
 
 # =============================================================================
@@ -248,9 +421,13 @@ class LangGraphAgent(_LangGraphAGUIAgent):
         # IMPORTANT: Add newline delimiter after each event for proper NDJSON streaming
         # CopilotKit frontend SDK expects newline-delimited JSON events
         #
-        # FIX (v1.10.0): Removed manual TEXT_MESSAGE event emission workaround.
-        # Now using copilotkit_emit_message() in chat_node which handles event emission internally.
-        # This simplifies the execute() method to just serialize SDK events.
+        # FIX (v1.11.0): Intercept CUSTOM events with name "copilotkit_manually_emit_message"
+        # and emit TEXT_MESSAGE_START/CONTENT/END events. This is needed because:
+        # 1. copilotkit_emit_message() emits a CUSTOM event (not TEXT_MESSAGE directly)
+        # 2. The CopilotKit Runtime (TypeScript) normally converts CUSTOM -> TEXT_MESSAGE
+        # 3. But our custom FastAPI endpoint bypasses the Runtime, so we must do it ourselves
+        # Import EventType for checking CUSTOM events (we use manual JSON for TEXT_MESSAGE)
+        from ag_ui.core import EventType
 
         event_count = 0
         dbg("Entering self.run() async loop")
@@ -260,20 +437,87 @@ class LangGraphAgent(_LangGraphAGUIAgent):
                 event_type = getattr(event, 'type', 'unknown') if hasattr(event, 'type') else type(event).__name__
                 dbg(f"Yielding event #{event_count} type={event_type}")
 
+                # Check if this is a CUSTOM event with copilotkit_manually_emit_message
+                # If so, emit TEXT_MESSAGE events (mimicking what CopilotKit Runtime does)
+                if hasattr(event, 'type') and event.type == EventType.CUSTOM:
+                    event_name = getattr(event, 'name', None)
+                    if event_name == "copilotkit_manually_emit_message":
+                        event_value = getattr(event, 'value', {}) or {}
+                        message_id = event_value.get('message_id', str(uuid.uuid4()))
+                        message = event_value.get('message', '')
+
+                        dbg(f"Converting CUSTOM to TEXT_MESSAGE events for message_id={message_id}")
+
+                        # CRITICAL FIX (v1.16.0): Use SCREAMING_SNAKE_CASE event types
+                        # CopilotKit React SDK (v1.50.1) uses Zod validation that expects
+                        # SCREAMING_SNAKE_CASE: TEXT_MESSAGE_START, TEXT_MESSAGE_CONTENT, etc.
+                        # The v1.13.0 PascalCase change was incorrect and caused Zod errors.
+
+                        # Emit TEXT_MESSAGE_START (SCREAMING_SNAKE_CASE, SSE format)
+                        yield f"data: {json.dumps({'type': 'TEXT_MESSAGE_START', 'messageId': message_id, 'role': 'assistant'})}\n\n"
+                        event_count += 1
+
+                        # Emit TEXT_MESSAGE_CONTENT (use "delta" per AG-UI protocol, SSE format)
+                        yield f"data: {json.dumps({'type': 'TEXT_MESSAGE_CONTENT', 'messageId': message_id, 'delta': message})}\n\n"
+                        event_count += 1
+
+                        # Emit TEXT_MESSAGE_END (SCREAMING_SNAKE_CASE, SSE format)
+                        yield f"data: {json.dumps({'type': 'TEXT_MESSAGE_END', 'messageId': message_id})}\n\n"
+                        event_count += 1
+
+                        # Skip emitting the original CUSTOM event (frontend doesn't need it)
+                        continue
+
                 # Serialize and yield the event
-                # Use by_alias=True for camelCase field names expected by React SDK v1.50+
+                # CRITICAL FIX (v1.16.0): Keep SCREAMING_SNAKE_CASE event types
+                # CopilotKit React SDK (v1.50.1) expects SCREAMING_SNAKE_CASE
+                # (RUN_STARTED, TEXT_MESSAGE_START, etc.) per AG-UI protocol.
+                # The v1.13.0 PascalCase conversion was incorrect.
+                #
+                # CRITICAL FIX (v1.17.0): Fix lifecycle events to include required fields
+                # CopilotKit SDK requires timestamp, parentRunId, input/output for
+                # RUN_STARTED/RUN_FINISHED events. AG-UI SDK emits null values.
                 if isinstance(event, str):
-                    # Already a string, ensure newline delimiter
-                    yield event if event.endswith("\n") else event + "\n"
-                elif hasattr(event, "model_dump_json"):
-                    # Pydantic v2 object - serialize to JSON with newline (camelCase)
-                    yield event.model_dump_json(by_alias=True) + "\n"
-                elif hasattr(event, "json"):
-                    # Pydantic v1 object - serialize to JSON with newline
-                    yield event.json(by_alias=True) + "\n"
+                    # Already a string - wrap in SSE format
+                    try:
+                        event_dict = json.loads(event.strip())
+                        # Keep event type as-is (SCREAMING_SNAKE_CASE)
+                        if "type" in event_dict:
+                            dbg(f"Yielding string event type: {event_dict['type']}")
+                        # Fix lifecycle events (v1.17.0)
+                        event_dict = _fix_lifecycle_event(event_dict, thread_id, run_id)
+                        yield f"data: {json.dumps(event_dict)}\n\n"
+                    except (json.JSONDecodeError, KeyError):
+                        # Wrap in SSE format if not already
+                        yield f"data: {event.strip()}\n\n"
+                elif hasattr(event, "model_dump"):
+                    # Pydantic v2 object - serialize to dict with SSE format
+                    event_dict = event.model_dump(by_alias=True)
+                    if "type" in event_dict:
+                        # Handle enum objects that serialize to their value
+                        if hasattr(event_dict["type"], "value"):
+                            event_dict["type"] = event_dict["type"].value
+                        else:
+                            event_dict["type"] = str(event_dict["type"])
+                        dbg(f"Yielding Pydantic event type: {event_dict['type']}")
+                    # Fix lifecycle events (v1.17.0)
+                    event_dict = _fix_lifecycle_event(event_dict, thread_id, run_id)
+                    yield f"data: {json.dumps(event_dict)}\n\n"
+                elif hasattr(event, "dict"):
+                    # Pydantic v1 object - serialize to dict with SSE format
+                    event_dict = event.dict(by_alias=True)
+                    if "type" in event_dict:
+                        if hasattr(event_dict["type"], "value"):
+                            event_dict["type"] = event_dict["type"].value
+                        else:
+                            event_dict["type"] = str(event_dict["type"])
+                        dbg(f"Yielding Pydantic v1 event type: {event_dict['type']}")
+                    # Fix lifecycle events (v1.17.0)
+                    event_dict = _fix_lifecycle_event(event_dict, thread_id, run_id)
+                    yield f"data: {json.dumps(event_dict)}\n\n"
                 else:
-                    # Fallback - convert to string with newline
-                    yield str(event) + "\n"
+                    # Fallback - convert to string with SSE format
+                    yield f"data: {str(event)}\n\n"
         finally:
             # Restore original graph if we swapped it
             if self._graph_factory:
@@ -1174,14 +1418,14 @@ async def copilotkit_custom_handler(request: Request, sdk: CopilotKitRemoteEndpo
                     except Exception as e:
                         sdbg(f"Error: {e}")
                         logger.error(f"[CopilotKit] Stream error: {e}")
-                        # Yield error event
-                        yield json.dumps({"type": "error", "error": str(e)}) + "\n"
+                        # Yield error event (SSE format)
+                        yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
 
                     sdbg(f"Stream complete, yielded {event_count} events")
 
                 return StreamingResponse(
                     stream_agent_events(),
-                    media_type="application/x-ndjson",
+                    media_type="text/event-stream",  # SSE format for CopilotKit SDK
                     headers={
                         "Cache-Control": "no-cache",
                         "Connection": "keep-alive",

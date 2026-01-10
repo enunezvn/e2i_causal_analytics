@@ -469,6 +469,17 @@ export function CopilotKitWrapper({
           transcribeAudioUrl="/api/transcribe"
           textToSpeechUrl="/api/tts"
           agent="default"
+          showDevConsole={import.meta.env.DEV}
+          onError={(errorEvent) => {
+            if (import.meta.env.DEV) {
+              console.error('[CopilotKit Error]', {
+                type: errorEvent.type,
+                timestamp: new Date(errorEvent.timestamp).toISOString(),
+                context: errorEvent.context,
+                error: errorEvent.error,
+              });
+            }
+          }}
         >
           {children}
         </CopilotKit>
