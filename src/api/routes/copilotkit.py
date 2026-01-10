@@ -7,9 +7,16 @@ Exposes backend actions for querying KPIs, running analyses,
 and interacting with the E2I agent system.
 
 Author: E2I Causal Analytics Team
-Version: 1.9.1
+Version: 1.9.3
 
 Changelog:
+    1.9.3 - Fixed SDK handler path param: inject path into scope's path_params before creating new request
+            Root cause: base route `/api/copilotkit` has no `{path:path}` param, so SDK handler's
+            `request.path_params.get('path')` returns None, causing `re.match()` TypeError.
+    1.9.2 - Fixed SDK handler body reconstruction: always reconstruct request after consuming body
+            Root cause: `if body_bytes:` evaluates to False for empty bytes (`b""`), causing
+            the original request (with consumed body) to be passed to sdk_handler, resulting
+            in "expected string or bytes-like object, got 'NoneType'" errors.
     1.9.1 - Fixed AG-UI event format: use PascalCase event types and camelCase field names
             per AG-UI protocol specification (https://docs.ag-ui.com/concepts/events)
             - TextMessageStart (not TEXT_MESSAGE_START)
@@ -1205,8 +1212,11 @@ async def copilotkit_custom_handler(request: Request, sdk: CopilotKitRemoteEndpo
             async def receive():
                 return {"type": "http.request", "body": body_bytes}
 
-            # Create new request with body restored
-            new_request = Request(request.scope, receive)
+            # Create new request with body restored and path param injected
+            # FIX v1.9.3: SDK handler expects path in path_params, but base route has no path param
+            scope_with_path = dict(request.scope)
+            scope_with_path["path_params"] = {**request.path_params, "path": path}
+            new_request = Request(scope_with_path, receive)
             return await sdk_handler(new_request, sdk)
 
         except Exception as e:
@@ -1217,20 +1227,21 @@ async def copilotkit_custom_handler(request: Request, sdk: CopilotKitRemoteEndpo
     # Build context for SDK handler (for non-root paths)
     try:
         body_bytes = await request.body()
-        body = json.loads(body_bytes.decode("utf-8")) if body_bytes else None
     except:  # noqa: E722
-        body = None
         body_bytes = b""
 
     # For all other paths, delegate to SDK handler
-    # Reconstruct request if we consumed the body
-    if body_bytes:
-        async def receive():
-            return {"type": "http.request", "body": body_bytes}
-        new_request = Request(request.scope, receive)
-        return await sdk_handler(new_request, sdk)
-
-    return await sdk_handler(request, sdk)
+    # ALWAYS reconstruct request since we consumed the body above (line 1219)
+    # FIX v1.9.2: Previously used `if body_bytes:` which evaluates to False for empty bytes,
+    # causing the original request (with consumed body) to be passed to SDK handler,
+    # resulting in "expected string or bytes-like object, got 'NoneType'" errors.
+    # FIX v1.9.3: SDK handler expects path in path_params, but base route has no path param
+    async def receive():
+        return {"type": "http.request", "body": body_bytes}
+    scope_with_path = dict(request.scope)
+    scope_with_path["path_params"] = {**request.path_params, "path": path}
+    new_request = Request(scope_with_path, receive)
+    return await sdk_handler(new_request, sdk)
 
 
 def add_copilotkit_routes(app: FastAPI, prefix: str = "/api/copilotkit") -> None:
