@@ -468,6 +468,7 @@ export function CopilotKitWrapper({
           runtimeUrl={runtimeUrl}
           transcribeAudioUrl="/api/transcribe"
           textToSpeechUrl="/api/tts"
+          agent="default"
         >
           {children}
         </CopilotKit>
