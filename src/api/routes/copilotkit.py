@@ -7,9 +7,27 @@ Exposes backend actions for querying KPIs, running analyses,
 and interacting with the E2I agent system.
 
 Author: E2I Causal Analytics Team
-Version: 1.18.0
+Version: 1.20.0
 
 Changelog:
+    1.20.0 - Fixed null fields in MESSAGES_SNAPSHOT messages array.
+             Root cause: CopilotKit React SDK (v1.50.1) Zod validation requires:
+               messages[].name: string (empty string if null)
+               messages[].toolCalls: array (empty array if null for assistant messages)
+             AG-UI SDK emits null values for these optional fields, causing validation errors:
+               "Expected string, received null" at path ["messages", 0, "name"]
+               "Expected array, received null" at path ["messages", 1, "toolCalls"]
+             Fix: Extended _fix_all_events() to iterate MESSAGES_SNAPSHOT messages and replace
+             null name with "" and null toolCalls with [].
+    1.19.0 - Fixed timestamp and source fields on ALL event types (not just lifecycle events).
+             Root cause: CopilotKit React SDK (v1.50.1) Zod validation requires timestamp (number)
+             and source (string) fields on ALL events, including TEXT_MESSAGE_START,
+             TEXT_MESSAGE_CONTENT, TEXT_MESSAGE_END, STATE_SNAPSHOT, and MESSAGES_SNAPSHOT.
+             The v1.18.0 fix only addressed lifecycle events (RUN_STARTED, RUN_FINISHED), but
+             Zod validation errors persisted on other event types with null timestamp/source.
+             Fix: Renamed _fix_lifecycle_event() to _fix_all_events() and expanded to add
+             timestamp (ms since epoch) and source ("e2i-copilot") to ALL events.
+             Also added timestamp and source to manually constructed TEXT_MESSAGE events.
     1.18.0 - Fixed input field structure in RUN_STARTED event.
              Root cause: CopilotKit React SDK (v1.50.1) Zod validation expects input to contain
              the full RunAgentInput structure: {threadId, runId, messages, tools, context}.
@@ -178,19 +196,21 @@ def _screaming_snake_to_pascal(event_type: str) -> str:
     return "".join(word.capitalize() for word in event_type.split("_"))
 
 
-def _fix_lifecycle_event(event_dict: dict, thread_id: str, run_id: str) -> dict:
+def _fix_all_events(event_dict: dict, thread_id: str, run_id: str) -> dict:
     """
-    Fix lifecycle events (RUN_STARTED, RUN_FINISHED) to include required fields.
+    Fix ALL events to include required timestamp and source fields.
 
     CopilotKit React SDK (v1.50.1) uses Zod validation that requires:
-    - timestamp: number (Unix timestamp in milliseconds)
+    - timestamp: number (Unix timestamp in milliseconds) on ALL events
+    - source: string on ALL events (empty string allowed)
+
+    Additionally, lifecycle events (RUN_STARTED, RUN_FINISHED) require:
     - parentRunId: string (can be empty but not null)
-    - input: object (can be empty but not null)
+    - input/output: object structures
     - threadId: string
     - runId: string
 
-    AG-UI SDK emits these with null values, causing Zod validation errors.
-    This function ensures all required fields have valid values.
+    v1.18.0 only fixed lifecycle events. v1.19.0 extends this to ALL events.
 
     Args:
         event_dict: The serialized event dictionary
@@ -204,25 +224,29 @@ def _fix_lifecycle_event(event_dict: dict, thread_id: str, run_id: str) -> dict:
 
     event_type = event_dict.get("type", "")
 
-    # Only fix lifecycle events
-    if event_type not in ("RUN_STARTED", "RUN_FINISHED"):
-        return event_dict
-
-    # Ensure timestamp is set (milliseconds since epoch)
+    # CRITICAL FIX (v1.19.0): Ensure timestamp and source on ALL events
+    # CopilotKit React SDK (v1.50.1) Zod validation requires these on every event type,
+    # including TEXT_MESSAGE_START, TEXT_MESSAGE_CONTENT, TEXT_MESSAGE_END,
+    # STATE_SNAPSHOT, MESSAGES_SNAPSHOT, and any other AG-UI events.
     if event_dict.get("timestamp") is None:
         event_dict["timestamp"] = int(time.time() * 1000)
 
-    # Ensure parentRunId is a string (empty string if null)
-    if event_dict.get("parentRunId") is None:
-        event_dict["parentRunId"] = ""
+    if event_dict.get("source") is None:
+        event_dict["source"] = "e2i-copilot"
 
-    # Ensure threadId is set
-    if event_dict.get("threadId") is None:
-        event_dict["threadId"] = thread_id
+    # Lifecycle-specific fields (preserved from v1.17.0 and v1.18.0)
+    if event_type in ("RUN_STARTED", "RUN_FINISHED"):
+        # Ensure parentRunId is a string (empty string if null)
+        if event_dict.get("parentRunId") is None:
+            event_dict["parentRunId"] = ""
 
-    # Ensure runId is set
-    if event_dict.get("runId") is None:
-        event_dict["runId"] = run_id
+        # Ensure threadId is set
+        if event_dict.get("threadId") is None:
+            event_dict["threadId"] = thread_id
+
+        # Ensure runId is set
+        if event_dict.get("runId") is None:
+            event_dict["runId"] = run_id
 
     # RUN_STARTED specific: ensure input contains full RunAgentInput structure
     # CopilotKit SDK (v1.50.1) Zod schema requires:
@@ -258,6 +282,22 @@ def _fix_lifecycle_event(event_dict: dict, thread_id: str, run_id: str) -> dict:
         # Ensure messages array exists (SDK may expect this)
         if output_obj.get("messages") is None:
             output_obj["messages"] = []
+
+    # CRITICAL FIX (v1.20.0): Fix messages in MESSAGES_SNAPSHOT
+    # CopilotKit React SDK (v1.50.1) Zod validation requires:
+    #   messages[].name: string (empty string if null)
+    #   messages[].toolCalls: array (empty array if null)
+    # AG-UI SDK emits null values for these optional fields, causing validation errors.
+    if event_type == "MESSAGES_SNAPSHOT":
+        messages = event_dict.get("messages", [])
+        if messages:
+            for msg in messages:
+                # Ensure name is a string (empty string if null)
+                if msg.get("name") is None:
+                    msg["name"] = ""
+                # Ensure toolCalls is an array (empty array if null) for assistant messages
+                if msg.get("role") == "assistant" and msg.get("toolCalls") is None:
+                    msg["toolCalls"] = []
 
     return event_dict
 
@@ -452,17 +492,24 @@ class LangGraphAgent(_LangGraphAGUIAgent):
                         # CopilotKit React SDK (v1.50.1) uses Zod validation that expects
                         # SCREAMING_SNAKE_CASE: TEXT_MESSAGE_START, TEXT_MESSAGE_CONTENT, etc.
                         # The v1.13.0 PascalCase change was incorrect and caused Zod errors.
+                        #
+                        # CRITICAL FIX (v1.19.0): Add timestamp and source to ALL events
+                        # CopilotKit React SDK (v1.50.1) Zod validation requires timestamp (number)
+                        # and source (string) on ALL events, not just lifecycle events.
+                        import time
+                        current_ts = int(time.time() * 1000)
+                        source = "e2i-copilot"
 
-                        # Emit TEXT_MESSAGE_START (SCREAMING_SNAKE_CASE, SSE format)
-                        yield f"data: {json.dumps({'type': 'TEXT_MESSAGE_START', 'messageId': message_id, 'role': 'assistant'})}\n\n"
+                        # Emit TEXT_MESSAGE_START with required timestamp and source
+                        yield f"data: {json.dumps({'type': 'TEXT_MESSAGE_START', 'messageId': message_id, 'role': 'assistant', 'timestamp': current_ts, 'source': source})}\n\n"
                         event_count += 1
 
-                        # Emit TEXT_MESSAGE_CONTENT (use "delta" per AG-UI protocol, SSE format)
-                        yield f"data: {json.dumps({'type': 'TEXT_MESSAGE_CONTENT', 'messageId': message_id, 'delta': message})}\n\n"
+                        # Emit TEXT_MESSAGE_CONTENT with required timestamp and source
+                        yield f"data: {json.dumps({'type': 'TEXT_MESSAGE_CONTENT', 'messageId': message_id, 'delta': message, 'timestamp': current_ts, 'source': source})}\n\n"
                         event_count += 1
 
-                        # Emit TEXT_MESSAGE_END (SCREAMING_SNAKE_CASE, SSE format)
-                        yield f"data: {json.dumps({'type': 'TEXT_MESSAGE_END', 'messageId': message_id})}\n\n"
+                        # Emit TEXT_MESSAGE_END with required timestamp and source
+                        yield f"data: {json.dumps({'type': 'TEXT_MESSAGE_END', 'messageId': message_id, 'timestamp': current_ts, 'source': source})}\n\n"
                         event_count += 1
 
                         # Skip emitting the original CUSTOM event (frontend doesn't need it)
@@ -485,7 +532,7 @@ class LangGraphAgent(_LangGraphAGUIAgent):
                         if "type" in event_dict:
                             dbg(f"Yielding string event type: {event_dict['type']}")
                         # Fix lifecycle events (v1.17.0)
-                        event_dict = _fix_lifecycle_event(event_dict, thread_id, run_id)
+                        event_dict = _fix_all_events(event_dict, thread_id, run_id)
                         yield f"data: {json.dumps(event_dict)}\n\n"
                     except (json.JSONDecodeError, KeyError):
                         # Wrap in SSE format if not already
@@ -501,7 +548,7 @@ class LangGraphAgent(_LangGraphAGUIAgent):
                             event_dict["type"] = str(event_dict["type"])
                         dbg(f"Yielding Pydantic event type: {event_dict['type']}")
                     # Fix lifecycle events (v1.17.0)
-                    event_dict = _fix_lifecycle_event(event_dict, thread_id, run_id)
+                    event_dict = _fix_all_events(event_dict, thread_id, run_id)
                     yield f"data: {json.dumps(event_dict)}\n\n"
                 elif hasattr(event, "dict"):
                     # Pydantic v1 object - serialize to dict with SSE format
@@ -513,7 +560,7 @@ class LangGraphAgent(_LangGraphAGUIAgent):
                             event_dict["type"] = str(event_dict["type"])
                         dbg(f"Yielding Pydantic v1 event type: {event_dict['type']}")
                     # Fix lifecycle events (v1.17.0)
-                    event_dict = _fix_lifecycle_event(event_dict, thread_id, run_id)
+                    event_dict = _fix_all_events(event_dict, thread_id, run_id)
                     yield f"data: {json.dumps(event_dict)}\n\n"
                 else:
                     # Fallback - convert to string with SSE format
