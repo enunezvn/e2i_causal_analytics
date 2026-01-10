@@ -7,9 +7,14 @@ Exposes backend actions for querying KPIs, running analyses,
 and interacting with the E2I agent system.
 
 Author: E2I Causal Analytics Team
-Version: 1.9.3
+Version: 1.9.4
 
 Changelog:
+    1.9.4 - Fixed 39-second streaming delay: force fresh thread_id per request to prevent SDK's
+            regenerate mode. Root cause: SDK's prepare_stream() compares checkpoint messages vs
+            frontend messages; if checkpoint has more (from previous AI responses), it triggers
+            regenerate mode which blocks waiting for get_checkpoint_before_message() to find
+            message IDs that don't exist in the new checkpointer's history.
     1.9.3 - Fixed SDK handler path param: inject path into scope's path_params before creating new request
             Root cause: base route `/api/copilotkit` has no `{path:path}` param, so SDK handler's
             `request.path_params.get('path')` returns None, causing `re.match()` TypeError.
@@ -145,9 +150,24 @@ class LangGraphAgent(_LangGraphAGUIAgent):
         The SDK calls execute() with these parameters, but LangGraphAGUIAgent
         expects run(input: RunAgentInput). This method performs the conversion
         and serializes the AG-UI events to strings for the StreamingResponse.
+
+        CRITICAL FIX (v1.9.4): Force unique thread_id per request to prevent SDK's
+        regenerate mode from being triggered. The SDK compares checkpoint messages
+        vs frontend messages, and if checkpoint has more (from previous AI responses),
+        it triggers regenerate mode which fails when message IDs don't exist in history.
+        By using a fresh thread_id, the checkpointer always returns empty state.
         """
         import time
         start_time = time.time()
+
+        # CRITICAL FIX (v1.9.4): Generate a fresh thread_id to prevent regenerate mode.
+        # The SDK's prepare_stream() triggers regenerate mode when:
+        #   len(checkpoint_messages) > len(frontend_messages)
+        # With a fresh thread_id, the checkpointer lookup returns empty state,
+        # so the regenerate check (0 > N) is always False.
+        original_thread_id = thread_id
+        thread_id = str(uuid.uuid4())
+        print(f"DEBUG execute [{time.time()-start_time:.3f}s]: Using fresh thread_id={thread_id[:8]}... (original={original_thread_id[:8] if original_thread_id else 'None'}...)")
 
         # Convert messages to the format expected by RunAgentInput
         # Messages can come from:
