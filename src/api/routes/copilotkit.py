@@ -158,7 +158,15 @@ class LangGraphAgent(_LangGraphAGUIAgent):
         By using a fresh thread_id, the checkpointer always returns empty state.
         """
         import time
+        import sys
+        from datetime import datetime
         start_time = time.time()
+
+        def dbg(msg):
+            """Flushed debug log with wall-clock and elapsed time."""
+            wall = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+            elapsed = time.time() - start_time
+            print(f"[{wall}] DEBUG execute [{elapsed:.3f}s]: {msg}", flush=True)
 
         # CRITICAL FIX (v1.9.4): Generate a fresh thread_id to prevent regenerate mode.
         # The SDK's prepare_stream() triggers regenerate mode when:
@@ -167,7 +175,7 @@ class LangGraphAgent(_LangGraphAGUIAgent):
         # so the regenerate check (0 > N) is always False.
         original_thread_id = thread_id
         thread_id = str(uuid.uuid4())
-        print(f"DEBUG execute [{time.time()-start_time:.3f}s]: Using fresh thread_id={thread_id[:8]}... (original={original_thread_id[:8] if original_thread_id else 'None'}...)")
+        dbg(f"Using fresh thread_id={thread_id[:8]}... (original={original_thread_id[:8] if original_thread_id else 'None'}...)")
 
         # Convert messages to the format expected by RunAgentInput
         # Messages can come from:
@@ -177,9 +185,9 @@ class LangGraphAgent(_LangGraphAGUIAgent):
         from ag_ui.core import UserMessage, AssistantMessage
 
         agui_messages = []
-        print(f"DEBUG execute [{time.time()-start_time:.3f}s]: Converting {len(messages or [])} messages to AG-UI format")
+        dbg(f"Converting {len(messages or [])} messages to AG-UI format")
         for i, msg in enumerate(messages or []):
-            print(f"DEBUG execute [{time.time()-start_time:.3f}s]: msg[{i}] type={type(msg).__name__} value={msg}")
+            dbg(f"msg[{i}] type={type(msg).__name__} value={msg}")
 
             if isinstance(msg, dict):
                 # Handle dict format from AG-UI protocol (frontend sends this)
@@ -191,7 +199,7 @@ class LangGraphAgent(_LangGraphAGUIAgent):
                         agui_messages.append(UserMessage(id=msg_id, content=content))
                     else:
                         agui_messages.append(AssistantMessage(id=msg_id, content=content))
-                    print(f"DEBUG execute [{time.time()-start_time:.3f}s]: Added dict message: role={role}, content={content[:50]}...")
+                    dbg(f"Added dict message: role={role}, content={content[:50]}...")
             elif hasattr(msg, "content") and hasattr(msg, "type"):
                 # Convert langchain message to AGUI format
                 role = "user" if msg.type == "human" else "assistant"
@@ -200,9 +208,9 @@ class LangGraphAgent(_LangGraphAGUIAgent):
                     agui_messages.append(UserMessage(id=msg_id, content=msg.content))
                 else:
                     agui_messages.append(AssistantMessage(id=msg_id, content=msg.content))
-                print(f"DEBUG execute [{time.time()-start_time:.3f}s]: Added LangChain message: role={role}, content={msg.content[:50]}...")
+                dbg(f"Added LangChain message: role={role}, content={msg.content[:50]}...")
 
-        print(f"DEBUG execute [{time.time()-start_time:.3f}s]: Converted to {len(agui_messages)} AG-UI messages")
+        dbg(f"Converted to {len(agui_messages)} AG-UI messages")
 
         # Build RunAgentInput
         # Generate run_id if not provided (SDK doesn't always pass it)
@@ -218,7 +226,7 @@ class LangGraphAgent(_LangGraphAGUIAgent):
             forwarded_props={"node_name": node_name} if node_name else {},
         )
 
-        print(f"DEBUG execute [{time.time()-start_time:.3f}s]: Created RunAgentInput, calling self.run()")
+        dbg("Created RunAgentInput, calling self.run()")
 
         # CRITICAL FIX (v1.6.8): Use fresh graph with new checkpointer to avoid
         # "Message ID not found in history" error. The SDK's prepare_stream()
@@ -227,7 +235,7 @@ class LangGraphAgent(_LangGraphAGUIAgent):
         original_graph = self.graph
         if self._graph_factory:
             self.graph = self._graph_factory()
-            print(f"DEBUG execute [{time.time()-start_time:.3f}s]: Created fresh graph with new checkpointer")
+            dbg("Created fresh graph with new checkpointer")
 
         # Call parent's run() method and serialize each AG-UI event to string
         # The run() method yields Pydantic AG-UI event objects that need serialization
@@ -242,11 +250,12 @@ class LangGraphAgent(_LangGraphAGUIAgent):
         from ag_ui.core import EventType
 
         event_count = 0
+        dbg("Entering self.run() async loop")
         try:
             async for event in self.run(run_input):
                 event_count += 1
                 event_type = getattr(event, 'type', 'unknown') if hasattr(event, 'type') else type(event).__name__
-                print(f"DEBUG execute [{time.time()-start_time:.3f}s]: Yielding event #{event_count} type={event_type}")
+                dbg(f"Yielding event #{event_count} type={event_type}")
 
                 # Check if this is a CUSTOM event with copilotkit_manually_emit_message
                 # If so, emit TEXT_MESSAGE events BEFORE the CUSTOM event (SDK bug workaround)
@@ -259,7 +268,7 @@ class LangGraphAgent(_LangGraphAGUIAgent):
                         message_id = event_value.get('message_id', str(uuid.uuid4()))
                         message = event_value.get('message', '')
 
-                        print(f"DEBUG execute [{time.time()-start_time:.3f}s]: Emitting TEXT_MESSAGE events for messageId={message_id}")
+                        dbg(f"Emitting TEXT_MESSAGE events for messageId={message_id}")
 
                         # FIX (v1.6.9): AG-UI protocol uses SCREAMING_SNAKE_CASE event types
                         # Verified via: ag_ui.core.events.TextMessageStartEvent.model_dump_json()
@@ -309,9 +318,9 @@ class LangGraphAgent(_LangGraphAGUIAgent):
             # Restore original graph if we swapped it
             if self._graph_factory:
                 self.graph = original_graph
-                print(f"DEBUG execute [{time.time()-start_time:.3f}s]: Restored original graph")
+                dbg("Restored original graph")
 
-        print(f"DEBUG execute [{time.time()-start_time:.3f}s]: Finished yielding {event_count} events")
+        dbg(f"Finished yielding {event_count} events")
 
 
 # =============================================================================
@@ -1186,8 +1195,16 @@ async def copilotkit_custom_handler(request: Request, sdk: CopilotKitRemoteEndpo
                     until the generator is exhausted.
                     """
                     import time
+                    from datetime import datetime
                     stream_start = time.time()
-                    print(f"DEBUG stream_agent_events [{time.time()-stream_start:.3f}s]: Starting stream")
+
+                    def sdbg(msg):
+                        """Flushed debug log with wall-clock and elapsed time."""
+                        wall = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+                        elapsed = time.time() - stream_start
+                        print(f"[{wall}] DEBUG stream [{elapsed:.3f}s]: {msg}", flush=True)
+
+                    sdbg("Starting stream")
 
                     event_count = 0
                     try:
@@ -1200,16 +1217,16 @@ async def copilotkit_custom_handler(request: Request, sdk: CopilotKitRemoteEndpo
                             node_name=node_name,
                         ):
                             event_count += 1
-                            print(f"DEBUG stream_agent_events [{time.time()-stream_start:.3f}s]: Streaming event #{event_count}")
+                            sdbg(f"Streaming event #{event_count}")
                             # Event is already serialized by agent.execute()
                             yield event
                     except Exception as e:
-                        print(f"DEBUG stream_agent_events [{time.time()-stream_start:.3f}s]: Error: {e}")
+                        sdbg(f"Error: {e}")
                         logger.error(f"[CopilotKit] Stream error: {e}")
                         # Yield error event
                         yield json.dumps({"type": "error", "error": str(e)}) + "\n"
 
-                    print(f"DEBUG stream_agent_events [{time.time()-stream_start:.3f}s]: Stream complete, yielded {event_count} events")
+                    sdbg(f"Stream complete, yielded {event_count} events")
 
                 return StreamingResponse(
                     stream_agent_events(),
