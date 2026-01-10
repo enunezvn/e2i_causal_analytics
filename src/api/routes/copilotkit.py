@@ -7,9 +7,13 @@ Exposes backend actions for querying KPIs, running analyses,
 and interacting with the E2I agent system.
 
 Author: E2I Causal Analytics Team
-Version: 1.9.4
+Version: 1.9.5
 
 Changelog:
+    1.9.5 - Fixed TEXT_MESSAGE event field names: use AG-UI SDK event classes directly for correct
+            serialization with snake_case field names (message_id, raw_event, timestamp).
+            Root cause: Previous manual JSON used camelCase (messageId) which React SDK v1.50.1
+            doesn't recognize, causing "No messages found" in CopilotKit Debug.
     1.9.4 - Fixed 39-second streaming delay: force fresh thread_id per request to prevent SDK's
             regenerate mode. Root cause: SDK's prepare_stream() compares checkpoint messages vs
             frontend messages; if checkpoint has more (from previous AI responses), it triggers
@@ -22,11 +26,8 @@ Changelog:
             Root cause: `if body_bytes:` evaluates to False for empty bytes (`b""`), causing
             the original request (with consumed body) to be passed to sdk_handler, resulting
             in "expected string or bytes-like object, got 'NoneType'" errors.
-    1.9.1 - Fixed AG-UI event format: use PascalCase event types and camelCase field names
-            per AG-UI protocol specification (https://docs.ag-ui.com/concepts/events)
-            - TextMessageStart (not TEXT_MESSAGE_START)
-            - messageId (not message_id)
-            - rawEvent (not raw_event)
+    1.9.1 - Fixed AG-UI event type casing: use SCREAMING_SNAKE_CASE event types
+            (TEXT_MESSAGE_START not TextMessageStart) per AG-UI protocol specification.
     1.9.0 - Fixed TEXT_MESSAGE events not being emitted: CopilotKit SDK v0.1.74 has a bug where
             _dispatch_event() creates TEXT_MESSAGE events but discards their return values.
             Workaround: manually emit TEXT_MESSAGE_START/CONTENT/END events in execute() method.
@@ -268,37 +269,39 @@ class LangGraphAgent(_LangGraphAGUIAgent):
                         message_id = event_value.get('message_id', str(uuid.uuid4()))
                         message = event_value.get('message', '')
 
-                        dbg(f"Emitting TEXT_MESSAGE events for messageId={message_id}")
+                        dbg(f"Emitting TEXT_MESSAGE events for message_id={message_id}")
 
-                        # FIX (v1.6.9): AG-UI protocol uses SCREAMING_SNAKE_CASE event types
-                        # Verified via: ag_ui.core.events.TextMessageStartEvent.model_dump_json()
-                        # Produces: {"type":"TEXT_MESSAGE_START","messageId":"...","role":"assistant"}
-                        # NOT PascalCase - the previous fix was incorrect.
+                        # FIX (v1.9.5): Use AG-UI SDK event classes directly for correct serialization
+                        # Verified via: TextMessageStartEvent(message_id='x', role='assistant').model_dump_json()
+                        # Produces: {"type":"TEXT_MESSAGE_START","timestamp":null,"raw_event":null,"message_id":"x","role":"assistant"}
+                        # Previous manual JSON used wrong field name (messageId instead of message_id)
+                        from ag_ui.core import (
+                            TextMessageStartEvent,
+                            TextMessageContentEvent,
+                            TextMessageEndEvent,
+                        )
 
-                        # Emit TEXT_MESSAGE_START
-                        text_start = {
-                            "type": "TEXT_MESSAGE_START",
-                            "messageId": message_id,
-                            "role": "assistant",
-                        }
-                        yield json.dumps(text_start) + "\n"
+                        # Emit TEXT_MESSAGE_START using SDK event class
+                        text_start = TextMessageStartEvent(
+                            message_id=message_id,
+                            role="assistant",
+                        )
+                        yield text_start.model_dump_json() + "\n"
                         event_count += 1
 
-                        # Emit TEXT_MESSAGE_CONTENT
-                        text_content = {
-                            "type": "TEXT_MESSAGE_CONTENT",
-                            "messageId": message_id,
-                            "delta": message,
-                        }
-                        yield json.dumps(text_content) + "\n"
+                        # Emit TEXT_MESSAGE_CONTENT using SDK event class
+                        text_content = TextMessageContentEvent(
+                            message_id=message_id,
+                            delta=message,
+                        )
+                        yield text_content.model_dump_json() + "\n"
                         event_count += 1
 
-                        # Emit TEXT_MESSAGE_END
-                        text_end = {
-                            "type": "TEXT_MESSAGE_END",
-                            "messageId": message_id,
-                        }
-                        yield json.dumps(text_end) + "\n"
+                        # Emit TEXT_MESSAGE_END using SDK event class
+                        text_end = TextMessageEndEvent(
+                            message_id=message_id,
+                        )
+                        yield text_end.model_dump_json() + "\n"
                         event_count += 1
 
                 # Serialize and yield the original event
