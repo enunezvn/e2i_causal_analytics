@@ -7,13 +7,18 @@ Exposes backend actions for querying KPIs, running analyses,
 and interacting with the E2I agent system.
 
 Author: E2I Causal Analytics Team
-Version: 1.9.5
+Version: 1.10.0
 
 Changelog:
-    1.9.5 - Fixed TEXT_MESSAGE event field names: use AG-UI SDK event classes directly for correct
-            serialization with snake_case field names (message_id, raw_event, timestamp).
-            Root cause: Previous manual JSON used camelCase (messageId) which React SDK v1.50.1
-            doesn't recognize, causing "No messages found" in CopilotKit Debug.
+    1.10.0 - Major refactor: Use SDK's native copilotkit_emit_message() instead of manual TEXT_MESSAGE workarounds.
+             Root cause: Messages not rendering despite correct event emission. Official SDK pattern uses
+             copilotkit_emit_message(config, message) from copilotkit.langgraph, which handles event emission
+             internally. Removed 50+ lines of manual TEXT_MESSAGE_START/CONTENT/END event emission code.
+    1.9.6 - Fixed TEXT_MESSAGE event serialization: use by_alias=True for camelCase field names.
+            Root cause: AG-UI SDK event classes produce snake_case by default (message_id),
+            but CopilotKit React SDK v1.50+ uses Zod validation expecting camelCase (messageId).
+            Fix: Changed model_dump_json() to model_dump_json(by_alias=True) everywhere.
+    1.9.5 - Used AG-UI SDK event classes directly for TEXT_MESSAGE events (still had casing issue).
     1.9.4 - Fixed 39-second streaming delay: force fresh thread_id per request to prevent SDK's
             regenerate mode. Root cause: SDK's prepare_stream() compares checkpoint messages vs
             frontend messages; if checkpoint has more (from previous AI responses), it triggers
@@ -63,6 +68,7 @@ from datetime import datetime, timezone
 from typing import Annotated, Any, AsyncGenerator, Dict, List, Optional, Sequence, TypedDict
 
 from copilotkit import CopilotKitRemoteEndpoint, Action as CopilotAction
+from copilotkit.langgraph import copilotkit_emit_message
 from copilotkit.langgraph_agui_agent import LangGraphAGUIAgent as _LangGraphAGUIAgent
 from ag_ui.core import RunAgentInput
 from copilotkit.integrations.fastapi import (
@@ -74,7 +80,6 @@ from copilotkit.integrations.fastapi import (
 from copilotkit.sdk import COPILOTKIT_SDK_VERSION, CopilotKitContext
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from langchain_core.callbacks import adispatch_custom_event
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import MemorySaver
@@ -243,12 +248,9 @@ class LangGraphAgent(_LangGraphAGUIAgent):
         # IMPORTANT: Add newline delimiter after each event for proper NDJSON streaming
         # CopilotKit frontend SDK expects newline-delimited JSON events
         #
-        # FIX (v1.9.0): The CopilotKit SDK v0.1.74 has a bug in _dispatch_event() where
-        # TEXT_MESSAGE events are created but their return values are discarded. The SDK
-        # only returns the original CUSTOM event. To fix this, we manually emit
-        # TEXT_MESSAGE_START, TEXT_MESSAGE_CONTENT, TEXT_MESSAGE_END events when we
-        # detect a CUSTOM event with name="copilotkit_manually_emit_message".
-        from ag_ui.core import EventType
+        # FIX (v1.10.0): Removed manual TEXT_MESSAGE event emission workaround.
+        # Now using copilotkit_emit_message() in chat_node which handles event emission internally.
+        # This simplifies the execute() method to just serialize SDK events.
 
         event_count = 0
         dbg("Entering self.run() async loop")
@@ -258,62 +260,17 @@ class LangGraphAgent(_LangGraphAGUIAgent):
                 event_type = getattr(event, 'type', 'unknown') if hasattr(event, 'type') else type(event).__name__
                 dbg(f"Yielding event #{event_count} type={event_type}")
 
-                # Check if this is a CUSTOM event with copilotkit_manually_emit_message
-                # If so, emit TEXT_MESSAGE events BEFORE the CUSTOM event (SDK bug workaround)
-                is_manual_emit = False
-                if hasattr(event, 'type') and event.type == EventType.CUSTOM:
-                    event_name = getattr(event, 'name', None)
-                    if event_name == "copilotkit_manually_emit_message":
-                        is_manual_emit = True
-                        event_value = getattr(event, 'value', {}) or {}
-                        message_id = event_value.get('message_id', str(uuid.uuid4()))
-                        message = event_value.get('message', '')
-
-                        dbg(f"Emitting TEXT_MESSAGE events for message_id={message_id}")
-
-                        # FIX (v1.9.5): Use AG-UI SDK event classes directly for correct serialization
-                        # Verified via: TextMessageStartEvent(message_id='x', role='assistant').model_dump_json()
-                        # Produces: {"type":"TEXT_MESSAGE_START","timestamp":null,"raw_event":null,"message_id":"x","role":"assistant"}
-                        # Previous manual JSON used wrong field name (messageId instead of message_id)
-                        from ag_ui.core import (
-                            TextMessageStartEvent,
-                            TextMessageContentEvent,
-                            TextMessageEndEvent,
-                        )
-
-                        # Emit TEXT_MESSAGE_START using SDK event class
-                        text_start = TextMessageStartEvent(
-                            message_id=message_id,
-                            role="assistant",
-                        )
-                        yield text_start.model_dump_json() + "\n"
-                        event_count += 1
-
-                        # Emit TEXT_MESSAGE_CONTENT using SDK event class
-                        text_content = TextMessageContentEvent(
-                            message_id=message_id,
-                            delta=message,
-                        )
-                        yield text_content.model_dump_json() + "\n"
-                        event_count += 1
-
-                        # Emit TEXT_MESSAGE_END using SDK event class
-                        text_end = TextMessageEndEvent(
-                            message_id=message_id,
-                        )
-                        yield text_end.model_dump_json() + "\n"
-                        event_count += 1
-
-                # Serialize and yield the original event
+                # Serialize and yield the event
+                # Use by_alias=True for camelCase field names expected by React SDK v1.50+
                 if isinstance(event, str):
                     # Already a string, ensure newline delimiter
                     yield event if event.endswith("\n") else event + "\n"
                 elif hasattr(event, "model_dump_json"):
-                    # Pydantic v2 object - serialize to JSON with newline
-                    yield event.model_dump_json() + "\n"
+                    # Pydantic v2 object - serialize to JSON with newline (camelCase)
+                    yield event.model_dump_json(by_alias=True) + "\n"
                 elif hasattr(event, "json"):
                     # Pydantic v1 object - serialize to JSON with newline
-                    yield event.json() + "\n"
+                    yield event.json(by_alias=True) + "\n"
                 else:
                     # Fallback - convert to string with newline
                     yield str(event) + "\n"
@@ -880,12 +837,8 @@ def create_e2i_chat_agent():
         if not last_message:
             print("DEBUG chat_node: No user message found, returning greeting")
             greeting = "Hello! I'm the E2I Analytics Assistant. I can help you with KPI analysis, causal inference, and insights for pharmaceutical brands. What would you like to know?"
-            # Emit custom event for AG-UI to render the text (with config for proper event routing)
-            await adispatch_custom_event(
-                "copilotkit_manually_emit_message",
-                {"message_id": message_id, "message": greeting, "role": "assistant"},
-                config=config
-            )
+            # Use SDK's native message emission (v1.10.0)
+            await copilotkit_emit_message(config, greeting)
             return {
                 "messages": [AIMessage(id=message_id, content=greeting)]
             }
@@ -894,13 +847,8 @@ def create_e2i_chat_agent():
         response = generate_e2i_response(last_message)
         print(f"DEBUG chat_node: Generated response: {response[:100]}...")
 
-        # Emit custom event for AG-UI to render the text (with config for proper event routing)
-        # This is required because we're not using a streaming LLM
-        await adispatch_custom_event(
-            "copilotkit_manually_emit_message",
-            {"message_id": message_id, "message": response, "role": "assistant"},
-            config=config
-        )
+        # Use SDK's native message emission (v1.10.0)
+        await copilotkit_emit_message(config, response)
 
         return {"messages": [AIMessage(id=message_id, content=response)]}
 
