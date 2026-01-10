@@ -10,7 +10,7 @@ import re
 import time
 from typing import Any, Dict
 
-from langchain_anthropic import ChatAnthropic
+from src.utils.llm_factory import get_fast_llm, get_llm_provider
 
 from ..state import IntentClassification, OrchestratorState
 
@@ -96,9 +96,10 @@ class IntentClassifierNode:
     }
 
     def __init__(self):
-        """Initialize intent classifier with Haiku for fast classification."""
-        # Use Haiku for fast classification
-        self.llm = ChatAnthropic(model="claude-haiku-4-20250414", max_tokens=256, timeout=2)
+        """Initialize intent classifier with fast LLM for classification."""
+        # Use fast LLM (Haiku or gpt-4o-mini based on LLM_PROVIDER env var)
+        self.llm = get_fast_llm(max_tokens=256, timeout=2)
+        self._provider = get_llm_provider()
 
     async def execute(self, state: OrchestratorState) -> OrchestratorState:
         """Execute intent classification.
@@ -211,10 +212,11 @@ Respond with ONLY a JSON object:
             opik = _get_opik_connector()
 
             if opik and opik.is_enabled:
-                # Trace the LLM call
+                # Trace the LLM call with dynamic provider info
+                model_name = "gpt-4o-mini" if self._provider == "openai" else "claude-haiku-4-20250414"
                 async with opik.trace_llm_call(
-                    model="claude-haiku-4-20250414",
-                    provider="anthropic",
+                    model=model_name,
+                    provider=self._provider,
                     prompt_template="intent_classification",
                     input_data={"query": query, "prompt": prompt},
                     metadata={"agent": "orchestrator", "operation": "intent_classification"},

@@ -8,7 +8,7 @@ import logging
 import time
 from typing import Any, Dict, List
 
-from langchain_anthropic import ChatAnthropic
+from src.utils.llm_factory import get_fast_llm, get_llm_provider
 
 from ..state import AgentResult, OrchestratorState
 
@@ -36,8 +36,10 @@ class SynthesizerNode:
     """
 
     def __init__(self):
-        """Initialize synthesizer with Haiku for fast synthesis."""
-        self.llm = ChatAnthropic(model="claude-haiku-4-20250414", max_tokens=1024, timeout=5)
+        """Initialize synthesizer with fast LLM for synthesis."""
+        # Use fast LLM (Haiku or gpt-4o-mini based on LLM_PROVIDER env var)
+        self.llm = get_fast_llm(max_tokens=1024, timeout=5)
+        self._provider = get_llm_provider()
 
     async def execute(self, state: OrchestratorState) -> OrchestratorState:
         """Execute response synthesis.
@@ -140,10 +142,11 @@ Provide a unified 2-3 paragraph response that:
             opik = _get_opik_connector()
 
             if opik and opik.is_enabled:
-                # Trace the LLM call
+                # Trace the LLM call with dynamic provider info
+                model_name = "gpt-4o-mini" if self._provider == "openai" else "claude-haiku-4-20250414"
                 async with opik.trace_llm_call(
-                    model="claude-haiku-4-20250414",
-                    provider="anthropic",
+                    model=model_name,
+                    provider=self._provider,
                     prompt_template="multi_agent_synthesis",
                     input_data={"summaries": summaries, "prompt": synthesis_prompt},
                     metadata={"agent": "orchestrator", "operation": "response_synthesis"},

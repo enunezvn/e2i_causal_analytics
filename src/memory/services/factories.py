@@ -216,6 +216,52 @@ class AnthropicLLMService(LLMService):
             raise ServiceConnectionError("Anthropic", f"Failed to generate completion: {e}", e) from e
 
 
+class OpenAILLMService(LLMService):
+    """OpenAI GPT for development/testing (cheaper alternative to Claude)."""
+
+    def __init__(
+        self,
+        model: str = "gpt-4o-mini",
+        max_tokens: int = 4096,
+        temperature: float = 0.3,
+    ):
+        self._client = None
+        self.model = model
+        self.max_tokens = max_tokens
+        self.temperature = temperature
+
+    def _get_client(self):
+        if self._client is None:
+            try:
+                import openai
+
+                api_key = os.environ.get("OPENAI_API_KEY")
+                if not api_key:
+                    raise ServiceConnectionError(
+                        "OpenAI", "OPENAI_API_KEY environment variable is not set"
+                    )
+                self._client = openai.OpenAI(api_key=api_key)
+            except ImportError as e:
+                raise ServiceConnectionError(
+                    "OpenAI", "openai package is not installed. Run: pip install openai"
+                ) from e
+        return self._client
+
+    async def complete(self, prompt: str, max_tokens: Optional[int] = None) -> str:
+        """Generate completion using OpenAI."""
+        client = self._get_client()
+        try:
+            response = client.chat.completions.create(
+                model=self.model,
+                max_tokens=max_tokens or self.max_tokens,
+                temperature=self.temperature,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return response.choices[0].message.content or ""
+        except Exception as e:
+            raise ServiceConnectionError("OpenAI", f"Failed to generate completion: {e}", e) from e
+
+
 class BedrockLLMService(LLMService):
     """AWS Bedrock Claude for production environment."""
 
@@ -475,22 +521,32 @@ def get_embedding_service(environment: Optional[str] = None) -> EmbeddingService
 @lru_cache(maxsize=1)
 def get_llm_service(environment: Optional[str] = None) -> LLMService:
     """
-    Get LLM service based on environment.
+    Get LLM service based on environment and provider preference.
 
     Args:
         environment: "local_pilot" or "aws_production". If not provided,
                      uses E2I_ENVIRONMENT env var or defaults to "local_pilot".
 
+    Environment Variables:
+        LLM_PROVIDER: "anthropic" (default) or "openai"
+            - Set to "openai" for cheaper gpt-4o-mini during development
+            - Set to "anthropic" for Claude in production
+
     Returns:
-        LLMService: Anthropic or Bedrock LLM service
+        LLMService: OpenAI, Anthropic, or Bedrock LLM service
     """
     if environment is None:
         environment = os.environ.get("E2I_ENVIRONMENT", "local_pilot")
 
-    logger.info(f"Creating LLM service for environment: {environment}")
+    # Check for provider override (useful for dev/testing with cheaper models)
+    llm_provider = os.environ.get("LLM_PROVIDER", "anthropic").lower()
+
+    logger.info(f"Creating LLM service for environment: {environment}, provider: {llm_provider}")
 
     if environment == "aws_production":
         return BedrockLLMService()
+    elif llm_provider == "openai":
+        return OpenAILLMService()
     else:
         return AnthropicLLMService()
 
