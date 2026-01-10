@@ -16,7 +16,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from langchain_anthropic import ChatAnthropic
+from src.utils.llm_factory import get_chat_llm, get_fast_llm, get_llm_provider
 
 from src.agents.experiment_designer.state import (
     ErrorDetails,
@@ -56,11 +56,18 @@ class DesignReasoningNode:
     """
 
     def __init__(self):
-        """Initialize design reasoning node with real LLM."""
-        self.model_name = "claude-sonnet-4-20250514"
-        self.fallback_model_name = "claude-haiku-4-20250414"
-        self.llm = ChatAnthropic(model=self.model_name, max_tokens=8192, timeout=120)
-        self.fallback_llm = ChatAnthropic(model=self.fallback_model_name, max_tokens=4096, timeout=60)
+        """Initialize design reasoning node with LLM factory."""
+        self._provider = get_llm_provider()
+        # Set model names based on provider for tracing
+        if self._provider == "openai":
+            self.model_name = "gpt-4o"
+            self.fallback_model_name = "gpt-4o-mini"
+        else:
+            self.model_name = "claude-sonnet-4-20250514"
+            self.fallback_model_name = "claude-haiku-4-20250414"
+        # Use reasoning tier for primary, fast tier for fallback
+        self.llm = get_chat_llm(model_tier="reasoning", max_tokens=8192, timeout=120)
+        self.fallback_llm = get_fast_llm(max_tokens=4096, timeout=60)
 
     async def execute(self, state: ExperimentDesignState) -> ExperimentDesignState:
         """Execute design reasoning.
@@ -90,10 +97,10 @@ class DesignReasoningNode:
             # Invoke LLM with fallback
             try:
                 if opik and opik.is_enabled:
-                    # Trace the LLM call
+                    # Trace the LLM call with dynamic provider info
                     async with opik.trace_llm_call(
                         model=self.model_name,
-                        provider="anthropic",
+                        provider=self._provider,
                         prompt_template="experiment_design_reasoning",
                         input_data={"prompt": prompt[:500], "business_question": state.get("business_question", "")},
                         metadata={"agent": "experiment_designer", "operation": "design_reasoning"},
@@ -121,7 +128,7 @@ class DesignReasoningNode:
                 if opik and opik.is_enabled:
                     async with opik.trace_llm_call(
                         model=self.fallback_model_name,
-                        provider="anthropic",
+                        provider=self._provider,
                         prompt_template="experiment_design_reasoning_fallback",
                         input_data={"prompt": fallback_prompt[:500]},
                         metadata={"agent": "experiment_designer", "operation": "design_reasoning_fallback"},
