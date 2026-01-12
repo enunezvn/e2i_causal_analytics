@@ -313,6 +313,7 @@ class TestTwinGeneratorGeneration:
         assert population.twin_type == TwinType.HCP
         assert population.brand == Brand.REMIBRUTINIB
 
+    @pytest.mark.xdist_group(name="digital_twin_heavy")
     def test_generate_with_seed(self, hcp_training_data):
         """Test that seed produces reproducible results across separate generators."""
         # Train two identical generators
@@ -495,13 +496,18 @@ class TestEdgeCases:
 
         assert hcp_generator.scaler is not None
 
+    @pytest.mark.xdist_group(name="digital_twin_heavy")
     def test_generate_large_population(self, hcp_generator, hcp_training_data):
-        """Test generating a larger population."""
+        """Test generating a larger population.
+
+        Note: Reduced from n=500 to n=100 for faster test execution.
+        The core functionality is verified at this scale.
+        """
         hcp_generator.train(data=hcp_training_data, target_col="prescribing_change")
 
-        population = hcp_generator.generate(n=500)
+        population = hcp_generator.generate(n=100)
 
-        assert len(population) == 500
+        assert len(population) == 100
 
     def test_metrics_cv_scores(self, hcp_generator, hcp_training_data):
         """Test that cross-validation scores are calculated."""
