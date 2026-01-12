@@ -32,7 +32,7 @@ import logging
 import os
 from abc import ABC, abstractmethod
 from functools import lru_cache
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -518,14 +518,64 @@ def get_embedding_service(environment: Optional[str] = None) -> EmbeddingService
         return OpenAIEmbeddingService()
 
 
-@lru_cache(maxsize=1)
-def get_llm_service(environment: Optional[str] = None) -> LLMService:
+# Type alias for LLM providers
+LLMProvider = Literal["anthropic", "openai", "bedrock"]
+
+
+def _get_llm_provider() -> LLMProvider:
+    """
+    Get the configured LLM provider from environment.
+
+    Returns:
+        LLMProvider: "anthropic", "openai", or "bedrock"
+    """
+    provider = os.environ.get("LLM_PROVIDER", "anthropic").lower()
+    if provider not in ("anthropic", "openai", "bedrock"):
+        logger.warning(f"Unknown LLM_PROVIDER '{provider}', defaulting to 'anthropic'")
+        return "anthropic"
+    return provider  # type: ignore
+
+
+@lru_cache(maxsize=4)
+def _get_llm_service_cached(environment: str, provider: str) -> LLMService:
+    """
+    Internal cached factory - called with resolved values.
+
+    Cache key includes both environment AND provider to ensure correct
+    service is returned when either changes.
+
+    Args:
+        environment: Resolved environment string
+        provider: Resolved provider string
+
+    Returns:
+        LLMService: Appropriate LLM service instance
+    """
+    logger.info(f"Creating LLM service: environment={environment}, provider={provider}")
+
+    if environment == "aws_production":
+        return BedrockLLMService()
+    elif provider == "openai":
+        return OpenAILLMService()
+    else:
+        return AnthropicLLMService()
+
+
+def get_llm_service(
+    environment: Optional[str] = None,
+    provider: Optional[LLMProvider] = None,
+) -> LLMService:
     """
     Get LLM service based on environment and provider preference.
 
     Args:
-        environment: "local_pilot" or "aws_production". If not provided,
-                     uses E2I_ENVIRONMENT env var or defaults to "local_pilot".
+        environment: "local_pilot" or "aws_production". Defaults to E2I_ENVIRONMENT env var.
+        provider: "anthropic", "openai", or "bedrock". Defaults to LLM_PROVIDER env var.
+
+    Provider Precedence:
+        1. Explicit `provider` argument (highest priority)
+        2. LLM_PROVIDER environment variable
+        3. Default: "anthropic"
 
     Environment Variables:
         LLM_PROVIDER: "anthropic" (default) or "openai"
@@ -534,21 +584,24 @@ def get_llm_service(environment: Optional[str] = None) -> LLMService:
 
     Returns:
         LLMService: OpenAI, Anthropic, or Bedrock LLM service
+
+    Example (testing - no patching needed):
+        service = get_llm_service(provider="anthropic")
+
+    Example (production - reads from env):
+        service = get_llm_service()
     """
-    if environment is None:
-        environment = os.environ.get("E2I_ENVIRONMENT", "local_pilot")
+    # Resolve environment
+    resolved_env = environment or os.environ.get("E2I_ENVIRONMENT", "local_pilot")
 
-    # Check for provider override (useful for dev/testing with cheaper models)
-    llm_provider = os.environ.get("LLM_PROVIDER", "anthropic").lower()
+    # Resolve provider with precedence: arg > env > default
+    resolved_provider = provider or _get_llm_provider()
 
-    logger.info(f"Creating LLM service for environment: {environment}, provider: {llm_provider}")
+    # Production override: aws_production always uses Bedrock
+    if resolved_env == "aws_production":
+        resolved_provider = "bedrock"
 
-    if environment == "aws_production":
-        return BedrockLLMService()
-    elif llm_provider == "openai":
-        return OpenAILLMService()
-    else:
-        return AnthropicLLMService()
+    return _get_llm_service_cached(resolved_env, resolved_provider)
 
 
 # ============================================================================
@@ -680,6 +733,6 @@ def reset_all_clients() -> None:
 
     # Clear LRU caches
     get_embedding_service.cache_clear()
-    get_llm_service.cache_clear()
+    _get_llm_service_cached.cache_clear()
 
     logger.info("All service clients have been reset")
