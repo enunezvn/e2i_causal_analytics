@@ -31,6 +31,7 @@ from src.memory.services.factories import (
     BedrockEmbeddingService,
     BedrockLLMService,
     OpenAIEmbeddingService,
+    OpenAILLMService,
     ServiceConnectionError,
     get_embedding_service,
     get_llm_service,
@@ -257,9 +258,14 @@ class TestLLMServices:
         reset_all_clients()
 
     def test_get_llm_service_returns_anthropic_for_local(self):
-        """get_llm_service should return Anthropic for local_pilot."""
-        service = get_llm_service("local_pilot")
+        """get_llm_service returns Anthropic when provider='anthropic'."""
+        service = get_llm_service("local_pilot", provider="anthropic")
         assert isinstance(service, AnthropicLLMService)
+
+    def test_get_llm_service_returns_openai_when_specified(self):
+        """get_llm_service returns OpenAI when provider='openai'."""
+        service = get_llm_service("local_pilot", provider="openai")
+        assert isinstance(service, OpenAILLMService)
 
     def test_get_llm_service_returns_bedrock_for_production(self):
         """get_llm_service should return Bedrock for aws_production."""
@@ -267,9 +273,15 @@ class TestLLMServices:
         service = get_llm_service("aws_production")
         assert isinstance(service, BedrockLLMService)
 
-    @patch.dict(os.environ, {"E2I_ENVIRONMENT": "local_pilot"})
+    def test_get_llm_service_production_ignores_provider(self):
+        """aws_production always uses Bedrock regardless of provider."""
+        reset_all_clients()
+        service = get_llm_service("aws_production", provider="openai")
+        assert isinstance(service, BedrockLLMService)
+
+    @patch.dict(os.environ, {"E2I_ENVIRONMENT": "local_pilot", "LLM_PROVIDER": "anthropic"})
     def test_get_llm_service_uses_env_var(self):
-        """get_llm_service should use E2I_ENVIRONMENT env var."""
+        """get_llm_service should use E2I_ENVIRONMENT and LLM_PROVIDER env vars."""
         reset_all_clients()
         service = get_llm_service()
         assert isinstance(service, AnthropicLLMService)
@@ -322,7 +334,7 @@ class TestResetFunctions:
         """reset_all_clients should clear all cached clients."""
         # Get services to populate caches
         get_embedding_service("local_pilot")
-        get_llm_service("local_pilot")
+        get_llm_service("local_pilot", provider="anthropic")
 
         # Reset
         reset_all_clients()
