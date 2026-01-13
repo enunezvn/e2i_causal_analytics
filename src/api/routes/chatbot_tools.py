@@ -38,6 +38,7 @@ from src.repositories.chatbot_message import (
 )
 from src.api.routes.cognitive import get_orchestrator
 from src.agents.tool_composer import compose_query
+from src.utils.llm_factory import get_chat_llm
 
 logger = logging.getLogger(__name__)
 
@@ -983,8 +984,11 @@ async def tool_composer_tool(
             "max_parallel": max_parallel,
         }
 
+        # Get LLM client for Tool Composer (use reasoning tier for complex queries)
+        llm_client = get_chat_llm(model_tier="reasoning", max_tokens=4096)
+
         # Use the compose_query convenience function
-        result = await compose_query(query=query, context=context)
+        result = await compose_query(query=query, llm_client=llm_client, context=context)
 
         # Extract composition results
         return {
