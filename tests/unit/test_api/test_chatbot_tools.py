@@ -18,6 +18,7 @@ from src.api.routes.chatbot_tools import (
     conversation_memory_tool,
     document_retrieval_tool,
     e2i_data_query_tool,
+    orchestrator_tool,
 )
 
 
@@ -25,7 +26,7 @@ class TestE2IDataQueryTool:
     """Tests for e2i_data_query_tool."""
 
     @pytest.mark.asyncio
-    @patch("src.api.routes.chatbot_tools.get_supabase_client", new_callable=AsyncMock)
+    @patch("src.api.routes.chatbot_tools.get_async_supabase_client", new_callable=AsyncMock)
     @patch("src.api.routes.chatbot_tools.BusinessMetricRepository")
     async def test_queries_kpi_data(self, mock_repo_class, mock_get_client):
         """Test querying KPI data."""
@@ -54,7 +55,7 @@ class TestE2IDataQueryTool:
         assert result["count"] == 2
 
     @pytest.mark.asyncio
-    @patch("src.api.routes.chatbot_tools.get_supabase_client", new_callable=AsyncMock)
+    @patch("src.api.routes.chatbot_tools.get_async_supabase_client", new_callable=AsyncMock)
     @patch("src.api.routes.chatbot_tools.CausalPathRepository")
     async def test_queries_causal_chain_data(self, mock_repo_class, mock_get_client):
         """Test querying causal chain data."""
@@ -80,7 +81,7 @@ class TestE2IDataQueryTool:
         assert result["query_type"] == "causal_chain"
 
     @pytest.mark.asyncio
-    @patch("src.api.routes.chatbot_tools.get_supabase_client", new_callable=AsyncMock)
+    @patch("src.api.routes.chatbot_tools.get_async_supabase_client", new_callable=AsyncMock)
     @patch("src.api.routes.chatbot_tools.AgentActivityRepository")
     async def test_queries_agent_analysis_data(self, mock_repo_class, mock_get_client):
         """Test querying agent analysis data."""
@@ -106,7 +107,7 @@ class TestE2IDataQueryTool:
         assert result["query_type"] == "agent_analysis"
 
     @pytest.mark.asyncio
-    @patch("src.api.routes.chatbot_tools.get_supabase_client", new_callable=AsyncMock)
+    @patch("src.api.routes.chatbot_tools.get_async_supabase_client", new_callable=AsyncMock)
     @patch("src.api.routes.chatbot_tools.hybrid_search")
     async def test_queries_experiments_via_rag(self, mock_hybrid_search, mock_get_client):
         """Test that experiments query type uses RAG fallback."""
@@ -134,7 +135,7 @@ class TestE2IDataQueryTool:
         mock_hybrid_search.assert_called_once()
 
     @pytest.mark.asyncio
-    @patch("src.api.routes.chatbot_tools.get_supabase_client", new_callable=AsyncMock)
+    @patch("src.api.routes.chatbot_tools.get_async_supabase_client", new_callable=AsyncMock)
     @patch("src.api.routes.chatbot_tools.BusinessMetricRepository")
     async def test_handles_database_error(self, mock_repo_class, mock_get_client):
         """Test that database errors are handled gracefully."""
@@ -305,7 +306,7 @@ class TestConversationMemoryTool:
     """Tests for conversation_memory_tool."""
 
     @pytest.mark.asyncio
-    @patch("src.api.routes.chatbot_tools.get_supabase_client", new_callable=AsyncMock)
+    @patch("src.api.routes.chatbot_tools.get_async_supabase_client", new_callable=AsyncMock)
     @patch("src.api.routes.chatbot_tools.get_chatbot_message_repository")
     @patch("src.api.routes.chatbot_tools.get_chatbot_conversation_repository")
     async def test_retrieves_conversation_history(
@@ -344,7 +345,7 @@ class TestConversationMemoryTool:
         assert result["conversation_title"] == "KPI Analysis"
 
     @pytest.mark.asyncio
-    @patch("src.api.routes.chatbot_tools.get_supabase_client", new_callable=AsyncMock)
+    @patch("src.api.routes.chatbot_tools.get_async_supabase_client", new_callable=AsyncMock)
     @patch("src.api.routes.chatbot_tools.get_chatbot_conversation_repository")
     async def test_returns_error_when_conversation_not_found(
         self, mock_get_conv_repo, mock_get_client
@@ -424,6 +425,180 @@ class TestDocumentRetrievalTool:
         assert "error" in result
 
 
+class TestOrchestratorTool:
+    """Tests for orchestrator_tool."""
+
+    @pytest.mark.asyncio
+    @patch("src.api.routes.chatbot_tools.get_orchestrator")
+    async def test_executes_query_through_orchestrator(self, mock_get_orchestrator):
+        """Test executing a query through the orchestrator."""
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.run = AsyncMock(
+            return_value={
+                "response_text": "TRx is primarily driven by HCP engagement...",
+                "response_confidence": 0.92,
+                "agents_dispatched": ["causal_impact"],
+                "analysis_results": {"causal_chains": [{"source": "HCP_engagement", "target": "TRx"}]},
+            }
+        )
+        mock_get_orchestrator.return_value = mock_orchestrator
+
+        result = await orchestrator_tool.ainvoke(
+            {"query": "Why is TRx declining for Kisqali?", "brand": "Kisqali"}
+        )
+
+        assert result["success"] is True
+        assert result["fallback"] is False
+        assert result["response"] == "TRx is primarily driven by HCP engagement..."
+        assert result["confidence"] == 0.92
+        assert "causal_impact" in result["agents_dispatched"]
+        mock_orchestrator.run.assert_called_once()
+
+    @pytest.mark.asyncio
+    @patch("src.api.routes.chatbot_tools.get_orchestrator")
+    async def test_passes_context_to_orchestrator(self, mock_get_orchestrator):
+        """Test that brand and region context is passed to orchestrator."""
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.run = AsyncMock(
+            return_value={
+                "response_text": "Analysis complete",
+                "response_confidence": 0.85,
+                "agents_dispatched": [],
+                "analysis_results": {},
+            }
+        )
+        mock_get_orchestrator.return_value = mock_orchestrator
+
+        await orchestrator_tool.ainvoke(
+            {
+                "query": "Analyze TRx trends",
+                "brand": "Kisqali",
+                "region": "US",
+                "target_agent": "causal_impact",
+            }
+        )
+
+        # Verify context was passed correctly
+        call_args = mock_orchestrator.run.call_args[0][0]
+        assert call_args["user_context"]["brand"] == "Kisqali"
+        assert call_args["user_context"]["region"] == "US"
+        assert call_args["user_context"]["target_agent"] == "causal_impact"
+
+    @pytest.mark.asyncio
+    @patch("src.api.routes.chatbot_tools.hybrid_search")
+    @patch("src.api.routes.chatbot_tools.get_orchestrator")
+    async def test_falls_back_to_rag_when_orchestrator_unavailable(
+        self, mock_get_orchestrator, mock_hybrid_search
+    ):
+        """Test fallback to RAG when orchestrator is unavailable."""
+        mock_get_orchestrator.return_value = None
+
+        mock_result = MagicMock()
+        mock_result.content = "Fallback content from RAG"
+        mock_result.score = 0.85
+        mock_result.source = "causal_paths"
+        mock_hybrid_search.return_value = [mock_result]
+
+        result = await orchestrator_tool.ainvoke(
+            {"query": "Why is TRx declining?", "brand": "Kisqali"}
+        )
+
+        assert result["success"] is True
+        assert result["fallback"] is True
+        assert "Orchestrator unavailable" in result["reason"]
+        assert result["result_count"] == 1
+        mock_hybrid_search.assert_called_once()
+
+    @pytest.mark.asyncio
+    @patch("src.api.routes.chatbot_tools.get_orchestrator")
+    async def test_handles_orchestrator_error(self, mock_get_orchestrator):
+        """Test handling of orchestrator errors."""
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.run = AsyncMock(side_effect=Exception("Orchestrator failed"))
+        mock_get_orchestrator.return_value = mock_orchestrator
+
+        result = await orchestrator_tool.ainvoke(
+            {"query": "Test query"}
+        )
+
+        assert result["success"] is False
+        assert "error" in result
+        assert result["fallback"] is True
+
+    @pytest.mark.asyncio
+    @patch("src.api.routes.chatbot_tools.get_orchestrator")
+    async def test_generates_session_id_when_not_provided(self, mock_get_orchestrator):
+        """Test that a session ID is generated when not provided."""
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.run = AsyncMock(
+            return_value={
+                "response_text": "OK",
+                "response_confidence": 0.9,
+                "agents_dispatched": [],
+                "analysis_results": {},
+            }
+        )
+        mock_get_orchestrator.return_value = mock_orchestrator
+
+        result = await orchestrator_tool.ainvoke(
+            {"query": "Test query"}
+        )
+
+        assert result["success"] is True
+        assert result["context"]["session_id"].startswith("chatbot-")
+
+    @pytest.mark.asyncio
+    @patch("src.api.routes.chatbot_tools.get_orchestrator")
+    async def test_uses_provided_session_id(self, mock_get_orchestrator):
+        """Test that provided session ID is used."""
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.run = AsyncMock(
+            return_value={
+                "response_text": "OK",
+                "response_confidence": 0.9,
+                "agents_dispatched": [],
+                "analysis_results": {},
+            }
+        )
+        mock_get_orchestrator.return_value = mock_orchestrator
+
+        result = await orchestrator_tool.ainvoke(
+            {"query": "Test query", "session_id": "custom-session-123"}
+        )
+
+        assert result["success"] is True
+        assert result["context"]["session_id"] == "custom-session-123"
+
+        # Verify session_id was passed to orchestrator
+        call_args = mock_orchestrator.run.call_args[0][0]
+        assert call_args["session_id"] == "custom-session-123"
+
+    @pytest.mark.asyncio
+    @patch("src.api.routes.chatbot_tools.get_orchestrator")
+    async def test_returns_agents_dispatched(self, mock_get_orchestrator):
+        """Test that agents dispatched info is returned."""
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.run = AsyncMock(
+            return_value={
+                "response_text": "Multi-agent analysis complete",
+                "response_confidence": 0.88,
+                "agents_dispatched": ["causal_impact", "gap_analyzer", "explainer"],
+                "analysis_results": {},
+            }
+        )
+        mock_get_orchestrator.return_value = mock_orchestrator
+
+        result = await orchestrator_tool.ainvoke(
+            {"query": "Full analysis of Kisqali performance"}
+        )
+
+        assert result["success"] is True
+        assert len(result["agents_dispatched"]) == 3
+        assert "causal_impact" in result["agents_dispatched"]
+        assert "gap_analyzer" in result["agents_dispatched"]
+        assert "explainer" in result["agents_dispatched"]
+
+
 class TestToolExports:
     """Tests for tool exports."""
 
@@ -436,6 +611,7 @@ class TestToolExports:
         assert "agent_routing_tool" in tool_names
         assert "conversation_memory_tool" in tool_names
         assert "document_retrieval_tool" in tool_names
+        assert "orchestrator_tool" in tool_names
 
     def test_tools_have_descriptions(self):
         """Test that all tools have descriptions."""
@@ -445,4 +621,4 @@ class TestToolExports:
 
     def test_tool_count(self):
         """Test expected number of tools."""
-        assert len(E2I_CHATBOT_TOOLS) == 5
+        assert len(E2I_CHATBOT_TOOLS) == 6
