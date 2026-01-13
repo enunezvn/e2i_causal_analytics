@@ -144,6 +144,10 @@ from src.repositories.chatbot_feedback import (
     ChatbotFeedbackRepository,
     get_chatbot_feedback_repository,
 )
+from src.repositories.chatbot_analytics import (
+    ChatbotAnalyticsRepository,
+    get_chatbot_analytics_repository,
+)
 
 # Re-export get_supabase_client for convenience
 from src.memory.services.factories import get_supabase_client
@@ -227,7 +231,7 @@ __all__ = [
     "MaterializationJobType",
     "MaterializationStatus",
     "SourceType",
-    # Chatbot Repositories (Migration 028-031)
+    # Chatbot Repositories (Migration 028-033)
     "ChatbotUserProfileRepository",
     "get_chatbot_user_profile_repository",
     "ChatbotConversationRepository",
@@ -236,6 +240,8 @@ __all__ = [
     "get_chatbot_message_repository",
     "ChatbotFeedbackRepository",
     "get_chatbot_feedback_repository",
+    "ChatbotAnalyticsRepository",
+    "get_chatbot_analytics_repository",
     # Utilities
     "get_supabase_client",
 ]

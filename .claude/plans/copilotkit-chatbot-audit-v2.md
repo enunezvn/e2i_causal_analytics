@@ -1,8 +1,8 @@
 # CopilotKit Chatbot Implementation Audit V2
 
 **Created**: 2026-01-12
-**Last Updated**: 2026-01-13 12:45 PM EST
-**Status**: ✅ COMPLETE - All priorities (P1-P6) + Message Persistence (v1.21.3) deployed & verified
+**Last Updated**: 2026-01-13 1:22 PM EST
+**Status**: ✅ COMPLETE - All priorities (P1-P6) + Message Persistence (v1.21.3) + Usage Analytics (v1.22.0) deployed & verified
 **Focus Areas**: Memory Integration | Agentic Layer Integration
 **Previous Audit**: copilotkit-chatbot-audit.md (Jan 9 - found 5 bugs)
 **Final Verification**: Browser test passed - ZodError fix confirmed working
@@ -614,6 +614,30 @@ if event_type == "MESSAGES_SNAPSHOT":
 - ✅ No ZodError in console
 - ✅ Screenshot saved: `.playwright-mcp/copilotkit-zod-fix-verified.png`
 
+### 2026-01-13: P7.1 Usage Analytics (v1.22.0)
+
+**Goal**: Track chatbot queries, response times, tool usage, and errors for monitoring and optimization.
+
+**Implementation**:
+1. Created `database/chat/033_chatbot_analytics.sql` with comprehensive schema
+2. Created `src/repositories/chatbot_analytics.py` with sync/async recording
+3. Added `_classify_query_type()` helper for automated query categorization
+4. Added `_record_analytics_sync()` for Supabase-compatible recording
+5. Integrated analytics recording in:
+   - `chat_node` - For direct Claude responses (no tools)
+   - `synthesize_node` - For tool-using responses (with tool inventory)
+6. Added 4 API endpoints for analytics retrieval
+
+**Deployment Verification** (2026-01-13 1:21 PM EST):
+- ✅ Database migration applied (table + indexes + functions)
+- ✅ API health check passed (v4.1.0)
+- ✅ `/api/copilotkit/analytics/usage` returns `{"success": true, ...}`
+- ✅ `/api/copilotkit/analytics/agents` returns `{"success": true, ...}`
+- ✅ `/api/copilotkit/analytics/errors` returns `{"success": true, ...}`
+- ✅ Analytics will populate as users interact with chatbot
+
+---
+
 ### 2026-01-13: Message Persistence Fix (v1.21.3)
 
 **Issue Discovered**: Messages were not being persisted to `chatbot_messages` table despite persistence code being deployed. Logs showed `_ensure_conversation_exists()` returning `False`.
@@ -740,7 +764,7 @@ CREATE INDEX IF NOT EXISTS idx_business_metrics_kpi_name ON business_metrics(kpi
 
 | Priority | Task | Effort | Impact | Status |
 |----------|------|--------|--------|--------|
-| **P7.1** | Add chatbot usage analytics (track queries, response times, tool usage) | 2-4 hours | High | Pending |
+| **P7.1** | Add chatbot usage analytics (track queries, response times, tool usage) | 2-4 hours | High | ✅ **COMPLETE** (v1.22.0) |
 | **P7.2** | Implement user feedback collection (thumbs up/down → database) | 1-2 hours | High | ✅ **COMPLETE** (v1.21.3) |
 | **P7.3** | Add E2E Playwright tests for chatbot flows | 2-4 hours | Medium | Pending |
 | **P7.4** | Create user documentation for chatbot features | 1-2 hours | Medium | Pending |
@@ -753,7 +777,19 @@ CREATE INDEX IF NOT EXISTS idx_business_metrics_kpi_name ON business_metrics(kpi
 - Frontend: `MessageFeedback.tsx` component with thumbs up/down buttons
 - Message persistence fix enables feedback FK references (messages now have IDs)
 
-### Recommended Immediate Action: P7.1 - Usage Analytics
+**P7.1 Implementation Details** (v1.22.0):
+- Database schema: `chatbot_analytics` table with comprehensive metrics
+- Analytics functions: `get_chatbot_usage_summary()`, `get_agent_performance_metrics()`, `get_hourly_usage_pattern()`
+- Backend endpoints:
+  - `GET /api/copilotkit/analytics/usage` - Usage summary (queries, response times, tool usage)
+  - `GET /api/copilotkit/analytics/agents` - Agent performance metrics
+  - `GET /api/copilotkit/analytics/errors` - Recent error analytics
+  - `GET /api/copilotkit/analytics/hourly` - Hourly usage pattern for capacity planning
+- Query classification: Automated categorization into kpi_inquiry, causal_analysis, agent_status, etc.
+- Analytics recording integrated in `chat_node` (direct responses) and `synthesize_node` (tool responses)
+- Repository: `ChatbotAnalyticsRepository` with sync recording for Supabase compatibility
+
+### ~~Recommended Immediate Action: P7.1 - Usage Analytics~~ ✅ COMPLETE
 
 **Rationale**: Now that CopilotKit is live, tracking usage patterns will inform future improvements.
 
