@@ -990,17 +990,22 @@ async def tool_composer_tool(
         # Use the compose_query convenience function
         result = await compose_query(query=query, llm_client=llm_client, context=context)
 
-        # Extract composition results
+        # Extract composition results from Pydantic CompositionResult model
+        # result.decomposition contains sub_questions, result.plan has execution info,
+        # result.execution has tool outputs, result.response has synthesized answer
         return {
             "success": True,
             "query": query,
-            "sub_questions": result.get("sub_questions", []),
-            "tools_executed": result.get("tools_executed", []),
-            "execution_order": result.get("execution_order", []),
-            "parallel_groups": result.get("parallel_groups", []),
-            "synthesized_response": result.get("synthesized_response", ""),
-            "confidence": result.get("confidence", 0.8),
-            "agent_outputs": result.get("agent_outputs", {}),
+            "sub_questions": [
+                {"id": sq.id, "question": sq.question, "intent": sq.intent}
+                for sq in result.decomposition.sub_questions
+            ],
+            "tools_executed": result.execution.tools_executed,
+            "execution_order": result.plan.get_execution_order(),
+            "parallel_groups": result.plan.parallel_groups,
+            "synthesized_response": result.response.answer,
+            "confidence": result.response.confidence,
+            "agent_outputs": result.execution.get_all_outputs(),
             "context": {
                 "brand": brand,
                 "region": region,
