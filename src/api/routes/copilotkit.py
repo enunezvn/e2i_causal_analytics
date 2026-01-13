@@ -1997,3 +1997,145 @@ async def chat(request: ChatRequest) -> ChatResponse:
             response="",
             error=str(e),
         )
+
+
+# =============================================================================
+# FEEDBACK ENDPOINTS
+# =============================================================================
+
+
+class FeedbackRequest(BaseModel):
+    """Request schema for submitting message feedback."""
+
+    message_id: int = Field(..., description="ID of the message being rated")
+    session_id: str = Field(..., description="Conversation session ID")
+    rating: str = Field(..., description="Rating: 'thumbs_up' or 'thumbs_down'")
+    comment: Optional[str] = Field(default=None, description="Optional user comment")
+    query_text: Optional[str] = Field(
+        default=None, description="The user query that led to this response"
+    )
+    response_preview: Optional[str] = Field(
+        default=None, description="First 500 chars of the response"
+    )
+    agent_name: Optional[str] = Field(
+        default=None, description="Which agent generated the response"
+    )
+    tools_used: Optional[List[str]] = Field(
+        default=None, description="Tools used in generating the response"
+    )
+
+
+class FeedbackResponse(BaseModel):
+    """Response schema for feedback endpoints."""
+
+    success: bool
+    feedback_id: Optional[int] = None
+    message: Optional[str] = None
+    error: Optional[str] = None
+
+
+@router.post("/feedback")
+async def submit_feedback(request: FeedbackRequest) -> FeedbackResponse:
+    """
+    Submit feedback (thumbs up/down) for a chatbot message.
+
+    This endpoint allows users to rate assistant responses for quality
+    improvement and prompt optimization.
+
+    Usage:
+        POST /api/copilotkit/feedback
+        Content-Type: application/json
+
+        {
+            "message_id": 123,
+            "session_id": "user-uuid~timestamp",
+            "rating": "thumbs_up",
+            "comment": "Great response!",
+            "query_text": "What is TRx performance?",
+            "response_preview": "The TRx performance...",
+            "agent_name": "tool_composer",
+            "tools_used": ["query_kpi"]
+        }
+    """
+    logger.info(
+        f"[Feedback] Received feedback: message_id={request.message_id}, "
+        f"rating={request.rating}, session={request.session_id[:20]}..."
+    )
+
+    # Validate rating
+    if request.rating not in ("thumbs_up", "thumbs_down"):
+        return FeedbackResponse(
+            success=False,
+            error=f"Invalid rating: {request.rating}. Must be 'thumbs_up' or 'thumbs_down'",
+        )
+
+    try:
+        from src.repositories import get_chatbot_feedback_repository
+
+        repo = get_chatbot_feedback_repository()
+
+        result = await repo.add_feedback(
+            message_id=request.message_id,
+            session_id=request.session_id,
+            rating=request.rating,
+            comment=request.comment,
+            query_text=request.query_text,
+            response_preview=request.response_preview,
+            agent_name=request.agent_name,
+            tools_used=request.tools_used,
+        )
+
+        if result:
+            logger.info(f"[Feedback] Saved feedback ID={result.get('id')}")
+            return FeedbackResponse(
+                success=True,
+                feedback_id=result.get("id"),
+                message="Feedback submitted successfully",
+            )
+        else:
+            return FeedbackResponse(
+                success=False,
+                error="Failed to save feedback - no result returned",
+            )
+
+    except Exception as e:
+        logger.error(f"[Feedback] Error submitting feedback: {e}")
+        return FeedbackResponse(
+            success=False,
+            error=str(e),
+        )
+
+
+@router.get("/feedback/stats")
+async def get_feedback_stats(
+    agent_name: Optional[str] = None, days: int = 30
+) -> Dict[str, Any]:
+    """
+    Get feedback statistics for analytics.
+
+    Usage:
+        GET /api/copilotkit/feedback/stats?agent_name=tool_composer&days=30
+    """
+    try:
+        from src.repositories import get_chatbot_feedback_repository
+
+        repo = get_chatbot_feedback_repository()
+
+        # Get agent-level stats
+        agent_stats = await repo.get_agent_stats(agent_name=agent_name, days=days)
+
+        # Get summary
+        summary = await repo.get_feedback_summary(days=days)
+
+        return {
+            "success": True,
+            "summary": summary,
+            "agent_stats": agent_stats,
+        }
+
+    except Exception as e:
+        logger.error(f"[Feedback] Error getting stats: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+        }
