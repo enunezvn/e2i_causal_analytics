@@ -15,7 +15,7 @@
  */
 
 import * as React from 'react';
-import { CopilotSidebar } from '@copilotkit/react-ui';
+import { CopilotChat } from '@copilotkit/react-ui';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   MessageSquare,
@@ -27,6 +27,7 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { useE2ICopilot, useCopilotEnabled } from '@/providers/E2ICopilotProvider';
 import { AgentStatusPanel } from './AgentStatusPanel';
+import { useChatFeedback, FeedbackRating } from '@/hooks/use-chat-feedback';
 
 // =============================================================================
 // TYPES
@@ -67,6 +68,78 @@ export function E2IChatSidebar({
   const copilotEnabled = useCopilotEnabled();
   const { chatOpen, setChatOpen, agents, filters } = useE2ICopilot();
   const [showAgents, setShowAgents] = React.useState(false);
+  const { submitFeedback } = useChatFeedback();
+
+  // Generate a stable session ID for feedback tracking
+  const sessionIdRef = React.useRef<string>(
+    `session_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`
+  );
+
+  // Feedback handlers for CopilotKit thumbs up/down buttons
+  // DEBUG: Log when handlers are created
+  console.log('[E2IChatSidebar] Creating feedback handlers, submitFeedback available:', !!submitFeedback);
+
+  const handleThumbsUp = React.useCallback(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (message: any) => {
+      // DEBUG: Immediate log to verify callback is invoked
+      console.log('[E2IChatSidebar] handleThumbsUp CALLED with message:', message);
+
+      try {
+        const messageId = message.id ? parseInt(message.id, 10) || Date.now() : Date.now();
+        const content = typeof message.content === 'string'
+          ? message.content
+          : JSON.stringify(message.content || '');
+
+        // Fire and forget - don't await to avoid blocking the UI
+        submitFeedback({
+          messageId,
+          sessionId: sessionIdRef.current,
+          rating: 'thumbs_up' as FeedbackRating,
+          responsePreview: content.substring(0, 500),
+          agentName: 'copilotkit',
+        }).then(() => {
+          console.log('[E2IChatSidebar] Thumbs up feedback submitted for message:', messageId);
+        }).catch((error) => {
+          console.error('[E2IChatSidebar] Failed to submit thumbs up feedback:', error);
+        });
+      } catch (error) {
+        console.error('[E2IChatSidebar] Error in handleThumbsUp:', error);
+      }
+    },
+    [submitFeedback]
+  );
+
+  const handleThumbsDown = React.useCallback(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (message: any) => {
+      // DEBUG: Immediate log to verify callback is invoked
+      console.log('[E2IChatSidebar] handleThumbsDown CALLED with message:', message);
+
+      try {
+        const messageId = message.id ? parseInt(message.id, 10) || Date.now() : Date.now();
+        const content = typeof message.content === 'string'
+          ? message.content
+          : JSON.stringify(message.content || '');
+
+        // Fire and forget - don't await to avoid blocking the UI
+        submitFeedback({
+          messageId,
+          sessionId: sessionIdRef.current,
+          rating: 'thumbs_down' as FeedbackRating,
+          responsePreview: content.substring(0, 500),
+          agentName: 'copilotkit',
+        }).then(() => {
+          console.log('[E2IChatSidebar] Thumbs down feedback submitted for message:', messageId);
+        }).catch((error) => {
+          console.error('[E2IChatSidebar] Failed to submit thumbs down feedback:', error);
+        });
+      } catch (error) {
+        console.error('[E2IChatSidebar] Error in handleThumbsDown:', error);
+      }
+    },
+    [submitFeedback]
+  );
 
   // Initialize with defaultOpen
   React.useEffect(() => {
@@ -194,9 +267,9 @@ export function E2IChatSidebar({
 
             {/* Chat Area */}
             <div className="flex-1 overflow-hidden">
-              <CopilotSidebar
-                defaultOpen={true}
-                clickOutsideToClose={false}
+              <CopilotChat
+                onThumbsUp={handleThumbsUp}
+                onThumbsDown={handleThumbsDown}
                 instructions={`You are helping an analyst work with the E2I Causal Analytics platform.
 
 Current context:
