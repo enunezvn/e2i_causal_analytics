@@ -34,3 +34,13 @@ export type {
 
 export { useUserPreferences } from './use-user-preferences';
 export type { UseUserPreferencesReturn } from './use-user-preferences';
+
+// Chat feedback hook
+export { useChatFeedback } from './use-chat-feedback';
+export type {
+  FeedbackRating,
+  FeedbackSubmission,
+  FeedbackResult,
+  FeedbackState,
+  UseChatFeedbackReturn,
+} from './use-chat-feedback';

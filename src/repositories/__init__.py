@@ -127,7 +127,7 @@ from src.repositories.feast_tracking import (
     SourceType,
 )
 
-# Chatbot Repositories (Migration 028-030)
+# Chatbot Repositories (Migration 028-031)
 from src.repositories.chatbot_user_profile import (
     ChatbotUserProfileRepository,
     get_chatbot_user_profile_repository,
@@ -139,6 +139,10 @@ from src.repositories.chatbot_conversation import (
 from src.repositories.chatbot_message import (
     ChatbotMessageRepository,
     get_chatbot_message_repository,
+)
+from src.repositories.chatbot_feedback import (
+    ChatbotFeedbackRepository,
+    get_chatbot_feedback_repository,
 )
 
 # Re-export get_supabase_client for convenience
@@ -223,13 +227,15 @@ __all__ = [
     "MaterializationJobType",
     "MaterializationStatus",
     "SourceType",
-    # Chatbot Repositories (Migration 028-030)
+    # Chatbot Repositories (Migration 028-031)
     "ChatbotUserProfileRepository",
     "get_chatbot_user_profile_repository",
     "ChatbotConversationRepository",
     "get_chatbot_conversation_repository",
     "ChatbotMessageRepository",
     "get_chatbot_message_repository",
+    "ChatbotFeedbackRepository",
+    "get_chatbot_feedback_repository",
     # Utilities
     "get_supabase_client",
 ]

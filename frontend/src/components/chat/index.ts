@@ -23,3 +23,6 @@ export {
   BlockBadge,
 } from './ValidationBadge';
 export type { ValidationBadgeProps, ValidationStatus } from './ValidationBadge';
+
+export { MessageFeedback } from './MessageFeedback';
+export type { MessageFeedbackProps } from './MessageFeedback';
