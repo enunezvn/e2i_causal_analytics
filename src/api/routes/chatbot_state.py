@@ -134,6 +134,7 @@ class IntentType:
     GENERAL = "general"
     GREETING = "greeting"
     HELP = "help"
+    MULTI_FACETED = "multi_faceted"  # Complex queries requiring Tool Composer
 
 
 # Default initial state

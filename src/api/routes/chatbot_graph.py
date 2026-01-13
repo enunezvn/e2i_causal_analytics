@@ -121,6 +121,54 @@ def _matches_pattern(query_lower: str, patterns: list[str]) -> bool:
     return False
 
 
+def _is_multi_faceted_query(query: str) -> bool:
+    """
+    Detect if query needs Tool Composer for multi-faceted processing.
+
+    Multi-faceted queries require aggregating results from multiple agents
+    or analyzing multiple aspects of the same question. Examples:
+    - "Compare TRx trends across all brands and explain the causal factors"
+    - "Show me the health score and recommendations for Kisqali"
+
+    Args:
+        query: User's query text
+
+    Returns:
+        True if query is multi-faceted and should use Tool Composer
+    """
+    import re
+
+    query_lower = query.lower()
+
+    # Score different facets of complexity
+    facets = {
+        # Query contains comparative/conjunction keywords suggesting multiple questions
+        "conjunction_keywords": any(
+            w in query_lower for w in ["compare", "trends", "explain", "also", "and then", "both"]
+        ),
+        # Query mentions multiple KPIs
+        "multiple_kpis": len(
+            re.findall(r"(trx|nrx|market share|conversion|volume|patient starts)", query_lower)
+        )
+        > 1,
+        # Query spans cross-agent capabilities
+        "cross_agent": any(
+            w in query_lower for w in ["drift", "health", "causal", "experiment", "prediction"]
+        ),
+        # Query mentions multiple brands
+        "multiple_brands": len(
+            re.findall(r"(kisqali|fabhalta|remibrutinib|all brands)", query_lower)
+        )
+        > 1,
+        # Query asks for both analysis AND recommendations
+        "analysis_and_recommendation": ("why" in query_lower or "what caused" in query_lower)
+        and any(w in query_lower for w in ["recommend", "suggest", "should"]),
+    }
+
+    # Need at least 2 facets to qualify as multi-faceted
+    return sum(facets.values()) >= 2
+
+
 def classify_intent(query: str) -> str:
     """
     Classify the user's query intent.
@@ -133,13 +181,18 @@ def classify_intent(query: str) -> str:
     """
     query_lower = query.lower()
 
-    # Greeting patterns
+    # Greeting patterns (check first for quick responses)
     if _matches_pattern(query_lower, ["hello", "hi", "hey", "good morning", "good afternoon"]):
         return IntentType.GREETING
 
-    # Help patterns
+    # Help patterns (check early for guidance requests)
     if _matches_pattern(query_lower, ["help", "what can you", "how do i", "guide me"]):
         return IntentType.HELP
+
+    # Multi-faceted check - BEFORE individual intents
+    # Complex queries needing Tool Composer should be detected early
+    if _is_multi_faceted_query(query):
+        return IntentType.MULTI_FACETED
 
     # KPI patterns
     if _matches_pattern(query_lower, ["kpi", "trx", "nrx", "market share", "conversion", "metric", "volume"]):
@@ -463,6 +516,7 @@ SIGNIFICANT_INTENTS = {
     IntentType.KPI_QUERY,
     IntentType.RECOMMENDATION,
     IntentType.SEARCH,
+    IntentType.MULTI_FACETED,  # Complex queries via Tool Composer are highly significant
 }
 
 # Tool names that indicate actionable queries
@@ -471,6 +525,8 @@ SIGNIFICANT_TOOLS = {
     "causal_analysis_tool",
     "agent_routing_tool",
     "document_retrieval_tool",
+    "orchestrator_tool",
+    "tool_composer_tool",
 }
 
 # Event type mapping from intent/tool to episodic memory event types
@@ -480,6 +536,7 @@ INTENT_TO_EVENT_TYPE = {
     IntentType.RECOMMENDATION: "agent_action",
     IntentType.SEARCH: "user_query",
     IntentType.AGENT_STATUS: "agent_action",
+    IntentType.MULTI_FACETED: "multi_agent_analysis",  # Tool Composer orchestrated queries
 }
 
 

@@ -19,7 +19,10 @@ from src.api.routes.chatbot_tools import (
     document_retrieval_tool,
     e2i_data_query_tool,
     orchestrator_tool,
+    tool_composer_tool,
 )
+from src.api.routes.chatbot_graph import _is_multi_faceted_query, classify_intent
+from src.api.routes.chatbot_state import IntentType
 
 
 class TestE2IDataQueryTool:
@@ -599,6 +602,185 @@ class TestOrchestratorTool:
         assert "explainer" in result["agents_dispatched"]
 
 
+class TestToolComposerTool:
+    """Tests for tool_composer_tool."""
+
+    @pytest.mark.asyncio
+    @patch("src.api.routes.chatbot_tools.compose_query")
+    async def test_executes_multi_faceted_query(self, mock_compose_query):
+        """Test executing a multi-faceted query through the Tool Composer."""
+        mock_compose_query.return_value = {
+            "sub_questions": [
+                "What is the TRx trend for Kisqali?",
+                "What is the TRx trend for Fabhalta?",
+                "What factors are driving these trends?",
+            ],
+            "tools_executed": ["e2i_data_query_tool", "e2i_data_query_tool", "causal_analysis_tool"],
+            "execution_order": [1, 2, 3],
+            "parallel_groups": [[1, 2], [3]],
+            "synthesized_response": "Kisqali shows 15% TRx growth while Fabhalta shows 8% growth...",
+            "confidence": 0.88,
+            "agent_outputs": {"causal_impact": {"effect": 0.15}},
+        }
+
+        result = await tool_composer_tool.ainvoke(
+            {
+                "query": "Compare TRx trends across Kisqali and Fabhalta and explain the causal factors",
+                "brand": None,  # Multi-brand comparison
+            }
+        )
+
+        assert result["success"] is True
+        assert len(result["sub_questions"]) == 3
+        assert len(result["tools_executed"]) == 3
+        assert result["confidence"] == 0.88
+        assert "Kisqali shows 15%" in result["synthesized_response"]
+        mock_compose_query.assert_called_once()
+
+    @pytest.mark.asyncio
+    @patch("src.api.routes.chatbot_tools.compose_query")
+    async def test_passes_context_to_composer(self, mock_compose_query):
+        """Test that context is passed correctly to Tool Composer."""
+        mock_compose_query.return_value = {
+            "sub_questions": [],
+            "tools_executed": [],
+            "execution_order": [],
+            "parallel_groups": [],
+            "synthesized_response": "OK",
+            "confidence": 0.9,
+            "agent_outputs": {},
+        }
+
+        await tool_composer_tool.ainvoke(
+            {
+                "query": "Complex query",
+                "brand": "Kisqali",
+                "region": "US",
+                "max_parallel": 4,
+            }
+        )
+
+        # Verify context was passed correctly
+        call_args = mock_compose_query.call_args
+        assert call_args.kwargs["context"]["brand"] == "Kisqali"
+        assert call_args.kwargs["context"]["region"] == "US"
+        assert call_args.kwargs["context"]["max_parallel"] == 4
+
+    @pytest.mark.asyncio
+    @patch("src.api.routes.chatbot_tools.get_orchestrator")
+    @patch("src.api.routes.chatbot_tools.compose_query")
+    async def test_falls_back_to_orchestrator_on_error(
+        self, mock_compose_query, mock_get_orchestrator
+    ):
+        """Test fallback to orchestrator when Tool Composer fails."""
+        mock_compose_query.side_effect = Exception("Composition failed")
+
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.run = AsyncMock(
+            return_value={
+                "response_text": "Fallback response from orchestrator",
+                "response_confidence": 0.75,
+            }
+        )
+        mock_get_orchestrator.return_value = mock_orchestrator
+
+        result = await tool_composer_tool.ainvoke(
+            {"query": "Complex multi-faceted query"}
+        )
+
+        assert result["success"] is True
+        assert result["fallback"] is True
+        assert "Composition failed" in result["fallback_reason"]
+        assert result["response"] == "Fallback response from orchestrator"
+
+    @pytest.mark.asyncio
+    @patch("src.api.routes.chatbot_tools.get_orchestrator")
+    @patch("src.api.routes.chatbot_tools.compose_query")
+    async def test_handles_complete_failure(
+        self, mock_compose_query, mock_get_orchestrator
+    ):
+        """Test handling when both Tool Composer and orchestrator fail."""
+        mock_compose_query.side_effect = Exception("Composition failed")
+        mock_get_orchestrator.return_value = None
+
+        result = await tool_composer_tool.ainvoke(
+            {"query": "Complex multi-faceted query"}
+        )
+
+        assert result["success"] is False
+        assert "error" in result
+
+    @pytest.mark.asyncio
+    @patch("src.api.routes.chatbot_tools.compose_query")
+    async def test_generates_session_id_when_not_provided(self, mock_compose_query):
+        """Test that a session ID is generated when not provided."""
+        mock_compose_query.return_value = {
+            "sub_questions": [],
+            "tools_executed": [],
+            "execution_order": [],
+            "parallel_groups": [],
+            "synthesized_response": "OK",
+            "confidence": 0.9,
+            "agent_outputs": {},
+        }
+
+        result = await tool_composer_tool.ainvoke(
+            {"query": "Test query"}
+        )
+
+        assert result["success"] is True
+        assert result["context"]["session_id"].startswith("composer-")
+
+
+class TestMultiFacetedQueryDetection:
+    """Tests for multi-faceted query detection."""
+
+    def test_detects_multi_kpi_comparison(self):
+        """Test detection of queries comparing multiple KPIs."""
+        query = "Compare TRx and NRx trends for Kisqali"
+        assert _is_multi_faceted_query(query) is True
+
+    def test_detects_cross_brand_analysis(self):
+        """Test detection of queries spanning multiple brands."""
+        query = "Compare Kisqali and Fabhalta market share trends and explain the differences"
+        assert _is_multi_faceted_query(query) is True
+
+    def test_detects_cross_agent_query(self):
+        """Test detection of queries requiring multiple agents."""
+        # Query has cross_agent (drift + experiment) AND conjunction_keywords (compare)
+        query = "Compare the drift trends and experiment recommendations for Kisqali"
+        assert _is_multi_faceted_query(query) is True
+
+    def test_detects_analysis_and_recommendation(self):
+        """Test detection of queries needing both analysis and recommendations."""
+        # Query has analysis_and_recommendation (why + should) AND multiple_kpis (trx + market share)
+        query = "Why did TRx and market share drop for Kisqali and what should we do about it?"
+        assert _is_multi_faceted_query(query) is True
+
+    def test_does_not_detect_simple_kpi_query(self):
+        """Test that simple KPI queries are not flagged as multi-faceted."""
+        query = "What is the TRx for Kisqali?"
+        assert _is_multi_faceted_query(query) is False
+
+    def test_does_not_detect_simple_causal_query(self):
+        """Test that simple causal queries are not flagged as multi-faceted."""
+        query = "Why did TRx drop?"
+        assert _is_multi_faceted_query(query) is False
+
+    def test_classify_intent_returns_multi_faceted(self):
+        """Test that classify_intent returns MULTI_FACETED for complex queries."""
+        query = "Compare TRx and NRx trends across Kisqali and Fabhalta and explain the causal factors"
+        intent = classify_intent(query)
+        assert intent == IntentType.MULTI_FACETED
+
+    def test_classify_intent_simple_query_not_multi_faceted(self):
+        """Test that simple queries don't get MULTI_FACETED intent."""
+        query = "What is the TRx for Kisqali?"
+        intent = classify_intent(query)
+        assert intent != IntentType.MULTI_FACETED
+        assert intent == IntentType.KPI_QUERY
+
+
 class TestToolExports:
     """Tests for tool exports."""
 
@@ -612,6 +794,7 @@ class TestToolExports:
         assert "conversation_memory_tool" in tool_names
         assert "document_retrieval_tool" in tool_names
         assert "orchestrator_tool" in tool_names
+        assert "tool_composer_tool" in tool_names
 
     def test_tools_have_descriptions(self):
         """Test that all tools have descriptions."""
@@ -621,4 +804,4 @@ class TestToolExports:
 
     def test_tool_count(self):
         """Test expected number of tools."""
-        assert len(E2I_CHATBOT_TOOLS) == 6
+        assert len(E2I_CHATBOT_TOOLS) == 7
