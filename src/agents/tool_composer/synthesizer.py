@@ -11,6 +11,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict
 
+from langchain_core.messages import HumanMessage, SystemMessage
+
 from .models.composition_models import (
     ComposedResponse,
     DecompositionResult,
@@ -168,18 +170,19 @@ class ResponseSynthesizer:
         return "\n".join(lines)
 
     async def _call_llm(self, query: str, results: str) -> str:
-        """Call the LLM for synthesis"""
+        """Call the LLM for synthesis using LangChain interface"""
         user_message = SYNTHESIS_USER_TEMPLATE.format(query=query, results=results)
 
-        response = await self.llm_client.messages.create(
-            model=self.model,
-            max_tokens=self.max_tokens,
-            temperature=self.temperature,
-            system=SYNTHESIS_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_message}],
-        )
+        # Using LangChain's message format (works with ChatAnthropic/ChatOpenAI)
+        messages = [
+            SystemMessage(content=SYNTHESIS_SYSTEM_PROMPT),
+            HumanMessage(content=user_message),
+        ]
 
-        return response.content[0].text
+        response = await self.llm_client.ainvoke(messages)
+
+        # LangChain returns AIMessage with .content attribute
+        return response.content
 
     def _parse_response(self, response: str) -> Dict[str, Any]:
         """Parse JSON from LLM response"""
