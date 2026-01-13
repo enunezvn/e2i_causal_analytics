@@ -7,9 +7,17 @@ Exposes backend actions for querying KPIs, running analyses,
 and interacting with the E2I agent system.
 
 Author: E2I Causal Analytics Team
-Version: 1.20.0
+Version: 1.20.1
 
 Changelog:
+    1.20.1 - Fixed null error field in tool messages within MESSAGES_SNAPSHOT.
+             Root cause: AG-UI SDK's AGUIToolMessage sets error=null by default.
+             CopilotKit React SDK (v1.50.1) Zod validation expects error to be:
+               - a string (for tool errors), OR
+               - absent/undefined (for successful tool calls)
+             When error is null, Zod throws:
+               "Expected string, received null" at path ["messages", 2, "error"]
+             Fix: Delete the error key entirely when it's null for tool messages.
     1.20.0 - Fixed null fields in MESSAGES_SNAPSHOT messages array.
              Root cause: CopilotKit React SDK (v1.50.1) Zod validation requires:
                messages[].name: string (empty string if null)
@@ -302,6 +310,15 @@ def _fix_all_events(event_dict: dict, thread_id: str, run_id: str) -> dict:
                 # Ensure toolCalls is an array (empty array if null) for assistant messages
                 if msg.get("role") == "assistant" and msg.get("toolCalls") is None:
                     msg["toolCalls"] = []
+                # CRITICAL FIX (v1.20.1): Remove null error field from ANY message
+                # CopilotKit React SDK (v1.50.1) Zod validation expects error to be:
+                #   - a string (for errors), OR
+                #   - absent/undefined (for successful operations)
+                # AG-UI SDK sets error=null by default on tool messages, causing:
+                #   "Expected string, received null" at path ["messages", N, "error"]
+                # Fix: Delete the error key entirely when it's null on ANY message type
+                if "error" in msg and msg["error"] is None:
+                    del msg["error"]
 
     return event_dict
 
