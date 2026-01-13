@@ -3,11 +3,12 @@ E2I Chatbot Tools for LangGraph Integration.
 
 Provides LangGraph-compatible tools for the E2I chatbot agent:
 - e2i_data_query_tool: Unified access to ALL E2I analytics data
-- causal_analysis_tool: Run causal analysis via RAG retrieval
+- causal_analysis_tool: Run causal analysis via hybrid RAG search
 - agent_routing_tool: Route to specific tier agents (keyword-based)
 - conversation_memory_tool: Retrieve chat history
 - document_retrieval_tool: Hybrid RAG search
 - orchestrator_tool: Execute queries through the full 18-agent orchestrator system
+- tool_composer_tool: Process multi-faceted queries via Tool Composer pipeline
 
 Adapted from Pydantic AI patterns to LangGraph @tool decorators.
 """
@@ -273,7 +274,8 @@ async def _query_kpis(
         if region:
             filters["region"] = region
         if kpi_name:
-            filters["kpi_name"] = kpi_name
+            # business_metrics uses 'metric_name' column, not 'kpi_name'
+            filters["metric_name"] = kpi_name
 
         # Get metrics with filters
         metrics = await repo.get_many(filters=filters, limit=limit)
@@ -302,9 +304,9 @@ async def _query_causal_chains(
         client = await get_async_supabase_client()
         repo = CausalPathRepository(client)
 
+        # Note: causal_paths table does not have 'brand' column
+        # Brand filtering is only available via hybrid_search (RAG index)
         filters = {}
-        if brand:
-            filters["brand"] = brand
 
         # Use RAG retriever for semantic search if kpi_name provided
         if kpi_name:
@@ -353,11 +355,11 @@ async def _query_agent_analysis(
         client = await get_async_supabase_client()
         repo = AgentActivityRepository(client)
 
+        # Note: agent_activities table does not have 'brand' column
+        # Brand parameter kept for API compatibility but not used in direct queries
         filters = {}
         if agent_name:
             filters["agent_name"] = agent_name
-        if brand:
-            filters["brand"] = brand
 
         activities = await repo.get_many(filters=filters, limit=limit)
 
@@ -384,11 +386,9 @@ async def _query_triggers(
         client = await get_async_supabase_client()
         repo = TriggerRepository(client)
 
+        # Note: triggers table does not have 'brand' or 'region' columns
+        # Parameters kept for API compatibility but not used in direct queries
         filters = {}
-        if brand:
-            filters["brand"] = brand
-        if region:
-            filters["region"] = region
 
         triggers = await repo.get_many(filters=filters, limit=limit)
 
