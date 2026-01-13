@@ -36,6 +36,11 @@ from src.repositories.chatbot_message import (
     ChatbotMessageRepository,
     get_chatbot_message_repository,
 )
+from src.memory.episodic_memory import (
+    EpisodicMemoryInput,
+    E2IEntityReferences,
+    insert_episodic_memory_with_text,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -445,6 +450,219 @@ async def tool_node(state: ChatbotState) -> Dict[str, Any]:
     pass
 
 
+# =============================================================================
+# EPISODIC MEMORY BRIDGE
+# =============================================================================
+
+# Significance thresholds for episodic memory storage
+SIGNIFICANCE_THRESHOLD = 0.6  # Minimum score to save to episodic memory
+
+# Intents that indicate significant interactions worth preserving
+SIGNIFICANT_INTENTS = {
+    IntentType.CAUSAL_ANALYSIS,
+    IntentType.KPI_QUERY,
+    IntentType.RECOMMENDATION,
+    IntentType.SEARCH,
+}
+
+# Tool names that indicate actionable queries
+SIGNIFICANT_TOOLS = {
+    "e2i_data_query_tool",
+    "causal_analysis_tool",
+    "agent_routing_tool",
+    "document_retrieval_tool",
+}
+
+# Event type mapping from intent/tool to episodic memory event types
+INTENT_TO_EVENT_TYPE = {
+    IntentType.CAUSAL_ANALYSIS: "causal_discovery",
+    IntentType.KPI_QUERY: "user_query",
+    IntentType.RECOMMENDATION: "agent_action",
+    IntentType.SEARCH: "user_query",
+    IntentType.AGENT_STATUS: "agent_action",
+}
+
+
+def _calculate_significance_score(state: ChatbotState) -> float:
+    """
+    Calculate a significance score for the interaction.
+
+    Significant interactions are worth preserving in episodic memory
+    for cross-session learning and platform knowledge building.
+
+    Scoring factors:
+    - Tool usage (+0.3 each, max 0.6)
+    - Significant intent (+0.25)
+    - Brand/KPI specificity (+0.15)
+    - RAG context retrieved (+0.1)
+    - Response length indicator (+0.1)
+
+    Returns:
+        Float between 0.0 and 1.0
+    """
+    score = 0.0
+
+    # Factor 1: Tool usage (strong signal of actionable query)
+    tool_results = state.get("tool_results", [])
+    if tool_results:
+        # Each tool call adds significance, capped at 0.6
+        tool_score = min(len(tool_results) * 0.3, 0.6)
+        score += tool_score
+
+    # Factor 2: Significant intent type
+    intent = state.get("intent")
+    if intent in SIGNIFICANT_INTENTS:
+        score += 0.25
+
+    # Factor 3: Brand/KPI specificity (indicates focused query)
+    brand_context = state.get("brand_context")
+    metadata = state.get("metadata", {})
+    kpi_mentioned = metadata.get("kpi_name") or metadata.get("kpis")
+    if brand_context or kpi_mentioned:
+        score += 0.15
+
+    # Factor 4: RAG context was retrieved (indicates knowledge-seeking)
+    rag_context = state.get("rag_context", [])
+    if rag_context:
+        score += 0.1
+
+    # Factor 5: Response substance (longer responses often contain insights)
+    response_text = state.get("response_text", "")
+    if len(response_text) > 500:
+        score += 0.1
+
+    return min(score, 1.0)
+
+
+async def _save_to_episodic_memory(
+    state: ChatbotState,
+    response_text: str,
+    tool_calls: List[Dict[str, Any]],
+    significance_score: float,
+) -> Optional[str]:
+    """
+    Save a significant chatbot interaction to episodic memory.
+
+    This bridges chatbot conversations to the platform's long-term
+    episodic memory system, enabling cross-session learning.
+
+    Args:
+        state: Current chatbot state
+        response_text: Final assistant response
+        tool_calls: List of tools that were called
+        significance_score: Calculated significance (0.0-1.0)
+
+    Returns:
+        Memory ID if saved, None if skipped or failed
+    """
+    try:
+        query = state.get("query", "")
+        session_id = state.get("session_id")
+        intent = state.get("intent")
+        brand_context = state.get("brand_context")
+        region_context = state.get("region_context")
+        tool_results = state.get("tool_results", [])
+
+        # Determine event type based on intent or tools used
+        event_type = "user_query"  # default
+        event_subtype = None
+
+        # Handle intent - can be IntentType enum or string
+        intent_value = None
+        if intent:
+            if hasattr(intent, "value"):
+                # It's an IntentType enum
+                intent_value = intent.value
+                if intent in INTENT_TO_EVENT_TYPE:
+                    event_type = INTENT_TO_EVENT_TYPE[intent]
+            else:
+                # It's already a string
+                intent_value = intent
+                # Try to map string intent to event type
+                # Note: IntentType is not an enum, its values are string constants
+                for intent_key, evt_type in INTENT_TO_EVENT_TYPE.items():
+                    if intent_key == intent:
+                        event_type = evt_type
+                        break
+
+        # Override based on tool usage
+        tool_names = [tc.get("tool_name", "") for tc in tool_calls]
+        if "causal_analysis_tool" in tool_names:
+            event_type = "causal_discovery"
+            event_subtype = "chatbot_causal_query"
+        elif "e2i_data_query_tool" in tool_names:
+            event_subtype = "chatbot_data_query"
+        elif "agent_routing_tool" in tool_names:
+            event_type = "agent_action"
+            event_subtype = "chatbot_agent_routing"
+        elif "document_retrieval_tool" in tool_names:
+            event_subtype = "chatbot_document_search"
+
+        # Build description for the memory
+        description = f"User asked: {query[:200]}"
+        if len(query) > 200:
+            description += "..."
+
+        # Extract entities mentioned in the interaction
+        entities = {}
+        if brand_context:
+            entities["brands"] = [brand_context] if isinstance(brand_context, str) else brand_context
+        if region_context:
+            entities["regions"] = [region_context] if isinstance(region_context, str) else region_context
+
+        # Extract KPIs from tool results or metadata
+        metadata = state.get("metadata", {})
+        kpi_name = metadata.get("kpi_name")
+        if kpi_name:
+            entities["kpis"] = [kpi_name]
+
+        # Build E2I entity references
+        e2i_refs = E2IEntityReferences(
+            brand=brand_context if isinstance(brand_context, str) else None,
+            region=region_context if isinstance(region_context, str) else None,
+        )
+
+        # Create episodic memory input
+        memory_input = EpisodicMemoryInput(
+            event_type=event_type,
+            event_subtype=event_subtype,
+            description=description,
+            raw_content={
+                "query": query,
+                "response_preview": response_text[:500] if response_text else "",
+                "tools_used": tool_names,
+                "tool_results_count": len(tool_results),
+                "intent": intent_value,
+                "session_id": session_id,
+            },
+            entities=entities if entities else None,
+            outcome_type="success" if response_text else "partial_success",
+            agent_name="orchestrator",  # Chatbot acts as orchestrator proxy
+            importance_score=significance_score,
+            e2i_refs=e2i_refs,
+        )
+
+        # Text to embed combines query and response for semantic search
+        text_to_embed = f"Query: {query}\n\nResponse: {response_text[:1000]}"
+
+        # Insert into episodic memory
+        memory_id = await insert_episodic_memory_with_text(
+            memory=memory_input,
+            text_to_embed=text_to_embed,
+            session_id=session_id,
+        )
+
+        logger.info(
+            f"Saved chatbot interaction to episodic memory: {memory_id} "
+            f"(significance={significance_score:.2f}, event_type={event_type})"
+        )
+        return memory_id
+
+    except Exception as e:
+        logger.warning(f"Failed to save to episodic memory: {e}")
+        return None
+
+
 async def finalize_node(state: ChatbotState) -> Dict[str, Any]:
     """
     Finalize the response and prepare for output.
@@ -513,6 +731,35 @@ async def finalize_node(state: ChatbotState) -> Dict[str, Any]:
 
     except Exception as e:
         logger.warning(f"Failed to persist messages: {e}")
+
+    # =================================================================
+    # EPISODIC MEMORY BRIDGE
+    # Save significant interactions to episodic memory for cross-session
+    # learning and platform knowledge building
+    # =================================================================
+    try:
+        significance_score = _calculate_significance_score(state)
+
+        if significance_score >= SIGNIFICANCE_THRESHOLD:
+            memory_id = await _save_to_episodic_memory(
+                state=state,
+                response_text=response_text,
+                tool_calls=tool_calls,
+                significance_score=significance_score,
+            )
+            if memory_id:
+                logger.debug(
+                    f"Episodic memory saved: {memory_id} "
+                    f"(score={significance_score:.2f})"
+                )
+        else:
+            logger.debug(
+                f"Skipped episodic memory (score={significance_score:.2f} < "
+                f"threshold={SIGNIFICANCE_THRESHOLD})"
+            )
+    except Exception as e:
+        # Don't fail the response if episodic memory save fails
+        logger.warning(f"Episodic memory bridge error: {e}")
 
     return {
         "response_text": response_text,
@@ -667,7 +914,9 @@ async def run_chatbot(
         region_context=region_context,
     )
 
-    result = await e2i_chatbot_graph.ainvoke(initial_state)
+    # Pass thread_id config for checkpointer (uses session_id for conversation tracking)
+    config = {"configurable": {"thread_id": initial_state["session_id"]}}
+    result = await e2i_chatbot_graph.ainvoke(initial_state, config=config)
     return result
 
 
@@ -704,5 +953,7 @@ async def stream_chatbot(
         region_context=region_context,
     )
 
-    async for state_update in e2i_chatbot_graph.astream(initial_state):
+    # Pass thread_id config for checkpointer (uses session_id for conversation tracking)
+    config = {"configurable": {"thread_id": initial_state["session_id"]}}
+    async for state_update in e2i_chatbot_graph.astream(initial_state, config=config):
         yield state_update
