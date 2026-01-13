@@ -688,8 +688,58 @@ CREATE INDEX IF NOT EXISTS idx_business_metrics_kpi_name ON business_metrics(kpi
 1. ~~**P6**: Investigate database schema and either add columns or fix queries~~ - Fixed in `f5600ea`
 2. ~~**P5**: Fix misleading docstrings (trivial, 15 min)~~ - Fixed in `f5600ea`
 3. ~~**P4**: Enable CopilotKit in frontend~~ - Fixed in `ed74056`
+4. ~~**ZodError Fix**: Remove null error field from tool messages~~ - Fixed in `5acc293`
 
-**Remediation Complete**: All 6 priorities have been implemented and deployed to production.
+**Remediation Complete**: All priorities implemented, deployed, and verified in production (2026-01-13).
+
+---
+
+## Post-Audit Recommendations
+
+### Phase 7: Production Hardening (Suggested Next Steps)
+
+| Priority | Task | Effort | Impact |
+|----------|------|--------|--------|
+| **P7.1** | Add chatbot usage analytics (track queries, response times, tool usage) | 2-4 hours | High |
+| **P7.2** | Implement user feedback collection (thumbs up/down → database) | 1-2 hours | High |
+| **P7.3** | Add E2E Playwright tests for chatbot flows | 2-4 hours | Medium |
+| **P7.4** | Create user documentation for chatbot features | 1-2 hours | Medium |
+| **P7.5** | Set up alerting for chatbot errors (Sentry/logging) | 1-2 hours | Medium |
+| **P7.6** | Optimize response streaming latency | 4-8 hours | Low |
+
+### Recommended Immediate Action: P7.1 - Usage Analytics
+
+**Rationale**: Now that CopilotKit is live, tracking usage patterns will inform future improvements.
+
+**Implementation**:
+```python
+# chatbot_graph.py - Add analytics in finalize_node
+async def _log_chatbot_analytics(state: ChatbotState):
+    await supabase.table("chatbot_analytics").insert({
+        "conversation_id": state.conversation_id,
+        "query_type": state.intent,
+        "tools_used": state.tool_calls,
+        "response_time_ms": (end_time - start_time) * 1000,
+        "token_count": len(state.response.split()),
+        "timestamp": datetime.utcnow().isoformat()
+    })
+```
+
+**Files to Create/Modify**:
+- `database/chat/031_chatbot_analytics.sql` - Analytics table
+- `src/api/routes/chatbot_graph.py` - Add logging hook
+- `src/repositories/chatbot_analytics.py` - Repository class
+
+### Alternative: P7.2 - Feedback Collection
+
+**Rationale**: The thumbs up/down buttons in CopilotKit UI currently don't persist feedback.
+
+**Implementation**:
+- Add `/api/copilotkit/feedback` endpoint
+- Store feedback in `chatbot_message_feedback` table
+- Use for fine-tuning prompts and improving responses
+
+---
 
 ### Verification (All Fixes Deployed)
 ```bash
