@@ -738,6 +738,112 @@ def _persist_message_sync(
         return None
 
 
+def _classify_query_type(query: str) -> str:
+    """
+    Classify a user query into a query type for analytics.
+
+    Returns one of the valid chatbot_query_type enum values:
+    - kpi_inquiry
+    - causal_analysis
+    - agent_status
+    - recommendation
+    - experiment
+    - prediction
+    - drift_alert
+    - general
+    - multi_faceted
+    """
+    query_lower = query.lower()
+
+    # Multi-faceted detection (multiple topics)
+    topic_count = sum([
+        any(kw in query_lower for kw in ["trx", "nrx", "kpi", "metric", "performance"]),
+        any(kw in query_lower for kw in ["causal", "impact", "effect", "intervention"]),
+        any(kw in query_lower for kw in ["predict", "forecast", "future"]),
+        any(kw in query_lower for kw in ["experiment", "test", "ab test", "a/b"]),
+        any(kw in query_lower for kw in ["drift", "shift", "degradation"]),
+    ])
+    if topic_count >= 2:
+        return "multi_faceted"
+
+    # Single topic detection
+    if any(kw in query_lower for kw in ["kpi", "trx", "nrx", "market share", "metric", "performance", "volume"]):
+        return "kpi_inquiry"
+    if any(kw in query_lower for kw in ["causal", "impact", "effect", "intervention", "why", "cause"]):
+        return "causal_analysis"
+    if any(kw in query_lower for kw in ["agent", "status", "tier", "health", "system"]):
+        return "agent_status"
+    if any(kw in query_lower for kw in ["recommend", "suggest", "should", "advice", "optimize"]):
+        return "recommendation"
+    if any(kw in query_lower for kw in ["experiment", "test", "ab test", "a/b", "trial"]):
+        return "experiment"
+    if any(kw in query_lower for kw in ["predict", "forecast", "future", "projection"]):
+        return "prediction"
+    if any(kw in query_lower for kw in ["drift", "shift", "degradation", "alert"]):
+        return "drift_alert"
+
+    return "general"
+
+
+def _record_analytics_sync(
+    session_id: str,
+    query_type: str,
+    response_time_ms: Optional[int] = None,
+    tools_invoked: Optional[List[str]] = None,
+    primary_agent: str = "copilotkit",
+    error_occurred: bool = False,
+    error_type: Optional[str] = None,
+    orchestrator_used: bool = False,
+    tool_composer_used: bool = False,
+    metadata: Optional[dict] = None,
+) -> Optional[dict]:
+    """
+    Record analytics to the database using synchronous Supabase client.
+
+    This tracks usage patterns, performance, and tool usage for the chatbot.
+    Used for monitoring, capacity planning, and optimization (P7.1).
+    """
+    try:
+        from src.api.dependencies.supabase_client import get_supabase
+
+        client = get_supabase()
+        if not client:
+            logger.debug("[CopilotKit] No Supabase client for analytics recording")
+            return None
+
+        analytics_data = {
+            "session_id": session_id,
+            "query_type": query_type,
+            "response_time_ms": response_time_ms,
+            "tools_invoked": tools_invoked or [],
+            "primary_agent": primary_agent,
+            "error_occurred": error_occurred,
+            "error_type": error_type,
+            "orchestrator_used": orchestrator_used,
+            "tool_composer_used": tool_composer_used,
+            "metadata": metadata or {},
+            "response_completed_at": datetime.now(timezone.utc).isoformat() if response_time_ms else None,
+        }
+
+        # Remove None values for cleaner insert
+        analytics_data = {k: v for k, v in analytics_data.items() if v is not None}
+
+        result = (
+            client.table("chatbot_analytics")
+            .insert(analytics_data)
+            .execute()
+        )
+
+        if result.data:
+            logger.debug(f"[CopilotKit] Recorded analytics id={result.data[0].get('id')}")
+            return result.data[0]
+        return None
+    except Exception as e:
+        # Analytics should never block the main flow
+        logger.debug(f"[CopilotKit] Analytics recording failed (non-critical): {e}")
+        return None
+
+
 async def _ensure_conversation_exists(session_id: str) -> bool:
     """
     Ensure a conversation record exists for the given session_id.
@@ -1535,7 +1641,19 @@ def create_e2i_chat_agent():
                         logger.warning(f"[CopilotKit] Failed to persist assistant message: {e}")
 
             elapsed = time.time() - node_start
+            elapsed_ms = int(elapsed * 1000)
             logger.info(f"[CopilotKit] chat_node completed in {elapsed:.2f}s")
+
+            # Record analytics (P7.1)
+            if session_id:
+                _record_analytics_sync(
+                    session_id=session_id,
+                    query_type=_classify_query_type(last_human_message or ""),
+                    response_time_ms=elapsed_ms,
+                    tools_invoked=[],
+                    primary_agent="copilotkit",
+                    metadata={"model_used": model_name, "direct_response": True},
+                )
 
             return {"messages": [response]}
 
@@ -1573,6 +1691,12 @@ def create_e2i_chat_agent():
 
         if not tool_results:
             return {"messages": []}
+
+        # Extract original query for analytics classification
+        original_query = ""
+        for msg in messages:
+            if isinstance(msg, HumanMessage):
+                original_query = msg.content if isinstance(msg.content, str) else str(msg.content)
 
         # Persist tool results
         if session_id and tool_results:
@@ -1615,6 +1739,21 @@ def create_e2i_chat_agent():
                     )
                 except Exception as e:
                     logger.warning(f"[CopilotKit] Failed to persist synthesis fallback: {e}")
+
+                # Record analytics (P7.1) for no-API-key fallback
+                elapsed_ms = int((time.time() - node_start) * 1000)
+                _record_analytics_sync(
+                    session_id=session_id,
+                    query_type=_classify_query_type(original_query),
+                    response_time_ms=elapsed_ms,
+                    tools_invoked=[tr["tool"] for tr in tool_results],
+                    primary_agent="copilotkit",
+                    metadata={
+                        "fallback_reason": "no_api_key",
+                        "tools_used": True,
+                        "tool_count": len(tool_results),
+                    },
+                )
             return {"messages": [AIMessage(content=result_text)]}
 
         try:
@@ -1662,6 +1801,20 @@ Synthesize these results into a natural, conversational response. Include specif
                 except Exception as e:
                     logger.warning(f"[CopilotKit] Failed to persist synthesized message: {e}")
 
+                # Record analytics (P7.1) for tool-using queries
+                _record_analytics_sync(
+                    session_id=session_id,
+                    query_type=_classify_query_type(original_query),
+                    response_time_ms=elapsed_ms,
+                    tools_invoked=[tr["tool"] for tr in tool_results],
+                    primary_agent="copilotkit",
+                    metadata={
+                        "model_used": model_name,
+                        "tools_used": True,
+                        "tool_count": len(tool_results),
+                    },
+                )
+
             return {"messages": [response]}
 
         except Exception as e:
@@ -1685,6 +1838,23 @@ Synthesize these results into a natural, conversational response. Include specif
                     )
                 except Exception as persist_err:
                     logger.warning(f"[CopilotKit] Failed to persist error fallback: {persist_err}")
+
+                # Record analytics (P7.1) for failed synthesis
+                elapsed_ms = int((time.time() - node_start) * 1000)
+                _record_analytics_sync(
+                    session_id=session_id,
+                    query_type=_classify_query_type(original_query),
+                    response_time_ms=elapsed_ms,
+                    tools_invoked=[tr["tool"] for tr in tool_results],
+                    primary_agent="copilotkit",
+                    error_occurred=True,
+                    error_type="synthesis_error",
+                    metadata={
+                        "error": str(e),
+                        "tools_used": True,
+                        "tool_count": len(tool_results),
+                    },
+                )
             return {"messages": [AIMessage(content=result_text)]}
 
     # Build the graph with tool calling support
@@ -2501,6 +2671,172 @@ async def get_feedback_stats(
 
     except Exception as e:
         logger.error(f"[Feedback] Error getting stats: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+        }
+
+
+# ============================================================================
+# Analytics Endpoints (P7.1)
+# ============================================================================
+
+
+@router.get("/analytics/usage")
+async def get_usage_analytics(
+    days: int = 7,
+) -> Dict[str, Any]:
+    """
+    Get chatbot usage analytics summary.
+
+    Usage:
+        GET /api/copilotkit/analytics/usage?days=7
+
+    Returns usage statistics including:
+    - Total queries
+    - Average response time
+    - Query type distribution
+    - Tool usage patterns
+    """
+    try:
+        from datetime import datetime, timedelta
+
+        from src.repositories import get_chatbot_analytics_repository
+
+        repo = get_chatbot_analytics_repository()
+
+        start_date = datetime.utcnow() - timedelta(days=days)
+        end_date = datetime.utcnow()
+
+        # Get usage summary
+        summary = await repo.get_usage_summary(start_date=start_date, end_date=end_date)
+
+        # Get query type distribution
+        query_types = await repo.get_query_type_distribution(days=days)
+
+        # Get tool usage stats
+        tool_usage = await repo.get_tool_usage_stats(days=days)
+
+        return {
+            "success": True,
+            "period_days": days,
+            "summary": summary,
+            "query_types": query_types,
+            "tool_usage": tool_usage,
+        }
+
+    except Exception as e:
+        logger.error(f"[Analytics] Error getting usage stats: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+        }
+
+
+@router.get("/analytics/agents")
+async def get_agent_analytics(
+    agent_name: Optional[str] = None,
+    days: int = 30,
+) -> Dict[str, Any]:
+    """
+    Get agent performance analytics.
+
+    Usage:
+        GET /api/copilotkit/analytics/agents?agent_name=tool_composer&days=30
+
+    Returns performance metrics by agent:
+    - Query count
+    - Average response time
+    - Error rate
+    - Tool invocation patterns
+    """
+    try:
+        from src.repositories import get_chatbot_analytics_repository
+
+        repo = get_chatbot_analytics_repository()
+
+        # Get agent performance metrics
+        agent_stats = await repo.get_agent_performance(agent_name=agent_name, days=days)
+
+        return {
+            "success": True,
+            "agent_name": agent_name,
+            "period_days": days,
+            "agent_stats": agent_stats,
+        }
+
+    except Exception as e:
+        logger.error(f"[Analytics] Error getting agent stats: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+        }
+
+
+@router.get("/analytics/errors")
+async def get_error_analytics(
+    limit: int = 20,
+) -> Dict[str, Any]:
+    """
+    Get recent error analytics for debugging.
+
+    Usage:
+        GET /api/copilotkit/analytics/errors?limit=20
+
+    Returns recent errors with:
+    - Error type
+    - Error message
+    - Session context
+    - Timestamp
+    """
+    try:
+        from src.repositories import get_chatbot_analytics_repository
+
+        repo = get_chatbot_analytics_repository()
+
+        errors = await repo.get_recent_errors(limit=limit)
+
+        return {
+            "success": True,
+            "count": len(errors),
+            "errors": errors,
+        }
+
+    except Exception as e:
+        logger.error(f"[Analytics] Error getting error stats: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+        }
+
+
+@router.get("/analytics/hourly")
+async def get_hourly_pattern(
+    days: int = 7,
+) -> Dict[str, Any]:
+    """
+    Get hourly usage pattern for capacity planning.
+
+    Usage:
+        GET /api/copilotkit/analytics/hourly?days=7
+
+    Returns usage distribution by hour of day.
+    """
+    try:
+        from src.repositories import get_chatbot_analytics_repository
+
+        repo = get_chatbot_analytics_repository()
+
+        hourly_pattern = await repo.get_hourly_pattern(days=days)
+
+        return {
+            "success": True,
+            "period_days": days,
+            "hourly_pattern": hourly_pattern,
+        }
+
+    except Exception as e:
+        logger.error(f"[Analytics] Error getting hourly pattern: {e}")
         return {
             "success": False,
             "error": str(e),
