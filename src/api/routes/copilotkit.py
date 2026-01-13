@@ -7,9 +7,29 @@ Exposes backend actions for querying KPIs, running analyses,
 and interacting with the E2I agent system.
 
 Author: E2I Causal Analytics Team
-Version: 1.20.1
+Version: 1.21.3
 
 Changelog:
+    1.21.3 - Fixed async/await issue: supabase-py is synchronous, not async.
+             Created _persist_message_sync() helper to bypass broken async repository methods.
+    1.21.2 - Fixed ChatbotMessageRepository instantiation: use `supabase_client` parameter
+             instead of `client` to match BaseRepository.__init__() signature.
+             Root cause: _get_chatbot_message_repository() was passing client=client but
+             BaseRepository expects supabase_client parameter name.
+             This caused messages not to persist despite session_id being available.
+    1.21.1 - Fixed session_id not reaching chat_node() for message persistence.
+             Root cause: AG-UI LangGraph's state management may not preserve custom
+             fields from RunAgentInput.state when passing to graph nodes.
+             Fix: Use Python contextvars to pass session_id across async boundaries.
+             The context var is set in execute() and read in chat_node() as the
+             primary source, with state and config.thread_id as fallbacks.
+    1.21.0 - Added message persistence to Supabase chatbot_messages table.
+             All user messages, assistant responses, tool calls, and synthesized responses
+             are now persisted using ChatbotMessageRepository. This enables:
+             - Feedback collection (P7.2) via message_id foreign key
+             - Conversation history tracking
+             - Agent performance analytics
+             Session ID is derived from frontend thread_id for conversation continuity.
     1.20.1 - Fixed null error field in tool messages within MESSAGES_SNAPSHOT.
              Root cause: AG-UI SDK's AGUIToolMessage sets error=null by default.
              CopilotKit React SDK (v1.50.1) Zod validation expects error to be:
@@ -141,6 +161,7 @@ Changelog:
 """
 
 import asyncio
+import contextvars
 import json
 import logging
 import operator
@@ -173,6 +194,12 @@ from pydantic import BaseModel, Field
 from src.api.routes.chatbot_tools import E2I_CHATBOT_TOOLS
 
 logger = logging.getLogger(__name__)
+
+# Context variable for passing session_id across async boundaries
+# This is used because AG-UI LangGraph may not preserve custom state fields
+_session_id_context: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "copilotkit_session_id", default=None
+)
 
 
 # =============================================================================
@@ -456,10 +483,21 @@ class LangGraphAgent(_LangGraphAGUIAgent):
         # Generate run_id if not provided (SDK doesn't always pass it)
         run_id = kwargs.get("run_id") or str(uuid.uuid4())
 
+        # Add session_id to state for message persistence
+        # Use original_thread_id (from frontend) as the persistent session identifier
+        state_with_session = dict(state) if state else {}
+        persistent_session_id = original_thread_id or thread_id
+        state_with_session["session_id"] = persistent_session_id
+
+        # CRITICAL (v1.21.1): Also set session_id in context var for reliable cross-async access
+        # AG-UI LangGraph may not preserve custom state fields, so use contextvars as fallback
+        _session_id_context.set(persistent_session_id)
+        dbg(f"Set session_id in state and context var: {persistent_session_id[:20]}...")
+
         run_input = RunAgentInput(
             thread_id=thread_id,
             run_id=run_id,
-            state=state,
+            state=state_with_session,
             messages=agui_messages,
             tools=actions,  # CopilotKit actions become tools
             context=[],
@@ -624,6 +662,154 @@ def _get_agent_registry_repository():
     except Exception as e:
         logger.warning(f"Failed to get AgentRegistryRepository: {e}")
         return None
+
+
+def _get_chatbot_message_repository():
+    """Get ChatbotMessageRepository instance with Supabase client."""
+    try:
+        from src.api.dependencies.supabase_client import get_supabase
+        from src.repositories.chatbot_message import ChatbotMessageRepository
+
+        client = get_supabase()
+        return ChatbotMessageRepository(supabase_client=client) if client else None
+    except Exception as e:
+        logger.warning(f"Failed to get ChatbotMessageRepository: {e}")
+        return None
+
+
+def _get_chatbot_conversation_repository():
+    """Get ChatbotConversationRepository instance with Supabase client."""
+    try:
+        from src.api.dependencies.supabase_client import get_supabase
+        from src.repositories.chatbot_conversation import ChatbotConversationRepository
+
+        client = get_supabase()
+        return ChatbotConversationRepository(supabase_client=client) if client else None
+    except Exception as e:
+        logger.warning(f"Failed to get ChatbotConversationRepository: {e}")
+        return None
+
+
+# Anonymous user ID for conversations without authentication
+_ANONYMOUS_USER_ID = "00000000-0000-0000-0000-000000000000"
+
+
+def _persist_message_sync(
+    session_id: str,
+    role: str,
+    content: str,
+    agent_name: Optional[str] = None,
+    metadata: Optional[dict] = None,
+) -> Optional[dict]:
+    """
+    Persist a message to the database using synchronous Supabase client.
+
+    NOTE: This bypasses the async repository method because supabase-py
+    uses synchronous HTTP calls internally, making 'await' incompatible.
+    """
+    try:
+        from src.api.dependencies.supabase_client import get_supabase
+
+        client = get_supabase()
+        if not client:
+            logger.warning("[CopilotKit] No Supabase client for message persistence")
+            return None
+
+        message_data = {
+            "session_id": session_id,
+            "role": role,
+            "content": content,
+            "agent_name": agent_name,
+            "metadata": metadata or {},
+        }
+
+        result = (
+            client.table("chatbot_messages")
+            .insert(message_data)
+            .execute()
+        )
+
+        if result.data:
+            logger.error(f"[DEBUG] _persist_message_sync: inserted message id={result.data[0].get('id')}")
+            return result.data[0]
+        return None
+    except Exception as e:
+        logger.error(f"[CopilotKit] _persist_message_sync failed: {e}")
+        return None
+
+
+async def _ensure_conversation_exists(session_id: str) -> bool:
+    """
+    Ensure a conversation record exists for the given session_id.
+    Creates one if it doesn't exist (for anonymous CopilotKit users).
+
+    Args:
+        session_id: The session/thread ID (must be a valid UUID)
+
+    Returns:
+        True if conversation exists or was created, False on failure
+    """
+    try:
+        logger.error(f"[DEBUG] _ensure_conversation_exists: Starting for session_id={session_id[:20]}...")
+        conv_repo = _get_chatbot_conversation_repository()
+        logger.error(f"[DEBUG] _ensure_conversation_exists: conv_repo={conv_repo is not None}")
+        if not conv_repo:
+            logger.warning("[CopilotKit] Could not get conversation repository")
+            return False
+
+        # Check if conversation already exists (don't use .single() which throws on no results)
+        # Use direct query with limit instead (Supabase client is synchronous, no await)
+        try:
+            logger.error(f"[DEBUG] _ensure_conversation_exists: Checking existing...")
+            if conv_repo.client:
+                check_result = (
+                    conv_repo.client.table("chatbot_conversations")
+                    .select("session_id")
+                    .eq("session_id", session_id)
+                    .limit(1)
+                    .execute()
+                )
+                existing = check_result.data if check_result.data else None
+                logger.error(f"[DEBUG] _ensure_conversation_exists: existing={existing}")
+                if existing:
+                    return True
+            else:
+                logger.error("[DEBUG] _ensure_conversation_exists: No client!")
+                return False
+        except Exception as check_err:
+            logger.error(f"[DEBUG] _ensure_conversation_exists: Check error: {check_err}")
+            # Continue to try creating if check fails
+
+        # Create new conversation for this session (use 'general' query_type from enum)
+        # NOTE: Using direct synchronous Supabase call since supabase-py is synchronous
+        logger.error(f"[DEBUG] _ensure_conversation_exists: Creating new conversation...")
+        try:
+            conversation_data = {
+                "session_id": session_id,
+                "user_id": _ANONYMOUS_USER_ID,
+                "title": "CopilotKit Conversation",
+                "query_type": "general",
+                "metadata": {"source": "copilotkit", "created_automatically": True},
+            }
+            result = (
+                conv_repo.client.table("chatbot_conversations")
+                .insert(conversation_data)
+                .execute()
+            )
+            logger.error(f"[DEBUG] _ensure_conversation_exists: create result data={result.data}")
+            if result.data:
+                logger.error(f"[CopilotKit] Created conversation for session_id={session_id[:20]}...")
+                return True
+            else:
+                logger.warning(f"[CopilotKit] Failed to create conversation for session_id={session_id}")
+                return False
+        except Exception as create_err:
+            logger.error(f"[DEBUG] _ensure_conversation_exists: Create error: {create_err}")
+            return False
+    except Exception as e:
+        logger.error(f"[CopilotKit] Error ensuring conversation exists: {e}")
+        return False
+
 
 # =============================================================================
 # E2I BACKEND ACTIONS
@@ -1146,10 +1332,11 @@ DO NOT just describe what tools can do - actually CALL them to get data!
 """
 
 
-class E2IAgentState(TypedDict):
+class E2IAgentState(TypedDict, total=False):
     """State for the E2I chat agent."""
 
     messages: Annotated[Sequence[BaseMessage], operator.add]
+    session_id: str  # Persistent session ID for message storage (optional)
 
 
 def create_e2i_chat_agent():
@@ -1183,10 +1370,30 @@ def create_e2i_chat_agent():
     async def chat_node(state: E2IAgentState, config: RunnableConfig) -> Dict[str, Any]:
         """Process chat messages using Claude with bound tools."""
         import time
+        from datetime import datetime
         node_start = time.time()
 
+        # DEBUG: Verify chat_node is being called (use print + ERROR log which we know work)
+        print(f"[DEBUG] chat_node CALLED at {datetime.now()}", flush=True)
+        logger.error(f"[DEBUG] chat_node CALLED - state keys: {list(state.keys()) if state else 'None'}")
+
         messages = state.get("messages", [])
-        logger.info(f"[CopilotKit] chat_node received {len(messages)} messages")
+
+        # Get session_id with priority: context var (most reliable) > state > config
+        # Context var is set in execute() and persists across async boundaries
+        session_id = _session_id_context.get()
+        session_id_source = "context_var" if session_id else None
+
+        if not session_id:
+            session_id = state.get("session_id")
+            session_id_source = "state" if session_id else None
+
+        if not session_id:
+            configurable = config.get("configurable", {}) if config else {}
+            session_id = configurable.get("thread_id") if configurable else None
+            session_id_source = "config.thread_id" if session_id else None
+
+        logger.info(f"[CopilotKit] chat_node: {len(messages)} messages, session_id={session_id[:20] if session_id else 'None'}... (source={session_id_source})")
 
         # Get the last human message
         last_human_message = None
@@ -1198,10 +1405,47 @@ def create_e2i_chat_agent():
                 last_human_message = msg.get("content", "")
                 break
 
+        # Persist user message to database
+        user_message_id = None
+        # DEBUG: Trace persistence path (using ERROR level to ensure visibility)
+        logger.error(f"[DEBUG] Persistence check: last_human_message={last_human_message[:50] if last_human_message else 'None'}..., session_id={session_id[:20] if session_id else 'None'}... (source={session_id_source})")
+        if last_human_message and session_id:
+            try:
+                # Ensure conversation exists before inserting messages (FK constraint)
+                conv_exists = await _ensure_conversation_exists(session_id)
+                logger.error(f"[DEBUG] Conversation exists: {conv_exists}")
+                if conv_exists:
+                    # Use synchronous helper to persist message (supabase-py is sync)
+                    result = _persist_message_sync(
+                        session_id=session_id,
+                        role="user",
+                        content=last_human_message,
+                        metadata={"source": "copilotkit"},
+                    )
+                    if result:
+                        user_message_id = result.get("id")
+                        logger.error(f"[CopilotKit] Persisted user message id={user_message_id}")
+            except Exception as e:
+                logger.error(f"[CopilotKit] Failed to persist user message: {e}", exc_info=True)
+
         # If no user message, return greeting
         if not last_human_message:
             greeting = "Hello! I'm the E2I Analytics Assistant. I can help you with KPI analysis, causal inference, and insights for pharmaceutical brands. What would you like to know?"
             await copilotkit_emit_message(config, greeting)
+            # Persist greeting message (ensure conversation exists first)
+            if session_id:
+                try:
+                    conv_exists = await _ensure_conversation_exists(session_id)
+                    if conv_exists:
+                        _persist_message_sync(
+                            session_id=session_id,
+                            role="assistant",
+                            content=greeting,
+                            agent_name="copilotkit",
+                            metadata={"source": "copilotkit", "type": "greeting"},
+                        )
+                except Exception as e:
+                    logger.warning(f"[CopilotKit] Failed to persist greeting: {e}")
             return {"messages": [AIMessage(content=greeting)]}
 
         # Get Claude API key
@@ -1249,11 +1493,46 @@ def create_e2i_chat_agent():
             # If response has tool calls, return without emitting (tools node will handle)
             if getattr(response, "tool_calls", None):
                 logger.info(f"[CopilotKit] Claude invoked tools: {[tc['name'] for tc in response.tool_calls]}")
+                # Persist tool call request (for tracking)
+                if session_id:
+                    try:
+                        _persist_message_sync(
+                            session_id=session_id,
+                            role="assistant",
+                            agent_name="copilotkit",
+                            content="",  # No content yet, tools will respond
+                            metadata={
+                                "source": "copilotkit",
+                                "type": "tool_request",
+                                "tool_calls": [{"name": tc["name"], "args": tc.get("args", {})} for tc in response.tool_calls],
+                                "model_used": model_name,
+                            },
+                        )
+                    except Exception as e:
+                        logger.warning(f"[CopilotKit] Failed to persist tool call: {e}")
                 return {"messages": [response]}
 
             # Emit text response to CopilotKit frontend
             if response.content:
                 await copilotkit_emit_message(config, response.content)
+                # Persist assistant response to database
+                if session_id:
+                    try:
+                        elapsed_ms = int((time.time() - node_start) * 1000)
+                        _persist_message_sync(
+                            session_id=session_id,
+                            role="assistant",
+                            content=response.content,
+                            agent_name="copilotkit",
+                            metadata={
+                                "source": "copilotkit",
+                                "model_used": model_name,
+                                "latency_ms": elapsed_ms,
+                            },
+                        )
+                        logger.info(f"[CopilotKit] Persisted assistant message")
+                    except Exception as e:
+                        logger.warning(f"[CopilotKit] Failed to persist assistant message: {e}")
 
             elapsed = time.time() - node_start
             logger.info(f"[CopilotKit] chat_node completed in {elapsed:.2f}s")
@@ -1264,11 +1543,27 @@ def create_e2i_chat_agent():
             logger.error(f"[CopilotKit] Claude invocation failed: {e}", exc_info=True)
             fallback = generate_e2i_response(last_human_message)
             await copilotkit_emit_message(config, fallback)
+            # Persist fallback response
+            if session_id:
+                try:
+                    _persist_message_sync(
+                        session_id=session_id,
+                        role="assistant",
+                        content=fallback,
+                        agent_name="copilotkit",
+                        metadata={"source": "copilotkit", "type": "fallback", "error": str(e)},
+                    )
+                except Exception as persist_err:
+                    logger.warning(f"[CopilotKit] Failed to persist fallback: {persist_err}")
             return {"messages": [AIMessage(content=fallback)]}
 
     async def synthesize_node(state: E2IAgentState, config: RunnableConfig) -> Dict[str, Any]:
         """Synthesize tool results into a final response."""
+        import time
+        node_start = time.time()
+
         messages = state.get("messages", [])
+        session_id = state.get("session_id")  # For message persistence
 
         # Get tool results from messages
         tool_results = []
@@ -1279,6 +1574,22 @@ def create_e2i_chat_agent():
         if not tool_results:
             return {"messages": []}
 
+        # Persist tool results
+        if session_id and tool_results:
+            try:
+                _persist_message_sync(
+                    session_id=session_id,
+                    role="tool",
+                    content=json.dumps(tool_results, default=str),
+                    metadata={
+                        "source": "copilotkit",
+                        "type": "tool_results",
+                        "tool_results": tool_results,
+                    },
+                )
+            except Exception as e:
+                logger.warning(f"[CopilotKit] Failed to persist tool results: {e}")
+
         # Get Claude to synthesize tool results
         api_key = os.getenv("ANTHROPIC_API_KEY")
         if not api_key:
@@ -1288,6 +1599,22 @@ def create_e2i_chat_agent():
                 for tr in tool_results
             ])
             await copilotkit_emit_message(config, result_text)
+            # Persist fallback response
+            if session_id:
+                try:
+                    _persist_message_sync(
+                        session_id=session_id,
+                        role="assistant",
+                        content=result_text,
+                        agent_name="copilotkit",
+                        metadata={
+                            "source": "copilotkit",
+                            "type": "synthesis_fallback",
+                            "tool_results": tool_results,
+                        },
+                    )
+                except Exception as e:
+                    logger.warning(f"[CopilotKit] Failed to persist synthesis fallback: {e}")
             return {"messages": [AIMessage(content=result_text)]}
 
         try:
@@ -1313,12 +1640,51 @@ Synthesize these results into a natural, conversational response. Include specif
             ])
 
             await copilotkit_emit_message(config, response.content)
+
+            # Persist synthesized response
+            if session_id:
+                try:
+                    elapsed_ms = int((time.time() - node_start) * 1000)
+                    _persist_message_sync(
+                        session_id=session_id,
+                        role="assistant",
+                        content=response.content,
+                        agent_name="copilotkit",
+                        metadata={
+                            "source": "copilotkit",
+                            "type": "synthesis",
+                            "model_used": model_name,
+                            "tool_results": tool_results,
+                            "latency_ms": elapsed_ms,
+                        },
+                    )
+                    logger.info(f"[CopilotKit] Persisted synthesized message")
+                except Exception as e:
+                    logger.warning(f"[CopilotKit] Failed to persist synthesized message: {e}")
+
             return {"messages": [response]}
 
         except Exception as e:
             logger.error(f"[CopilotKit] Synthesis failed: {e}")
             result_text = "\n\n".join([f"**{tr['tool']}**: {tr['result']}" for tr in tool_results])
             await copilotkit_emit_message(config, result_text)
+            # Persist error fallback
+            if session_id:
+                try:
+                    _persist_message_sync(
+                        session_id=session_id,
+                        role="assistant",
+                        content=result_text,
+                        agent_name="copilotkit",
+                        metadata={
+                            "source": "copilotkit",
+                            "type": "synthesis_error",
+                            "error": str(e),
+                            "tool_results": tool_results,
+                        },
+                    )
+                except Exception as persist_err:
+                    logger.warning(f"[CopilotKit] Failed to persist error fallback: {persist_err}")
             return {"messages": [AIMessage(content=result_text)]}
 
     # Build the graph with tool calling support
