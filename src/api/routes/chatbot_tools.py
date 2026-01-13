@@ -3,10 +3,11 @@ E2I Chatbot Tools for LangGraph Integration.
 
 Provides LangGraph-compatible tools for the E2I chatbot agent:
 - e2i_data_query_tool: Unified access to ALL E2I analytics data
-- causal_analysis_tool: Run causal analysis via orchestrator
-- agent_routing_tool: Route to specific tier agents
+- causal_analysis_tool: Run causal analysis via RAG retrieval
+- agent_routing_tool: Route to specific tier agents (keyword-based)
 - conversation_memory_tool: Retrieve chat history
 - document_retrieval_tool: Hybrid RAG search
+- orchestrator_tool: Execute queries through the full 18-agent orchestrator system
 
 Adapted from Pydantic AI patterns to LangGraph @tool decorators.
 """
@@ -35,6 +36,7 @@ from src.repositories.chatbot_message import (
     ChatbotMessageRepository,
     get_chatbot_message_repository,
 )
+from src.api.routes.cognitive import get_orchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -178,6 +180,30 @@ class DocumentRetrievalInput(BaseModel):
     kpi_name: Optional[str] = Field(
         default=None,
         description="KPI name for targeted retrieval",
+    )
+
+
+class OrchestratorToolInput(BaseModel):
+    """Input schema for orchestrator_tool."""
+
+    query: str = Field(
+        description="The query to process through the E2I orchestrator and 18-agent system"
+    )
+    target_agent: Optional[str] = Field(
+        default=None,
+        description="Specific agent to route to (e.g., causal_impact, experiment_designer, drift_monitor)",
+    )
+    brand: Optional[str] = Field(
+        default=None,
+        description="Brand context for the query (Kisqali, Fabhalta, Remibrutinib)",
+    )
+    region: Optional[str] = Field(
+        default=None,
+        description="Region context for the query (US, EU, APAC)",
+    )
+    session_id: Optional[str] = Field(
+        default=None,
+        description="Session ID for context continuity",
     )
 
 
@@ -763,6 +789,124 @@ async def document_retrieval_tool(
         }
 
 
+@tool(args_schema=OrchestratorToolInput)
+async def orchestrator_tool(
+    query: str,
+    target_agent: Optional[str] = None,
+    brand: Optional[str] = None,
+    region: Optional[str] = None,
+    session_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Execute a query through the E2I orchestrator and 18-agent system.
+
+    This tool provides access to the full E2I multi-agent architecture:
+    - Tier 0: ML Foundation (data prep, feature analysis, model training)
+    - Tier 1: Orchestration (orchestrator, tool_composer)
+    - Tier 2: Causal Analytics (causal_impact, gap_analyzer, heterogeneous_optimizer)
+    - Tier 3: Monitoring (drift_monitor, experiment_designer, health_score)
+    - Tier 4: Predictions (prediction_synthesizer, resource_optimizer)
+    - Tier 5: Learning (explainer, feedback_learner)
+
+    Use this tool for:
+    - Complex causal analysis requiring the causal_impact agent
+    - Experiment design through experiment_designer agent
+    - Drift detection and model health checks
+    - Multi-agent orchestrated queries
+    - Any query that benefits from the full agent pipeline
+
+    This tool routes through the real orchestrator, NOT just keyword matching.
+
+    Args:
+        query: The query to process through the orchestrator
+        target_agent: Optional specific agent to route to
+        brand: Brand context (Kisqali, Fabhalta, Remibrutinib)
+        region: Region context (US, EU, APAC)
+        session_id: Session ID for context continuity
+
+    Returns:
+        Dict with orchestrator response, agents dispatched, and confidence
+    """
+    logger.info(f"Orchestrator tool: query={query[:50]}..., target_agent={target_agent}")
+
+    try:
+        orchestrator = get_orchestrator()
+
+        if orchestrator is None:
+            logger.warning("Orchestrator unavailable, using fallback")
+            # Fallback to hybrid search when orchestrator unavailable
+            fallback_results = await hybrid_search(
+                query=query,
+                k=10,
+                filters={"brand": brand} if brand else None,
+            )
+            return {
+                "success": True,
+                "fallback": True,
+                "reason": "Orchestrator unavailable - using RAG fallback",
+                "query": query,
+                "result_count": len(fallback_results),
+                "results": [
+                    {
+                        "content": r.content,
+                        "score": r.score,
+                        "source": r.source,
+                    }
+                    for r in fallback_results[:5]
+                ],
+            }
+
+        # Build user context for orchestrator
+        user_context = {}
+        if brand:
+            user_context["brand"] = brand
+        if region:
+            user_context["region"] = region
+        if target_agent:
+            user_context["target_agent"] = target_agent
+
+        # Generate session_id if not provided
+        effective_session_id = session_id or f"chatbot-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+
+        # Call the orchestrator
+        orchestrator_result = await orchestrator.run({
+            "query": query,
+            "session_id": effective_session_id,
+            "user_context": user_context,
+        })
+
+        # Extract key fields from orchestrator response
+        response_text = orchestrator_result.get("response_text", "")
+        response_confidence = orchestrator_result.get("response_confidence", 0.85)
+        agents_dispatched = orchestrator_result.get("agents_dispatched", [])
+        analysis_results = orchestrator_result.get("analysis_results", {})
+
+        return {
+            "success": True,
+            "fallback": False,
+            "query": query,
+            "response": response_text,
+            "confidence": response_confidence,
+            "agents_dispatched": agents_dispatched,
+            "analysis_results": analysis_results,
+            "target_agent_requested": target_agent,
+            "context": {
+                "brand": brand,
+                "region": region,
+                "session_id": effective_session_id,
+            },
+        }
+
+    except Exception as e:
+        logger.error(f"Orchestrator tool failed: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "query": query,
+            "fallback": True,
+        }
+
+
 # =============================================================================
 # TOOL EXPORTS
 # =============================================================================
@@ -775,6 +919,7 @@ E2I_CHATBOT_TOOLS = [
     agent_routing_tool,
     conversation_memory_tool,
     document_retrieval_tool,
+    orchestrator_tool,
 ]
 
 # Tool name to function mapping
@@ -784,6 +929,7 @@ E2I_TOOL_MAP = {
     "agent_routing_tool": agent_routing_tool,
     "conversation_memory_tool": conversation_memory_tool,
     "document_retrieval_tool": document_retrieval_tool,
+    "orchestrator_tool": orchestrator_tool,
 }
 
 
