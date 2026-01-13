@@ -37,6 +37,7 @@ from src.repositories.chatbot_message import (
     get_chatbot_message_repository,
 )
 from src.api.routes.cognitive import get_orchestrator
+from src.agents.tool_composer import compose_query
 
 logger = logging.getLogger(__name__)
 
@@ -204,6 +205,32 @@ class OrchestratorToolInput(BaseModel):
     session_id: Optional[str] = Field(
         default=None,
         description="Session ID for context continuity",
+    )
+
+
+class ToolComposerToolInput(BaseModel):
+    """Input schema for tool_composer_tool."""
+
+    query: str = Field(
+        description="Multi-faceted query requiring decomposition and multi-agent processing"
+    )
+    brand: Optional[str] = Field(
+        default=None,
+        description="Brand context for the query (Kisqali, Fabhalta, Remibrutinib)",
+    )
+    region: Optional[str] = Field(
+        default=None,
+        description="Region context for the query (US, EU, APAC)",
+    )
+    session_id: Optional[str] = Field(
+        default=None,
+        description="Session ID for context continuity",
+    )
+    max_parallel: int = Field(
+        default=3,
+        ge=1,
+        le=5,
+        description="Maximum number of parallel tool executions",
     )
 
 
@@ -907,6 +934,106 @@ async def orchestrator_tool(
         }
 
 
+@tool(args_schema=ToolComposerToolInput)
+async def tool_composer_tool(
+    query: str,
+    brand: Optional[str] = None,
+    region: Optional[str] = None,
+    session_id: Optional[str] = None,
+    max_parallel: int = 3,
+) -> Dict[str, Any]:
+    """
+    Process multi-faceted queries through the E2I Tool Composer.
+
+    The Tool Composer handles complex queries that require:
+    - Multiple sub-questions answered by different agents
+    - Cross-agent analysis (e.g., causal + drift + predictions)
+    - Comparison across brands, KPIs, or time periods
+    - Analysis combined with recommendations
+
+    Pipeline:
+    1. DECOMPOSE: Break query into atomic sub-questions
+    2. PLAN: Map sub-questions to tools and create execution DAG
+    3. EXECUTE: Run tools in dependency order with parallel execution
+    4. SYNTHESIZE: Aggregate results into coherent response
+
+    Example queries:
+    - "Compare TRx trends across all brands and explain the causal factors"
+    - "Show me the health score and recommendations for Kisqali"
+    - "What caused the NRx drop and should we run an experiment?"
+
+    Args:
+        query: Multi-faceted query requiring decomposition
+        brand: Brand context (Kisqali, Fabhalta, Remibrutinib)
+        region: Region context (US, EU, APAC)
+        session_id: Session ID for context continuity
+        max_parallel: Maximum parallel tool executions (1-5)
+
+    Returns:
+        Dict with synthesized response from multiple agent outputs
+    """
+    logger.info(f"Tool composer: query={query[:50]}..., brand={brand}")
+
+    try:
+        # Build context for Tool Composer
+        context = {
+            "brand": brand,
+            "region": region,
+            "session_id": session_id or f"composer-{datetime.now().strftime('%Y%m%d%H%M%S')}",
+            "max_parallel": max_parallel,
+        }
+
+        # Use the compose_query convenience function
+        result = await compose_query(query=query, context=context)
+
+        # Extract composition results
+        return {
+            "success": True,
+            "query": query,
+            "sub_questions": result.get("sub_questions", []),
+            "tools_executed": result.get("tools_executed", []),
+            "execution_order": result.get("execution_order", []),
+            "parallel_groups": result.get("parallel_groups", []),
+            "synthesized_response": result.get("synthesized_response", ""),
+            "confidence": result.get("confidence", 0.8),
+            "agent_outputs": result.get("agent_outputs", {}),
+            "context": {
+                "brand": brand,
+                "region": region,
+                "session_id": context["session_id"],
+            },
+        }
+
+    except Exception as e:
+        logger.error(f"Tool composer failed: {e}")
+        # Fallback to orchestrator for simpler processing
+        try:
+            logger.info("Tool composer fallback: attempting orchestrator")
+            orchestrator = get_orchestrator()
+            if orchestrator:
+                fallback_result = await orchestrator.run({
+                    "query": query,
+                    "session_id": session_id or f"fallback-{datetime.now().strftime('%Y%m%d%H%M%S')}",
+                    "user_context": {"brand": brand, "region": region},
+                })
+                return {
+                    "success": True,
+                    "fallback": True,
+                    "fallback_reason": f"Tool composer error: {str(e)}",
+                    "query": query,
+                    "response": fallback_result.get("response_text", ""),
+                    "confidence": fallback_result.get("response_confidence", 0.7),
+                }
+        except Exception as fallback_error:
+            logger.error(f"Orchestrator fallback also failed: {fallback_error}")
+
+        return {
+            "success": False,
+            "error": str(e),
+            "query": query,
+        }
+
+
 # =============================================================================
 # TOOL EXPORTS
 # =============================================================================
@@ -920,6 +1047,7 @@ E2I_CHATBOT_TOOLS = [
     conversation_memory_tool,
     document_retrieval_tool,
     orchestrator_tool,
+    tool_composer_tool,
 ]
 
 # Tool name to function mapping
@@ -930,6 +1058,7 @@ E2I_TOOL_MAP = {
     "conversation_memory_tool": conversation_memory_tool,
     "document_retrieval_tool": document_retrieval_tool,
     "orchestrator_tool": orchestrator_tool,
+    "tool_composer_tool": tool_composer_tool,
 }
 
 
