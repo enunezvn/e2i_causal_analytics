@@ -8,7 +8,6 @@
  * @module components/chat/MessageFeedback
  */
 
-import * as React from 'react';
 import { ThumbsUp, ThumbsDown, Loader2, Check } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
