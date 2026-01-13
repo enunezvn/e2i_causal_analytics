@@ -1,10 +1,11 @@
 # CopilotKit Chatbot Implementation Audit V2
 
 **Created**: 2026-01-12
-**Last Updated**: 2026-01-13
-**Status**: ✅ Complete - All priorities (P1-P6) deployed
+**Last Updated**: 2026-01-13 10:40 AM EST
+**Status**: ✅ COMPLETE - All priorities (P1-P6) deployed & verified in production
 **Focus Areas**: Memory Integration | Agentic Layer Integration
 **Previous Audit**: copilotkit-chatbot-audit.md (Jan 9 - found 5 bugs)
+**Final Verification**: Browser test passed - ZodError fix confirmed working
 
 ---
 
@@ -586,18 +587,48 @@ export function CopilotKitWrapper({
 
 **Deployment**: Frontend rebuilt and restarted, HTTP 200 verified.
 
+### 2026-01-13: ZodError Fix for Tool Messages
+
+| Commit | Description |
+|--------|-------------|
+| `5acc293` | fix(copilotkit): remove null error field from tool messages in MESSAGES_SNAPSHOT |
+| `327975c` | fix(copilotkit): replace pattern-matching with Claude LLM + tool binding |
+
+**Issue**: CopilotKit React SDK v1.50.1 Zod validation failed with `ZodError: Expected string, received null` when tool messages contained `error: null` field.
+
+**Root Cause**: AG-UI LangGraph SDK emits tool messages with `error: null`, but CopilotKit Zod schema expects `error` to be either a string or completely absent.
+
+**Fix Applied** (v1.20.1):
+```python
+# copilotkit.py - Strip null error fields from MESSAGES_SNAPSHOT events
+if event_type == "MESSAGES_SNAPSHOT":
+    for msg in data.get("messages", []):
+        if msg.get("error") is None:
+            del msg["error"]
+```
+
+**Browser Verification** (2026-01-13 10:37 AM EST):
+- ✅ Chat panel opens successfully
+- ✅ Messages sent without errors
+- ✅ Responses stream with structured data (tables, markdown)
+- ✅ No ZodError in console
+- ✅ Screenshot saved: `.playwright-mcp/copilotkit-zod-fix-verified.png`
+
 ---
 
-## Current Droplet Status (2026-01-13)
+## Current Droplet Status (2026-01-13 10:36 AM EST)
 
 | Metric | Value |
 |--------|-------|
-| Uptime | 2 days, 12 hours |
-| Memory | 4.7GB / 7.8GB (3.0GB available) |
-| Swap | 685MB / 2.0GB |
-| Disk | 39GB / 116GB (34%) |
-| API Health | ✅ 200 OK |
-| Docker Services | 11 containers (all healthy) |
+| Uptime | 4h 40m |
+| Memory | 2.0GB / 7.8GB (74% free) |
+| Swap | 0B / 2.0GB |
+| Disk | 39GB / 116GB (66% free) |
+| API Health | ✅ 200 OK (v4.1.0) |
+| E2I API Service | ✅ Active (2h 18m) |
+| NGINX | ✅ Active (4h 11m) |
+| Docker Services | MLflow, FalkorDB, Redis (all healthy 5h) |
+| CopilotKit | ✅ Operational (v1.50) |
 
 ---
 
