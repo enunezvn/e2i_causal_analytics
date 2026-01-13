@@ -15,6 +15,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from langchain_core.messages import HumanMessage, SystemMessage
+
 from src.tool_registry.registry import ToolRegistry
 
 from .cache import get_cache_manager
@@ -332,15 +334,16 @@ class ToolPlanner:
         if episodic_context:
             user_message = f"{episodic_context}\n\n{user_message}"
 
-        response = await self.llm_client.messages.create(
-            model=self.model,
-            max_tokens=3000,
-            temperature=self.temperature,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_message}],
-        )
+        # Using LangChain's message format (works with ChatAnthropic/ChatOpenAI)
+        messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=user_message),
+        ]
 
-        return response.content[0].text
+        response = await self.llm_client.ainvoke(messages)
+
+        # LangChain returns AIMessage with .content attribute
+        return response.content
 
     def _format_episodic_context(
         self, similar_compositions: List[Dict[str, Any]]

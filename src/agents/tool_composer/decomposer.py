@@ -11,6 +11,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
+from langchain_core.messages import HumanMessage, SystemMessage
+
 from .models.composition_models import (
     DecompositionResult,
     SubQuestion,
@@ -136,19 +138,19 @@ class QueryDecomposer:
             raise DecompositionError(f"Failed to decompose query: {e}") from e
 
     async def _call_llm(self, query: str) -> str:
-        """Call the LLM for decomposition"""
+        """Call the LLM for decomposition using LangChain interface"""
         user_message = DECOMPOSITION_USER_TEMPLATE.format(query=query)
 
-        # Using Anthropic's message API format
-        response = await self.llm_client.messages.create(
-            model=self.model,
-            max_tokens=2000,
-            temperature=self.temperature,
-            system=DECOMPOSITION_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_message}],
-        )
+        # Using LangChain's message format (works with ChatAnthropic/ChatOpenAI)
+        messages = [
+            SystemMessage(content=DECOMPOSITION_SYSTEM_PROMPT),
+            HumanMessage(content=user_message),
+        ]
 
-        return response.content[0].text
+        response = await self.llm_client.ainvoke(messages)
+
+        # LangChain returns AIMessage with .content attribute
+        return response.content
 
     def _parse_response(self, response: str) -> Dict[str, Any]:
         """Parse JSON from LLM response"""
