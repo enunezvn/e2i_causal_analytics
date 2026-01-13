@@ -154,11 +154,15 @@ from copilotkit.integrations.fastapi import (
 from copilotkit.sdk import COPILOTKIT_SDK_VERSION, CopilotKitContext
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_anthropic import ChatAnthropic
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
+from langgraph.prebuilt import ToolNode
 from pydantic import BaseModel, Field
+
+from src.api.routes.chatbot_tools import E2I_CHATBOT_TOOLS
 
 logger = logging.getLogger(__name__)
 
@@ -1077,6 +1081,53 @@ COPILOT_ACTIONS = [
 # LANGGRAPH AGENT FOR E2I CHAT
 # =============================================================================
 
+# System prompt for the CopilotKit chat agent
+E2I_COPILOT_SYSTEM_PROMPT = """You are the E2I Analytics Assistant, an intelligent AI specialized in pharmaceutical commercial analytics for Novartis brands.
+
+## Your Expertise
+
+You help users with:
+1. **KPI Analysis** - TRx, NRx, market share, conversion rates, patient starts
+2. **Causal Analysis** - Understanding WHY metrics change and what drives performance
+3. **Agent System** - Information about the 18-agent tiered architecture
+4. **Recommendations** - AI-powered suggestions for HCP targeting and market access
+5. **Insights Search** - Finding trends, causal paths, and historical patterns
+
+## Brands You Support
+
+- **Kisqali** - HR+/HER2- breast cancer
+- **Fabhalta** - PNH (Paroxysmal Nocturnal Hemoglobinuria)
+- **Remibrutinib** - CSU (Chronic Spontaneous Urticaria)
+
+## Guidelines
+
+1. **Data-Driven Responses**: ALWAYS use the available tools to fetch real data before answering
+2. **Source Attribution**: Cite the data source when presenting metrics or insights
+3. **Commercial Focus**: This is pharmaceutical COMMERCIAL analytics - NOT clinical or medical advice
+4. **Causal Clarity**: When discussing causation, be clear about confidence levels
+5. **Actionable Insights**: Provide recommendations that can drive business decisions
+
+## Tool Usage - CRITICAL
+
+You MUST use tools proactively when users ask about data:
+- Use `e2i_data_query_tool` for KPI metrics, causal chains, agent analyses, triggers
+- Use `causal_analysis_tool` for understanding metric drivers
+- Use `document_retrieval_tool` for searching the knowledge base
+- Use `agent_routing_tool` to get agent status and information
+- Use `orchestrator_tool` for complex multi-agent workflows
+- Use `tool_composer_tool` for multi-faceted queries
+
+DO NOT just describe what tools can do - actually CALL them to get data!
+
+## Response Format
+
+- Be concise but comprehensive
+- Use bullet points for lists
+- Highlight key metrics with **bold**
+- Include actual data values from tool results
+- Suggest follow-up questions when appropriate
+"""
+
 
 class E2IAgentState(TypedDict):
     """State for the E2I chat agent."""
@@ -1086,68 +1137,197 @@ class E2IAgentState(TypedDict):
 
 def create_e2i_chat_agent():
     """
-    Create a simple LangGraph agent for E2I chat.
+    Create a LangGraph agent for E2I chat with Claude and tool calling.
 
-    This agent responds to chat messages and provides helpful information
-    about the E2I Causal Analytics platform. It delegates tool calls
-    to CopilotKit actions.
+    This agent:
+    1. Uses Claude with bound E2I tools for data-driven responses
+    2. Automatically executes tools when Claude invokes them
+    3. Streams responses back to CopilotKit frontend
+
+    Returns:
+        Compiled LangGraph with chat → tools → chat loop
     """
 
-    async def chat_node(state: E2IAgentState, config: RunnableConfig) -> Dict[str, Any]:
-        """Process chat messages and generate responses."""
-
+    def should_continue(state: E2IAgentState) -> str:
+        """Determine if we should continue to tools or end."""
         messages = state.get("messages", [])
+        if not messages:
+            return "end"
 
+        last_message = messages[-1]
+
+        # If the last message has tool calls, go to tools node
+        if isinstance(last_message, AIMessage) and getattr(last_message, "tool_calls", None):
+            logger.info(f"[CopilotKit] Claude requested {len(last_message.tool_calls)} tool call(s)")
+            return "tools"
+
+        return "end"
+
+    async def chat_node(state: E2IAgentState, config: RunnableConfig) -> Dict[str, Any]:
+        """Process chat messages using Claude with bound tools."""
         import time
         node_start = time.time()
 
-        # Debug: Log what messages look like
-        print(f"DEBUG chat_node [t={node_start:.3f}]: Received {len(messages)} messages")
-        for i, msg in enumerate(messages):
-            print(f"DEBUG chat_node [t={node_start:.3f}]: msg[{i}] type={type(msg).__name__} content={msg if isinstance(msg, dict) else getattr(msg, 'content', str(msg)[:100])}")
+        messages = state.get("messages", [])
+        logger.info(f"[CopilotKit] chat_node received {len(messages)} messages")
 
-        # Get the last human message - handle both dict and HumanMessage formats
-        last_message = None
+        # Get the last human message
+        last_human_message = None
         for msg in reversed(messages):
-            # Handle LangChain message objects
             if isinstance(msg, HumanMessage):
-                last_message = msg.content
-                print(f"DEBUG chat_node: Found HumanMessage: {last_message[:100]}")
+                last_human_message = msg.content
                 break
-            # Handle dict format from AG-UI protocol
-            elif isinstance(msg, dict):
-                role = msg.get("role", "")
-                if role == "user":
-                    last_message = msg.get("content", "")
-                    print(f"DEBUG chat_node: Found dict user message: {last_message[:100]}")
-                    break
+            elif isinstance(msg, dict) and msg.get("role") == "user":
+                last_human_message = msg.get("content", "")
+                break
 
-        # Generate message ID for this response
-        message_id = f"ai-{uuid.uuid4()}"
-
-        if not last_message:
-            print("DEBUG chat_node: No user message found, returning greeting")
+        # If no user message, return greeting
+        if not last_human_message:
             greeting = "Hello! I'm the E2I Analytics Assistant. I can help you with KPI analysis, causal inference, and insights for pharmaceutical brands. What would you like to know?"
-            # Use SDK's native message emission (v1.10.0)
             await copilotkit_emit_message(config, greeting)
-            return {
-                "messages": [AIMessage(id=message_id, content=greeting)]
-            }
+            return {"messages": [AIMessage(content=greeting)]}
 
-        # Generate a contextual response based on the query
-        response = generate_e2i_response(last_message)
-        print(f"DEBUG chat_node: Generated response: {response[:100]}...")
+        # Get Claude API key
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not api_key:
+            logger.warning("[CopilotKit] ANTHROPIC_API_KEY not set, using fallback response")
+            fallback = generate_e2i_response(last_human_message)
+            await copilotkit_emit_message(config, fallback)
+            return {"messages": [AIMessage(content=fallback)]}
 
-        # Use SDK's native message emission (v1.10.0)
-        await copilotkit_emit_message(config, response)
+        try:
+            # Create Claude LLM with tools bound
+            model_name = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+            llm = ChatAnthropic(
+                model=model_name,
+                api_key=api_key,
+                temperature=0.3,
+                max_tokens=2048,
+            )
 
-        return {"messages": [AIMessage(id=message_id, content=response)]}
+            # Bind E2I tools to Claude
+            llm_with_tools = llm.bind_tools(E2I_CHATBOT_TOOLS)
 
-    # Build the graph
+            # Build messages for LLM
+            system_msg = SystemMessage(content=E2I_COPILOT_SYSTEM_PROMPT)
+            llm_messages = [system_msg]
+
+            # Add conversation history (convert to LangChain format if needed)
+            for msg in messages:
+                if isinstance(msg, (HumanMessage, AIMessage, SystemMessage, ToolMessage)):
+                    llm_messages.append(msg)
+                elif isinstance(msg, dict):
+                    role = msg.get("role", "")
+                    content = msg.get("content", "")
+                    if role == "user":
+                        llm_messages.append(HumanMessage(content=content))
+                    elif role == "assistant":
+                        llm_messages.append(AIMessage(content=content))
+
+            logger.info(f"[CopilotKit] Invoking Claude with {len(llm_messages)} messages and {len(E2I_CHATBOT_TOOLS)} tools bound")
+
+            # Invoke Claude
+            response = await llm_with_tools.ainvoke(llm_messages)
+
+            # If response has tool calls, return without emitting (tools node will handle)
+            if getattr(response, "tool_calls", None):
+                logger.info(f"[CopilotKit] Claude invoked tools: {[tc['name'] for tc in response.tool_calls]}")
+                return {"messages": [response]}
+
+            # Emit text response to CopilotKit frontend
+            if response.content:
+                await copilotkit_emit_message(config, response.content)
+
+            elapsed = time.time() - node_start
+            logger.info(f"[CopilotKit] chat_node completed in {elapsed:.2f}s")
+
+            return {"messages": [response]}
+
+        except Exception as e:
+            logger.error(f"[CopilotKit] Claude invocation failed: {e}", exc_info=True)
+            fallback = generate_e2i_response(last_human_message)
+            await copilotkit_emit_message(config, fallback)
+            return {"messages": [AIMessage(content=fallback)]}
+
+    async def synthesize_node(state: E2IAgentState, config: RunnableConfig) -> Dict[str, Any]:
+        """Synthesize tool results into a final response."""
+        messages = state.get("messages", [])
+
+        # Get tool results from messages
+        tool_results = []
+        for msg in messages:
+            if isinstance(msg, ToolMessage):
+                tool_results.append({"tool": msg.name, "result": msg.content})
+
+        if not tool_results:
+            return {"messages": []}
+
+        # Get Claude to synthesize tool results
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not api_key:
+            # Fallback: just format tool results as text
+            result_text = "\n\n".join([
+                f"**{tr['tool']}**: {tr['result'][:500]}..." if len(tr['result']) > 500 else f"**{tr['tool']}**: {tr['result']}"
+                for tr in tool_results
+            ])
+            await copilotkit_emit_message(config, result_text)
+            return {"messages": [AIMessage(content=result_text)]}
+
+        try:
+            model_name = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+            llm = ChatAnthropic(
+                model=model_name,
+                api_key=api_key,
+                temperature=0.3,
+                max_tokens=2048,
+            )
+
+            # Ask Claude to synthesize the results
+            synthesis_prompt = f"""Based on the tool results below, provide a clear, helpful response to the user.
+
+Tool Results:
+{json.dumps(tool_results, indent=2, default=str)}
+
+Synthesize these results into a natural, conversational response. Include specific data values and metrics. Be concise."""
+
+            response = await llm.ainvoke([
+                SystemMessage(content=E2I_COPILOT_SYSTEM_PROMPT),
+                HumanMessage(content=synthesis_prompt)
+            ])
+
+            await copilotkit_emit_message(config, response.content)
+            return {"messages": [response]}
+
+        except Exception as e:
+            logger.error(f"[CopilotKit] Synthesis failed: {e}")
+            result_text = "\n\n".join([f"**{tr['tool']}**: {tr['result']}" for tr in tool_results])
+            await copilotkit_emit_message(config, result_text)
+            return {"messages": [AIMessage(content=result_text)]}
+
+    # Build the graph with tool calling support
     workflow = StateGraph(E2IAgentState)
+
+    # Add nodes
     workflow.add_node("chat", chat_node)
+    workflow.add_node("tools", ToolNode(E2I_CHATBOT_TOOLS))
+    workflow.add_node("synthesize", synthesize_node)
+
+    # Set entry point
     workflow.set_entry_point("chat")
-    workflow.add_edge("chat", END)
+
+    # Add conditional edge: chat → tools or end
+    workflow.add_conditional_edges(
+        "chat",
+        should_continue,
+        {
+            "tools": "tools",
+            "end": END,
+        },
+    )
+
+    # After tools, synthesize the results
+    workflow.add_edge("tools", "synthesize")
+    workflow.add_edge("synthesize", END)
 
     # Checkpointer is required by ag_ui_langgraph for state management
     checkpointer = MemorySaver()
