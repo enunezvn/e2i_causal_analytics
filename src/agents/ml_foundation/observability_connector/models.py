@@ -12,12 +12,12 @@ Author: E2I Causal Analytics Team
 Version: 1.0.0
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 # =============================================================================
@@ -93,16 +93,13 @@ class SpanEvent(BaseModel):
 
     name: str = Field(..., description="Event name (e.g., 'checkpoint', 'retry')")
     timestamp: datetime = Field(
-        default_factory=datetime.utcnow, description="When the event occurred"
+        default_factory=lambda: datetime.now(timezone.utc), description="When the event occurred"
     )
     attributes: Dict[str, Any] = Field(
         default_factory=dict, description="Event-specific attributes"
     )
 
-    class Config:
-        """Pydantic configuration."""
-
-        frozen = True  # Events are immutable
+    model_config = ConfigDict(frozen=True)  # Events are immutable
 
 
 # =============================================================================
@@ -271,7 +268,7 @@ class ObservabilitySpan(BaseModel):
         Args:
             ended_at: End time (defaults to now)
         """
-        self.ended_at = ended_at or datetime.utcnow()
+        self.ended_at = ended_at or datetime.now(timezone.utc)
         if self.started_at:
             delta = self.ended_at - self.started_at
             self.duration_ms = int(delta.total_seconds() * 1000)
@@ -302,10 +299,7 @@ class ObservabilitySpan(BaseModel):
             data["ended_at"] = data["ended_at"].isoformat()
         return data
 
-    class Config:
-        """Pydantic configuration."""
-
-        from_attributes = True  # Allow ORM mode
+    model_config = ConfigDict(from_attributes=True)  # Allow ORM mode
 
 
 # =============================================================================
@@ -366,7 +360,7 @@ class QualityMetrics(BaseModel):
         default="24h", description="Time window for metrics (1h, 24h, 7d)"
     )
     computed_at: datetime = Field(
-        default_factory=datetime.utcnow, description="When metrics were computed"
+        default_factory=lambda: datetime.now(timezone.utc), description="When metrics were computed"
     )
 
     # Span counts
@@ -455,10 +449,7 @@ class QualityMetrics(BaseModel):
         )
         return self.quality_score
 
-    class Config:
-        """Pydantic configuration."""
-
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # =============================================================================
@@ -496,7 +487,7 @@ def create_span(
         agent_tier=agent_tier,
         operation_type=operation_type,
         parent_span_id=parent_span_id,
-        started_at=kwargs.pop("started_at", datetime.utcnow()),
+        started_at=kwargs.pop("started_at", datetime.now(timezone.utc)),
         **kwargs,
     )
 
@@ -532,6 +523,6 @@ def create_llm_span(
         operation_type="llm_call",
         model_name=model_name,
         parent_span_id=parent_span_id,
-        started_at=kwargs.pop("started_at", datetime.utcnow()),
+        started_at=kwargs.pop("started_at", datetime.now(timezone.utc)),
         **kwargs,
     )

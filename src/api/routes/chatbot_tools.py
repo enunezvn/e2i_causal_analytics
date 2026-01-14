@@ -14,7 +14,7 @@ Adapted from Pydantic AI patterns to LangGraph @tool decorators.
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
@@ -243,7 +243,7 @@ class ToolComposerToolInput(BaseModel):
 
 def _get_time_filter(time_range: TimeRange) -> datetime:
     """Convert time range enum to datetime filter."""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     if time_range == TimeRange.LAST_7_DAYS:
         return now - timedelta(days=7)
     elif time_range == TimeRange.LAST_30_DAYS:

@@ -19,7 +19,8 @@ import numpy as np
 
 try:
     import bentoml
-    from bentoml.io import JSON, NumpyNdarray
+    # Note: bentoml.io module deprecated in v1.4+
+    # Use Pydantic models with @bentoml.api decorator instead
     BENTOML_AVAILABLE = True
 except ImportError:
     BENTOML_AVAILABLE = False

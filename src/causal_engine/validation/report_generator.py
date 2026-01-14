@@ -10,7 +10,7 @@ for causal effect validation.
 import logging
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 
 from src.causal_engine.validation.state import (
@@ -60,7 +60,7 @@ class ValidationReportGenerator:
         """
         start_time = time.time()
         report_id = f"{self.report_id_prefix}-{uuid.uuid4().hex[:8].upper()}"
-        generated_at = datetime.utcnow().isoformat() + "Z"
+        generated_at = datetime.now(timezone.utc).isoformat() + "Z"
 
         # Generate sections
         cross_validation_section = self._generate_cross_validation_section(

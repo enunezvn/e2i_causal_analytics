@@ -5,7 +5,7 @@ Handles user feedback (thumbs up/down) on chatbot assistant responses.
 Used for quality improvement and prompt optimization.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Literal, Optional
 
 from src.repositories.base import BaseRepository
@@ -230,7 +230,7 @@ class ChatbotFeedbackRepository(BaseRepository):
         if not self.client:
             return {}
 
-        cutoff = datetime.utcnow() - timedelta(days=days)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
         # Get all feedback in period
         result = await (

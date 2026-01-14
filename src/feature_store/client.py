@@ -6,6 +6,7 @@ Provides unified interface for feature retrieval, writing, and management.
 """
 
 import logging
+import os
 from typing import Any, Dict, List, Optional
 
 import mlflow
@@ -101,7 +102,7 @@ class FeatureStoreClient:
 
         # Initialize MLflow
         if mlflow_tracking_uri:
-            mlflow.set_tracking_uri(mlflow_tracking_uri)
+            os.environ["MLFLOW_TRACKING_URI"] = mlflow_tracking_uri
             logger.info(f"MLflow tracking URI set to: {mlflow_tracking_uri}")
 
         # Initialize retrieval and writing components

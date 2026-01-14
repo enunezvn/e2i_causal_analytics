@@ -6,7 +6,7 @@ Redis-based caching layer for expensive KPI calculations.
 
 import json
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from loguru import logger
@@ -142,7 +142,7 @@ class KPICache:
         ttl_seconds = ttl or self._default_ttl
 
         try:
-            expires_at = datetime.utcnow() + timedelta(seconds=ttl_seconds)
+            expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
 
             result_dict = {
                 "kpi_id": result.kpi_id,

@@ -102,7 +102,7 @@ class EnergyScoreMLflowTracker:
         """Check if MLflow is available."""
         try:
             import mlflow
-            mlflow.set_tracking_uri(self.tracking_uri)
+            os.environ["MLFLOW_TRACKING_URI"] = self.tracking_uri
             return True
         except ImportError:
             logger.warning("MLflow not installed, metrics will only log to database")

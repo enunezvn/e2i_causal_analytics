@@ -470,7 +470,7 @@ class MLflowConnector:
             import mlflow
             from mlflow.tracking import MlflowClient
 
-            mlflow.set_tracking_uri(self.tracking_uri)
+            os.environ["MLFLOW_TRACKING_URI"] = self.tracking_uri
             self._mlflow = mlflow
             self._client = MlflowClient(tracking_uri=self.tracking_uri)
             self._enabled = True

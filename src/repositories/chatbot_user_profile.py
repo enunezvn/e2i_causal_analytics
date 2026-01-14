@@ -4,7 +4,7 @@ Chatbot User Profile Repository.
 Handles user preferences and settings for E2I chatbot.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from src.repositories.base import BaseRepository
@@ -133,7 +133,7 @@ class ChatbotUserProfileRepository(BaseRepository):
             profile = await self.get_by_id(user_id)
             if profile:
                 updates = {
-                    "last_active_at": datetime.utcnow().isoformat(),
+                    "last_active_at": datetime.now(timezone.utc).isoformat(),
                 }
                 if new_conversation:
                     updates["total_conversations"] = (

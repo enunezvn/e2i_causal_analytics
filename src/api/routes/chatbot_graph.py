@@ -14,7 +14,7 @@ Workflow:
 
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -267,7 +267,7 @@ async def init_node(state: ChatbotState) -> Dict[str, Any]:
     return {
         "messages": [human_msg],
         "metadata": {
-            "init_timestamp": str(datetime.utcnow()),
+            "init_timestamp": str(datetime.now(timezone.utc)),
             "is_new_conversation": is_new_conversation,
         },
     }
