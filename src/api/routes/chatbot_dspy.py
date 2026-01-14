@@ -34,6 +34,30 @@ except ImportError:
 # Feature flag for DSPy intent classification
 CHATBOT_DSPY_INTENT_ENABLED = os.getenv("CHATBOT_DSPY_INTENT", "true").lower() == "true"
 
+# DSPy LLM configuration flag (to ensure we only configure once)
+_dspy_lm_configured = False
+
+
+def _ensure_dspy_configured():
+    """Ensure DSPy LLM is configured before use."""
+    global _dspy_lm_configured
+    if not DSPY_AVAILABLE or _dspy_lm_configured:
+        return
+
+    try:
+        # Check if already configured
+        if hasattr(dspy.settings, "lm") and dspy.settings.lm is not None:
+            _dspy_lm_configured = True
+            return
+
+        # Configure DSPy with Anthropic Claude
+        lm = dspy.LM("anthropic/claude-sonnet-4-20250514")
+        dspy.configure(lm=lm)
+        _dspy_lm_configured = True
+        logger.info("Configured DSPy LLM for chatbot intent classification")
+    except Exception as e:
+        logger.warning(f"Failed to configure DSPy LLM: {e}")
+
 
 # =============================================================================
 # DSPY SIGNATURES
@@ -449,6 +473,10 @@ def _get_dspy_classifier() -> Optional["ChatbotIntentClassifier"]:
     global _dspy_classifier
     if not DSPY_AVAILABLE or not CHATBOT_DSPY_INTENT_ENABLED:
         return None
+
+    # Ensure DSPy LLM is configured before creating classifier
+    _ensure_dspy_configured()
+
     if _dspy_classifier is None:
         try:
             _dspy_classifier = ChatbotIntentClassifier()
@@ -805,6 +833,10 @@ def _get_dspy_router() -> Optional["ChatbotAgentRouter"]:
     global _dspy_router
     if not DSPY_AVAILABLE or not CHATBOT_DSPY_ROUTING_ENABLED:
         return None
+
+    # Ensure DSPy LLM is configured before creating router
+    _ensure_dspy_configured()
+
     if _dspy_router is None:
         try:
             _dspy_router = ChatbotAgentRouter()
@@ -1154,6 +1186,10 @@ def _get_dspy_query_rewriter() -> Optional["ChatbotQueryRewriter"]:
     global _dspy_query_rewriter
     if not DSPY_AVAILABLE or not CHATBOT_COGNITIVE_RAG_ENABLED:
         return None
+
+    # Ensure DSPy LLM is configured before creating query rewriter
+    _ensure_dspy_configured()
+
     if _dspy_query_rewriter is None:
         try:
             _dspy_query_rewriter = ChatbotQueryRewriter()
@@ -1533,8 +1569,14 @@ def _get_dspy_synthesizer():
     """Get or create the DSPy ChatbotSynthesizer singleton."""
     global _chatbot_synthesizer
     if _chatbot_synthesizer is None and DSPY_AVAILABLE:
-        _chatbot_synthesizer = dspy.ChainOfThought(EvidenceSynthesisSignature)
-        logger.info("Initialized DSPy ChatbotSynthesizer module")
+        # Ensure DSPy LLM is configured before creating synthesizer
+        _ensure_dspy_configured()
+        try:
+            _chatbot_synthesizer = dspy.ChainOfThought(EvidenceSynthesisSignature)
+            logger.info("Initialized DSPy ChatbotSynthesizer module")
+        except Exception as e:
+            logger.warning(f"Failed to initialize DSPy ChatbotSynthesizer: {e}")
+            return None
     return _chatbot_synthesizer
 
 
