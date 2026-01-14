@@ -27,6 +27,7 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { useE2ICopilot, useCopilotEnabled } from '@/providers/E2ICopilotProvider';
 import { AgentStatusPanel } from './AgentStatusPanel';
+import { AgentProgressRenderer } from './AgentProgressRenderer';
 import { useChatFeedback, FeedbackRating } from '@/hooks/use-chat-feedback';
 
 // =============================================================================
@@ -267,6 +268,9 @@ export function E2IChatSidebar({
 
             {/* Chat Area */}
             <div className="flex-1 overflow-hidden">
+              {/* CoAgent progress renderer - displays real-time progress from LangGraph */}
+              <AgentProgressRenderer className="px-3 pt-2" />
+
               <CopilotChat
                 onThumbsUp={handleThumbsUp}
                 onThumbsDown={handleThumbsDown}
