@@ -7,9 +7,17 @@ Exposes backend actions for querying KPIs, running analyses,
 and interacting with the E2I agent system.
 
 Author: E2I Causal Analytics Team
-Version: 1.21.3
+Version: 1.21.5
 
 Changelog:
+    1.21.5 - Fixed tool message ID being string "None" in MESSAGES_SNAPSHOT.
+             Root cause: ToolMessage with id=None in Python serializes as "None" string.
+             CopilotKit React SDK may fail validation on invalid ID format.
+             Fix: For tool messages, use toolCallId with "tool-" prefix as the ID.
+             For other messages, generate a proper UUID.
+    1.21.4 - Fixed message content format and error event type.
+             - Handle message as list of content blocks for copilotkit_manually_emit_message
+             - Use RUN_ERROR event type instead of "error" (not valid AG-UI event type)
     1.21.3 - Fixed async/await issue: supabase-py is synchronous, not async.
              Created _persist_message_sync() helper to bypass broken async repository methods.
     1.21.2 - Fixed ChatbotMessageRepository instantiation: use `supabase_client` parameter
@@ -346,6 +354,16 @@ def _fix_all_events(event_dict: dict, thread_id: str, run_id: str) -> dict:
                 # Fix: Delete the error key entirely when it's null on ANY message type
                 if "error" in msg and msg["error"] is None:
                     del msg["error"]
+                # CRITICAL FIX (v1.21.5): Fix tool message ID being string "None"
+                # When ToolMessage has id=None in Python, it serializes as "None" string
+                # which can cause frontend validation issues. Use toolCallId as fallback.
+                if msg.get("id") in (None, "None", "null"):
+                    # For tool messages, use toolCallId as the ID
+                    if msg.get("role") == "tool" and msg.get("toolCallId"):
+                        msg["id"] = f"tool-{msg['toolCallId']}"
+                    else:
+                        # Generate a new UUID for other messages with invalid ID
+                        msg["id"] = f"msg-{uuid.uuid4()}"
 
     return event_dict
 
