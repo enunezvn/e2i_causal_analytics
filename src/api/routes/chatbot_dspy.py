@@ -2462,11 +2462,12 @@ class ChatbotSignalCollector:
             The database ID of the inserted signal, or None if failed
         """
         try:
-            from src.memory.services.factories import get_async_supabase_client
+            from src.memory.services.factories import get_async_supabase_service_client
 
-            client = await get_async_supabase_client()
+            # Use service role client to bypass RLS for internal signal collection
+            client = await get_async_supabase_service_client()
             if not client:
-                logger.warning("No Supabase client available for signal persistence")
+                logger.warning("No Supabase service client available for signal persistence")
                 return None
 
             # Compute rewards
