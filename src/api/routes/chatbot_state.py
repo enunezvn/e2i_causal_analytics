@@ -53,10 +53,14 @@ class ChatbotState(TypedDict, total=False):
     user_id: str
     session_id: str
     request_id: str
+    trace_id: Optional[str]  # Opik trace ID for observability
 
     # Query processing
     query: str
     intent: Optional[str]
+    intent_confidence: Optional[float]  # DSPy classification confidence (0.0-1.0)
+    intent_reasoning: Optional[str]  # DSPy classification reasoning
+    intent_classification_method: Optional[str]  # "dspy" or "hardcoded"
 
     # E2I context filters
     brand_context: Optional[str]
@@ -145,6 +149,7 @@ def create_initial_state(
     session_id: Optional[str] = None,
     brand_context: Optional[str] = None,
     region_context: Optional[str] = None,
+    trace_id: Optional[str] = None,
 ) -> ChatbotState:
     """
     Create an initial ChatbotState for a new request.
@@ -156,6 +161,7 @@ def create_initial_state(
         session_id: Optional existing session ID (new one generated if None)
         brand_context: Optional brand filter
         region_context: Optional region filter
+        trace_id: Optional Opik trace ID for observability
 
     Returns:
         Initialized ChatbotState
@@ -170,8 +176,12 @@ def create_initial_state(
         user_id=user_id,
         session_id=session_id,
         request_id=request_id,
+        trace_id=trace_id,
         query=query,
         intent=None,
+        intent_confidence=None,
+        intent_reasoning=None,
+        intent_classification_method=None,
         brand_context=brand_context,
         region_context=region_context,
         messages=[],

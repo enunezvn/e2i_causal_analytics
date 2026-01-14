@@ -14,6 +14,7 @@ Workflow:
 
 import logging
 import os
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 
@@ -41,8 +42,72 @@ from src.memory.episodic_memory import (
     E2IEntityReferences,
     insert_episodic_memory_with_text,
 )
+from src.api.routes.chatbot_tracer import (
+    get_chatbot_tracer,
+    ChatbotTraceContext,
+    CHATBOT_OPIK_TRACING_ENABLED,
+)
+from src.api.routes.chatbot_dspy import (
+    classify_intent_dspy,
+    CHATBOT_DSPY_INTENT_ENABLED,
+)
+from src.mlops.mlflow_connector import MLflowConnector
+
+# MLflow metrics feature flag
+CHATBOT_MLFLOW_METRICS_ENABLED = os.getenv("CHATBOT_MLFLOW_METRICS", "true").lower() == "true"
+
+# MLflow experiment name
+CHATBOT_MLFLOW_EXPERIMENT = "chatbot_interactions"
 
 logger = logging.getLogger(__name__)
+
+# Context variable for active trace context (accessible by nodes)
+import contextvars
+_active_trace_context: contextvars.ContextVar[Optional[ChatbotTraceContext]] = contextvars.ContextVar(
+    "chatbot_trace_context", default=None
+)
+
+# MLflow connector singleton (lazy initialization)
+_mlflow_connector: Optional[MLflowConnector] = None
+_mlflow_experiment_id: Optional[str] = None
+
+
+def _get_mlflow_connector() -> Optional[MLflowConnector]:
+    """Get the MLflow connector singleton."""
+    global _mlflow_connector
+    if not CHATBOT_MLFLOW_METRICS_ENABLED:
+        return None
+    if _mlflow_connector is None:
+        _mlflow_connector = MLflowConnector()
+    return _mlflow_connector
+
+
+async def _get_or_create_chatbot_experiment() -> Optional[str]:
+    """Get or create the chatbot interactions MLflow experiment."""
+    global _mlflow_experiment_id
+    if not CHATBOT_MLFLOW_METRICS_ENABLED:
+        return None
+    if _mlflow_experiment_id is not None:
+        return _mlflow_experiment_id
+
+    mlflow_conn = _get_mlflow_connector()
+    if mlflow_conn is None:
+        return None
+
+    try:
+        _mlflow_experiment_id = await mlflow_conn.get_or_create_experiment(
+            name=CHATBOT_MLFLOW_EXPERIMENT,
+            tags={
+                "platform": "e2i_causal_analytics",
+                "component": "chatbot",
+                "framework": "langgraph",
+            },
+        )
+        logger.info(f"MLflow experiment '{CHATBOT_MLFLOW_EXPERIMENT}' ready: {_mlflow_experiment_id}")
+        return _mlflow_experiment_id
+    except Exception as e:
+        logger.warning(f"Failed to get/create MLflow experiment: {e}")
+        return None
 
 
 # =============================================================================
@@ -237,29 +302,48 @@ async def init_node(state: ChatbotState) -> Dict[str, Any]:
 
     logger.info(f"Init node: session={session_id}, query={query[:50]}...")
 
-    # Try to create or verify conversation exists in database
+    # Get active trace context for observability
+    trace_ctx = _active_trace_context.get()
+
     is_new_conversation = False
-    try:
-        client = await get_async_supabase_client()
-        if client:
-            conv_repo = get_chatbot_conversation_repository(client)
 
-            # Check if conversation exists
-            existing_conv = await conv_repo.get_by_session_id(session_id)
+    # Wrap node execution with tracing if available
+    async def _execute_init():
+        nonlocal is_new_conversation
+        # Try to create or verify conversation exists in database
+        try:
+            client = await get_async_supabase_client()
+            if client:
+                conv_repo = get_chatbot_conversation_repository(client)
 
-            if not existing_conv:
-                # Create new conversation
-                await conv_repo.create_conversation(
-                    user_id=user_id,
-                    session_id=session_id,
-                    brand_context=brand,
-                    region_context=region,
-                    query_type="general",
-                )
-                is_new_conversation = True
-                logger.debug(f"Created new conversation: {session_id}")
-    except Exception as e:
-        logger.warning(f"Failed to create/verify conversation: {e}")
+                # Check if conversation exists
+                existing_conv = await conv_repo.get_by_session_id(session_id)
+
+                if not existing_conv:
+                    # Create new conversation
+                    await conv_repo.create_conversation(
+                        user_id=user_id,
+                        session_id=session_id,
+                        brand_context=brand,
+                        region_context=region,
+                        query_type="general",
+                    )
+                    is_new_conversation = True
+                    logger.debug(f"Created new conversation: {session_id}")
+        except Exception as e:
+            logger.warning(f"Failed to create/verify conversation: {e}")
+
+    # Execute with tracing if available
+    if trace_ctx:
+        async with trace_ctx.trace_node("init") as node_span:
+            await _execute_init()
+            node_span.log_init(
+                is_new_conversation=is_new_conversation,
+                session_id=session_id,
+                user_id=user_id,
+            )
+    else:
+        await _execute_init()
 
     # Add human message to state
     human_msg = HumanMessage(content=query)
@@ -285,33 +369,50 @@ async def load_context_node(state: ChatbotState) -> Dict[str, Any]:
 
     logger.debug(f"Loading context for session: {session_id}")
 
+    # Get active trace context for observability
+    trace_ctx = _active_trace_context.get()
+
     # Load previous messages from database
     previous_messages: List[Dict[str, Any]] = []
     conversation_title = None
 
-    try:
-        client = await get_async_supabase_client()
-        if client:
-            msg_repo = get_chatbot_message_repository(client)
-            conv_repo = get_chatbot_conversation_repository(client)
+    async def _execute_load_context():
+        nonlocal previous_messages, conversation_title, brand, region
+        try:
+            client = await get_async_supabase_client()
+            if client:
+                msg_repo = get_chatbot_message_repository(client)
+                conv_repo = get_chatbot_conversation_repository(client)
 
-            # Get conversation metadata
-            conv = await conv_repo.get_by_session_id(session_id)
-            if conv:
-                conversation_title = conv.get("title")
-                # Use conversation's brand/region if not provided in request
-                if not brand:
-                    brand = conv.get("brand_context")
-                if not region:
-                    region = conv.get("region_context")
+                # Get conversation metadata
+                conv = await conv_repo.get_by_session_id(session_id)
+                if conv:
+                    conversation_title = conv.get("title")
+                    # Use conversation's brand/region if not provided in request
+                    if not brand:
+                        brand = conv.get("brand_context")
+                    if not region:
+                        region = conv.get("region_context")
 
-            # Get recent messages for context
-            recent_msgs = await msg_repo.get_recent_messages(session_id, count=10)
-            previous_messages = recent_msgs
-            logger.debug(f"Loaded {len(previous_messages)} previous messages")
+                # Get recent messages for context
+                recent_msgs = await msg_repo.get_recent_messages(session_id, count=10)
+                previous_messages = recent_msgs
+                logger.debug(f"Loaded {len(previous_messages)} previous messages")
 
-    except Exception as e:
-        logger.warning(f"Failed to load conversation context: {e}")
+        except Exception as e:
+            logger.warning(f"Failed to load conversation context: {e}")
+
+    # Execute with tracing if available
+    if trace_ctx:
+        async with trace_ctx.trace_node("load_context") as node_span:
+            await _execute_load_context()
+            node_span.log_context_load(
+                previous_message_count=len(previous_messages),
+                brand_context=brand,
+                region_context=region,
+            )
+    else:
+        await _execute_load_context()
 
     # Convert previous messages to LangChain message format
     history_messages = []
@@ -348,58 +449,139 @@ async def retrieve_rag_node(state: ChatbotState) -> Dict[str, Any]:
 
     logger.debug(f"RAG retrieval: query={query[:50]}..., intent={intent}")
 
-    try:
-        # Adjust retrieval based on intent
-        kpi_name = None
-        if intent == IntentType.KPI_QUERY:
-            # Extract KPI name from query if present
-            for kpi in ["trx", "nrx", "market share", "conversion"]:
-                if kpi in query.lower():
-                    kpi_name = kpi
-                    break
+    # Get active trace context for observability
+    trace_ctx = _active_trace_context.get()
 
-        results = await hybrid_search(
-            query=query,
-            k=5,
-            kpi_name=kpi_name,
-            filters={"brand": brand} if brand else None,
-        )
+    rag_context = []
+    rag_sources = []
+    relevance_scores = []
+    kpi_name = None
+    error = None
 
-        rag_context = [
-            {
-                "source_id": r.source_id,
-                "content": r.content[:500],  # Truncate for context window
-                "score": r.score,
-                "source": r.source,
-            }
-            for r in results
-        ]
+    async def _execute_rag():
+        nonlocal rag_context, rag_sources, relevance_scores, kpi_name, error
+        try:
+            # Adjust retrieval based on intent
+            if intent == IntentType.KPI_QUERY:
+                # Extract KPI name from query if present
+                for kpi in ["trx", "nrx", "market share", "conversion"]:
+                    if kpi in query.lower():
+                        kpi_name = kpi
+                        break
 
-        rag_sources = [r.source_id for r in results]
+            results = await hybrid_search(
+                query=query,
+                k=5,
+                kpi_name=kpi_name,
+                filters={"brand": brand} if brand else None,
+            )
 
-        return {
-            "rag_context": rag_context,
-            "rag_sources": rag_sources,
-        }
+            rag_context = [
+                {
+                    "source_id": r.source_id,
+                    "content": r.content[:500],  # Truncate for context window
+                    "score": r.score,
+                    "source": r.source,
+                }
+                for r in results
+            ]
 
-    except Exception as e:
-        logger.error(f"RAG retrieval failed: {e}")
+            rag_sources = [r.source_id for r in results]
+            relevance_scores = [r.score for r in results]
+
+        except Exception as e:
+            logger.error(f"RAG retrieval failed: {e}")
+            error = f"RAG retrieval error: {str(e)}"
+
+    # Execute with tracing if available
+    if trace_ctx:
+        async with trace_ctx.trace_node("retrieve_rag") as node_span:
+            await _execute_rag()
+            node_span.log_rag_retrieval(
+                result_count=len(rag_context),
+                relevance_scores=relevance_scores,
+                kpi_filter=kpi_name,
+                brand_filter=brand,
+                retrieval_method="hybrid",  # hybrid_search uses semantic + sparse
+            )
+    else:
+        await _execute_rag()
+
+    if error:
         return {
             "rag_context": [],
             "rag_sources": [],
-            "error": f"RAG retrieval error: {str(e)}",
+            "error": error,
         }
+
+    return {
+        "rag_context": rag_context,
+        "rag_sources": rag_sources,
+    }
 
 
 async def classify_intent_node(state: ChatbotState) -> Dict[str, Any]:
     """
-    Classify the user's query intent.
+    Classify the user's query intent using DSPy (with hardcoded fallback).
+
+    Phase 3 DSPy integration: Uses ChatbotIntentClassifier for ML-based
+    classification with confidence scores and training signal collection.
     """
     query = state.get("query", "")
-    intent = classify_intent(query)
-    logger.debug(f"Intent classified: {intent}")
+    brand_context = state.get("brand_context", "") or ""
+    messages = state.get("messages", [])
 
-    return {"intent": intent}
+    # Build conversation context from recent messages (last 3)
+    conversation_context = ""
+    if messages:
+        recent_msgs = messages[-3:] if len(messages) > 3 else messages
+        context_parts = []
+        for msg in recent_msgs:
+            role = "User" if isinstance(msg, HumanMessage) else "Assistant"
+            content = getattr(msg, "content", str(msg))
+            if content:
+                context_parts.append(f"{role}: {content[:100]}...")
+        conversation_context = "\n".join(context_parts)
+
+    # Get active trace context for observability
+    trace_ctx = _active_trace_context.get()
+
+    intent = None
+    confidence = 0.0
+    reasoning = ""
+    classification_method = "unknown"
+
+    async def _execute_classify():
+        nonlocal intent, confidence, reasoning, classification_method
+        # Use DSPy classifier with fallback to hardcoded
+        intent, confidence, reasoning, classification_method = await classify_intent_dspy(
+            query=query,
+            conversation_context=conversation_context,
+            brand_context=brand_context,
+            collect_signal=True,  # Collect training signals for optimization
+        )
+        logger.debug(
+            f"Intent classified: {intent} (confidence={confidence:.2f}, method={classification_method})"
+        )
+
+    # Execute with tracing if available
+    if trace_ctx:
+        async with trace_ctx.trace_node("classify_intent") as node_span:
+            await _execute_classify()
+            node_span.log_intent_classification(
+                intent=intent,
+                confidence=confidence,
+                classification_method=classification_method,
+            )
+    else:
+        await _execute_classify()
+
+    return {
+        "intent": intent,
+        "intent_confidence": confidence,
+        "intent_reasoning": reasoning,
+        "intent_classification_method": classification_method,
+    }
 
 
 async def generate_node(state: ChatbotState) -> Dict[str, Any]:
@@ -412,6 +594,9 @@ async def generate_node(state: ChatbotState) -> Dict[str, Any]:
     rag_context = state.get("rag_context", [])
     brand = state.get("brand_context")
     region = state.get("region_context")
+
+    # Get active trace context for observability
+    trace_ctx = _active_trace_context.get()
 
     # Build context string for system prompt
     context_parts = []
@@ -433,31 +618,76 @@ async def generate_node(state: ChatbotState) -> Dict[str, Any]:
     # Prepare messages for LLM
     llm_messages = [system_msg] + messages
 
-    # Get LLM via factory (supports dynamic provider switching)
-    try:
-        llm = get_chat_llm(
-            model_tier="standard",
-            max_tokens=1024,
-            temperature=0.3,
-        )
-        provider = get_llm_provider()
-        logger.info(f"Using {provider} LLM for chatbot")
+    # Track generation metrics
+    result = None
+    provider = None
+    model_name = None
+    tool_calls_count = 0
+    input_tokens = 0
+    output_tokens = 0
+    is_fallback = False
 
-        # Bind tools to the model
-        llm_with_tools = llm.bind_tools(E2I_CHATBOT_TOOLS)
+    async def _execute_generate():
+        nonlocal result, provider, model_name, tool_calls_count, input_tokens, output_tokens, is_fallback
+        try:
+            llm = get_chat_llm(
+                model_tier="standard",
+                max_tokens=1024,
+                temperature=0.3,
+            )
+            provider = get_llm_provider()
+            model_name = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+            logger.info(f"Using {provider} LLM for chatbot")
 
-        # Generate response
-        response = await llm_with_tools.ainvoke(llm_messages)
+            # Bind tools to the model
+            llm_with_tools = llm.bind_tools(E2I_CHATBOT_TOOLS)
 
-        return {
-            "messages": [response],
-            "agent_name": "chatbot",
-            "agent_tier": 1,
-        }
+            # Generate response
+            response = await llm_with_tools.ainvoke(llm_messages)
 
-    except Exception as e:
-        logger.error(f"LLM generation failed: {e}")
-        return _generate_fallback_response(state)
+            # Extract token usage if available (varies by provider)
+            if hasattr(response, "usage_metadata"):
+                usage = response.usage_metadata
+                input_tokens = getattr(usage, "input_tokens", 0)
+                output_tokens = getattr(usage, "output_tokens", 0)
+            elif hasattr(response, "response_metadata"):
+                meta = response.response_metadata
+                if "usage" in meta:
+                    input_tokens = meta["usage"].get("input_tokens", 0)
+                    output_tokens = meta["usage"].get("output_tokens", 0)
+
+            # Count tool calls
+            if hasattr(response, "tool_calls") and response.tool_calls:
+                tool_calls_count = len(response.tool_calls)
+
+            result = {
+                "messages": [response],
+                "agent_name": "chatbot",
+                "agent_tier": 1,
+            }
+
+        except Exception as e:
+            logger.error(f"LLM generation failed: {e}")
+            is_fallback = True
+            result = _generate_fallback_response(state)
+
+    # Execute with tracing if available
+    if trace_ctx:
+        async with trace_ctx.trace_node("generate") as node_span:
+            await _execute_generate()
+            node_span.log_generate(
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                model=model_name or "unknown",
+                provider=provider or "unknown",
+                tool_calls_count=tool_calls_count,
+                temperature=0.3,
+                is_fallback=is_fallback,
+            )
+    else:
+        await _execute_generate()
+
+    return result
 
 
 def _generate_fallback_response(state: ChatbotState) -> Dict[str, Any]:
@@ -729,6 +959,9 @@ async def finalize_node(state: ChatbotState) -> Dict[str, Any]:
     rag_context = state.get("rag_context", [])
     rag_sources = state.get("rag_sources", [])
 
+    # Get active trace context for observability
+    trace_ctx = _active_trace_context.get()
+
     # Get the last AI message as response
     response_text = ""
     tool_calls = []
@@ -743,74 +976,98 @@ async def finalize_node(state: ChatbotState) -> Dict[str, Any]:
                 ]
             break
 
-    # Persist messages to database
-    try:
-        client = await get_async_supabase_client()
-        if client:
-            msg_repo = get_chatbot_message_repository(client)
+    # Track finalization metrics
+    messages_persisted = 0
+    episodic_memory_saved = False
+    significance_score = 0.0
 
-            # Save user message
-            await msg_repo.add_message(
-                session_id=session_id,
-                role="user",
-                content=query,
-                metadata={"request_id": state.get("request_id")},
-            )
+    async def _execute_finalize():
+        nonlocal messages_persisted, episodic_memory_saved, significance_score
 
-            # Save assistant message with full context
-            model_used = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
-            await msg_repo.add_message(
-                session_id=session_id,
-                role="assistant",
-                content=response_text,
-                agent_name=agent_name,
-                agent_tier=agent_tier,
-                tool_calls=tool_calls,
-                tool_results=tool_results,
-                rag_context=rag_context,
-                rag_sources=rag_sources,
-                model_used=model_used,
-                metadata={
-                    "request_id": state.get("request_id"),
-                    "intent": state.get("intent"),
-                    "brand_context": state.get("brand_context"),
-                    "region_context": state.get("region_context"),
-                },
-            )
+        # Persist messages to database
+        try:
+            client = await get_async_supabase_client()
+            if client:
+                msg_repo = get_chatbot_message_repository(client)
 
-            logger.debug(f"Persisted messages for session: {session_id}")
+                # Save user message
+                await msg_repo.add_message(
+                    session_id=session_id,
+                    role="user",
+                    content=query,
+                    metadata={"request_id": state.get("request_id")},
+                )
+                messages_persisted += 1
 
-    except Exception as e:
-        logger.warning(f"Failed to persist messages: {e}")
+                # Save assistant message with full context
+                model_used = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+                await msg_repo.add_message(
+                    session_id=session_id,
+                    role="assistant",
+                    content=response_text,
+                    agent_name=agent_name,
+                    agent_tier=agent_tier,
+                    tool_calls=tool_calls,
+                    tool_results=tool_results,
+                    rag_context=rag_context,
+                    rag_sources=rag_sources,
+                    model_used=model_used,
+                    metadata={
+                        "request_id": state.get("request_id"),
+                        "intent": state.get("intent"),
+                        "brand_context": state.get("brand_context"),
+                        "region_context": state.get("region_context"),
+                    },
+                )
+                messages_persisted += 1
 
-    # =================================================================
-    # EPISODIC MEMORY BRIDGE
-    # Save significant interactions to episodic memory for cross-session
-    # learning and platform knowledge building
-    # =================================================================
-    try:
-        significance_score = _calculate_significance_score(state)
+                logger.debug(f"Persisted messages for session: {session_id}")
 
-        if significance_score >= SIGNIFICANCE_THRESHOLD:
-            memory_id = await _save_to_episodic_memory(
-                state=state,
-                response_text=response_text,
-                tool_calls=tool_calls,
+        except Exception as e:
+            logger.warning(f"Failed to persist messages: {e}")
+
+        # =================================================================
+        # EPISODIC MEMORY BRIDGE
+        # Save significant interactions to episodic memory for cross-session
+        # learning and platform knowledge building
+        # =================================================================
+        try:
+            significance_score = _calculate_significance_score(state)
+
+            if significance_score >= SIGNIFICANCE_THRESHOLD:
+                memory_id = await _save_to_episodic_memory(
+                    state=state,
+                    response_text=response_text,
+                    tool_calls=tool_calls,
+                    significance_score=significance_score,
+                )
+                if memory_id:
+                    episodic_memory_saved = True
+                    logger.debug(
+                        f"Episodic memory saved: {memory_id} "
+                        f"(score={significance_score:.2f})"
+                    )
+            else:
+                logger.debug(
+                    f"Skipped episodic memory (score={significance_score:.2f} < "
+                    f"threshold={SIGNIFICANCE_THRESHOLD})"
+                )
+        except Exception as e:
+            # Don't fail the response if episodic memory save fails
+            logger.warning(f"Episodic memory bridge error: {e}")
+
+    # Execute with tracing if available
+    if trace_ctx:
+        async with trace_ctx.trace_node("finalize") as node_span:
+            await _execute_finalize()
+            node_span.log_finalize(
+                response_length=len(response_text),
+                messages_persisted=messages_persisted,
+                episodic_memory_saved=episodic_memory_saved,
                 significance_score=significance_score,
             )
-            if memory_id:
-                logger.debug(
-                    f"Episodic memory saved: {memory_id} "
-                    f"(score={significance_score:.2f})"
-                )
-        else:
-            logger.debug(
-                f"Skipped episodic memory (score={significance_score:.2f} < "
-                f"threshold={SIGNIFICANCE_THRESHOLD})"
-            )
-    except Exception as e:
-        # Don't fail the response if episodic memory save fails
-        logger.warning(f"Episodic memory bridge error: {e}")
+    else:
+        await _execute_finalize()
 
     return {
         "response_text": response_text,
@@ -956,19 +1213,159 @@ async def run_chatbot(
     Returns:
         Final state with response
     """
-    initial_state = create_initial_state(
-        user_id=user_id,
+    # Start timing for latency metrics
+    start_time = time.time()
+
+    # Get the tracer (singleton)
+    tracer = get_chatbot_tracer()
+
+    # Wrap workflow execution with Opik trace
+    async with tracer.trace_workflow(
         query=query,
-        request_id=request_id,
         session_id=session_id,
+        user_id=user_id,
         brand_context=brand_context,
         region_context=region_context,
-    )
+        metadata={"request_id": request_id},
+    ) as trace_ctx:
+        # Store trace context for node access
+        _active_trace_context.set(trace_ctx)
 
-    # Pass thread_id config for checkpointer (uses session_id for conversation tracking)
-    config = {"configurable": {"thread_id": initial_state["session_id"]}}
-    result = await e2i_chatbot_graph.ainvoke(initial_state, config=config)
-    return result
+        # Track for MLflow metrics
+        result = None
+        error_occurred = False
+        error_type = None
+
+        try:
+            initial_state = create_initial_state(
+                user_id=user_id,
+                query=query,
+                request_id=request_id,
+                session_id=session_id,
+                brand_context=brand_context,
+                region_context=region_context,
+                trace_id=trace_ctx.trace_id,
+            )
+
+            # Pass thread_id config for checkpointer (uses session_id for conversation tracking)
+            config = {"configurable": {"thread_id": initial_state["session_id"]}}
+            result = await e2i_chatbot_graph.ainvoke(initial_state, config=config)
+
+            # Log workflow completion metrics
+            trace_ctx.log_workflow_complete(
+                status="success" if not result.get("error") else "error",
+                success=not result.get("error"),
+                intent=result.get("intent"),
+                total_tokens=result.get("metadata", {}).get("total_tokens", 0),
+                tool_calls_count=len(result.get("tool_results", [])),
+                rag_result_count=len(result.get("rag_context", [])),
+                response_length=len(result.get("response_text", "")),
+            )
+
+            return result
+
+        except Exception as e:
+            # Log failure
+            error_occurred = True
+            error_type = type(e).__name__
+            trace_ctx.log_workflow_complete(
+                status="failed",
+                success=False,
+                errors=[str(e)],
+            )
+            raise
+
+        finally:
+            # Clear trace context
+            _active_trace_context.set(None)
+
+            # Calculate latency
+            latency_ms = (time.time() - start_time) * 1000
+
+            # =====================================================================
+            # MLFLOW SESSION METRICS (Phase 2)
+            # Log chatbot session metrics to MLflow for experiment tracking
+            # =====================================================================
+            if CHATBOT_MLFLOW_METRICS_ENABLED:
+                try:
+                    experiment_id = await _get_or_create_chatbot_experiment()
+                    mlflow_conn = _get_mlflow_connector()
+
+                    if experiment_id and mlflow_conn:
+                        # Generate run name from session and request
+                        run_name = f"chat_{session_id[:8] if session_id else 'anon'}_{request_id[:8]}"
+
+                        async with mlflow_conn.start_run(
+                            experiment_id=experiment_id,
+                            run_name=run_name,
+                            tags={
+                                "session_id": session_id or "none",
+                                "request_id": request_id,
+                                "trace_id": trace_ctx.trace_id if trace_ctx else "none",
+                            },
+                        ) as mlflow_run:
+                            # Task 2.3: Log session params
+                            await mlflow_run.log_params({
+                                "user_id": user_id[:8] if user_id else "anon",  # Truncated for privacy
+                                "brand_context": brand_context or "none",
+                                "region_context": region_context or "none",
+                                "query_length": len(query),
+                                "is_new_session": str(session_id is None),
+                            })
+
+                            # Task 2.4: Log per-request metrics (latency, token usage)
+                            metrics = {
+                                "latency_ms": latency_ms,
+                            }
+
+                            if result:
+                                # Token usage from metadata
+                                metadata = result.get("metadata", {})
+                                total_tokens = metadata.get("total_tokens", 0)
+                                if total_tokens:
+                                    metrics["total_tokens"] = total_tokens
+
+                                # Response metrics
+                                response_text = result.get("response_text", "")
+                                metrics["response_length"] = len(response_text)
+
+                                # Task 2.5: Log intent distribution metrics
+                                intent = result.get("intent")
+                                if intent:
+                                    # Convert intent to numeric for MLflow (1 for each type)
+                                    intent_str = intent.value if hasattr(intent, "value") else str(intent)
+                                    metrics[f"intent_{intent_str}"] = 1
+
+                                # Tool usage metrics
+                                tool_results = result.get("tool_results", [])
+                                metrics["tool_calls_count"] = len(tool_results)
+
+                                # Task 2.6: Log RAG quality metrics
+                                rag_context = result.get("rag_context", [])
+                                metrics["rag_result_count"] = len(rag_context)
+                                if rag_context:
+                                    # Calculate average relevance score
+                                    scores = [ctx.get("score", 0) for ctx in rag_context if "score" in ctx]
+                                    if scores:
+                                        metrics["rag_avg_relevance"] = sum(scores) / len(scores)
+                                        metrics["rag_max_relevance"] = max(scores)
+                                        metrics["rag_min_relevance"] = min(scores)
+
+                            # Task 2.7: Log error tracking metrics
+                            metrics["is_error"] = 1 if error_occurred else 0
+                            if result and result.get("error"):
+                                metrics["has_workflow_error"] = 1
+
+                            await mlflow_run.log_metrics(metrics)
+
+                            logger.debug(
+                                f"MLflow metrics logged: run={run_name}, latency={latency_ms:.0f}ms, "
+                                f"error={error_occurred}"
+                            )
+
+                except Exception as mlflow_error:
+                    # MLflow logging should never break the chatbot
+                    logger.warning(f"MLflow metrics logging failed: {mlflow_error}")
 
 
 async def stream_chatbot(
