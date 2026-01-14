@@ -17,7 +17,7 @@ Usage:
         ...
 
 Author: E2I Causal Analytics Team
-Version: 4.2.0
+Version: 4.2.1
 """
 
 import logging
@@ -33,6 +33,20 @@ logger = logging.getLogger(__name__)
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY", "")
 SUPABASE_JWT_SECRET = os.environ.get("SUPABASE_JWT_SECRET", "")
+
+# Testing mode - bypasses authentication for integration/e2e tests
+TESTING_MODE = os.environ.get("E2I_TESTING_MODE", "").lower() in ("true", "1", "yes")
+
+# Mock user for testing mode
+TEST_USER: Dict[str, Any] = {
+    "id": "test-user-id",
+    "email": "test@e2i-analytics.com",
+    "role": "authenticated",
+    "aud": "authenticated",
+    "created_at": None,
+    "app_metadata": {"role": "admin"},
+    "user_metadata": {"name": "Test User"},
+}
 
 # Security scheme for OpenAPI docs
 security = HTTPBearer(auto_error=False)
@@ -146,6 +160,11 @@ async def require_auth(
     Raises:
         AuthError: If not authenticated
     """
+    # In testing mode, return mock user
+    if TESTING_MODE:
+        request.state.user = TEST_USER
+        return TEST_USER
+
     if credentials is None:
         raise AuthError("Missing authorization header")
 
@@ -194,5 +213,12 @@ async def require_admin(
 
 # Convenience function to check if auth is configured
 def is_auth_enabled() -> bool:
-    """Check if Supabase auth is configured."""
+    """Check if Supabase auth is configured and not in testing mode."""
+    if TESTING_MODE:
+        return False
     return bool(SUPABASE_URL and SUPABASE_ANON_KEY)
+
+
+def is_testing_mode() -> bool:
+    """Check if running in testing mode."""
+    return TESTING_MODE
