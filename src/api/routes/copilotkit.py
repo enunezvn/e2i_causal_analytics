@@ -2544,7 +2544,10 @@ class FeedbackRequest(BaseModel):
     """Request schema for submitting message feedback."""
 
     message_id: int = Field(..., description="ID of the message being rated")
-    session_id: str = Field(..., description="Conversation session ID")
+    session_id: Optional[str] = Field(
+        default=None,
+        description="Conversation session ID (optional - will be looked up from message if not provided)",
+    )
     rating: str = Field(..., description="Rating: 'thumbs_up' or 'thumbs_down'")
     comment: Optional[str] = Field(default=None, description="Optional user comment")
     query_text: Optional[str] = Field(
@@ -2595,7 +2598,7 @@ async def submit_feedback(request: FeedbackRequest) -> FeedbackResponse:
     """
     logger.info(
         f"[Feedback] Received feedback: message_id={request.message_id}, "
-        f"rating={request.rating}, session={request.session_id[:20]}..."
+        f"rating={request.rating}, session={request.session_id[:20] if request.session_id else 'to-be-looked-up'}..."
     )
 
     # Validate rating
@@ -2606,13 +2609,55 @@ async def submit_feedback(request: FeedbackRequest) -> FeedbackResponse:
         )
 
     try:
+        import os
+        from supabase import create_client
+        from src.memory.services.factories import get_async_supabase_client
         from src.repositories import get_chatbot_feedback_repository
 
-        repo = get_chatbot_feedback_repository()
+        # Use service key client to bypass RLS for message lookup
+        service_url = os.environ.get("SUPABASE_URL")
+        service_key = os.environ.get("SUPABASE_SERVICE_KEY")
+
+        if not service_url or not service_key:
+            return FeedbackResponse(
+                success=False,
+                error="Server configuration error: missing Supabase credentials",
+            )
+
+        # Look up the message to get the actual session_id from the database
+        # Using service key client to bypass RLS policies
+        session_id = None
+        lookup_error = None
+        try:
+            service_client = create_client(service_url, service_key)
+            message_result = service_client.table("chatbot_messages").select(
+                "id, session_id"
+            ).eq("id", request.message_id).limit(1).execute()
+
+            if message_result.data and len(message_result.data) > 0:
+                session_id = message_result.data[0].get("session_id")
+                logger.info(
+                    f"[Feedback] Found message {request.message_id} with session_id={session_id}"
+                )
+            else:
+                lookup_error = f"Message {request.message_id} not found in database"
+                logger.warning(f"[Feedback] {lookup_error}")
+        except Exception as lookup_err:
+            lookup_error = f"Error looking up message: {lookup_err}"
+            logger.warning(f"[Feedback] {lookup_error}")
+
+        if not session_id:
+            return FeedbackResponse(
+                success=False,
+                error=lookup_error or f"Could not find session for message_id {request.message_id}",
+            )
+
+        client = await get_async_supabase_client()
+        repo = get_chatbot_feedback_repository(supabase_client=client)
 
         result = await repo.add_feedback(
             message_id=request.message_id,
-            session_id=request.session_id,
+            session_id=session_id,
             rating=request.rating,
             comment=request.comment,
             query_text=request.query_text,
@@ -2653,9 +2698,11 @@ async def get_feedback_stats(
         GET /api/copilotkit/feedback/stats?agent_name=tool_composer&days=30
     """
     try:
+        from src.memory.services.factories import get_async_supabase_client
         from src.repositories import get_chatbot_feedback_repository
 
-        repo = get_chatbot_feedback_repository()
+        client = await get_async_supabase_client()
+        repo = get_chatbot_feedback_repository(supabase_client=client)
 
         # Get agent-level stats
         agent_stats = await repo.get_agent_stats(agent_name=agent_name, days=days)
