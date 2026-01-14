@@ -19,6 +19,7 @@ import { CopilotKit } from '@copilotkit/react-core';
 import {
   useCopilotReadable,
   useCopilotAction,
+  useCoAgent,
 } from '@copilotkit/react-core';
 import { useNavigate, useLocation } from 'react-router-dom';
 
@@ -52,6 +53,20 @@ export interface UserPreferences {
   theme: 'light' | 'dark' | 'system';
 }
 
+/**
+ * E2I Agent State for CoAgent bidirectional sync.
+ * This interface mirrors the E2IAgentState TypedDict on the backend.
+ * State is emitted from LangGraph nodes via copilotkit_emit_state().
+ */
+export interface E2IAgentState {
+  current_node: string;      // "chat", "tools", "synthesize", "idle"
+  progress_steps: string[];  // ["Processing query...", "Calling tools..."]
+  progress_percent: number;  // 0-100
+  tools_executing: string[]; // ["orchestrator_tool", ...]
+  agent_status: string;      // "processing", "waiting", "complete", "error"
+  error_message: string | null;
+}
+
 export interface E2ICopilotContextValue {
   filters: E2IFilters;
   setFilters: React.Dispatch<React.SetStateAction<E2IFilters>>;
@@ -62,6 +77,10 @@ export interface E2ICopilotContextValue {
   setHighlightedPaths: React.Dispatch<React.SetStateAction<string[]>>;
   chatOpen: boolean;
   setChatOpen: React.Dispatch<React.SetStateAction<boolean>>;
+  // CoAgent state sync (Phase 3 implementation)
+  agentState: E2IAgentState;
+  agentRunning: boolean;
+  agentNodeName: string | undefined;
 }
 
 export interface E2ICopilotProviderProps {
@@ -104,6 +123,15 @@ const DEFAULT_PREFERENCES: UserPreferences = {
   defaultBrand: 'Remibrutinib',
   notificationsEnabled: true,
   theme: 'system',
+};
+
+const DEFAULT_AGENT_STATE: E2IAgentState = {
+  current_node: 'idle',
+  progress_steps: [],
+  progress_percent: 0,
+  tools_executing: [],
+  agent_status: 'idle',
+  error_message: null,
 };
 
 const SAMPLE_AGENTS: AgentInfo[] = [
@@ -149,6 +177,18 @@ export function useCopilotEnabled(): boolean {
 }
 
 // =============================================================================
+// AGENT STATE SETTERS CONTEXT (for CopilotHooksConnector to update state)
+// =============================================================================
+
+interface AgentStateSetters {
+  setAgentState: React.Dispatch<React.SetStateAction<E2IAgentState>>;
+  setAgentRunning: React.Dispatch<React.SetStateAction<boolean>>;
+  setAgentNodeName: React.Dispatch<React.SetStateAction<string | undefined>>;
+}
+
+const AgentStateSettersContext = React.createContext<AgentStateSetters | null>(null);
+
+// =============================================================================
 // INTERNAL CONTEXT PROVIDER (without CopilotKit hooks)
 // =============================================================================
 
@@ -160,6 +200,11 @@ function E2IBaseContextProvider({ children }: { children: React.ReactNode }) {
   const [highlightedPaths, setHighlightedPaths] = React.useState<string[]>([]);
   const [chatOpen, setChatOpen] = React.useState(false);
 
+  // CoAgent state - defaults for when CopilotKit is disabled
+  const [agentState, setAgentState] = React.useState<E2IAgentState>(DEFAULT_AGENT_STATE);
+  const [agentRunning, setAgentRunning] = React.useState(false);
+  const [agentNodeName, setAgentNodeName] = React.useState<string | undefined>(undefined);
+
   const contextValue: E2ICopilotContextValue = {
     filters,
     setFilters,
@@ -170,11 +215,17 @@ function E2IBaseContextProvider({ children }: { children: React.ReactNode }) {
     setHighlightedPaths,
     chatOpen,
     setChatOpen,
+    // CoAgent state
+    agentState,
+    agentRunning,
+    agentNodeName,
   };
 
   return (
     <E2ICopilotContext.Provider value={contextValue}>
-      {children}
+      <AgentStateSettersContext.Provider value={{ setAgentState, setAgentRunning, setAgentNodeName }}>
+        {children}
+      </AgentStateSettersContext.Provider>
     </E2ICopilotContext.Provider>
   );
 }
@@ -353,6 +404,28 @@ function CopilotHooksConnector({ children }: { children: React.ReactNode }) {
       return newState ? 'Chat opened' : 'Chat closed';
     },
   });
+
+  // ==========================================================================
+  // CoAgent State Sync - Bidirectional state between LangGraph and React
+  // ==========================================================================
+
+  // Get setters from context to update shared state
+  const agentStateSetters = React.useContext(AgentStateSettersContext);
+
+  // Subscribe to LangGraph agent state via useCoAgent
+  const { state: coAgentState, running, nodeName } = useCoAgent<E2IAgentState>({
+    name: 'default', // Must match LangGraphAgent name in CopilotKit config
+    initialState: DEFAULT_AGENT_STATE,
+  });
+
+  // Sync CoAgent state to shared context when it changes
+  React.useEffect(() => {
+    if (agentStateSetters) {
+      agentStateSetters.setAgentState(coAgentState);
+      agentStateSetters.setAgentRunning(running);
+      agentStateSetters.setAgentNodeName(nodeName);
+    }
+  }, [coAgentState, running, nodeName, agentStateSetters]);
 
   return <>{children}</>;
 }
