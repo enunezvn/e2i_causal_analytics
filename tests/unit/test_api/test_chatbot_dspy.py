@@ -1533,3 +1533,601 @@ class TestSynthesisFeatureFlag:
         """Test that synthesis is enabled by default."""
         # Default should be True based on the code
         assert CHATBOT_DSPY_SYNTHESIS_ENABLED is True
+
+
+# =============================================================================
+# PHASE 7: UNIFIED TRAINING SIGNAL COLLECTION TESTS
+# =============================================================================
+
+
+class TestChatbotSessionSignal:
+    """Test cases for ChatbotSessionSignal dataclass."""
+
+    def test_session_signal_creation_defaults(self):
+        """Test creating a session signal with default values."""
+        from src.api.routes.chatbot_dspy import ChatbotSessionSignal
+
+        signal = ChatbotSessionSignal(
+            session_id="test-session-123",
+            thread_id="thread-456",
+            query="What is the TRx for Kisqali?",
+        )
+
+        assert signal.session_id == "test-session-123"
+        assert signal.thread_id == "thread-456"
+        assert signal.query == "What is the TRx for Kisqali?"
+        assert signal.user_id is None
+        assert signal.predicted_intent == ""
+        assert signal.intent_confidence == 0.0
+        assert signal.evidence_count == 0
+        assert signal.user_rating is None
+
+    def test_session_signal_full_creation(self):
+        """Test creating a fully populated session signal."""
+        from src.api.routes.chatbot_dspy import ChatbotSessionSignal
+
+        signal = ChatbotSessionSignal(
+            session_id="test-session-123",
+            thread_id="thread-456",
+            user_id="user-789",
+            query="What is the TRx for Kisqali in Northeast?",
+            brand_context="Kisqali",
+            region_context="Northeast",
+            predicted_intent="kpi_query",
+            intent_confidence=0.95,
+            intent_method="dspy",
+            intent_reasoning="Query contains TRx KPI",
+            predicted_agent="causal_impact",
+            secondary_agents=["gap_analyzer"],
+            routing_confidence=0.88,
+            routing_method="dspy",
+            rewritten_query="Kisqali TRx Northeast region metrics",
+            evidence_count=3,
+            avg_relevance_score=0.85,
+            rag_method="cognitive",
+            response_length=250,
+            synthesis_confidence="high",
+            citations_count=2,
+            synthesis_method="dspy",
+            follow_up_count=3,
+        )
+
+        assert signal.user_id == "user-789"
+        assert signal.brand_context == "Kisqali"
+        assert signal.predicted_intent == "kpi_query"
+        assert signal.intent_confidence == 0.95
+        assert signal.predicted_agent == "causal_impact"
+        assert len(signal.secondary_agents) == 1
+        assert signal.evidence_count == 3
+        assert signal.synthesis_confidence == "high"
+
+    def test_compute_accuracy_reward_high_confidence(self):
+        """Test accuracy reward with high confidence values."""
+        from src.api.routes.chatbot_dspy import ChatbotSessionSignal
+
+        signal = ChatbotSessionSignal(
+            session_id="test",
+            thread_id="thread",
+            query="test",
+            intent_confidence=0.95,
+            intent_method="dspy",
+            routing_confidence=0.90,
+            routing_method="dspy",
+            avg_relevance_score=0.88,
+            rag_method="cognitive",
+            synthesis_method="dspy",
+            synthesis_confidence="high",
+        )
+
+        reward = signal.compute_accuracy_reward()
+        assert 0.0 <= reward <= 1.0
+        # High confidence should yield reasonable reward (above baseline)
+        assert reward > 0.4
+
+    def test_compute_accuracy_reward_low_confidence(self):
+        """Test accuracy reward with low confidence values."""
+        from src.api.routes.chatbot_dspy import ChatbotSessionSignal
+
+        signal = ChatbotSessionSignal(
+            session_id="test",
+            thread_id="thread",
+            query="test",
+            intent_confidence=0.3,
+            intent_method="hardcoded",
+            routing_confidence=0.4,
+            routing_method="hardcoded",
+            avg_relevance_score=0.3,
+            rag_method="basic",
+            synthesis_method="hardcoded",
+            synthesis_confidence="low",
+        )
+
+        reward = signal.compute_accuracy_reward()
+        assert 0.0 <= reward <= 1.0
+        assert reward < 0.5  # Low confidence should yield low reward
+
+    def test_compute_efficiency_reward(self):
+        """Test efficiency reward computation."""
+        from src.api.routes.chatbot_dspy import ChatbotSessionSignal
+
+        # Fast response
+        fast_signal = ChatbotSessionSignal(
+            session_id="test",
+            thread_id="thread",
+            query="test",
+            total_duration_ms=500,
+            hop_count=1,
+        )
+
+        fast_reward = fast_signal.compute_efficiency_reward()
+        assert 0.0 <= fast_reward <= 1.0
+
+        # Slow response
+        slow_signal = ChatbotSessionSignal(
+            session_id="test",
+            thread_id="thread",
+            query="test",
+            total_duration_ms=15000,
+            hop_count=5,
+        )
+
+        slow_reward = slow_signal.compute_efficiency_reward()
+        assert 0.0 <= slow_reward <= 1.0
+        assert fast_reward > slow_reward  # Fast should be more efficient
+
+    def test_compute_satisfaction_reward_with_positive_feedback(self):
+        """Test satisfaction reward with positive user feedback."""
+        from src.api.routes.chatbot_dspy import ChatbotSessionSignal
+
+        signal = ChatbotSessionSignal(
+            session_id="test",
+            thread_id="thread",
+            query="test",
+            user_rating=5.0,
+            was_helpful=True,
+            user_followed_up=False,
+            had_hallucination=False,
+        )
+
+        reward = signal.compute_satisfaction_reward()
+        assert 0.0 <= reward <= 1.0
+        assert reward > 0.7  # Positive feedback should yield high reward
+
+    def test_compute_satisfaction_reward_with_negative_feedback(self):
+        """Test satisfaction reward with negative user feedback."""
+        from src.api.routes.chatbot_dspy import ChatbotSessionSignal
+
+        signal = ChatbotSessionSignal(
+            session_id="test",
+            thread_id="thread",
+            query="test",
+            user_rating=1.0,
+            was_helpful=False,
+            had_hallucination=True,
+        )
+
+        reward = signal.compute_satisfaction_reward()
+        assert 0.0 <= reward <= 1.0
+        assert reward < 0.5  # Negative feedback should yield low reward
+
+    def test_compute_unified_reward(self):
+        """Test unified reward computation returns all components."""
+        from src.api.routes.chatbot_dspy import ChatbotSessionSignal
+
+        signal = ChatbotSessionSignal(
+            session_id="test",
+            thread_id="thread",
+            query="test",
+            intent_confidence=0.9,
+            intent_method="dspy",
+            routing_confidence=0.85,
+            routing_method="dspy",
+            avg_relevance_score=0.8,
+            synthesis_confidence="high",
+            synthesis_method="dspy",
+            total_duration_ms=1000,
+            user_rating=4.5,
+            was_helpful=True,
+        )
+
+        rewards = signal.compute_unified_reward()
+
+        assert "accuracy" in rewards
+        assert "efficiency" in rewards
+        assert "satisfaction" in rewards
+        assert "overall" in rewards
+
+        for key, value in rewards.items():
+            assert 0.0 <= value <= 1.0
+
+        # Overall should be weighted average
+        assert rewards["overall"] > 0
+
+    def test_to_dict_serialization(self):
+        """Test that session signal can be serialized to dict."""
+        from src.api.routes.chatbot_dspy import ChatbotSessionSignal
+
+        signal = ChatbotSessionSignal(
+            session_id="test-session",
+            thread_id="thread-123",
+            query="What is the TRx?",
+            predicted_intent="kpi_query",
+            intent_confidence=0.9,
+        )
+
+        result = signal.to_dict()
+
+        assert isinstance(result, dict)
+        assert result["session_id"] == "test-session"
+        assert result["thread_id"] == "thread-123"
+        assert result["query"] == "What is the TRx?"
+        assert result["predicted_intent"] == "kpi_query"
+        # Rewards are flattened into top level of dict
+        assert "accuracy" in result
+        assert "efficiency" in result
+        assert "satisfaction" in result
+        assert "overall" in result
+        assert "timestamp" in result
+
+
+class TestChatbotSignalCollector:
+    """Test cases for ChatbotSignalCollector class."""
+
+    def test_collector_creation(self):
+        """Test creating a signal collector."""
+        from src.api.routes.chatbot_dspy import ChatbotSignalCollector
+
+        collector = ChatbotSignalCollector(buffer_size=100)
+        assert collector is not None
+
+    def test_start_session(self):
+        """Test starting a new session."""
+        from src.api.routes.chatbot_dspy import ChatbotSignalCollector
+
+        collector = ChatbotSignalCollector(buffer_size=100)
+        signal = collector.start_session(
+            session_id="session-123",
+            thread_id="thread-456",
+            query="What is the TRx for Kisqali?",
+            user_id="user-789",
+            brand_context="Kisqali",
+            region_context="Northeast",
+        )
+
+        assert signal is not None
+        assert signal.session_id == "session-123"
+        assert signal.thread_id == "thread-456"
+        assert signal.query == "What is the TRx for Kisqali?"
+        assert signal.user_id == "user-789"
+        assert signal.brand_context == "Kisqali"
+
+    def test_get_session(self):
+        """Test retrieving an active session."""
+        from src.api.routes.chatbot_dspy import ChatbotSignalCollector
+
+        collector = ChatbotSignalCollector()
+        collector.start_session(
+            session_id="session-123",
+            thread_id="thread-456",
+            query="Test query",
+        )
+
+        session = collector.get_session("session-123")
+        assert session is not None
+        assert session.session_id == "session-123"
+
+        # Non-existent session
+        missing = collector.get_session("non-existent")
+        assert missing is None
+
+    def test_update_intent(self):
+        """Test updating intent classification signal."""
+        from src.api.routes.chatbot_dspy import ChatbotSignalCollector
+
+        collector = ChatbotSignalCollector()
+        collector.start_session(
+            session_id="session-123",
+            thread_id="thread-456",
+            query="Test query",
+        )
+
+        collector.update_intent(
+            session_id="session-123",
+            intent="kpi_query",
+            confidence=0.95,
+            method="dspy",
+            reasoning="Contains KPI reference",
+        )
+
+        session = collector.get_session("session-123")
+        assert session.predicted_intent == "kpi_query"
+        assert session.intent_confidence == 0.95
+        assert session.intent_method == "dspy"
+        assert session.intent_reasoning == "Contains KPI reference"
+
+    def test_update_routing(self):
+        """Test updating routing signal."""
+        from src.api.routes.chatbot_dspy import ChatbotSignalCollector
+
+        collector = ChatbotSignalCollector()
+        collector.start_session(
+            session_id="session-123",
+            thread_id="thread-456",
+            query="Test query",
+        )
+
+        collector.update_routing(
+            session_id="session-123",
+            agent="causal_impact",
+            secondary_agents=["gap_analyzer", "explainer"],
+            confidence=0.88,
+            method="dspy",
+            rationale="Query requires causal analysis",
+        )
+
+        session = collector.get_session("session-123")
+        assert session.predicted_agent == "causal_impact"
+        assert "gap_analyzer" in session.secondary_agents
+        assert session.routing_confidence == 0.88
+
+    def test_update_rag(self):
+        """Test updating RAG signal."""
+        from src.api.routes.chatbot_dspy import ChatbotSignalCollector
+
+        collector = ChatbotSignalCollector()
+        collector.start_session(
+            session_id="session-123",
+            thread_id="thread-456",
+            query="Test query",
+        )
+
+        collector.update_rag(
+            session_id="session-123",
+            rewritten_query="optimized query",
+            keywords=["TRx", "Kisqali"],
+            entities=["Kisqali", "Northeast"],
+            evidence_count=5,
+            hop_count=2,
+            avg_relevance=0.85,
+            method="cognitive",
+        )
+
+        session = collector.get_session("session-123")
+        assert session.rewritten_query == "optimized query"
+        assert "TRx" in session.search_keywords
+        assert session.evidence_count == 5
+        assert session.rag_method == "cognitive"
+
+    def test_update_synthesis(self):
+        """Test updating synthesis signal."""
+        from src.api.routes.chatbot_dspy import ChatbotSignalCollector
+
+        collector = ChatbotSignalCollector()
+        collector.start_session(
+            session_id="session-123",
+            thread_id="thread-456",
+            query="Test query",
+        )
+
+        collector.update_synthesis(
+            session_id="session-123",
+            response_length=350,
+            confidence="high",
+            citations_count=3,
+            method="dspy",
+            follow_up_count=2,
+        )
+
+        session = collector.get_session("session-123")
+        assert session.response_length == 350
+        assert session.synthesis_confidence == "high"
+        assert session.citations_count == 3
+
+    def test_update_feedback(self):
+        """Test updating user feedback."""
+        from src.api.routes.chatbot_dspy import ChatbotSignalCollector
+
+        collector = ChatbotSignalCollector()
+        collector.start_session(
+            session_id="session-123",
+            thread_id="thread-456",
+            query="Test query",
+        )
+
+        collector.update_feedback(
+            session_id="session-123",
+            user_rating=4.5,
+            was_helpful=True,
+            user_followed_up=True,
+            had_hallucination=False,
+        )
+
+        session = collector.get_session("session-123")
+        assert session.user_rating == 4.5
+        assert session.was_helpful is True
+        assert session.user_followed_up is True
+        assert session.had_hallucination is False
+
+    def test_finalize_session(self):
+        """Test finalizing a session moves it to completed signals."""
+        from src.api.routes.chatbot_dspy import ChatbotSignalCollector
+
+        collector = ChatbotSignalCollector()
+        collector.start_session(
+            session_id="session-123",
+            thread_id="thread-456",
+            query="Test query",
+        )
+
+        collector.update_intent(
+            session_id="session-123",
+            intent="kpi_query",
+            confidence=0.9,
+            method="dspy",
+        )
+
+        finalized = collector.finalize_session(
+            session_id="session-123",
+            total_duration_ms=1500.0,
+        )
+
+        assert finalized is not None
+        assert finalized.total_duration_ms == 1500.0
+
+        # Session should no longer be in active sessions
+        assert collector.get_session("session-123") is None
+
+        # Should be in completed signals
+        signals = collector.get_signals(limit=10)
+        assert len(signals) >= 1
+
+    def test_get_high_quality_signals(self):
+        """Test retrieving high quality signals."""
+        from src.api.routes.chatbot_dspy import ChatbotSignalCollector
+
+        collector = ChatbotSignalCollector()
+
+        # Create a high quality session
+        collector.start_session(
+            session_id="high-quality",
+            thread_id="thread-1",
+            query="What is TRx?",
+        )
+        collector.update_intent(
+            session_id="high-quality",
+            intent="kpi_query",
+            confidence=0.95,
+            method="dspy",
+        )
+        collector.update_synthesis(
+            session_id="high-quality",
+            response_length=300,
+            confidence="high",
+            citations_count=3,
+            method="dspy",
+            follow_up_count=2,
+        )
+        collector.update_feedback(
+            session_id="high-quality",
+            user_rating=5.0,
+            was_helpful=True,
+        )
+        collector.finalize_session(session_id="high-quality", total_duration_ms=1000)
+
+        # Create a low quality session
+        collector.start_session(
+            session_id="low-quality",
+            thread_id="thread-2",
+            query="hi",
+        )
+        collector.update_intent(
+            session_id="low-quality",
+            intent="greeting",
+            confidence=0.3,
+            method="hardcoded",
+        )
+        collector.finalize_session(session_id="low-quality", total_duration_ms=500)
+
+        # Get high quality signals
+        high_quality = collector.get_high_quality_signals(
+            min_overall_reward=0.6,
+            limit=10,
+        )
+
+        # Should have at least the high quality signal
+        assert len(high_quality) >= 1
+
+    def test_get_signals_for_training(self):
+        """Test retrieving signals formatted for training."""
+        from src.api.routes.chatbot_dspy import ChatbotSignalCollector
+
+        collector = ChatbotSignalCollector()
+
+        collector.start_session(
+            session_id="session-1",
+            thread_id="thread-1",
+            query="What is TRx for Kisqali?",
+        )
+        collector.update_intent(
+            session_id="session-1",
+            intent="kpi_query",
+            confidence=0.9,
+            method="dspy",
+            reasoning="Contains TRx KPI",
+        )
+        collector.finalize_session(session_id="session-1")
+
+        # Get signals for intent phase
+        intent_signals = collector.get_signals_for_training(phase="intent", limit=10)
+        assert len(intent_signals) >= 1
+        assert "query" in intent_signals[0]
+        # The key is "target_intent" in the training format
+        assert "target_intent" in intent_signals[0]
+        assert "reward" in intent_signals[0]
+
+    def test_get_statistics(self):
+        """Test getting collector statistics."""
+        from src.api.routes.chatbot_dspy import ChatbotSignalCollector
+
+        collector = ChatbotSignalCollector()
+
+        collector.start_session(
+            session_id="session-1",
+            thread_id="thread-1",
+            query="Test query 1",
+        )
+        collector.finalize_session(session_id="session-1")
+
+        collector.start_session(
+            session_id="session-2",
+            thread_id="thread-2",
+            query="Test query 2",
+        )
+        # Leave session-2 active
+
+        stats = collector.get_statistics()
+
+        assert "total_signals" in stats
+        # The key is "pending_sessions" in the stats
+        assert "pending_sessions" in stats
+        assert stats["total_signals"] >= 1
+        assert stats["pending_sessions"] >= 1
+
+    def test_buffer_size_limit(self):
+        """Test that collector respects buffer size limit."""
+        from src.api.routes.chatbot_dspy import ChatbotSignalCollector
+
+        collector = ChatbotSignalCollector(buffer_size=3)
+
+        # Create more signals than buffer size
+        for i in range(5):
+            collector.start_session(
+                session_id=f"session-{i}",
+                thread_id=f"thread-{i}",
+                query=f"Query {i}",
+            )
+            collector.finalize_session(session_id=f"session-{i}")
+
+        # Should only keep buffer_size signals
+        signals = collector.get_signals(limit=100)
+        assert len(signals) <= 3
+
+
+class TestChatbotSignalCollectorSingleton:
+    """Test cases for the global signal collector singleton."""
+
+    def test_get_chatbot_signal_collector_returns_instance(self):
+        """Test that get_chatbot_signal_collector returns a collector."""
+        from src.api.routes.chatbot_dspy import get_chatbot_signal_collector
+
+        collector = get_chatbot_signal_collector()
+        assert collector is not None
+
+    def test_get_chatbot_signal_collector_returns_same_instance(self):
+        """Test that get_chatbot_signal_collector returns singleton."""
+        from src.api.routes.chatbot_dspy import get_chatbot_signal_collector
+
+        collector1 = get_chatbot_signal_collector()
+        collector2 = get_chatbot_signal_collector()
+
+        assert collector1 is collector2
