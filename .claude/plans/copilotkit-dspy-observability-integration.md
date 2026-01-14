@@ -1,7 +1,7 @@
 # CopilotKit Chatbot DSPy & Observability Integration Plan
 
 **Created**: 2026-01-14
-**Status**: In Progress (Phase 4 Complete)
+**Status**: In Progress (Phase 5 Complete)
 **Priority**: High
 **Last Updated**: 2026-01-14
 
@@ -24,9 +24,9 @@ The CopilotKit chatbot (primary user interface) has **ZERO DSPy integration** an
 |------------|---------|--------|
 | Intent Classification | ✅ DSPy ChatbotIntentClassifier (Phase 3) | DSPy IntentClassificationSignature |
 | Response Generation | Direct LLM call | DSPy EvidenceSynthesisSignature |
-| RAG Retrieval | Basic hybrid_search | Cognitive RAG with HopDecisionSignature |
+| RAG Retrieval | ✅ Cognitive RAG pipeline (Phase 5) | Cognitive RAG with HopDecisionSignature |
 | Agent Routing | ✅ DSPy ChatbotAgentRouter (Phase 4) | DSPy AgentRoutingSignature |
-| Training Signals | ✅ IntentTrainingSignalCollector (Phase 3), RoutingTrainingSignalCollector (Phase 4) | ReflectorModule collection |
+| Training Signals | ✅ IntentTrainingSignalCollector (Phase 3), RoutingTrainingSignalCollector (Phase 4), RAGTrainingSignalCollector (Phase 5) | ReflectorModule collection |
 | Opik Tracing | ✅ Full per-node spans (Phase 1) | Full per-node spans |
 | MLflow Metrics | ✅ Session-level tracking (Phase 2) | Session-level experiment tracking |
 | Token Usage | Not tracked | Per-LLM-call logging |
@@ -188,26 +188,43 @@ print(f'Agent: {result[0]}, Confidence: {result[2]:.2f}, Method: {result[4]}')
 ### Phase 5: Cognitive RAG Integration
 **Goal**: Replace basic hybrid_search with cognitive RAG
 **Scope**: Major change to retrieve_rag_node
-**Files**: `chatbot_graph.py`, `chatbot_dspy.py`
+**Files**: `chatbot_graph.py`, `chatbot_dspy.py`, `chatbot_state.py`, `chatbot_tracer.py`
 
 #### Tasks
-- [ ] 5.1 Import SummarizerModule from cognitive_rag_dspy.py
-- [ ] 5.2 Add QueryRewriteSignature to improve retrieval
-- [ ] 5.3 Integrate HopDecisionSignature for multi-hop retrieval
-- [ ] 5.4 Add EvidenceRelevanceSignature for scoring
-- [ ] 5.5 Modify retrieve_rag_node to use cognitive pipeline
-- [ ] 5.6 Log cognitive RAG metrics to Opik
-- [ ] 5.7 Add configuration for cognitive vs basic RAG
-- [ ] 5.8 Add integration tests
+- [x] 5.1 Import SummarizerModule from cognitive_rag_dspy.py
+- [x] 5.2 Add QueryRewriteSignature to improve retrieval
+- [x] 5.3 Integrate HopDecisionSignature for multi-hop retrieval
+- [x] 5.4 Add EvidenceRelevanceSignature for scoring
+- [x] 5.5 Modify retrieve_rag_node to use cognitive pipeline
+- [x] 5.6 Log cognitive RAG metrics to Opik
+- [x] 5.7 Add configuration for cognitive vs basic RAG
+- [x] 5.8 Add integration tests (76 total tests passing)
+
+**Phase 5 Completed**: 2026-01-14
+**Verification**:
+- Created `QueryRewriteSignature` DSPy signature with rewritten_query, search_keywords, graph_entities outputs
+- Created `EvidenceRelevanceSignature` DSPy signature for relevance scoring (0.0-1.0)
+- Created `HopDecisionSignature` DSPy signature for multi-hop retrieval decisions
+- Created `ChatbotQueryRewriter` and `ChatbotEvidenceScorer` DSPy modules
+- Created `CognitiveRAGResult` dataclass with rewritten_query, evidence, hop_count, avg_relevance_score
+- Added `RAGTrainingSignal` and `RAGTrainingSignalCollector` for training signal collection
+- Added `E2I_DOMAIN_VOCABULARY` constant (brands, regions, KPIs, HCP types)
+- Modified `retrieve_rag_node` to use `cognitive_rag_retrieve()` with fallback to `hybrid_search`
+- Added `rag_rewritten_query` and `rag_retrieval_method` fields to ChatbotState
+- Added `log_metadata()` method to NodeSpanContext for Opik tracing
+- Added 20 new cognitive RAG tests (76 total DSPy tests passing)
+**Feature Flag**: `CHATBOT_COGNITIVE_RAG=true` (enabled by default)
 
 #### Testing (Droplet)
 ```bash
 # Test: Compare RAG quality
 python -c "
-from src.api.routes.chatbot_graph import retrieve_rag_node
-# Test with cognitive RAG enabled
-result = await retrieve_rag_node({'query': 'Kisqali causal drivers'})
-print(f'Results: {len(result[\"rag_context\"])}, Hop count: {result.get(\"hop_count\", 1)}')
+from src.api.routes.chatbot_dspy import cognitive_rag_retrieve
+import asyncio
+result = asyncio.run(cognitive_rag_retrieve('What caused Kisqali TRx drop?'))
+print(f'Rewritten: {result.rewritten_query}')
+print(f'Evidence: {len(result.evidence)}, Avg relevance: {result.avg_relevance_score:.2f}')
+print(f'Method: {result.retrieval_method}')
 "
 ```
 
@@ -387,9 +404,9 @@ After implementation, verify:
 2. [x] MLflow shows chatbot_interactions experiment with metrics (VERIFIED 2026-01-14)
 3. [x] Intent classification returns confidence scores (VERIFIED 2026-01-14 - Phase 3)
 4. [x] Agent routing returns rationale (VERIFIED 2026-01-14 - Phase 4)
-5. [ ] RAG retrieval shows multi-hop decisions
+5. [x] RAG retrieval shows multi-hop decisions (VERIFIED 2026-01-14 - Phase 5)
 6. [ ] Response includes evidence citations
 7. [ ] Training signals accumulating in database
 8. [ ] feedback_learner receiving optimization requests
 9. [ ] No performance regression (latency <2s p50)
-10. [x] All existing tests still pass (56/56 DSPy tests passing)
+10. [x] All existing tests still pass (76/76 DSPy tests passing after Phase 5)

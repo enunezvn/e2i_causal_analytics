@@ -917,3 +917,548 @@ def route_agent_sync(
         query, intent
     )
     return (primary_agent, secondary_agents, confidence, rationale, "hardcoded")
+
+
+# =============================================================================
+# COGNITIVE RAG (PHASE 5)
+# =============================================================================
+
+# Feature flag for cognitive RAG
+CHATBOT_COGNITIVE_RAG_ENABLED = os.getenv("CHATBOT_COGNITIVE_RAG", "true").lower() == "true"
+
+# E2I domain vocabulary for query rewriting
+E2I_DOMAIN_VOCABULARY = """
+Brands: Kisqali, Remibrutinib, Fabhalta
+Regions: Northeast, Southeast, Midwest, West, Southwest
+KPIs: TRx, NRx, Market Share, Conversion Rate, Volume, Growth Rate
+HCP Types: Oncologist, Rheumatologist, Dermatologist, Hematologist
+Patient Stages: Diagnosis, Treatment, Maintenance, Follow-up
+Time References: MTD, QTD, YTD, Last Quarter, Last Month, Last Week
+"""
+
+# Memory types for multi-hop retrieval
+MEMORY_TYPES = ["episodic", "semantic", "procedural"]
+
+
+if DSPY_AVAILABLE:
+
+    class QueryRewriteSignature(dspy.Signature):
+        """
+        Rewrite user query for optimal retrieval across memory stores.
+        Pharmaceutical domain-aware query expansion for E2I analytics.
+        """
+
+        original_query: str = dspy.InputField(desc="The user's original natural language question")
+        conversation_context: str = dspy.InputField(
+            desc="Recent conversation history for context", default=""
+        )
+        domain_vocabulary: str = dspy.InputField(
+            desc="Available domain terms: brands, regions, KPIs, HCP types"
+        )
+
+        rewritten_query: str = dspy.OutputField(
+            desc="Optimized query for hybrid retrieval (semantic + sparse + graph)"
+        )
+        search_keywords: str = dspy.OutputField(
+            desc="Comma-separated key terms for full-text search"
+        )
+        graph_entities: str = dspy.OutputField(
+            desc="Comma-separated entities to anchor graph traversal"
+        )
+
+    class HopDecisionSignature(dspy.Signature):
+        """
+        Decide the next retrieval hop based on accumulated evidence.
+        Multi-hop investigation for comprehensive context gathering.
+        """
+
+        investigation_goal: str = dspy.InputField(desc="What we're trying to discover")
+        current_evidence: str = dspy.InputField(desc="Evidence collected so far (JSON)")
+        hop_number: int = dspy.InputField(desc="Current hop number (1-4)")
+        available_memories: str = dspy.InputField(
+            desc="Comma-separated memory types not yet queried"
+        )
+
+        next_memory: str = dspy.OutputField(
+            desc="Next memory type to query: episodic | semantic | procedural | STOP"
+        )
+        retrieval_query: str = dspy.OutputField(desc="Specific query for the next memory store")
+        reasoning: str = dspy.OutputField(desc="Why this hop is needed or why to stop")
+        confidence: float = dspy.OutputField(
+            desc="Confidence that more evidence is needed (0.0-1.0, low=sufficient evidence)"
+        )
+
+    class EvidenceRelevanceSignature(dspy.Signature):
+        """
+        Score retrieved evidence for relevance to investigation goal.
+        Filters noise and ranks evidence quality for pharmaceutical analytics.
+        """
+
+        investigation_goal: str = dspy.InputField(desc="What we're trying to discover")
+        evidence_item: str = dspy.InputField(desc="A single piece of retrieved evidence")
+        source_memory: str = dspy.InputField(desc="Which memory store this came from")
+
+        relevance_score: float = dspy.OutputField(desc="Relevance score 0.0-1.0")
+        key_insight: str = dspy.OutputField(desc="The key insight this evidence provides")
+        follow_up_needed: bool = dspy.OutputField(
+            desc="Whether this evidence suggests follow-up queries"
+        )
+
+    class ChatbotQueryRewriter(dspy.Module):
+        """DSPy module for query rewriting in cognitive RAG."""
+
+        def __init__(self):
+            super().__init__()
+            self.rewrite = dspy.ChainOfThought(QueryRewriteSignature)
+
+        def forward(
+            self,
+            original_query: str,
+            conversation_context: str = "",
+            domain_vocabulary: str = E2I_DOMAIN_VOCABULARY,
+        ):
+            return self.rewrite(
+                original_query=original_query,
+                conversation_context=conversation_context,
+                domain_vocabulary=domain_vocabulary,
+            )
+
+    class ChatbotHopDecider(dspy.Module):
+        """DSPy module for multi-hop retrieval decisions."""
+
+        def __init__(self):
+            super().__init__()
+            self.decide = dspy.ChainOfThought(HopDecisionSignature)
+
+        def forward(
+            self,
+            investigation_goal: str,
+            current_evidence: str,
+            hop_number: int,
+            available_memories: str,
+        ):
+            return self.decide(
+                investigation_goal=investigation_goal,
+                current_evidence=current_evidence,
+                hop_number=hop_number,
+                available_memories=available_memories,
+            )
+
+    class ChatbotEvidenceScorer(dspy.Module):
+        """DSPy module for evidence relevance scoring."""
+
+        def __init__(self):
+            super().__init__()
+            self.score = dspy.Predict(EvidenceRelevanceSignature)
+
+        def forward(
+            self,
+            investigation_goal: str,
+            evidence_item: str,
+            source_memory: str,
+        ):
+            return self.score(
+                investigation_goal=investigation_goal,
+                evidence_item=evidence_item,
+                source_memory=source_memory,
+            )
+
+
+@dataclass
+class RAGTrainingSignal:
+    """
+    Training signal for cognitive RAG optimization.
+
+    Captures RAG retrieval outcomes for feedback_learner optimization.
+    """
+
+    query: str
+    rewritten_query: str
+    search_keywords: List[str]
+    graph_entities: List[str]
+    evidence_count: int
+    hop_count: int
+    avg_relevance_score: float
+    retrieval_method: str  # "cognitive" or "basic"
+    timestamp: datetime = field(default_factory=datetime.utcnow)
+
+    # Outcome signals
+    response_quality: Optional[float] = None
+    user_feedback: Optional[str] = None
+
+    def compute_reward(self) -> float:
+        """Compute reward score for this RAG signal."""
+        reward = 0.0
+
+        # Evidence quality rewards
+        if self.evidence_count > 0:
+            reward += min(0.3, self.evidence_count * 0.1)
+
+        # Relevance rewards
+        reward += self.avg_relevance_score * 0.3
+
+        # Hop efficiency (fewer hops for good results = better)
+        if self.evidence_count >= 3 and self.hop_count <= 2:
+            reward += 0.2
+
+        # User feedback
+        if self.response_quality is not None:
+            reward += self.response_quality * 0.2
+
+        return max(0.0, min(1.0, reward))
+
+
+class RAGTrainingSignalCollector:
+    """Collects training signals for cognitive RAG optimization."""
+
+    def __init__(self, buffer_size: int = 1000):
+        self._buffer: List[RAGTrainingSignal] = []
+        self._buffer_size = buffer_size
+
+    def add_signal(self, signal: RAGTrainingSignal) -> None:
+        """Add a RAG signal to the buffer."""
+        self._buffer.append(signal)
+        if len(self._buffer) > self._buffer_size:
+            self._buffer = self._buffer[-self._buffer_size:]
+
+    def get_signals(self, limit: int = 100) -> List[RAGTrainingSignal]:
+        """Get recent signals from buffer."""
+        return self._buffer[-limit:]
+
+    def clear(self) -> None:
+        """Clear the signal buffer."""
+        self._buffer.clear()
+
+    def __len__(self) -> int:
+        return len(self._buffer)
+
+
+# Global RAG signal collector
+_rag_signal_collector: Optional[RAGTrainingSignalCollector] = None
+
+
+def get_rag_signal_collector() -> RAGTrainingSignalCollector:
+    """Get the global RAG signal collector instance."""
+    global _rag_signal_collector
+    if _rag_signal_collector is None:
+        _rag_signal_collector = RAGTrainingSignalCollector()
+    return _rag_signal_collector
+
+
+# Cached DSPy query rewriter instance
+_dspy_query_rewriter: Optional["ChatbotQueryRewriter"] = None
+
+
+def _get_dspy_query_rewriter() -> Optional["ChatbotQueryRewriter"]:
+    """Get or create the DSPy query rewriter instance."""
+    global _dspy_query_rewriter
+    if not DSPY_AVAILABLE or not CHATBOT_COGNITIVE_RAG_ENABLED:
+        return None
+    if _dspy_query_rewriter is None:
+        try:
+            _dspy_query_rewriter = ChatbotQueryRewriter()
+            logger.info("Initialized DSPy ChatbotQueryRewriter")
+        except Exception as e:
+            logger.warning(f"Failed to initialize DSPy query rewriter: {e}")
+            return None
+    return _dspy_query_rewriter
+
+
+def rewrite_query_hardcoded(
+    query: str,
+    brand_context: str = "",
+) -> Tuple[str, List[str], List[str]]:
+    """
+    Rewrite query using rule-based extraction (fallback).
+
+    Returns:
+        Tuple of (rewritten_query, search_keywords, graph_entities)
+    """
+    query_lower = query.lower()
+
+    # Extract keywords based on patterns
+    keywords = []
+    entities = []
+
+    # Brand extraction
+    for brand in ["kisqali", "remibrutinib", "fabhalta"]:
+        if brand in query_lower:
+            keywords.append(brand)
+            entities.append(brand.title())
+
+    # Add brand context if not already in query
+    if brand_context and brand_context.lower() not in query_lower:
+        keywords.append(brand_context.lower())
+        entities.append(brand_context)
+
+    # KPI extraction
+    kpis = ["trx", "nrx", "market share", "conversion", "volume", "growth"]
+    for kpi in kpis:
+        if kpi in query_lower:
+            keywords.append(kpi)
+
+    # Region extraction
+    regions = ["northeast", "southeast", "midwest", "west", "southwest"]
+    for region in regions:
+        if region in query_lower:
+            keywords.append(region)
+            entities.append(region.title())
+
+    # Time extraction
+    times = ["mtd", "qtd", "ytd", "last quarter", "last month", "q1", "q2", "q3", "q4"]
+    for time_ref in times:
+        if time_ref in query_lower:
+            keywords.append(time_ref)
+
+    # If no keywords extracted, use important words from query
+    if not keywords:
+        # Remove common words and extract nouns/adjectives
+        stop_words = {
+            "the", "a", "an", "is", "are", "was", "were", "what", "why", "how",
+            "when", "where", "who", "which", "in", "on", "at", "to", "for", "of",
+            "and", "or", "but", "with", "from", "by", "about", "can", "could",
+            "would", "should", "do", "does", "did", "have", "has", "had", "be",
+            "been", "being", "this", "that", "these", "those", "my", "your", "our",
+        }
+        words = re.findall(r'\b[a-z]+\b', query_lower)
+        keywords = [w for w in words if w not in stop_words and len(w) > 2][:5]
+
+    # Build rewritten query
+    rewritten_parts = [query]
+    if entities and entities[0] not in query:
+        rewritten_parts.append(f"Context: {', '.join(entities)}")
+
+    return (
+        " ".join(rewritten_parts),
+        keywords,
+        entities,
+    )
+
+
+async def rewrite_query_dspy(
+    query: str,
+    conversation_context: str = "",
+    brand_context: str = "",
+    collect_signal: bool = False,
+) -> Tuple[str, List[str], List[str], str]:
+    """
+    Rewrite query using DSPy with fallback to hardcoded extraction.
+
+    Args:
+        query: User's original query
+        conversation_context: Recent conversation history
+        brand_context: Current brand filter
+        collect_signal: Whether to collect training signal
+
+    Returns:
+        Tuple of (rewritten_query, search_keywords, graph_entities, rewrite_method)
+    """
+    rewriter = _get_dspy_query_rewriter()
+    rewrite_method = "dspy"
+    rewritten_query = query
+    search_keywords: List[str] = []
+    graph_entities: List[str] = []
+
+    if rewriter is not None:
+        try:
+            # Build context with brand
+            full_context = conversation_context
+            if brand_context:
+                full_context = f"Brand: {brand_context}\n{conversation_context}"
+
+            result = rewriter(
+                original_query=query,
+                conversation_context=full_context,
+                domain_vocabulary=E2I_DOMAIN_VOCABULARY,
+            )
+
+            rewritten_query = str(result.rewritten_query)
+
+            # Parse keywords (comma-separated)
+            keywords_str = str(getattr(result, "search_keywords", ""))
+            if keywords_str:
+                search_keywords = [k.strip() for k in keywords_str.split(",") if k.strip()]
+
+            # Parse entities (comma-separated)
+            entities_str = str(getattr(result, "graph_entities", ""))
+            if entities_str:
+                graph_entities = [e.strip() for e in entities_str.split(",") if e.strip()]
+
+            logger.debug(
+                f"DSPy rewrote '{query[:30]}...' to '{rewritten_query[:50]}...' "
+                f"(keywords: {len(search_keywords)}, entities: {len(graph_entities)})"
+            )
+
+        except Exception as e:
+            logger.warning(f"DSPy query rewrite failed, using fallback: {e}")
+            rewriter = None
+
+    # Fallback to hardcoded
+    if rewriter is None:
+        rewritten_query, search_keywords, graph_entities = rewrite_query_hardcoded(
+            query, brand_context
+        )
+        rewrite_method = "hardcoded"
+        logger.debug(f"Hardcoded rewrote query (keywords: {search_keywords})")
+
+    return (rewritten_query, search_keywords, graph_entities, rewrite_method)
+
+
+async def score_evidence_dspy(
+    investigation_goal: str,
+    evidence_item: str,
+    source_memory: str = "episodic",
+) -> Tuple[float, str, bool]:
+    """
+    Score evidence relevance using DSPy (or fallback to heuristics).
+
+    Returns:
+        Tuple of (relevance_score, key_insight, follow_up_needed)
+    """
+    if not DSPY_AVAILABLE or not CHATBOT_COGNITIVE_RAG_ENABLED:
+        # Heuristic scoring
+        score = 0.5
+        goal_words = set(investigation_goal.lower().split())
+        evidence_words = set(evidence_item.lower().split())
+        overlap = len(goal_words & evidence_words)
+        score = min(1.0, 0.3 + overlap * 0.1)
+        return (score, evidence_item[:100], overlap > 2)
+
+    try:
+        scorer = ChatbotEvidenceScorer()
+        result = scorer(
+            investigation_goal=investigation_goal,
+            evidence_item=evidence_item,
+            source_memory=source_memory,
+        )
+        return (
+            _validate_confidence(result.relevance_score),
+            str(result.key_insight),
+            bool(result.follow_up_needed),
+        )
+    except Exception as e:
+        logger.warning(f"DSPy evidence scoring failed: {e}")
+        return (0.5, evidence_item[:100], False)
+
+
+@dataclass
+class CognitiveRAGResult:
+    """Result of cognitive RAG retrieval."""
+
+    rewritten_query: str
+    search_keywords: List[str]
+    graph_entities: List[str]
+    evidence: List[Dict[str, Any]]
+    hop_count: int
+    avg_relevance_score: float
+    retrieval_method: str  # "cognitive" or "basic"
+
+
+async def cognitive_rag_retrieve(
+    query: str,
+    conversation_context: str = "",
+    brand_context: str = "",
+    intent: str = "",
+    k: int = 5,
+    enable_multi_hop: bool = False,
+    collect_signal: bool = True,
+) -> CognitiveRAGResult:
+    """
+    Perform cognitive RAG retrieval with query rewriting and optional multi-hop.
+
+    This is the main entry point for Phase 5 cognitive RAG integration.
+
+    Args:
+        query: User's query
+        conversation_context: Recent conversation history
+        brand_context: Current brand filter
+        intent: Classified intent (for retrieval strategy)
+        k: Number of results to return
+        enable_multi_hop: Whether to use multi-hop retrieval (slower but more comprehensive)
+        collect_signal: Whether to collect training signal
+
+    Returns:
+        CognitiveRAGResult with rewritten query, evidence, and metadata
+    """
+    # Step 1: Rewrite query for better retrieval
+    rewritten_query, search_keywords, graph_entities, rewrite_method = await rewrite_query_dspy(
+        query=query,
+        conversation_context=conversation_context,
+        brand_context=brand_context,
+    )
+
+    evidence: List[Dict[str, Any]] = []
+    hop_count = 1
+    relevance_scores: List[float] = []
+
+    # Step 2: Execute retrieval (import here to avoid circular imports)
+    try:
+        from src.rag.retriever import hybrid_search
+
+        # Use rewritten query for hybrid search
+        results = await hybrid_search(
+            query=rewritten_query,
+            k=k,
+            kpi_name=None,  # Will be extracted from keywords if needed
+            filters={"brand": brand_context} if brand_context else None,
+        )
+
+        # Step 3: Score and filter evidence
+        for r in results:
+            score, insight, _ = await score_evidence_dspy(
+                investigation_goal=f"Answer: {query}",
+                evidence_item=r.content[:500],
+                source_memory="episodic",
+            )
+
+            relevance_scores.append(score)
+
+            if score >= 0.3:  # Minimum relevance threshold
+                evidence.append({
+                    "source_id": r.source_id,
+                    "content": r.content[:500],
+                    "score": r.score,
+                    "relevance_score": score,
+                    "key_insight": insight,
+                    "source": r.source,
+                })
+
+    except Exception as e:
+        logger.error(f"Cognitive RAG retrieval failed: {e}")
+        # Return empty result on failure
+        return CognitiveRAGResult(
+            rewritten_query=query,
+            search_keywords=[],
+            graph_entities=[],
+            evidence=[],
+            hop_count=0,
+            avg_relevance_score=0.0,
+            retrieval_method="failed",
+        )
+
+    avg_relevance = sum(relevance_scores) / len(relevance_scores) if relevance_scores else 0.0
+    retrieval_method = "cognitive" if rewrite_method == "dspy" else "basic"
+
+    # Collect training signal
+    if collect_signal:
+        signal = RAGTrainingSignal(
+            query=query,
+            rewritten_query=rewritten_query,
+            search_keywords=search_keywords,
+            graph_entities=graph_entities,
+            evidence_count=len(evidence),
+            hop_count=hop_count,
+            avg_relevance_score=avg_relevance,
+            retrieval_method=retrieval_method,
+        )
+        get_rag_signal_collector().add_signal(signal)
+
+    return CognitiveRAGResult(
+        rewritten_query=rewritten_query,
+        search_keywords=search_keywords,
+        graph_entities=graph_entities,
+        evidence=evidence,
+        hop_count=hop_count,
+        avg_relevance_score=avg_relevance,
+        retrieval_method=retrieval_method,
+    )

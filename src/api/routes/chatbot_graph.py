@@ -50,6 +50,8 @@ from src.api.routes.chatbot_tracer import (
 from src.api.routes.chatbot_dspy import (
     classify_intent_dspy,
     CHATBOT_DSPY_INTENT_ENABLED,
+    cognitive_rag_retrieve,
+    CHATBOT_COGNITIVE_RAG_ENABLED,
 )
 from src.mlops.mlflow_connector import MLflowConnector
 
@@ -439,15 +441,33 @@ async def load_context_node(state: ChatbotState) -> Dict[str, Any]:
 
 async def retrieve_rag_node(state: ChatbotState) -> Dict[str, Any]:
     """
-    Retrieve relevant context using hybrid RAG.
+    Retrieve relevant context using cognitive RAG with DSPy query rewriting.
 
-    Performs semantic + sparse + graph retrieval.
+    Phase 5 DSPy integration: Uses cognitive RAG pipeline with:
+    - Query rewriting for E2I domain optimization
+    - Evidence relevance scoring
+    - Training signal collection for optimization
+
+    Falls back to basic hybrid_search if cognitive RAG is disabled or fails.
     """
     query = state.get("query", "")
-    brand = state.get("brand_context")
-    intent = state.get("intent")
+    brand = state.get("brand_context") or ""
+    intent = state.get("intent") or ""
+    messages = state.get("messages", [])
 
-    logger.debug(f"RAG retrieval: query={query[:50]}..., intent={intent}")
+    logger.debug(f"RAG retrieval: query={query[:50]}..., intent={intent}, cognitive_enabled={CHATBOT_COGNITIVE_RAG_ENABLED}")
+
+    # Build conversation context from recent messages (last 3)
+    conversation_context = ""
+    if messages:
+        recent_msgs = messages[-3:] if len(messages) > 3 else messages
+        context_parts = []
+        for msg in recent_msgs:
+            role = "User" if isinstance(msg, HumanMessage) else "Assistant"
+            content = getattr(msg, "content", str(msg))
+            if content:
+                context_parts.append(f"{role}: {content[:100]}...")
+        conversation_context = "\n".join(context_parts)
 
     # Get active trace context for observability
     trace_ctx = _active_trace_context.get()
@@ -457,10 +477,67 @@ async def retrieve_rag_node(state: ChatbotState) -> Dict[str, Any]:
     relevance_scores = []
     kpi_name = None
     error = None
+    retrieval_method = "basic"
+    rewritten_query = None
+    search_keywords = []
+    graph_entities = []
+    avg_relevance = 0.0
 
-    async def _execute_rag():
-        nonlocal rag_context, rag_sources, relevance_scores, kpi_name, error
+    async def _execute_cognitive_rag():
+        """Execute cognitive RAG pipeline with DSPy query rewriting."""
+        nonlocal rag_context, rag_sources, relevance_scores, retrieval_method
+        nonlocal rewritten_query, search_keywords, graph_entities, avg_relevance, error
+
         try:
+            result = await cognitive_rag_retrieve(
+                query=query,
+                conversation_context=conversation_context,
+                brand_context=brand,
+                intent=str(intent) if intent else "",
+                k=5,
+                enable_multi_hop=False,  # Start with single-hop
+                collect_signal=True,  # Collect training signals
+            )
+
+            # Extract results from cognitive RAG
+            rewritten_query = result.rewritten_query
+            search_keywords = result.search_keywords
+            graph_entities = result.graph_entities
+            retrieval_method = result.retrieval_method
+            avg_relevance = result.avg_relevance_score
+
+            # Convert evidence to rag_context format
+            rag_context = [
+                {
+                    "source_id": e.get("source_id", "unknown"),
+                    "content": e.get("content", "")[:500],
+                    "score": e.get("relevance_score", e.get("score", 0.0)),
+                    "source": e.get("source", "rag"),
+                    "key_insight": e.get("key_insight", ""),
+                }
+                for e in result.evidence
+            ]
+
+            rag_sources = [e.get("source_id", "unknown") for e in result.evidence]
+            relevance_scores = [e.get("relevance_score", e.get("score", 0.0)) for e in result.evidence]
+
+            logger.debug(
+                f"Cognitive RAG complete: method={retrieval_method}, results={len(rag_context)}, "
+                f"avg_relevance={avg_relevance:.2f}, keywords={search_keywords[:3]}"
+            )
+
+        except Exception as e:
+            logger.warning(f"Cognitive RAG failed, falling back to basic: {e}")
+            # Don't set error - we'll fall back to basic RAG
+            raise  # Re-raise to trigger fallback
+
+    async def _execute_basic_rag():
+        """Execute basic hybrid RAG (fallback)."""
+        nonlocal rag_context, rag_sources, relevance_scores, kpi_name, error, retrieval_method
+
+        try:
+            retrieval_method = "basic"
+
             # Adjust retrieval based on intent
             if intent == IntentType.KPI_QUERY:
                 # Extract KPI name from query if present
@@ -490,20 +567,40 @@ async def retrieve_rag_node(state: ChatbotState) -> Dict[str, Any]:
             relevance_scores = [r.score for r in results]
 
         except Exception as e:
-            logger.error(f"RAG retrieval failed: {e}")
+            logger.error(f"Basic RAG retrieval failed: {e}")
             error = f"RAG retrieval error: {str(e)}"
+
+    async def _execute_rag():
+        """Execute RAG with cognitive pipeline or fallback."""
+        if CHATBOT_COGNITIVE_RAG_ENABLED:
+            try:
+                await _execute_cognitive_rag()
+            except Exception:
+                # Cognitive RAG failed, fall back to basic
+                await _execute_basic_rag()
+        else:
+            await _execute_basic_rag()
 
     # Execute with tracing if available
     if trace_ctx:
         async with trace_ctx.trace_node("retrieve_rag") as node_span:
             await _execute_rag()
+            # Log enhanced metrics for cognitive RAG
             node_span.log_rag_retrieval(
                 result_count=len(rag_context),
                 relevance_scores=relevance_scores,
                 kpi_filter=kpi_name,
                 brand_filter=brand,
-                retrieval_method="hybrid",  # hybrid_search uses semantic + sparse
+                retrieval_method=retrieval_method,
             )
+            # Log cognitive RAG specific metrics
+            if retrieval_method == "cognitive":
+                node_span.log_metadata({
+                    "rewritten_query": rewritten_query[:100] if rewritten_query else None,
+                    "search_keywords": search_keywords[:5],
+                    "graph_entities": graph_entities[:5],
+                    "avg_relevance_score": avg_relevance,
+                })
     else:
         await _execute_rag()
 
@@ -517,6 +614,8 @@ async def retrieve_rag_node(state: ChatbotState) -> Dict[str, Any]:
     return {
         "rag_context": rag_context,
         "rag_sources": rag_sources,
+        "rag_rewritten_query": rewritten_query,
+        "rag_retrieval_method": retrieval_method,
     }
 
 
