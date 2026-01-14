@@ -675,14 +675,24 @@ class OpikConnector:
         try:
             import opik
 
-            # Configure Opik globally if API key is provided
-            if self.config.api_key:
-                opik.configure(
-                    api_key=self.config.api_key,
-                    workspace=self.config.workspace,
-                    url=self.config.url,
-                    use_local=self.config.use_local,
-                    force=False,  # Don't overwrite existing config
+            # Configure Opik globally if API key is provided or using local instance
+            if self.config.api_key or self.config.use_local:
+                configure_kwargs = {
+                    "workspace": self.config.workspace,
+                    "use_local": self.config.use_local,
+                    "force": False,  # Don't overwrite existing config
+                }
+                # Only include api_key if provided (local doesn't need it)
+                if self.config.api_key:
+                    configure_kwargs["api_key"] = self.config.api_key
+                # Only include url if provided
+                if self.config.url:
+                    configure_kwargs["url"] = self.config.url
+
+                opik.configure(**configure_kwargs)
+                logger.info(
+                    f"Opik configured: use_local={self.config.use_local}, "
+                    f"url={self.config.url}, workspace={self.config.workspace}"
                 )
 
             # Create Opik client instance
@@ -732,20 +742,23 @@ class OpikConnector:
         metadata: Optional[Dict[str, Any]] = None,
         tags: Optional[List[str]] = None,
         input_data: Optional[Dict[str, Any]] = None,
+        force_new_trace: bool = False,
     ):
         """Context manager for tracing agent operations.
 
-        Creates a trace (if no trace_id) or span (if trace_id provided) in Opik
-        and tracks timing, status, and errors.
+        Creates a trace (if no trace_id or force_new_trace) or span (if trace_id
+        provided and not force_new_trace) in Opik and tracks timing, status, and errors.
 
         Args:
             agent_name: Name of the agent (e.g., "gap_analyzer")
             operation: Operation being performed (e.g., "analyze_gaps")
-            trace_id: Optional trace ID to attach this span to an existing trace
+            trace_id: Optional trace ID to use for the trace/span
             parent_span_id: Optional parent span ID for nested spans
             metadata: Additional metadata to attach to the span
             tags: Tags for categorizing the span
             input_data: Input data for the operation
+            force_new_trace: If True, create a new trace even if trace_id is provided.
+                            Useful when caller generates their own trace_id for tracking.
 
         Yields:
             SpanContext: Context object for enriching the span
@@ -757,7 +770,7 @@ class OpikConnector:
                 span.set_output({"gaps": result})
         """
         span_id = str(uuid7_func())  # Opik requires UUID v7
-        is_new_trace = trace_id is None
+        is_new_trace = trace_id is None or force_new_trace
         trace_id = trace_id or str(uuid7_func())  # Opik requires UUID v7
         start_time = datetime.now(timezone.utc)
 
@@ -780,7 +793,8 @@ class OpikConnector:
 
         try:
             # Create Opik trace/span if enabled
-            if self.is_enabled and self._should_sample():
+            should_sample = self._should_sample()
+            if self.is_enabled and should_sample:
                 try:
                     if is_new_trace:
                         # Create new trace
@@ -830,6 +844,7 @@ class OpikConnector:
                     span_ctx._opik_span = opik_span
 
                 except Exception as e:
+                    print(f"[OPIK_CONNECTOR] Failed to create Opik span: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
                     logger.warning(f"Failed to create Opik span: {e}")
 
             yield span_ctx
