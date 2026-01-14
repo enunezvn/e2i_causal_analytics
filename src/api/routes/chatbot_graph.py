@@ -52,6 +52,8 @@ from src.api.routes.chatbot_dspy import (
     CHATBOT_DSPY_INTENT_ENABLED,
     cognitive_rag_retrieve,
     CHATBOT_COGNITIVE_RAG_ENABLED,
+    synthesize_response_dspy,
+    CHATBOT_DSPY_SYNTHESIS_ENABLED,
 )
 from src.mlops.mlflow_connector import MLflowConnector
 
@@ -685,37 +687,33 @@ async def classify_intent_node(state: ChatbotState) -> Dict[str, Any]:
 
 async def generate_node(state: ChatbotState) -> Dict[str, Any]:
     """
-    Generate response using Claude with tools.
+    Generate response using Claude with tools or DSPy synthesis.
 
-    This is the main generation node that can invoke tools.
+    Phase 6 DSPy integration: When we have good RAG evidence, uses DSPy
+    synthesis for structured responses with confidence statements and citations.
+    Falls back to LLM with tools for complex queries requiring tool execution.
     """
     messages = list(state.get("messages", []))
     rag_context = state.get("rag_context", [])
     brand = state.get("brand_context")
     region = state.get("region_context")
+    intent = state.get("intent", "general")
+    query = state.get("query", "")
 
     # Get active trace context for observability
     trace_ctx = _active_trace_context.get()
 
-    # Build context string for system prompt
-    context_parts = []
-    if brand:
-        context_parts.append(f"Current Brand Filter: {brand}")
-    if region:
-        context_parts.append(f"Current Region Filter: {region}")
-    if rag_context:
-        context_parts.append("\n## Retrieved Context\n")
-        for ctx in rag_context[:3]:  # Top 3 for context window
-            context_parts.append(f"- [{ctx['source']}] {ctx['content'][:200]}...")
-
-    context_str = "\n".join(context_parts) if context_parts else ""
-
-    # Create system message
-    system_prompt = E2I_CHATBOT_SYSTEM_PROMPT.format(context=context_str)
-    system_msg = SystemMessage(content=system_prompt)
-
-    # Prepare messages for LLM
-    llm_messages = [system_msg] + messages
+    # Build conversation context from recent messages
+    conversation_context = ""
+    if messages:
+        recent_msgs = messages[-3:] if len(messages) > 3 else messages
+        context_parts = []
+        for msg in recent_msgs:
+            role = "User" if isinstance(msg, HumanMessage) else "Assistant"
+            content = getattr(msg, "content", str(msg))
+            if content:
+                context_parts.append(f"{role}: {content[:100]}...")
+        conversation_context = "\n".join(context_parts)
 
     # Track generation metrics
     result = None
@@ -725,9 +723,99 @@ async def generate_node(state: ChatbotState) -> Dict[str, Any]:
     input_tokens = 0
     output_tokens = 0
     is_fallback = False
+    synthesis_used = False
+    synthesis_method = None
+    confidence_statement = None
+    evidence_citations = []
+    follow_up_suggestions = []
 
-    async def _execute_generate():
+    # Determine if we should use DSPy synthesis
+    # Use synthesis when:
+    # 1. Synthesis is enabled
+    # 2. We have RAG evidence with good relevance scores
+    # 3. Intent doesn't require tool execution (greetings, help don't need RAG)
+    should_use_synthesis = (
+        CHATBOT_DSPY_SYNTHESIS_ENABLED
+        and rag_context
+        and len(rag_context) >= 1
+        and intent not in (IntentType.GREETING, IntentType.HELP, IntentType.AGENT_STATUS)
+    )
+
+    # Calculate average evidence relevance
+    avg_evidence_score = 0.0
+    if rag_context:
+        scores = [ctx.get("relevance_score", ctx.get("score", 0.0)) for ctx in rag_context]
+        avg_evidence_score = sum(scores) / len(scores) if scores else 0.0
+
+    # Only use synthesis if evidence quality is sufficient
+    if should_use_synthesis and avg_evidence_score < 0.3:
+        should_use_synthesis = False
+        logger.debug(f"Skipping synthesis: avg evidence score too low ({avg_evidence_score:.2f})")
+
+    async def _execute_synthesis():
+        """Execute DSPy evidence synthesis."""
+        nonlocal result, synthesis_used, synthesis_method, confidence_statement
+        nonlocal evidence_citations, follow_up_suggestions
+
+        synthesis_result = await synthesize_response_dspy(
+            query=query,
+            intent=str(intent) if intent else "general",
+            evidence=rag_context,
+            brand_context=brand or "",
+            conversation_context=conversation_context,
+            collect_signal=True,
+        )
+
+        synthesis_used = True
+        synthesis_method = synthesis_result.synthesis_method
+        confidence_statement = synthesis_result.confidence_statement
+        evidence_citations = synthesis_result.evidence_citations
+        follow_up_suggestions = synthesis_result.follow_up_suggestions
+
+        # Create AI message with synthesized response
+        response_msg = AIMessage(content=synthesis_result.response)
+
+        result = {
+            "messages": [response_msg],
+            "agent_name": "chatbot_synthesis",
+            "agent_tier": 1,
+            "response_text": synthesis_result.response,
+            "confidence_statement": confidence_statement,
+            "evidence_citations": evidence_citations,
+            "synthesis_method": synthesis_method,
+            "follow_up_suggestions": follow_up_suggestions,
+        }
+
+        logger.info(
+            f"DSPy synthesis complete: {len(synthesis_result.response)} chars, "
+            f"confidence={synthesis_result.confidence_level}, "
+            f"citations={len(evidence_citations)}, method={synthesis_method}"
+        )
+
+    async def _execute_llm_generate():
+        """Execute LLM generation with tools."""
         nonlocal result, provider, model_name, tool_calls_count, input_tokens, output_tokens, is_fallback
+
+        # Build context string for system prompt
+        context_parts = []
+        if brand:
+            context_parts.append(f"Current Brand Filter: {brand}")
+        if region:
+            context_parts.append(f"Current Region Filter: {region}")
+        if rag_context:
+            context_parts.append("\n## Retrieved Context\n")
+            for ctx in rag_context[:3]:  # Top 3 for context window
+                context_parts.append(f"- [{ctx.get('source', 'unknown')}] {ctx.get('content', '')[:200]}...")
+
+        context_str = "\n".join(context_parts) if context_parts else ""
+
+        # Create system message
+        system_prompt = E2I_CHATBOT_SYSTEM_PROMPT.format(context=context_str)
+        system_msg = SystemMessage(content=system_prompt)
+
+        # Prepare messages for LLM
+        llm_messages = [system_msg] + messages
+
         try:
             llm = get_chat_llm(
                 model_tier="standard",
@@ -770,6 +858,17 @@ async def generate_node(state: ChatbotState) -> Dict[str, Any]:
             is_fallback = True
             result = _generate_fallback_response(state)
 
+    async def _execute_generate():
+        """Execute generation (synthesis or LLM)."""
+        if should_use_synthesis:
+            try:
+                await _execute_synthesis()
+            except Exception as e:
+                logger.warning(f"Synthesis failed, falling back to LLM: {e}")
+                await _execute_llm_generate()
+        else:
+            await _execute_llm_generate()
+
     # Execute with tracing if available
     if trace_ctx:
         async with trace_ctx.trace_node("generate") as node_span:
@@ -777,12 +876,21 @@ async def generate_node(state: ChatbotState) -> Dict[str, Any]:
             node_span.log_generate(
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
-                model=model_name or "unknown",
-                provider=provider or "unknown",
+                model=model_name or "dspy_synthesis" if synthesis_used else "unknown",
+                provider=provider or "dspy" if synthesis_used else "unknown",
                 tool_calls_count=tool_calls_count,
                 temperature=0.3,
                 is_fallback=is_fallback,
             )
+            # Log synthesis-specific metrics
+            if synthesis_used:
+                node_span.log_metadata({
+                    "synthesis_method": synthesis_method,
+                    "confidence_statement": confidence_statement[:100] if confidence_statement else None,
+                    "citations_count": len(evidence_citations),
+                    "follow_up_count": len(follow_up_suggestions),
+                    "avg_evidence_score": avg_evidence_score,
+                })
     else:
         await _execute_generate()
 

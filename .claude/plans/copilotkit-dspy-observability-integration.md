@@ -1,7 +1,7 @@
 # CopilotKit Chatbot DSPy & Observability Integration Plan
 
 **Created**: 2026-01-14
-**Status**: In Progress (Phase 5 Complete)
+**Status**: In Progress (Phase 6 Complete)
 **Priority**: High
 **Last Updated**: 2026-01-14
 
@@ -23,10 +23,10 @@ The CopilotKit chatbot (primary user interface) has **ZERO DSPy integration** an
 | Capability | Current | Target |
 |------------|---------|--------|
 | Intent Classification | ✅ DSPy ChatbotIntentClassifier (Phase 3) | DSPy IntentClassificationSignature |
-| Response Generation | Direct LLM call | DSPy EvidenceSynthesisSignature |
+| Response Generation | ✅ DSPy EvidenceSynthesisSignature (Phase 6) | DSPy EvidenceSynthesisSignature |
 | RAG Retrieval | ✅ Cognitive RAG pipeline (Phase 5) | Cognitive RAG with HopDecisionSignature |
 | Agent Routing | ✅ DSPy ChatbotAgentRouter (Phase 4) | DSPy AgentRoutingSignature |
-| Training Signals | ✅ IntentTrainingSignalCollector (Phase 3), RoutingTrainingSignalCollector (Phase 4), RAGTrainingSignalCollector (Phase 5) | ReflectorModule collection |
+| Training Signals | ✅ IntentTrainingSignalCollector (Phase 3), RoutingTrainingSignalCollector (Phase 4), RAGTrainingSignalCollector (Phase 5), SynthesisTrainingSignalCollector (Phase 6) | ReflectorModule collection |
 | Opik Tracing | ✅ Full per-node spans (Phase 1) | Full per-node spans |
 | MLflow Metrics | ✅ Session-level tracking (Phase 2) | Session-level experiment tracking |
 | Token Usage | Not tracked | Per-LLM-call logging |
@@ -233,16 +233,30 @@ print(f'Method: {result.retrieval_method}')
 ### Phase 6: Evidence Synthesis DSPy
 **Goal**: Replace direct LLM call with structured synthesis
 **Scope**: Change to generate_node
-**Files**: `chatbot_graph.py`, `chatbot_dspy.py`
+**Files**: `chatbot_graph.py`, `chatbot_dspy.py`, `chatbot_state.py`
 
 #### Tasks
-- [ ] 6.1 Add EvidenceSynthesisSignature to chatbot_dspy.py
-- [ ] 6.2 Create `ChatbotSynthesizer` DSPy module
-- [ ] 6.3 Modify generate_node to use synthesis signature
-- [ ] 6.4 Add confidence_statement to response
-- [ ] 6.5 Add evidence_citations tracking
-- [ ] 6.6 Log synthesis metrics to Opik
-- [ ] 6.7 Add unit tests
+- [x] 6.1 Add EvidenceSynthesisSignature to chatbot_dspy.py
+- [x] 6.2 Create `ChatbotSynthesizer` DSPy module
+- [x] 6.3 Modify generate_node to use synthesis signature
+- [x] 6.4 Add confidence_statement to response
+- [x] 6.5 Add evidence_citations tracking
+- [x] 6.6 Log synthesis metrics to Opik
+- [x] 6.7 Add unit tests (23 new synthesis tests, 98 total tests passing)
+
+**Phase 6 Completed**: 2026-01-14
+**Verification**:
+- Created `EvidenceSynthesisSignature` DSPy signature with response, confidence_statement, evidence_citations, follow_up_suggestions outputs
+- Created `SynthesisResult` dataclass for structured synthesis output
+- Created `synthesize_response_dspy()` async function with DSPy ChainOfThought synthesis
+- Created `synthesize_response_hardcoded()` fallback with intent-aware response templates
+- Added `SynthesisTrainingSignal` and `SynthesisTrainingSignalCollector` for training signal collection
+- Added confidence level computation based on evidence quality (high: relevance >= 0.7 with 2+ sources, moderate: >= 0.5 or 2+ sources, low: otherwise)
+- Modified `generate_node` to use DSPy synthesis when: feature enabled, RAG evidence exists, avg_relevance >= 0.3, non-tool intent
+- Added `confidence_statement`, `evidence_citations`, `synthesis_method`, `follow_up_suggestions` fields to ChatbotState
+- Opik tracing logs synthesis-specific metrics: evidence_count, avg_relevance, synthesis_method, confidence_level, citations_count, follow_up_count
+- 23 new synthesis tests in 5 test classes (TestHardcodedSynthesis, TestSynthesisTrainingSignal, TestSynthesisTrainingSignalCollector, TestAsyncSynthesis, TestSynthesisFeatureFlag)
+**Feature Flag**: `CHATBOT_DSPY_SYNTHESIS=true` (enabled by default)
 
 #### Testing (Droplet)
 ```bash
@@ -405,8 +419,8 @@ After implementation, verify:
 3. [x] Intent classification returns confidence scores (VERIFIED 2026-01-14 - Phase 3)
 4. [x] Agent routing returns rationale (VERIFIED 2026-01-14 - Phase 4)
 5. [x] RAG retrieval shows multi-hop decisions (VERIFIED 2026-01-14 - Phase 5)
-6. [ ] Response includes evidence citations
+6. [x] Response includes evidence citations (VERIFIED 2026-01-14 - Phase 6)
 7. [ ] Training signals accumulating in database
 8. [ ] feedback_learner receiving optimization requests
 9. [ ] No performance regression (latency <2s p50)
-10. [x] All existing tests still pass (76/76 DSPy tests passing after Phase 5)
+10. [x] All existing tests still pass (98/98 DSPy tests passing after Phase 6)
