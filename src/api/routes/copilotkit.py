@@ -171,7 +171,7 @@ from datetime import datetime, timezone
 from typing import Annotated, Any, AsyncGenerator, Dict, List, Optional, Sequence, TypedDict
 
 from copilotkit import CopilotKitRemoteEndpoint, Action as CopilotAction
-from copilotkit.langgraph import copilotkit_emit_message
+from copilotkit.langgraph import copilotkit_emit_message, copilotkit_emit_state
 from copilotkit.langgraph_agui_agent import LangGraphAGUIAgent as _LangGraphAGUIAgent
 from ag_ui.core import RunAgentInput
 from copilotkit.integrations.fastapi import (
@@ -183,7 +183,6 @@ from copilotkit.integrations.fastapi import (
 from copilotkit.sdk import COPILOTKIT_SDK_VERSION, CopilotKitContext
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import MemorySaver
@@ -192,6 +191,7 @@ from langgraph.prebuilt import ToolNode
 from pydantic import BaseModel, Field
 
 from src.api.routes.chatbot_tools import E2I_CHATBOT_TOOLS
+from src.utils.llm_factory import get_chat_llm, get_llm_provider, MODEL_MAPPINGS
 
 logger = logging.getLogger(__name__)
 
@@ -543,7 +543,19 @@ class LangGraphAgent(_LangGraphAGUIAgent):
                     if event_name == "copilotkit_manually_emit_message":
                         event_value = getattr(event, 'value', {}) or {}
                         message_id = event_value.get('message_id', str(uuid.uuid4()))
-                        message = event_value.get('message', '')
+                        raw_message = event_value.get('message', '')
+
+                        # FIX (v1.21.4): Handle message as list of content blocks
+                        # copilotkit_manually_emit_message sends message as list: [{'text': '...', 'type': 'text', 'index': 0}]
+                        # But delta field expects a string, not a list
+                        if isinstance(raw_message, list):
+                            # Extract text from all content blocks
+                            message = ''.join(
+                                block.get('text', '') if isinstance(block, dict) else str(block)
+                                for block in raw_message
+                            )
+                        else:
+                            message = str(raw_message) if raw_message else ''
 
                         dbg(f"Converting CUSTOM to TEXT_MESSAGE events for message_id={message_id}")
 
@@ -1439,10 +1451,24 @@ DO NOT just describe what tools can do - actually CALL them to get data!
 
 
 class E2IAgentState(TypedDict, total=False):
-    """State for the E2I chat agent."""
+    """
+    State for the E2I chat agent.
 
+    Includes observable fields for CoAgent bidirectional state sync with frontend.
+    These fields are emitted via copilotkit_emit_state() for real-time UI updates.
+    """
+
+    # Core message state
     messages: Annotated[Sequence[BaseMessage], operator.add]
     session_id: str  # Persistent session ID for message storage (optional)
+
+    # Observable state for CoAgent sync (Phase 1 of state sync implementation)
+    current_node: str  # Current processing node: "chat", "tools", "synthesize", "idle"
+    progress_steps: List[str]  # Progress steps: ["Processing query...", "Calling tools..."]
+    progress_percent: int  # Progress percentage: 0-100
+    tools_executing: List[str]  # Tools currently executing: ["orchestrator_tool", ...]
+    agent_status: str  # Agent status: "processing", "waiting", "complete", "error"
+    error_message: Optional[str]  # Error message if agent_status is "error"
 
 
 def create_e2i_chat_agent():
@@ -1482,6 +1508,18 @@ def create_e2i_chat_agent():
         # DEBUG: Verify chat_node is being called (use print + ERROR log which we know work)
         print(f"[DEBUG] chat_node CALLED at {datetime.now()}", flush=True)
         logger.error(f"[DEBUG] chat_node CALLED - state keys: {list(state.keys()) if state else 'None'}")
+
+        # CoAgent State Sync: Emit initial state for real-time UI progress
+        state["current_node"] = "chat"
+        state["progress_steps"] = ["Processing your query..."]
+        state["progress_percent"] = 25
+        state["agent_status"] = "processing"
+        state["tools_executing"] = []
+        state["error_message"] = None
+        try:
+            await copilotkit_emit_state(config, state)
+        except Exception as e:
+            logger.debug(f"[CopilotKit] State emission skipped (not in CoAgent context): {e}")
 
         messages = state.get("messages", [])
 
@@ -1554,25 +1592,17 @@ def create_e2i_chat_agent():
                     logger.warning(f"[CopilotKit] Failed to persist greeting: {e}")
             return {"messages": [AIMessage(content=greeting)]}
 
-        # Get Claude API key
-        api_key = os.getenv("ANTHROPIC_API_KEY")
-        if not api_key:
-            logger.warning("[CopilotKit] ANTHROPIC_API_KEY not set, using fallback response")
-            fallback = generate_e2i_response(last_human_message)
-            await copilotkit_emit_message(config, fallback)
-            return {"messages": [AIMessage(content=fallback)]}
-
+        # Get LLM via factory (supports dynamic provider switching)
         try:
-            # Create Claude LLM with tools bound
-            model_name = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
-            llm = ChatAnthropic(
-                model=model_name,
-                api_key=api_key,
-                temperature=0.3,
+            llm = get_chat_llm(
+                model_tier="standard",
                 max_tokens=2048,
+                temperature=0.3,
             )
+            provider = get_llm_provider()
+            logger.info(f"[CopilotKit] Using {provider} LLM for chat")
 
-            # Bind E2I tools to Claude
+            # Bind E2I tools to LLM
             llm_with_tools = llm.bind_tools(E2I_CHATBOT_TOOLS)
 
             # Build messages for LLM
@@ -1591,14 +1621,26 @@ def create_e2i_chat_agent():
                     elif role == "assistant":
                         llm_messages.append(AIMessage(content=content))
 
-            logger.info(f"[CopilotKit] Invoking Claude with {len(llm_messages)} messages and {len(E2I_CHATBOT_TOOLS)} tools bound")
+            logger.info(f"[CopilotKit] Invoking {provider} LLM with {len(llm_messages)} messages and {len(E2I_CHATBOT_TOOLS)} tools bound")
 
-            # Invoke Claude
+            # Invoke LLM
             response = await llm_with_tools.ainvoke(llm_messages)
 
             # If response has tool calls, return without emitting (tools node will handle)
             if getattr(response, "tool_calls", None):
-                logger.info(f"[CopilotKit] Claude invoked tools: {[tc['name'] for tc in response.tool_calls]}")
+                tool_names = [tc['name'] for tc in response.tool_calls]
+                logger.info(f"[CopilotKit] Claude invoked tools: {tool_names}")
+
+                # CoAgent State Sync: Emit tools executing state
+                state["current_node"] = "tools"
+                state["progress_steps"].append(f"Executing {len(tool_names)} tool(s)...")
+                state["progress_percent"] = 50
+                state["tools_executing"] = tool_names
+                try:
+                    await copilotkit_emit_state(config, state)
+                except Exception as e:
+                    logger.debug(f"[CopilotKit] State emission skipped: {e}")
+
                 # Persist tool call request (for tracking)
                 if session_id:
                     try:
@@ -1652,13 +1694,23 @@ def create_e2i_chat_agent():
                     response_time_ms=elapsed_ms,
                     tools_invoked=[],
                     primary_agent="copilotkit",
-                    metadata={"model_used": model_name, "direct_response": True},
+                    metadata={"model_used": f"{provider}:{MODEL_MAPPINGS[provider]['standard']}", "direct_response": True},
                 )
+
+            # CoAgent State Sync: Emit completion state for direct responses
+            state["current_node"] = "idle"
+            state["progress_steps"].append("Response complete")
+            state["progress_percent"] = 100
+            state["agent_status"] = "complete"
+            try:
+                await copilotkit_emit_state(config, state)
+            except Exception as e:
+                logger.debug(f"[CopilotKit] State emission skipped: {e}")
 
             return {"messages": [response]}
 
         except Exception as e:
-            logger.error(f"[CopilotKit] Claude invocation failed: {e}", exc_info=True)
+            logger.error(f"[CopilotKit] LLM invocation failed: {e}", exc_info=True)
             fallback = generate_e2i_response(last_human_message)
             await copilotkit_emit_message(config, fallback)
             # Persist fallback response
@@ -1679,6 +1731,18 @@ def create_e2i_chat_agent():
         """Synthesize tool results into a final response."""
         import time
         node_start = time.time()
+
+        # CoAgent State Sync: Emit synthesizing state
+        state["current_node"] = "synthesize"
+        if "progress_steps" not in state or not state.get("progress_steps"):
+            state["progress_steps"] = []
+        state["progress_steps"].append("Synthesizing tool results...")
+        state["progress_percent"] = 75
+        state["agent_status"] = "processing"
+        try:
+            await copilotkit_emit_state(config, state)
+        except Exception as e:
+            logger.debug(f"[CopilotKit] State emission skipped: {e}")
 
         messages = state.get("messages", [])
         session_id = state.get("session_id")  # For message persistence
@@ -1714,58 +1778,17 @@ def create_e2i_chat_agent():
             except Exception as e:
                 logger.warning(f"[CopilotKit] Failed to persist tool results: {e}")
 
-        # Get Claude to synthesize tool results
-        api_key = os.getenv("ANTHROPIC_API_KEY")
-        if not api_key:
-            # Fallback: just format tool results as text
-            result_text = "\n\n".join([
-                f"**{tr['tool']}**: {tr['result'][:500]}..." if len(tr['result']) > 500 else f"**{tr['tool']}**: {tr['result']}"
-                for tr in tool_results
-            ])
-            await copilotkit_emit_message(config, result_text)
-            # Persist fallback response
-            if session_id:
-                try:
-                    _persist_message_sync(
-                        session_id=session_id,
-                        role="assistant",
-                        content=result_text,
-                        agent_name="copilotkit",
-                        metadata={
-                            "source": "copilotkit",
-                            "type": "synthesis_fallback",
-                            "tool_results": tool_results,
-                        },
-                    )
-                except Exception as e:
-                    logger.warning(f"[CopilotKit] Failed to persist synthesis fallback: {e}")
-
-                # Record analytics (P7.1) for no-API-key fallback
-                elapsed_ms = int((time.time() - node_start) * 1000)
-                _record_analytics_sync(
-                    session_id=session_id,
-                    query_type=_classify_query_type(original_query),
-                    response_time_ms=elapsed_ms,
-                    tools_invoked=[tr["tool"] for tr in tool_results],
-                    primary_agent="copilotkit",
-                    metadata={
-                        "fallback_reason": "no_api_key",
-                        "tools_used": True,
-                        "tool_count": len(tool_results),
-                    },
-                )
-            return {"messages": [AIMessage(content=result_text)]}
-
+        # Get LLM via factory to synthesize tool results
         try:
-            model_name = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
-            llm = ChatAnthropic(
-                model=model_name,
-                api_key=api_key,
-                temperature=0.3,
+            llm = get_chat_llm(
+                model_tier="standard",
                 max_tokens=2048,
+                temperature=0.3,
             )
+            provider = get_llm_provider()
+            logger.info(f"[CopilotKit] Using {provider} LLM for synthesis")
 
-            # Ask Claude to synthesize the results
+            # Ask LLM to synthesize the results
             synthesis_prompt = f"""Based on the tool results below, provide a clear, helpful response to the user.
 
 Tool Results:
@@ -1809,11 +1832,22 @@ Synthesize these results into a natural, conversational response. Include specif
                     tools_invoked=[tr["tool"] for tr in tool_results],
                     primary_agent="copilotkit",
                     metadata={
-                        "model_used": model_name,
+                        "model_used": f"{provider}:{MODEL_MAPPINGS[provider]['standard']}",
                         "tools_used": True,
                         "tool_count": len(tool_results),
                     },
                 )
+
+            # CoAgent State Sync: Emit completion state
+            state["current_node"] = "idle"
+            state["progress_steps"].append("Response complete")
+            state["progress_percent"] = 100
+            state["agent_status"] = "complete"
+            state["tools_executing"] = []
+            try:
+                await copilotkit_emit_state(config, state)
+            except Exception as e:
+                logger.debug(f"[CopilotKit] State emission skipped: {e}")
 
             return {"messages": [response]}
 
@@ -2196,10 +2230,20 @@ async def copilotkit_custom_handler(request: Request, sdk: CopilotKitRemoteEndpo
                             # Event is already serialized by agent.execute()
                             yield event
                     except Exception as e:
+                        import traceback
+                        tb_str = traceback.format_exc()
                         sdbg(f"Error: {e}")
+                        sdbg(f"Traceback:\n{tb_str}")
                         logger.error(f"[CopilotKit] Stream error: {e}")
-                        # Yield error event (SSE format)
-                        yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+                        logger.error(f"[CopilotKit] Stream traceback:\n{tb_str}")
+                        # FIX (v1.21.4): Use RUN_ERROR event type (AG-UI protocol)
+                        # "error" is not a valid AG-UI event type - causes ZodError on frontend
+                        error_event = {
+                            'type': 'RUN_ERROR',
+                            'message': str(e),
+                            'code': 'STREAM_ERROR',
+                        }
+                        yield f"data: {json.dumps(error_event)}\n\n"
 
                     sdbg(f"Stream complete, yielded {event_count} events")
 
@@ -2315,6 +2359,7 @@ router = APIRouter(prefix="/copilotkit", tags=["copilotkit"])
 @router.get("/status")
 async def get_copilotkit_status() -> Dict[str, Any]:
     """Get CopilotKit integration status."""
+    provider = get_llm_provider()
     return {
         "status": "active",
         "version": "1.1.0",
@@ -2322,6 +2367,8 @@ async def get_copilotkit_status() -> Dict[str, Any]:
         "agent_names": ["default"],
         "actions_available": len(COPILOT_ACTIONS),
         "action_names": [a.name for a in COPILOT_ACTIONS],
+        "llm_provider": provider,
+        "llm_model": MODEL_MAPPINGS[provider]["standard"],
         "llm_configured": bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("OPENAI_API_KEY")),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
