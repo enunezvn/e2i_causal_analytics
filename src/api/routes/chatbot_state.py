@@ -83,6 +83,12 @@ class ChatbotState(TypedDict, total=False):
     response_chunks: List[str]
     streaming_complete: bool
 
+    # Evidence synthesis (Phase 6 DSPy)
+    confidence_statement: Optional[str]  # DSPy synthesis confidence statement
+    evidence_citations: List[str]  # Source IDs cited in response
+    synthesis_method: Optional[str]  # "dspy" or "hardcoded"
+    follow_up_suggestions: List[str]  # Suggested follow-up questions
+
     # Conversation metadata
     conversation_title: Optional[str]
     agent_name: Optional[str]
@@ -195,6 +201,10 @@ def create_initial_state(
         response_text="",
         response_chunks=[],
         streaming_complete=False,
+        confidence_statement=None,
+        evidence_citations=[],
+        synthesis_method=None,
+        follow_up_suggestions=[],
         conversation_title=None,
         agent_name=None,
         agent_tier=None,

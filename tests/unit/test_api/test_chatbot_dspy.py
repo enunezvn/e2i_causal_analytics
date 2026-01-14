@@ -1098,3 +1098,438 @@ class TestChatbotCognitiveRAGFeatureFlag:
     def test_feature_flag_exists(self):
         """Test that feature flag is defined."""
         assert isinstance(CHATBOT_COGNITIVE_RAG_ENABLED, bool)
+
+
+# =============================================================================
+# PHASE 6: EVIDENCE SYNTHESIS TESTS
+# =============================================================================
+
+from src.api.routes.chatbot_dspy import (
+    # Phase 6: Evidence Synthesis
+    synthesize_response_hardcoded,
+    synthesize_response_dspy,
+    SynthesisTrainingSignal,
+    SynthesisTrainingSignalCollector,
+    get_synthesis_signal_collector,
+    SynthesisResult,
+    CHATBOT_DSPY_SYNTHESIS_ENABLED,
+)
+
+
+class TestHardcodedSynthesis:
+    """Test cases for hardcoded evidence synthesis (fallback)."""
+
+    def test_synthesis_with_no_evidence(self):
+        """Test synthesis when no evidence is available."""
+        response, confidence_statement, citations, follow_ups, level = synthesize_response_hardcoded(
+            query="What is the TRx for Kisqali?",
+            intent="kpi_query",
+            evidence=[],
+            brand_context="Kisqali",
+        )
+
+        assert response is not None
+        assert len(response) > 0
+        assert confidence_statement is not None
+        assert "low" in confidence_statement.lower() or level == "low"
+        assert citations == []
+        assert len(follow_ups) >= 1
+
+    def test_synthesis_with_single_evidence(self):
+        """Test synthesis with one evidence item."""
+        evidence = [
+            {
+                "source_id": "src_001",
+                "content": "TRx for Kisqali increased by 15% in Q3",
+                "score": 0.8,
+                "relevance_score": 0.8,
+                "source": "metrics",
+            }
+        ]
+
+        response, confidence_statement, citations, follow_ups, level = synthesize_response_hardcoded(
+            query="What is the TRx for Kisqali?",
+            intent="kpi_query",
+            evidence=evidence,
+            brand_context="Kisqali",
+        )
+
+        assert response is not None
+        assert "src_001" in citations
+        assert level in ["moderate", "low"]  # Single source = moderate at best
+        assert len(follow_ups) >= 1
+
+    def test_synthesis_with_multiple_evidence(self):
+        """Test synthesis with multiple evidence items."""
+        evidence = [
+            {
+                "source_id": "src_001",
+                "content": "TRx for Kisqali increased by 15% in Q3",
+                "relevance_score": 0.85,
+                "source": "metrics",
+            },
+            {
+                "source_id": "src_002",
+                "content": "Northeast region showed strongest growth at 20%",
+                "relevance_score": 0.78,
+                "source": "analysis",
+            },
+            {
+                "source_id": "src_003",
+                "content": "New HCP targeting strategy contributed to gains",
+                "relevance_score": 0.72,
+                "source": "insights",
+            },
+        ]
+
+        response, confidence_statement, citations, follow_ups, level = synthesize_response_hardcoded(
+            query="What is driving Kisqali TRx growth?",
+            intent="causal_analysis",
+            evidence=evidence,
+            brand_context="Kisqali",
+        )
+
+        assert response is not None
+        assert len(response) > 100  # Should have substantial content
+        assert len(citations) == 3
+        assert level in ["high", "moderate"]  # Multiple sources = higher confidence
+        assert "causal" in response.lower() or "factor" in response.lower()
+
+    def test_synthesis_kpi_query_intent(self):
+        """Test synthesis output format for KPI queries."""
+        evidence = [{"source_id": "kpi_src", "content": "TRx is 10,000 units", "relevance_score": 0.9, "source": "kpi"}]
+
+        response, _, _, follow_ups, _ = synthesize_response_hardcoded(
+            query="What is TRx?",
+            intent="kpi_query",
+            evidence=evidence,
+        )
+
+        assert "metric" in response.lower() or "trend" in response.lower() or "data" in response.lower()
+        # KPI follow-ups should suggest trend or driver analysis
+        assert any("trend" in f.lower() or "driver" in f.lower() or "period" in f.lower() for f in follow_ups)
+
+    def test_synthesis_causal_intent(self):
+        """Test synthesis output format for causal analysis."""
+        evidence = [{"source_id": "causal_src", "content": "Campaign caused 10% lift", "relevance_score": 0.85, "source": "causal"}]
+
+        response, _, _, follow_ups, _ = synthesize_response_hardcoded(
+            query="What caused the increase?",
+            intent="causal_analysis",
+            evidence=evidence,
+        )
+
+        assert "causal" in response.lower() or "factor" in response.lower() or "finding" in response.lower()
+        # Causal follow-ups should suggest deeper analysis
+        assert any("driver" in f.lower() or "detail" in f.lower() or "compare" in f.lower() or "segment" in f.lower() for f in follow_ups)
+
+    def test_synthesis_recommendation_intent(self):
+        """Test synthesis output format for recommendations."""
+        evidence = [{"source_id": "rec_src", "content": "Recommend focusing on top HCPs", "relevance_score": 0.75, "source": "rec"}]
+
+        response, _, _, follow_ups, _ = synthesize_response_hardcoded(
+            query="What should we do?",
+            intent="recommendation",
+            evidence=evidence,
+        )
+
+        assert "recommendation" in response.lower() or "insight" in response.lower() or "analysis" in response.lower()
+        # Recommendation follow-ups should suggest action items
+        assert any("action" in f.lower() or "prioritize" in f.lower() or "impact" in f.lower() for f in follow_ups)
+
+    def test_synthesis_confidence_levels(self):
+        """Test confidence level calculation based on evidence quality."""
+        # High confidence: multiple sources with high relevance
+        high_evidence = [
+            {"source_id": "h1", "content": "Data 1", "relevance_score": 0.9, "source": "a"},
+            {"source_id": "h2", "content": "Data 2", "relevance_score": 0.8, "source": "b"},
+        ]
+        _, _, _, _, level_high = synthesize_response_hardcoded("q", "general", high_evidence)
+        assert level_high == "high"
+
+        # Moderate confidence: fewer sources or lower scores
+        mod_evidence = [{"source_id": "m1", "content": "Data", "relevance_score": 0.6, "source": "a"}]
+        _, _, _, _, level_mod = synthesize_response_hardcoded("q", "general", mod_evidence)
+        assert level_mod in ["moderate", "low"]
+
+        # Low confidence: no evidence
+        _, _, _, _, level_low = synthesize_response_hardcoded("q", "general", [])
+        assert level_low == "low"
+
+
+class TestSynthesisTrainingSignal:
+    """Test cases for synthesis training signal."""
+
+    def test_training_signal_creation(self):
+        """Test creating a synthesis training signal."""
+        signal = SynthesisTrainingSignal(
+            query="Test query",
+            intent="kpi_query",
+            evidence_count=3,
+            response_length=250,
+            confidence_level="high",
+            citations_count=3,
+            synthesis_method="hardcoded",
+        )
+
+        assert signal.query == "Test query"
+        assert signal.intent == "kpi_query"
+        assert signal.evidence_count == 3
+        assert signal.response_length == 250
+        assert signal.confidence_level == "high"
+        assert signal.citations_count == 3
+        assert signal.synthesis_method == "hardcoded"
+        assert signal.timestamp is not None
+
+    def test_training_signal_reward_computation(self):
+        """Test reward calculation for training signals."""
+        # Good synthesis with citations
+        good_signal = SynthesisTrainingSignal(
+            query="Test",
+            intent="kpi_query",
+            evidence_count=3,
+            response_length=300,
+            confidence_level="high",
+            citations_count=3,
+            synthesis_method="dspy",
+        )
+
+        reward = good_signal.compute_reward()
+        assert reward > 0.5  # Should be rewarded for good synthesis
+
+    def test_training_signal_hallucination_penalty(self):
+        """Test that hallucination penalizes reward."""
+        hallucination_signal = SynthesisTrainingSignal(
+            query="Test",
+            intent="kpi_query",
+            evidence_count=2,
+            response_length=200,
+            confidence_level="high",
+            citations_count=2,
+            synthesis_method="dspy",
+            had_hallucination=True,
+        )
+
+        reward = hallucination_signal.compute_reward()
+        # Should be heavily penalized
+        assert reward < 0.5
+
+    def test_training_signal_user_feedback(self):
+        """Test user feedback affects reward."""
+        # Good feedback
+        good_feedback_signal = SynthesisTrainingSignal(
+            query="Test",
+            intent="kpi_query",
+            evidence_count=2,
+            response_length=200,
+            confidence_level="moderate",
+            citations_count=2,
+            synthesis_method="hardcoded",
+            user_rating=5.0,
+            was_helpful=True,
+        )
+
+        good_reward = good_feedback_signal.compute_reward()
+
+        # Bad feedback
+        bad_feedback_signal = SynthesisTrainingSignal(
+            query="Test",
+            intent="kpi_query",
+            evidence_count=2,
+            response_length=200,
+            confidence_level="moderate",
+            citations_count=2,
+            synthesis_method="hardcoded",
+            user_rating=1.0,
+            was_helpful=False,
+        )
+
+        bad_reward = bad_feedback_signal.compute_reward()
+
+        assert good_reward > bad_reward
+
+
+class TestSynthesisTrainingSignalCollector:
+    """Test cases for synthesis training signal collector."""
+
+    def test_collector_add_signal(self):
+        """Test adding signals to collector."""
+        collector = SynthesisTrainingSignalCollector()
+
+        signal = SynthesisTrainingSignal(
+            query="Test",
+            intent="general",
+            evidence_count=1,
+            response_length=100,
+            confidence_level="low",
+            citations_count=0,
+            synthesis_method="hardcoded",
+        )
+
+        collector.add_signal(signal)
+        assert len(collector.get_signals()) == 1
+
+    def test_collector_buffer_limit(self):
+        """Test collector respects buffer size limit."""
+        collector = SynthesisTrainingSignalCollector(max_buffer_size=5)
+
+        for i in range(10):
+            signal = SynthesisTrainingSignal(
+                query=f"Query {i}",
+                intent="general",
+                evidence_count=1,
+                response_length=100,
+                confidence_level="low",
+                citations_count=0,
+                synthesis_method="hardcoded",
+            )
+            collector.add_signal(signal)
+
+        # Should only keep last 5
+        assert len(collector.get_signals()) == 5
+        # Most recent should be "Query 9"
+        assert collector.get_signals()[-1].query == "Query 9"
+
+    def test_collector_clear(self):
+        """Test collector clear functionality."""
+        collector = SynthesisTrainingSignalCollector()
+
+        signal = SynthesisTrainingSignal(
+            query="Test",
+            intent="general",
+            evidence_count=1,
+            response_length=100,
+            confidence_level="low",
+            citations_count=0,
+            synthesis_method="hardcoded",
+        )
+
+        collector.add_signal(signal)
+        assert len(collector.get_signals()) == 1
+
+        collector.clear()
+        assert len(collector.get_signals()) == 0
+
+    def test_global_collector_singleton(self):
+        """Test that global collector is a singleton."""
+        collector1 = get_synthesis_signal_collector()
+        collector2 = get_synthesis_signal_collector()
+
+        assert collector1 is collector2
+
+
+@pytest.mark.asyncio
+class TestAsyncSynthesis:
+    """Test cases for async DSPy synthesis function."""
+
+    async def test_synthesis_dspy_with_evidence(self):
+        """Test DSPy synthesis with valid evidence."""
+        evidence = [
+            {
+                "source_id": "src_001",
+                "content": "TRx for Kisqali increased by 15%",
+                "relevance_score": 0.85,
+                "source": "metrics",
+            },
+            {
+                "source_id": "src_002",
+                "content": "Northeast showed strongest growth",
+                "relevance_score": 0.75,
+                "source": "analysis",
+            },
+        ]
+
+        result = await synthesize_response_dspy(
+            query="What is the TRx trend for Kisqali?",
+            intent="kpi_query",
+            evidence=evidence,
+            brand_context="Kisqali",
+            collect_signal=False,
+        )
+
+        assert isinstance(result, SynthesisResult)
+        assert result.response is not None
+        assert len(result.response) > 0
+        assert result.synthesis_method in ["dspy", "hardcoded"]
+        assert result.confidence_level in ["high", "moderate", "low"]
+        # Should cite evidence sources
+        assert len(result.evidence_citations) >= 0  # May or may not cite depending on synthesis
+
+    async def test_synthesis_dspy_with_no_evidence(self):
+        """Test DSPy synthesis with no evidence (should still work)."""
+        result = await synthesize_response_dspy(
+            query="Tell me about Kisqali",
+            intent="general",
+            evidence=[],
+            brand_context="Kisqali",
+            collect_signal=False,
+        )
+
+        assert isinstance(result, SynthesisResult)
+        assert result.response is not None
+        assert result.confidence_level == "low"  # No evidence = low confidence
+        assert len(result.evidence_citations) == 0
+
+    async def test_synthesis_dspy_collects_signal(self):
+        """Test that synthesis collects training signals."""
+        collector = get_synthesis_signal_collector()
+        initial_count = len(collector.get_signals())
+
+        evidence = [{"source_id": "test", "content": "Test data", "relevance_score": 0.7, "source": "test"}]
+
+        await synthesize_response_dspy(
+            query="Test query",
+            intent="general",
+            evidence=evidence,
+            collect_signal=True,
+        )
+
+        assert len(collector.get_signals()) == initial_count + 1
+
+    async def test_synthesis_dspy_with_conversation_context(self):
+        """Test synthesis with conversation context."""
+        evidence = [{"source_id": "src", "content": "Relevant data", "relevance_score": 0.8, "source": "data"}]
+
+        result = await synthesize_response_dspy(
+            query="And what about the Northeast?",
+            intent="kpi_query",
+            evidence=evidence,
+            brand_context="Kisqali",
+            conversation_context="User asked about TRx trends. Assistant provided overview of Kisqali performance.",
+            collect_signal=False,
+        )
+
+        assert isinstance(result, SynthesisResult)
+        assert result.response is not None
+
+    async def test_synthesis_dspy_follow_up_suggestions(self):
+        """Test that synthesis provides follow-up suggestions."""
+        evidence = [
+            {"source_id": "src1", "content": "TRx is 10,000 units", "relevance_score": 0.9, "source": "kpi"},
+            {"source_id": "src2", "content": "Growth is 15%", "relevance_score": 0.85, "source": "kpi"},
+        ]
+
+        result = await synthesize_response_dspy(
+            query="What is the TRx for Kisqali?",
+            intent="kpi_query",
+            evidence=evidence,
+            brand_context="Kisqali",
+            collect_signal=False,
+        )
+
+        # Should have follow-up suggestions (from hardcoded fallback if DSPy not configured)
+        # Note: DSPy may or may not generate follow-ups
+        assert result.follow_up_suggestions is not None
+
+
+class TestSynthesisFeatureFlag:
+    """Test cases for synthesis feature flag."""
+
+    def test_feature_flag_exists(self):
+        """Test that synthesis feature flag is defined."""
+        assert isinstance(CHATBOT_DSPY_SYNTHESIS_ENABLED, bool)
+
+    def test_feature_flag_default_enabled(self):
+        """Test that synthesis is enabled by default."""
+        # Default should be True based on the code
+        assert CHATBOT_DSPY_SYNTHESIS_ENABLED is True

@@ -1462,3 +1462,410 @@ async def cognitive_rag_retrieve(
         avg_relevance_score=avg_relevance,
         retrieval_method=retrieval_method,
     )
+
+
+# =============================================================================
+# PHASE 6: EVIDENCE SYNTHESIS DSPY
+# =============================================================================
+
+# Feature flag for DSPy evidence synthesis
+CHATBOT_DSPY_SYNTHESIS_ENABLED = os.getenv("CHATBOT_DSPY_SYNTHESIS", "true").lower() == "true"
+
+
+# DSPy Signatures for Evidence Synthesis
+if DSPY_AVAILABLE:
+
+    class EvidenceSynthesisSignature(dspy.Signature):
+        """
+        Synthesize a response from retrieved evidence for pharmaceutical analytics queries.
+
+        Given a user query and retrieved evidence from the RAG system, produce a
+        well-structured, accurate response that:
+        - Directly addresses the user's question
+        - Cites evidence sources appropriately
+        - Provides confidence levels for claims
+        - Is grounded in the retrieved evidence
+        - Maintains focus on commercial pharma analytics (not clinical)
+
+        The response should be informative, actionable, and suitable for business decision-making.
+        """
+
+        query: str = dspy.InputField(desc="User's original question")
+        intent: str = dspy.InputField(
+            desc="Classified intent (kpi_query, causal_analysis, recommendation, etc.)",
+            default="general",
+        )
+        evidence: str = dspy.InputField(
+            desc="Retrieved evidence items formatted as source citations with content"
+        )
+        brand_context: str = dspy.InputField(
+            desc="Brand filter context (Kisqali, Remibrutinib, Fabhalta)",
+            default="",
+        )
+        conversation_context: str = dspy.InputField(
+            desc="Recent conversation history for continuity",
+            default="",
+        )
+
+        response: str = dspy.OutputField(
+            desc="Well-structured response that addresses the query using the evidence"
+        )
+        confidence_statement: str = dspy.OutputField(
+            desc="Brief statement about confidence level (e.g., 'High confidence based on 3 corroborating sources' or 'Moderate confidence - limited evidence available')"
+        )
+        evidence_citations: str = dspy.OutputField(
+            desc="Comma-separated list of source_ids that were used to formulate the response"
+        )
+        follow_up_suggestions: str = dspy.OutputField(
+            desc="1-2 suggested follow-up questions the user might want to ask",
+            default="",
+        )
+
+
+# =============================================================================
+# EVIDENCE SYNTHESIS DSPY MODULE
+# =============================================================================
+
+_chatbot_synthesizer = None
+
+
+def _get_dspy_synthesizer():
+    """Get or create the DSPy ChatbotSynthesizer singleton."""
+    global _chatbot_synthesizer
+    if _chatbot_synthesizer is None and DSPY_AVAILABLE:
+        _chatbot_synthesizer = dspy.ChainOfThought(EvidenceSynthesisSignature)
+        logger.info("Initialized DSPy ChatbotSynthesizer module")
+    return _chatbot_synthesizer
+
+
+# =============================================================================
+# SYNTHESIS TRAINING SIGNAL COLLECTION
+# =============================================================================
+
+@dataclass
+class SynthesisTrainingSignal:
+    """Training signal for evidence synthesis optimization."""
+
+    query: str
+    intent: str
+    evidence_count: int
+    response_length: int
+    confidence_level: str  # "high", "moderate", "low"
+    citations_count: int
+    synthesis_method: str  # "dspy" or "hardcoded"
+    timestamp: datetime = field(default_factory=datetime.utcnow)
+
+    # Feedback for optimization (filled later)
+    user_rating: Optional[float] = None  # 1-5 scale
+    was_helpful: Optional[bool] = None
+    had_hallucination: Optional[bool] = None
+
+    def compute_reward(self) -> float:
+        """Compute reward score for training optimization."""
+        reward = 0.0
+
+        # Base reward for completing synthesis
+        reward += 0.2
+
+        # Reward for using evidence (citations)
+        if self.citations_count > 0:
+            reward += min(0.3, self.citations_count * 0.1)  # Up to 0.3 for citations
+
+        # Reward for appropriate response length (not too short, not too long)
+        if 100 <= self.response_length <= 500:
+            reward += 0.2
+        elif 50 <= self.response_length <= 800:
+            reward += 0.1
+
+        # Reward for using DSPy (structured synthesis)
+        if self.synthesis_method == "dspy":
+            reward += 0.1
+
+        # Penalty for hallucination
+        if self.had_hallucination:
+            reward -= 0.5
+
+        # Reward for user feedback
+        if self.user_rating is not None:
+            reward += (self.user_rating - 3) * 0.1  # -0.2 to +0.2
+
+        if self.was_helpful:
+            reward += 0.2
+
+        return max(0.0, min(1.0, reward))
+
+
+class SynthesisTrainingSignalCollector:
+    """Collects synthesis training signals for feedback_learner optimization."""
+
+    def __init__(self, max_buffer_size: int = 1000):
+        self._signals: List[SynthesisTrainingSignal] = []
+        self._max_buffer_size = max_buffer_size
+
+    def add_signal(self, signal: SynthesisTrainingSignal) -> None:
+        """Add a training signal to the buffer."""
+        self._signals.append(signal)
+        if len(self._signals) > self._max_buffer_size:
+            # Remove oldest signals
+            self._signals = self._signals[-self._max_buffer_size:]
+        logger.debug(f"Added synthesis training signal, buffer size: {len(self._signals)}")
+
+    def get_signals(self, limit: int = 100) -> List[SynthesisTrainingSignal]:
+        """Get recent training signals."""
+        return self._signals[-limit:]
+
+    def clear(self) -> None:
+        """Clear the signal buffer."""
+        self._signals.clear()
+
+
+# Global synthesis signal collector singleton
+_synthesis_signal_collector: Optional[SynthesisTrainingSignalCollector] = None
+
+
+def get_synthesis_signal_collector() -> SynthesisTrainingSignalCollector:
+    """Get the global synthesis signal collector singleton."""
+    global _synthesis_signal_collector
+    if _synthesis_signal_collector is None:
+        _synthesis_signal_collector = SynthesisTrainingSignalCollector()
+    return _synthesis_signal_collector
+
+
+# =============================================================================
+# SYNTHESIS RESULT DATACLASS
+# =============================================================================
+
+@dataclass
+class SynthesisResult:
+    """Result from evidence synthesis."""
+
+    response: str
+    confidence_statement: str
+    evidence_citations: List[str]  # List of source_ids
+    follow_up_suggestions: List[str]
+    synthesis_method: str  # "dspy" or "hardcoded"
+    confidence_level: str  # "high", "moderate", "low"
+
+
+# =============================================================================
+# HARDCODED SYNTHESIS FALLBACK
+# =============================================================================
+
+def synthesize_response_hardcoded(
+    query: str,
+    intent: str,
+    evidence: List[Dict[str, Any]],
+    brand_context: str = "",
+) -> Tuple[str, str, List[str], List[str], str]:
+    """
+    Hardcoded synthesis fallback when DSPy is unavailable.
+
+    Returns:
+        Tuple of (response, confidence_statement, citations, follow_ups, confidence_level)
+    """
+    # Extract citations from evidence
+    citations = [e.get("source_id", "unknown") for e in evidence if e.get("source_id")]
+
+    # Build response based on evidence
+    if not evidence:
+        response = (
+            f"I don't have specific data to answer your question about "
+            f"{brand_context + ' ' if brand_context else ''}"
+            f"at this time. Could you please rephrase your question or try a different query?"
+        )
+        confidence_statement = "Low confidence - no relevant evidence found"
+        confidence_level = "low"
+        follow_ups = [
+            "What specific KPI would you like to explore?",
+            "Would you like to see available data for a different time period?",
+        ]
+    else:
+        # Build response from evidence
+        evidence_summary = []
+        for i, e in enumerate(evidence[:3], 1):
+            content = e.get("content", "")[:150]
+            source = e.get("source", "data")
+            evidence_summary.append(f"- **Source {i}** ({source}): {content}...")
+
+        evidence_text = "\n".join(evidence_summary)
+
+        # Determine confidence based on evidence quality
+        avg_score = sum(e.get("relevance_score", e.get("score", 0.5)) for e in evidence) / len(evidence)
+        if avg_score >= 0.7 and len(evidence) >= 2:
+            confidence_level = "high"
+            confidence_statement = f"High confidence based on {len(evidence)} corroborating sources (avg relevance: {avg_score:.0%})"
+        elif avg_score >= 0.5 or len(evidence) >= 2:
+            confidence_level = "moderate"
+            confidence_statement = f"Moderate confidence based on {len(evidence)} source(s) (avg relevance: {avg_score:.0%})"
+        else:
+            confidence_level = "low"
+            confidence_statement = f"Low confidence - limited evidence (avg relevance: {avg_score:.0%})"
+
+        # Generate response based on intent
+        if intent == "kpi_query":
+            response = (
+                f"Based on the retrieved data{' for ' + brand_context if brand_context else ''}:\n\n"
+                f"{evidence_text}\n\n"
+                f"These metrics provide insights into current performance trends."
+            )
+            follow_ups = [
+                "Would you like to see the trend over a different time period?",
+                "Should I analyze the drivers behind these numbers?",
+            ]
+        elif intent == "causal_analysis":
+            response = (
+                f"Analyzing the causal factors{' for ' + brand_context if brand_context else ''}:\n\n"
+                f"{evidence_text}\n\n"
+                f"These findings suggest potential cause-effect relationships in the data."
+            )
+            follow_ups = [
+                "Would you like to explore any specific driver in more detail?",
+                "Should I compare this with a different segment or region?",
+            ]
+        elif intent == "recommendation":
+            response = (
+                f"Based on the analysis{' for ' + brand_context if brand_context else ''}:\n\n"
+                f"{evidence_text}\n\n"
+                f"Consider these insights when making strategic decisions."
+            )
+            follow_ups = [
+                "Would you like specific action items based on these recommendations?",
+                "Should I prioritize these by potential impact?",
+            ]
+        else:
+            response = (
+                f"Here's what I found{' for ' + brand_context if brand_context else ''}:\n\n"
+                f"{evidence_text}\n\n"
+                f"Let me know if you'd like more details on any specific aspect."
+            )
+            follow_ups = [
+                "Would you like me to dig deeper into any of these findings?",
+                "Is there a specific aspect you'd like me to focus on?",
+            ]
+
+    return response, confidence_statement, citations, follow_ups, confidence_level
+
+
+# =============================================================================
+# MAIN SYNTHESIS FUNCTION
+# =============================================================================
+
+async def synthesize_response_dspy(
+    query: str,
+    intent: str,
+    evidence: List[Dict[str, Any]],
+    brand_context: str = "",
+    conversation_context: str = "",
+    collect_signal: bool = True,
+) -> SynthesisResult:
+    """
+    Synthesize a response from evidence using DSPy (with hardcoded fallback).
+
+    This function uses DSPy's ChainOfThought to generate structured responses
+    with confidence statements and proper evidence citations.
+
+    Args:
+        query: User's original question
+        intent: Classified intent type
+        evidence: Retrieved evidence items from RAG
+        brand_context: Optional brand filter
+        conversation_context: Recent conversation for continuity
+        collect_signal: Whether to collect training signals
+
+    Returns:
+        SynthesisResult with response, confidence, and citations
+    """
+    synthesis_method = "hardcoded"
+    response = ""
+    confidence_statement = ""
+    evidence_citations: List[str] = []
+    follow_up_suggestions: List[str] = []
+    confidence_level = "low"
+
+    # Format evidence for DSPy
+    evidence_text = ""
+    if evidence:
+        evidence_parts = []
+        for e in evidence[:5]:  # Top 5 for context window
+            source_id = e.get("source_id", "unknown")
+            content = e.get("content", "")[:300]
+            score = e.get("relevance_score", e.get("score", 0.0))
+            source = e.get("source", "data")
+            evidence_parts.append(f"[{source_id}] ({source}, relevance: {score:.0%}): {content}")
+        evidence_text = "\n\n".join(evidence_parts)
+
+    # Try DSPy synthesis if enabled
+    if CHATBOT_DSPY_SYNTHESIS_ENABLED and DSPY_AVAILABLE:
+        try:
+            synthesizer = _get_dspy_synthesizer()
+            if synthesizer:
+                result = synthesizer(
+                    query=query,
+                    intent=intent,
+                    evidence=evidence_text if evidence_text else "No evidence retrieved.",
+                    brand_context=brand_context,
+                    conversation_context=conversation_context,
+                )
+
+                response = result.response
+                confidence_statement = result.confidence_statement
+                follow_up_suggestions_str = getattr(result, "follow_up_suggestions", "")
+
+                # Parse evidence citations (comma-separated source_ids)
+                citations_str = result.evidence_citations
+                if citations_str:
+                    evidence_citations = [
+                        c.strip() for c in citations_str.split(",") if c.strip()
+                    ]
+
+                # Parse follow-up suggestions
+                if follow_up_suggestions_str:
+                    follow_up_suggestions = [
+                        s.strip() for s in follow_up_suggestions_str.split("?")
+                        if s.strip() and len(s.strip()) > 10
+                    ]
+                    # Re-add question marks
+                    follow_up_suggestions = [s + "?" if not s.endswith("?") else s for s in follow_up_suggestions[:2]]
+
+                # Determine confidence level from statement
+                confidence_lower = confidence_statement.lower()
+                if "high" in confidence_lower:
+                    confidence_level = "high"
+                elif "moderate" in confidence_lower or "medium" in confidence_lower:
+                    confidence_level = "moderate"
+                else:
+                    confidence_level = "low"
+
+                synthesis_method = "dspy"
+                logger.debug(f"DSPy synthesis complete: {len(response)} chars, {len(evidence_citations)} citations")
+
+        except Exception as e:
+            logger.warning(f"DSPy synthesis failed, using fallback: {e}")
+
+    # Fallback to hardcoded synthesis
+    if synthesis_method == "hardcoded":
+        response, confidence_statement, evidence_citations, follow_up_suggestions, confidence_level = (
+            synthesize_response_hardcoded(query, intent, evidence, brand_context)
+        )
+
+    # Collect training signal
+    if collect_signal:
+        signal = SynthesisTrainingSignal(
+            query=query,
+            intent=intent,
+            evidence_count=len(evidence),
+            response_length=len(response),
+            confidence_level=confidence_level,
+            citations_count=len(evidence_citations),
+            synthesis_method=synthesis_method,
+        )
+        get_synthesis_signal_collector().add_signal(signal)
+
+    return SynthesisResult(
+        response=response,
+        confidence_statement=confidence_statement,
+        evidence_citations=evidence_citations,
+        follow_up_suggestions=follow_up_suggestions,
+        synthesis_method=synthesis_method,
+        confidence_level=confidence_level,
+    )
