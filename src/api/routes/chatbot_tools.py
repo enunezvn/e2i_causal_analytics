@@ -40,8 +40,23 @@ from src.repositories.chatbot_message import (
 from src.api.routes.cognitive import get_orchestrator
 from src.agents.tool_composer import compose_query
 from src.utils.llm_factory import get_chat_llm
+from src.api.routes.chatbot_dspy import (
+    route_agent_dspy,
+    route_agent_hardcoded,
+    CHATBOT_DSPY_ROUTING_ENABLED,
+    VALID_AGENTS,
+)
 
 logger = logging.getLogger(__name__)
+
+# Try to import Opik for tracing
+try:
+    from src.mlops.opik_connector import OpikConnector
+
+    OPIK_AVAILABLE = True
+except ImportError:
+    OPIK_AVAILABLE = False
+    logger.debug("Opik not available for agent routing tracing")
 
 
 # =============================================================================
@@ -592,7 +607,7 @@ async def agent_routing_tool(
     context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
-    Route a query to the appropriate E2I agent tier.
+    Route a query to the appropriate E2I agent tier using DSPy.
 
     The E2I system has 18 agents organized in 6 tiers:
     - Tier 0: ML Foundation (scope_definer, data_preparer, feature_analyzer, etc.)
@@ -602,71 +617,131 @@ async def agent_routing_tool(
     - Tier 4: Predictions (prediction_synthesizer, resource_optimizer)
     - Tier 5: Learning (explainer, feedback_learner)
 
-    Use this tool when a query needs specialized agent processing.
+    Uses DSPy-based routing with intelligent agent selection and fallback
+    to keyword matching when DSPy is unavailable.
 
     Args:
         query: The user's query to route
         target_agent: Specific agent to route to (if known)
-        context: Additional context for routing decision
+        context: Additional context for routing decision (intent, brand_context)
 
     Returns:
-        Dict with routing decision and agent recommendation
+        Dict with routing decision, confidence, rationale, and agent recommendation
     """
     logger.info(f"Agent routing: query={query[:50]}..., target={target_agent}")
 
-    # Agent capability mapping
-    agent_capabilities = {
-        "causal_impact": ["why", "cause", "effect", "impact", "driver", "factor"],
-        "gap_analyzer": ["gap", "opportunity", "roi", "underperforming", "potential"],
-        "drift_monitor": ["drift", "change", "shift", "anomaly", "deviation"],
-        "experiment_designer": ["test", "experiment", "a/b", "trial", "hypothesis"],
-        "prediction_synthesizer": ["predict", "forecast", "future", "trend", "projection"],
-        "explainer": ["explain", "why", "understand", "summarize", "interpret"],
-        "health_score": ["health", "status", "score", "performance", "metric"],
-    }
+    # Initialize Opik tracing if available
+    opik_span = None
+    if OPIK_AVAILABLE:
+        try:
+            opik = OpikConnector()
+            opik_span = opik.start_span(
+                name="agent_routing",
+                metadata={"query_preview": query[:100], "target_agent": target_agent},
+            )
+        except Exception as e:
+            logger.debug(f"Failed to start Opik span: {e}")
 
-    # If target agent specified, validate and return
-    if target_agent:
-        if target_agent in agent_capabilities:
-            return {
-                "success": True,
-                "routed_to": target_agent,
-                "reason": "Explicit agent selection",
-                "capabilities": agent_capabilities.get(target_agent, []),
-            }
-        else:
-            return {
-                "success": False,
-                "error": f"Unknown agent: {target_agent}",
-                "available_agents": list(agent_capabilities.keys()),
-            }
+    try:
+        # If target agent specified, validate and return
+        if target_agent:
+            if target_agent in VALID_AGENTS:
+                result = {
+                    "success": True,
+                    "routed_to": target_agent,
+                    "secondary_agents": [],
+                    "routing_confidence": 1.0,
+                    "rationale": "Explicit agent selection",
+                    "routing_method": "explicit",
+                    "query_analyzed": query[:100],
+                }
+                # Log to Opik
+                if opik_span:
+                    opik_span.set_metadata({
+                        "routed_to": target_agent,
+                        "routing_confidence": 1.0,
+                        "routing_method": "explicit",
+                    })
+                return result
+            else:
+                return {
+                    "success": False,
+                    "error": f"Unknown agent: {target_agent}",
+                    "available_agents": list(VALID_AGENTS),
+                }
 
-    # Auto-route based on query keywords
-    query_lower = query.lower()
-    scores = {}
+        # Extract context values
+        intent = ""
+        brand_context = ""
+        if context:
+            intent = context.get("intent", "")
+            brand_context = context.get("brand_context", "") or context.get("brand", "")
 
-    for agent, keywords in agent_capabilities.items():
-        score = sum(1 for kw in keywords if kw in query_lower)
-        if score > 0:
-            scores[agent] = score
+        # Use DSPy routing with fallback to hardcoded
+        primary_agent, secondary_agents, confidence, rationale, routing_method = (
+            await route_agent_dspy(
+                query=query,
+                intent=intent,
+                brand_context=brand_context,
+                collect_signal=True,
+            )
+        )
 
-    if scores:
-        best_agent = max(scores, key=scores.get)
-        return {
+        result = {
             "success": True,
-            "routed_to": best_agent,
-            "reason": f"Keyword match (score: {scores[best_agent]})",
-            "all_scores": scores,
+            "routed_to": primary_agent,
+            "secondary_agents": secondary_agents,
+            "routing_confidence": confidence,
+            "rationale": rationale,
+            "routing_method": routing_method,
+            "dspy_enabled": CHATBOT_DSPY_ROUTING_ENABLED,
             "query_analyzed": query[:100],
         }
 
-    # Default to explainer for general queries
-    return {
-        "success": True,
-        "routed_to": "explainer",
-        "reason": "Default routing (no specific keywords matched)",
-        "query_analyzed": query[:100],
-    }
+        # Log routing decision to Opik
+        if opik_span:
+            opik_span.set_metadata({
+                "routed_to": primary_agent,
+                "secondary_agents": secondary_agents,
+                "routing_confidence": confidence,
+                "routing_method": routing_method,
+                "intent": intent,
+                "brand_context": brand_context,
+            })
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Agent routing failed: {e}")
+        # Fallback to hardcoded routing on error
+        try:
+            primary_agent, secondary_agents, confidence, rationale = route_agent_hardcoded(
+                query, intent="" if not context else context.get("intent", "")
+            )
+            return {
+                "success": True,
+                "routed_to": primary_agent,
+                "secondary_agents": secondary_agents,
+                "routing_confidence": confidence,
+                "rationale": rationale,
+                "routing_method": "hardcoded_fallback",
+                "fallback_reason": str(e),
+                "query_analyzed": query[:100],
+            }
+        except Exception as fallback_error:
+            return {
+                "success": False,
+                "error": str(e),
+                "fallback_error": str(fallback_error),
+                "query_analyzed": query[:100],
+            }
+    finally:
+        # End Opik span
+        if opik_span:
+            try:
+                opik_span.end()
+            except Exception:
+                pass
 
 
 @tool(args_schema=ConversationMemoryInput)
