@@ -769,3 +769,332 @@ class TestAgentCapabilitiesMapping:
                 # Keywords should be lowercase and non-empty
                 assert keyword == keyword.lower(), f"Non-lowercase keyword: {keyword}"
                 assert len(keyword) > 0, f"Empty keyword for {agent}"
+
+
+# ============================================================================
+# PHASE 5: Cognitive RAG DSPy Tests
+# ============================================================================
+
+from src.api.routes.chatbot_dspy import (
+    # Cognitive RAG components
+    CognitiveRAGResult,
+    RAGTrainingSignal,
+    RAGTrainingSignalCollector,
+    get_rag_signal_collector,
+    rewrite_query_hardcoded,
+    cognitive_rag_retrieve,
+    CHATBOT_COGNITIVE_RAG_ENABLED,
+    E2I_DOMAIN_VOCABULARY,
+)
+
+
+class TestCognitiveRAGResult:
+    """Test cases for CognitiveRAGResult dataclass."""
+
+    def test_result_creation(self):
+        """Test creating a cognitive RAG result."""
+        result = CognitiveRAGResult(
+            rewritten_query="TRx metrics for Kisqali Northeast region",
+            search_keywords=["trx", "kisqali", "northeast"],
+            graph_entities=["Kisqali", "Northeast"],
+            evidence=[
+                {"source_id": "doc1", "content": "TRx is 1000", "score": 0.9}
+            ],
+            hop_count=1,
+            avg_relevance_score=0.85,
+            retrieval_method="cognitive",
+        )
+        assert result.rewritten_query == "TRx metrics for Kisqali Northeast region"
+        assert len(result.search_keywords) == 3
+        assert len(result.graph_entities) == 2
+        assert len(result.evidence) == 1
+        assert result.hop_count == 1
+        assert result.avg_relevance_score == 0.85
+        assert result.retrieval_method == "cognitive"
+
+    def test_result_with_empty_evidence(self):
+        """Test result with no evidence found."""
+        result = CognitiveRAGResult(
+            rewritten_query="test query",
+            search_keywords=["test"],
+            graph_entities=[],
+            evidence=[],
+            hop_count=0,
+            avg_relevance_score=0.0,
+            retrieval_method="basic",
+        )
+        assert result.evidence == []
+        assert result.avg_relevance_score == 0.0
+
+
+class TestRAGTrainingSignal:
+    """Test cases for RAG training signal collection."""
+
+    def test_signal_creation(self):
+        """Test creating a RAG training signal."""
+        signal = RAGTrainingSignal(
+            query="What is TRx for Kisqali?",
+            rewritten_query="TRx metrics Kisqali brand",
+            search_keywords=["trx", "kisqali"],
+            graph_entities=["Kisqali"],
+            evidence_count=5,
+            hop_count=1,
+            avg_relevance_score=0.8,
+            retrieval_method="cognitive",
+        )
+        assert signal.query == "What is TRx for Kisqali?"
+        assert signal.rewritten_query == "TRx metrics Kisqali brand"
+        assert len(signal.search_keywords) == 2
+        assert signal.evidence_count == 5
+        assert signal.retrieval_method == "cognitive"
+
+    def test_signal_reward_computation(self):
+        """Test reward computation for RAG signals."""
+        # High evidence count, high relevance
+        signal_good = RAGTrainingSignal(
+            query="test",
+            rewritten_query="test rewritten",
+            search_keywords=["test"],
+            graph_entities=[],
+            evidence_count=5,
+            hop_count=1,
+            avg_relevance_score=0.9,
+            retrieval_method="cognitive",
+            response_quality=0.9,
+            user_feedback="helpful",
+        )
+        reward_good = signal_good.compute_reward()
+        assert reward_good > 0.5  # Should be high reward
+
+        # Low evidence count, low relevance
+        signal_bad = RAGTrainingSignal(
+            query="test",
+            rewritten_query="test",
+            search_keywords=[],
+            graph_entities=[],
+            evidence_count=0,
+            hop_count=3,  # Many hops, no evidence = bad
+            avg_relevance_score=0.1,
+            retrieval_method="basic",
+        )
+        reward_bad = signal_bad.compute_reward()
+        assert reward_bad < reward_good  # Should be lower reward
+
+    def test_signal_default_timestamp(self):
+        """Test that signal has default timestamp."""
+        signal = RAGTrainingSignal(
+            query="test",
+            rewritten_query="test",
+            search_keywords=[],
+            graph_entities=[],
+            evidence_count=0,
+            hop_count=0,
+            avg_relevance_score=0.0,
+            retrieval_method="basic",
+        )
+        assert signal.timestamp is not None
+
+
+class TestRAGTrainingSignalCollector:
+    """Test cases for RAG training signal collector."""
+
+    def test_collector_add_and_get(self):
+        """Test collector add and retrieval."""
+        collector = RAGTrainingSignalCollector(buffer_size=10)
+        collector.clear()
+
+        for i in range(5):
+            signal = RAGTrainingSignal(
+                query=f"query {i}",
+                rewritten_query=f"rewritten {i}",
+                search_keywords=["test"],
+                graph_entities=[],
+                evidence_count=i,
+                hop_count=1,
+                avg_relevance_score=0.5 + (i * 0.1),
+                retrieval_method="cognitive",
+            )
+            collector.add_signal(signal)
+
+        assert len(collector) == 5
+        signals = collector.get_signals(limit=3)
+        assert len(signals) == 3
+
+    def test_collector_buffer_overflow(self):
+        """Test that buffer size is respected."""
+        collector = RAGTrainingSignalCollector(buffer_size=5)
+        collector.clear()
+
+        for i in range(10):
+            signal = RAGTrainingSignal(
+                query=f"query {i}",
+                rewritten_query=f"rewritten {i}",
+                search_keywords=[],
+                graph_entities=[],
+                evidence_count=i,
+                hop_count=1,
+                avg_relevance_score=0.5,
+                retrieval_method="basic",
+            )
+            collector.add_signal(signal)
+
+        assert len(collector) == 5  # Buffer should cap at 5
+
+
+class TestGlobalRAGSignalCollector:
+    """Test cases for global RAG signal collector singleton."""
+
+    def test_get_rag_signal_collector_singleton(self):
+        """Test that get_rag_signal_collector returns same instance."""
+        collector1 = get_rag_signal_collector()
+        collector2 = get_rag_signal_collector()
+        assert collector1 is collector2
+
+
+class TestHardcodedQueryRewriting:
+    """Test cases for hardcoded query rewriting (fallback)."""
+
+    def test_rewrite_with_e2i_entities(self):
+        """Test query rewriting extracts E2I entities."""
+        query = "What is the TRx for Kisqali in the Northeast?"
+        rewritten, keywords, entities = rewrite_query_hardcoded(query)
+
+        assert "kisqali" in keywords
+        assert "trx" in keywords
+        assert "northeast" in keywords
+        assert "Kisqali" in entities
+        assert "Northeast" in entities
+
+    def test_rewrite_with_brand_context(self):
+        """Test query rewriting with brand context."""
+        query = "Show me market share"
+        rewritten, keywords, entities = rewrite_query_hardcoded(query, brand_context="Fabhalta")
+
+        # Should include brand from context
+        assert "fabhalta" in keywords
+        assert "market share" in keywords
+
+    def test_rewrite_generic_query(self):
+        """Test query rewriting with generic query."""
+        query = "Tell me about sales"
+        rewritten, keywords, entities = rewrite_query_hardcoded(query)
+
+        # Should still return keywords
+        assert len(keywords) > 0
+        # No specific entities
+        assert entities == []
+
+    def test_rewrite_multiple_entities(self):
+        """Test extraction of multiple E2I entities."""
+        query = "Compare Kisqali TRx in Northeast vs Southeast for Q2"
+        rewritten, keywords, entities = rewrite_query_hardcoded(query)
+
+        assert "Kisqali" in entities
+        assert "Northeast" in entities
+        assert "Southeast" in entities
+        assert "trx" in keywords
+
+
+class TestE2IDomainVocabulary:
+    """Test cases for E2I domain vocabulary constant."""
+
+    def test_vocabulary_contains_brands(self):
+        """Test vocabulary contains all E2I brands."""
+        assert "Kisqali" in E2I_DOMAIN_VOCABULARY
+        assert "Remibrutinib" in E2I_DOMAIN_VOCABULARY
+        assert "Fabhalta" in E2I_DOMAIN_VOCABULARY
+
+    def test_vocabulary_contains_regions(self):
+        """Test vocabulary contains regions."""
+        assert "Northeast" in E2I_DOMAIN_VOCABULARY
+        assert "Southeast" in E2I_DOMAIN_VOCABULARY
+        assert "Midwest" in E2I_DOMAIN_VOCABULARY
+
+    def test_vocabulary_contains_kpis(self):
+        """Test vocabulary contains KPIs."""
+        assert "TRx" in E2I_DOMAIN_VOCABULARY
+        assert "NRx" in E2I_DOMAIN_VOCABULARY
+        assert "Market Share" in E2I_DOMAIN_VOCABULARY
+
+
+@pytest.mark.asyncio
+class TestAsyncCognitiveRAGRetrieve:
+    """Test cases for async cognitive RAG retrieval."""
+
+    async def test_cognitive_retrieve_fallback(self):
+        """Test cognitive retrieve falls back when hybrid_search fails."""
+        # Mock the hybrid_search to fail (patch in the rag.retriever module)
+        with patch("src.rag.retriever.hybrid_search", side_effect=Exception("Mock error")):
+            result = await cognitive_rag_retrieve(
+                query="What is TRx for Kisqali?",
+                collect_signal=False,
+            )
+            # Should return result with empty evidence due to error
+            assert isinstance(result, CognitiveRAGResult)
+            assert result.evidence == []
+
+    async def test_cognitive_retrieve_with_results(self):
+        """Test cognitive retrieve with mocked results."""
+        # Mock hybrid_search to return results
+        mock_result = MagicMock()
+        mock_result.source_id = "doc1"
+        mock_result.content = "TRx for Kisqali is 1000 units"
+        mock_result.score = 0.9
+        mock_result.source = "analytics"
+
+        with patch("src.rag.retriever.hybrid_search", new_callable=AsyncMock) as mock_search:
+            mock_search.return_value = [mock_result]
+
+            result = await cognitive_rag_retrieve(
+                query="What is TRx for Kisqali?",
+                brand_context="Kisqali",
+                collect_signal=False,
+            )
+
+            assert isinstance(result, CognitiveRAGResult)
+            assert result.rewritten_query is not None
+            # Evidence may be filtered by relevance threshold
+            assert result.retrieval_method in ["cognitive", "basic"]
+
+    async def test_cognitive_retrieve_collects_signal(self):
+        """Test that signal collection works."""
+        collector = get_rag_signal_collector()
+        initial_count = len(collector)
+
+        # Mock hybrid_search
+        with patch("src.rag.retriever.hybrid_search", new_callable=AsyncMock) as mock_search:
+            mock_search.return_value = []
+
+            await cognitive_rag_retrieve(
+                query="Test query for signal collection",
+                collect_signal=True,
+            )
+
+        # Should have one more signal
+        assert len(collector) == initial_count + 1
+
+    async def test_cognitive_retrieve_with_context(self):
+        """Test cognitive retrieve with full context."""
+        with patch("src.rag.retriever.hybrid_search", new_callable=AsyncMock) as mock_search:
+            mock_search.return_value = []
+
+            result = await cognitive_rag_retrieve(
+                query="Why did TRx drop?",
+                conversation_context="User asked about Kisqali earlier",
+                brand_context="Kisqali",
+                intent="causal_analysis",
+                k=3,
+                collect_signal=False,
+            )
+
+            assert isinstance(result, CognitiveRAGResult)
+            # Check that search was called
+            mock_search.assert_called_once()
+
+
+class TestChatbotCognitiveRAGFeatureFlag:
+    """Test cases for cognitive RAG feature flag."""
+
+    def test_feature_flag_exists(self):
+        """Test that feature flag is defined."""
+        assert isinstance(CHATBOT_COGNITIVE_RAG_ENABLED, bool)

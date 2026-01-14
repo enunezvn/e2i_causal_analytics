@@ -405,6 +405,27 @@ class NodeSpanContext:
         if self._opik_span:
             self._opik_span.set_output(output)
 
+    def log_metadata(self, metadata: Dict[str, Any]) -> None:
+        """Log arbitrary metadata for this node span.
+
+        Useful for cognitive RAG and other custom metrics.
+
+        Args:
+            metadata: Key-value pairs to log
+        """
+        self.metadata.update(metadata)
+
+        if self._opik_span:
+            for key, value in metadata.items():
+                if value is not None:
+                    self._opik_span.set_attribute(key, value)
+            self._opik_span.add_event(
+                "metadata_logged",
+                {k: v for k, v in metadata.items() if v is not None},
+            )
+
+        logger.debug(f"[{self.node_name.upper()}] metadata: {list(metadata.keys())}")
+
 
 @dataclass
 class ChatbotTraceContext:
