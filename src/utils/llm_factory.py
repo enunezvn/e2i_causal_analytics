@@ -18,7 +18,7 @@ Usage:
     reasoning_llm = get_reasoning_llm()
 
 Environment Variables:
-    LLM_PROVIDER: "anthropic" (default) or "openai"
+    LLM_PROVIDER: "openai" (default) or "anthropic"
     ANTHROPIC_API_KEY: Required if using Anthropic
     OPENAI_API_KEY: Required if using OpenAI
 
@@ -68,10 +68,10 @@ def get_llm_provider() -> LLMProvider:
     Returns:
         LLMProvider: "anthropic" or "openai"
     """
-    provider = os.environ.get("LLM_PROVIDER", "anthropic").lower()
+    provider = os.environ.get("LLM_PROVIDER", "openai").lower()
     if provider not in ("anthropic", "openai"):
-        logger.warning(f"Unknown LLM_PROVIDER '{provider}', defaulting to 'anthropic'")
-        return "anthropic"
+        logger.warning(f"Unknown LLM_PROVIDER '{provider}', defaulting to 'openai'")
+        return "openai"
     return provider  # type: ignore
 
 

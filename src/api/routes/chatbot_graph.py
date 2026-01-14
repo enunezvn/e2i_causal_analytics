@@ -17,7 +17,6 @@ import os
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
-from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import END, StateGraph
@@ -25,6 +24,7 @@ from langgraph.prebuilt import ToolNode
 
 from src.api.routes.chatbot_state import ChatbotState, IntentType, create_initial_state
 from src.api.routes.chatbot_tools import E2I_CHATBOT_TOOLS
+from src.utils.llm_factory import get_chat_llm, get_llm_provider
 from src.memory.services.factories import get_async_supabase_client
 from src.memory.working_memory import get_langgraph_checkpointer
 from src.rag.retriever import hybrid_search
@@ -433,21 +433,15 @@ async def generate_node(state: ChatbotState) -> Dict[str, Any]:
     # Prepare messages for LLM
     llm_messages = [system_msg] + messages
 
-    # Get Claude model
-    model_name = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-
-    if not api_key:
-        logger.warning("ANTHROPIC_API_KEY not set, using fallback response")
-        return _generate_fallback_response(state)
-
+    # Get LLM via factory (supports dynamic provider switching)
     try:
-        llm = ChatAnthropic(
-            model=model_name,
-            api_key=api_key,
-            temperature=0.3,
+        llm = get_chat_llm(
+            model_tier="standard",
             max_tokens=1024,
+            temperature=0.3,
         )
+        provider = get_llm_provider()
+        logger.info(f"Using {provider} LLM for chatbot")
 
         # Bind tools to the model
         llm_with_tools = llm.bind_tools(E2I_CHATBOT_TOOLS)

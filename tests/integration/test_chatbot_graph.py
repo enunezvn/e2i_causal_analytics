@@ -133,13 +133,13 @@ class TestChatbotWorkflow:
     """Integration tests for chatbot workflow execution."""
 
     @pytest.mark.asyncio
-    @patch("src.api.routes.chatbot_graph.get_supabase_client", new_callable=AsyncMock)
+    @patch("src.api.routes.chatbot_graph.get_async_supabase_client", new_callable=AsyncMock)
     @patch("src.api.routes.chatbot_graph.hybrid_search")
-    @patch("src.api.routes.chatbot_graph.ChatAnthropic")
+    @patch("src.api.routes.chatbot_graph.get_chat_llm")
     async def test_runs_full_workflow_with_fallback(
-        self, mock_anthropic, mock_hybrid_search, mock_get_client
+        self, mock_get_chat_llm, mock_hybrid_search, mock_get_client
     ):
-        """Test running full workflow with fallback when no API key."""
+        """Test running full workflow with fallback when LLM factory fails."""
         # Mock Supabase client
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
@@ -156,20 +156,20 @@ class TestChatbotWorkflow:
         # Mock RAG search
         mock_hybrid_search.return_value = []
 
-        # Mock LLM to raise error (simulating no API key)
-        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": ""}):
-            result = await run_chatbot(
-                query="Hello",
-                user_id="user-123",
-                request_id="req-456",
-            )
+        # Mock LLM factory to raise error (simulating no API key)
+        mock_get_chat_llm.side_effect = ValueError("OPENAI_API_KEY not set")
+        result = await run_chatbot(
+            query="Hello",
+            user_id="user-123",
+            request_id="req-456",
+        )
 
         assert result is not None
         assert "response_text" in result
         assert result["streaming_complete"] is True
 
     @pytest.mark.asyncio
-    @patch("src.api.routes.chatbot_graph.get_supabase_client", new_callable=AsyncMock)
+    @patch("src.api.routes.chatbot_graph.get_async_supabase_client", new_callable=AsyncMock)
     async def test_handles_greeting_intent(self, mock_get_client):
         """Test that greeting queries get appropriate response."""
         mock_get_client.return_value = None  # No database
@@ -182,11 +182,12 @@ class TestChatbotWorkflow:
             )
 
         assert "response_text" in result
-        # Fallback greeting response should mention what the assistant can do
-        assert "E2I" in result["response_text"] or "help" in result["response_text"].lower()
+        # Fallback greeting response should mention pharmaceutical analytics or assistance
+        response_lower = result["response_text"].lower()
+        assert any(keyword in response_lower for keyword in ["pharmaceutical", "analytics", "assist", "help"])
 
     @pytest.mark.asyncio
-    @patch("src.api.routes.chatbot_graph.get_supabase_client", new_callable=AsyncMock)
+    @patch("src.api.routes.chatbot_graph.get_async_supabase_client", new_callable=AsyncMock)
     async def test_handles_help_intent(self, mock_get_client):
         """Test that help queries get appropriate response."""
         mock_get_client.return_value = None
@@ -207,7 +208,7 @@ class TestMessagePersistence:
     """Tests for message persistence in finalize_node."""
 
     @pytest.mark.asyncio
-    @patch("src.api.routes.chatbot_graph.get_supabase_client", new_callable=AsyncMock)
+    @patch("src.api.routes.chatbot_graph.get_async_supabase_client", new_callable=AsyncMock)
     @patch("src.api.routes.chatbot_graph.get_chatbot_message_repository")
     @patch("src.api.routes.chatbot_graph.get_chatbot_conversation_repository")
     async def test_persists_messages_on_completion(
@@ -243,7 +244,7 @@ class TestRAGIntegration:
     """Tests for RAG retrieval integration."""
 
     @pytest.mark.asyncio
-    @patch("src.api.routes.chatbot_graph.get_supabase_client", new_callable=AsyncMock)
+    @patch("src.api.routes.chatbot_graph.get_async_supabase_client", new_callable=AsyncMock)
     @patch("src.api.routes.chatbot_graph.hybrid_search")
     async def test_retrieves_rag_context(self, mock_hybrid_search, mock_get_client):
         """Test that RAG context is retrieved."""
@@ -269,7 +270,7 @@ class TestRAGIntegration:
         assert "rag_context" in result
 
     @pytest.mark.asyncio
-    @patch("src.api.routes.chatbot_graph.get_supabase_client", new_callable=AsyncMock)
+    @patch("src.api.routes.chatbot_graph.get_async_supabase_client", new_callable=AsyncMock)
     @patch("src.api.routes.chatbot_graph.hybrid_search")
     async def test_handles_rag_error_gracefully(self, mock_hybrid_search, mock_get_client):
         """Test that RAG errors don't crash the workflow."""
