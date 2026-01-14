@@ -1869,3 +1869,686 @@ async def synthesize_response_dspy(
         synthesis_method=synthesis_method,
         confidence_level=confidence_level,
     )
+
+
+# =============================================================================
+# PHASE 7: UNIFIED TRAINING SIGNAL COLLECTION
+# =============================================================================
+
+@dataclass
+class ChatbotSessionSignal:
+    """
+    Unified training signal for a complete chatbot session.
+
+    Aggregates signals from all phases (intent, routing, RAG, synthesis)
+    to provide comprehensive training data for feedback_learner.
+    """
+
+    # Session identification
+    session_id: str
+    thread_id: str
+    user_id: Optional[str] = None
+    timestamp: datetime = field(default_factory=datetime.utcnow)
+
+    # Query context
+    query: str = ""
+    brand_context: str = ""
+    region_context: str = ""
+
+    # Phase 3: Intent Classification
+    predicted_intent: str = ""
+    intent_confidence: float = 0.0
+    intent_method: str = ""  # "dspy" or "hardcoded"
+    intent_reasoning: str = ""
+
+    # Phase 4: Agent Routing
+    predicted_agent: str = ""
+    secondary_agents: List[str] = field(default_factory=list)
+    routing_confidence: float = 0.0
+    routing_method: str = ""  # "dspy" or "hardcoded"
+    routing_rationale: str = ""
+
+    # Phase 5: Cognitive RAG
+    rewritten_query: str = ""
+    search_keywords: List[str] = field(default_factory=list)
+    graph_entities: List[str] = field(default_factory=list)
+    evidence_count: int = 0
+    hop_count: int = 0
+    avg_relevance_score: float = 0.0
+    rag_method: str = ""  # "cognitive" or "basic"
+
+    # Phase 6: Evidence Synthesis
+    response_length: int = 0
+    synthesis_confidence: str = ""  # "high", "moderate", "low"
+    citations_count: int = 0
+    synthesis_method: str = ""  # "dspy" or "hardcoded"
+    follow_up_count: int = 0
+
+    # User feedback (populated after interaction)
+    user_rating: Optional[float] = None  # 1-5 scale
+    was_helpful: Optional[bool] = None
+    user_followed_up: Optional[bool] = None
+    had_hallucination: Optional[bool] = None
+
+    # Timing metrics
+    total_duration_ms: Optional[float] = None
+    intent_duration_ms: Optional[float] = None
+    routing_duration_ms: Optional[float] = None
+    rag_duration_ms: Optional[float] = None
+    synthesis_duration_ms: Optional[float] = None
+
+    def compute_accuracy_reward(self) -> float:
+        """
+        Compute accuracy reward based on classification and routing correctness.
+
+        Returns:
+            Reward between 0.0 and 1.0
+        """
+        reward = 0.0
+
+        # Intent classification confidence
+        if self.intent_method == "dspy":
+            reward += self.intent_confidence * 0.2
+        else:
+            reward += self.intent_confidence * 0.15
+
+        # Routing confidence
+        if self.routing_method == "dspy":
+            reward += self.routing_confidence * 0.2
+        else:
+            reward += self.routing_confidence * 0.15
+
+        # Evidence retrieval quality
+        if self.evidence_count >= 3:
+            reward += 0.15
+        elif self.evidence_count >= 1:
+            reward += 0.1
+
+        # Relevance score
+        reward += self.avg_relevance_score * 0.15
+
+        # User feedback if available
+        if self.was_helpful is True:
+            reward += 0.3
+        elif self.was_helpful is False:
+            reward -= 0.2
+
+        return max(0.0, min(1.0, reward))
+
+    def compute_efficiency_reward(self) -> float:
+        """
+        Compute efficiency reward based on response time and resource usage.
+
+        Returns:
+            Reward between 0.0 and 1.0
+        """
+        reward = 0.5  # Base reward
+
+        # DSPy usage rewards (structured processing)
+        dspy_usage = sum([
+            1 if self.intent_method == "dspy" else 0,
+            1 if self.routing_method == "dspy" else 0,
+            1 if self.rag_method == "cognitive" else 0,
+            1 if self.synthesis_method == "dspy" else 0,
+        ])
+        reward += dspy_usage * 0.05  # Up to 0.2 bonus for full DSPy
+
+        # Hop efficiency (fewer hops for good results = better)
+        if self.evidence_count >= 3 and self.hop_count <= 2:
+            reward += 0.15
+        elif self.evidence_count >= 1 and self.hop_count <= 3:
+            reward += 0.1
+
+        # Response length efficiency
+        if 100 <= self.response_length <= 500:
+            reward += 0.1
+        elif 50 <= self.response_length <= 800:
+            reward += 0.05
+
+        # Timing rewards (if available)
+        if self.total_duration_ms is not None:
+            if self.total_duration_ms < 2000:  # Under 2 seconds
+                reward += 0.1
+            elif self.total_duration_ms < 5000:  # Under 5 seconds
+                reward += 0.05
+            elif self.total_duration_ms > 10000:  # Over 10 seconds
+                reward -= 0.1
+
+        return max(0.0, min(1.0, reward))
+
+    def compute_satisfaction_reward(self) -> float:
+        """
+        Compute satisfaction reward based on user feedback and response quality.
+
+        Returns:
+            Reward between 0.0 and 1.0
+        """
+        reward = 0.3  # Base reward for completing the interaction
+
+        # User rating (1-5 scale)
+        if self.user_rating is not None:
+            reward += (self.user_rating - 3) * 0.15  # -0.3 to +0.3
+
+        # Helpful response
+        if self.was_helpful is True:
+            reward += 0.25
+        elif self.was_helpful is False:
+            reward -= 0.2
+
+        # User engagement (followed up with another question)
+        if self.user_followed_up is True:
+            reward += 0.1
+
+        # Hallucination penalty
+        if self.had_hallucination is True:
+            reward -= 0.4
+
+        # Synthesis confidence
+        if self.synthesis_confidence == "high":
+            reward += 0.15
+        elif self.synthesis_confidence == "moderate":
+            reward += 0.1
+        elif self.synthesis_confidence == "low":
+            reward += 0.0
+
+        # Citations (grounded responses)
+        if self.citations_count >= 2:
+            reward += 0.1
+        elif self.citations_count >= 1:
+            reward += 0.05
+
+        return max(0.0, min(1.0, reward))
+
+    def compute_unified_reward(self) -> Dict[str, float]:
+        """
+        Compute unified reward scores across all dimensions.
+
+        Returns:
+            Dict with accuracy, efficiency, satisfaction, and overall scores
+        """
+        accuracy = self.compute_accuracy_reward()
+        efficiency = self.compute_efficiency_reward()
+        satisfaction = self.compute_satisfaction_reward()
+
+        # Weighted overall score
+        overall = (
+            accuracy * 0.35 +  # Classification/routing correctness
+            efficiency * 0.25 +  # Resource efficiency
+            satisfaction * 0.40  # User satisfaction (most important)
+        )
+
+        return {
+            "accuracy": accuracy,
+            "efficiency": efficiency,
+            "satisfaction": satisfaction,
+            "overall": overall,
+        }
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert signal to dictionary for database storage."""
+        return {
+            "session_id": self.session_id,
+            "thread_id": self.thread_id,
+            "user_id": self.user_id,
+            "timestamp": self.timestamp.isoformat(),
+            "query": self.query,
+            "brand_context": self.brand_context,
+            "region_context": self.region_context,
+            "predicted_intent": self.predicted_intent,
+            "intent_confidence": self.intent_confidence,
+            "intent_method": self.intent_method,
+            "intent_reasoning": self.intent_reasoning,
+            "predicted_agent": self.predicted_agent,
+            "secondary_agents": self.secondary_agents,
+            "routing_confidence": self.routing_confidence,
+            "routing_method": self.routing_method,
+            "routing_rationale": self.routing_rationale,
+            "rewritten_query": self.rewritten_query,
+            "search_keywords": self.search_keywords,
+            "graph_entities": self.graph_entities,
+            "evidence_count": self.evidence_count,
+            "hop_count": self.hop_count,
+            "avg_relevance_score": self.avg_relevance_score,
+            "rag_method": self.rag_method,
+            "response_length": self.response_length,
+            "synthesis_confidence": self.synthesis_confidence,
+            "citations_count": self.citations_count,
+            "synthesis_method": self.synthesis_method,
+            "follow_up_count": self.follow_up_count,
+            "user_rating": self.user_rating,
+            "was_helpful": self.was_helpful,
+            "user_followed_up": self.user_followed_up,
+            "had_hallucination": self.had_hallucination,
+            "total_duration_ms": self.total_duration_ms,
+            "intent_duration_ms": self.intent_duration_ms,
+            "routing_duration_ms": self.routing_duration_ms,
+            "rag_duration_ms": self.rag_duration_ms,
+            "synthesis_duration_ms": self.synthesis_duration_ms,
+            **self.compute_unified_reward(),
+        }
+
+
+class ChatbotSignalCollector:
+    """
+    Unified training signal collector for the chatbot workflow.
+
+    Aggregates signals from all phases (intent, routing, RAG, synthesis)
+    and provides methods for computing rewards and persisting to database.
+    """
+
+    def __init__(self, buffer_size: int = 500):
+        self._signals: List[ChatbotSessionSignal] = []
+        self._buffer_size = buffer_size
+        self._pending_sessions: Dict[str, ChatbotSessionSignal] = {}
+
+    def start_session(
+        self,
+        session_id: str,
+        thread_id: str,
+        query: str,
+        user_id: Optional[str] = None,
+        brand_context: str = "",
+        region_context: str = "",
+    ) -> ChatbotSessionSignal:
+        """
+        Start collecting signals for a new session.
+
+        Args:
+            session_id: Unique session identifier
+            thread_id: Conversation thread ID
+            query: User's query
+            user_id: Optional user identifier
+            brand_context: Brand filter context
+            region_context: Region filter context
+
+        Returns:
+            New ChatbotSessionSignal instance
+        """
+        signal = ChatbotSessionSignal(
+            session_id=session_id,
+            thread_id=thread_id,
+            query=query,
+            user_id=user_id,
+            brand_context=brand_context,
+            region_context=region_context,
+        )
+        self._pending_sessions[session_id] = signal
+        logger.debug(f"Started signal collection for session: {session_id}")
+        return signal
+
+    def get_session(self, session_id: str) -> Optional[ChatbotSessionSignal]:
+        """Get a pending session by ID."""
+        return self._pending_sessions.get(session_id)
+
+    def update_intent(
+        self,
+        session_id: str,
+        intent: str,
+        confidence: float,
+        method: str,
+        reasoning: str = "",
+        duration_ms: Optional[float] = None,
+    ) -> None:
+        """Update intent classification results for a session."""
+        signal = self._pending_sessions.get(session_id)
+        if signal:
+            signal.predicted_intent = intent
+            signal.intent_confidence = confidence
+            signal.intent_method = method
+            signal.intent_reasoning = reasoning
+            signal.intent_duration_ms = duration_ms
+            logger.debug(f"Updated intent signal for session {session_id}: {intent}")
+
+    def update_routing(
+        self,
+        session_id: str,
+        agent: str,
+        secondary_agents: List[str],
+        confidence: float,
+        method: str,
+        rationale: str = "",
+        duration_ms: Optional[float] = None,
+    ) -> None:
+        """Update agent routing results for a session."""
+        signal = self._pending_sessions.get(session_id)
+        if signal:
+            signal.predicted_agent = agent
+            signal.secondary_agents = secondary_agents
+            signal.routing_confidence = confidence
+            signal.routing_method = method
+            signal.routing_rationale = rationale
+            signal.routing_duration_ms = duration_ms
+            logger.debug(f"Updated routing signal for session {session_id}: {agent}")
+
+    def update_rag(
+        self,
+        session_id: str,
+        rewritten_query: str,
+        keywords: List[str],
+        entities: List[str],
+        evidence_count: int,
+        hop_count: int,
+        avg_relevance: float,
+        method: str,
+        duration_ms: Optional[float] = None,
+    ) -> None:
+        """Update RAG retrieval results for a session."""
+        signal = self._pending_sessions.get(session_id)
+        if signal:
+            signal.rewritten_query = rewritten_query
+            signal.search_keywords = keywords
+            signal.graph_entities = entities
+            signal.evidence_count = evidence_count
+            signal.hop_count = hop_count
+            signal.avg_relevance_score = avg_relevance
+            signal.rag_method = method
+            signal.rag_duration_ms = duration_ms
+            logger.debug(
+                f"Updated RAG signal for session {session_id}: "
+                f"{evidence_count} evidence, {hop_count} hops"
+            )
+
+    def update_synthesis(
+        self,
+        session_id: str,
+        response_length: int,
+        confidence: str,
+        citations_count: int,
+        method: str,
+        follow_up_count: int = 0,
+        duration_ms: Optional[float] = None,
+    ) -> None:
+        """Update synthesis results for a session."""
+        signal = self._pending_sessions.get(session_id)
+        if signal:
+            signal.response_length = response_length
+            signal.synthesis_confidence = confidence
+            signal.citations_count = citations_count
+            signal.synthesis_method = method
+            signal.follow_up_count = follow_up_count
+            signal.synthesis_duration_ms = duration_ms
+            logger.debug(
+                f"Updated synthesis signal for session {session_id}: "
+                f"{response_length} chars, {confidence} confidence"
+            )
+
+    def update_feedback(
+        self,
+        session_id: str,
+        user_rating: Optional[float] = None,
+        was_helpful: Optional[bool] = None,
+        user_followed_up: Optional[bool] = None,
+        had_hallucination: Optional[bool] = None,
+    ) -> None:
+        """Update user feedback for a session."""
+        signal = self._pending_sessions.get(session_id)
+        if signal:
+            if user_rating is not None:
+                signal.user_rating = user_rating
+            if was_helpful is not None:
+                signal.was_helpful = was_helpful
+            if user_followed_up is not None:
+                signal.user_followed_up = user_followed_up
+            if had_hallucination is not None:
+                signal.had_hallucination = had_hallucination
+            logger.debug(f"Updated feedback for session {session_id}")
+
+    def finalize_session(
+        self,
+        session_id: str,
+        total_duration_ms: Optional[float] = None,
+    ) -> Optional[ChatbotSessionSignal]:
+        """
+        Finalize a session and move signal to completed buffer.
+
+        Args:
+            session_id: Session ID to finalize
+            total_duration_ms: Total interaction duration
+
+        Returns:
+            Finalized signal or None if session not found
+        """
+        signal = self._pending_sessions.pop(session_id, None)
+        if signal:
+            signal.total_duration_ms = total_duration_ms
+
+            # Add to completed signals buffer
+            self._signals.append(signal)
+            if len(self._signals) > self._buffer_size:
+                self._signals = self._signals[-self._buffer_size:]
+
+            rewards = signal.compute_unified_reward()
+            logger.info(
+                f"Finalized session {session_id} - "
+                f"rewards: accuracy={rewards['accuracy']:.2f}, "
+                f"efficiency={rewards['efficiency']:.2f}, "
+                f"satisfaction={rewards['satisfaction']:.2f}, "
+                f"overall={rewards['overall']:.2f}"
+            )
+            return signal
+        return None
+
+    def get_signals(self, limit: int = 100) -> List[ChatbotSessionSignal]:
+        """Get recent completed signals."""
+        return self._signals[-limit:]
+
+    def get_high_quality_signals(
+        self,
+        min_overall_reward: float = 0.6,
+        limit: int = 50,
+    ) -> List[ChatbotSessionSignal]:
+        """Get high-quality signals for training."""
+        high_quality = [
+            s for s in self._signals
+            if s.compute_unified_reward()["overall"] >= min_overall_reward
+        ]
+        return high_quality[-limit:]
+
+    def get_signals_for_training(
+        self,
+        phase: str = "all",
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """
+        Get signals formatted for training the specified phase.
+
+        Args:
+            phase: "intent", "routing", "rag", "synthesis", or "all"
+            limit: Maximum number of signals to return
+
+        Returns:
+            List of dictionaries with relevant training data
+        """
+        signals = self._signals[-limit:]
+
+        if phase == "intent":
+            return [
+                {
+                    "query": s.query,
+                    "context": s.brand_context,
+                    "target_intent": s.predicted_intent,
+                    "confidence": s.intent_confidence,
+                    "reward": s.compute_accuracy_reward(),
+                }
+                for s in signals if s.intent_method
+            ]
+        elif phase == "routing":
+            return [
+                {
+                    "query": s.query,
+                    "intent": s.predicted_intent,
+                    "context": s.brand_context,
+                    "target_agent": s.predicted_agent,
+                    "confidence": s.routing_confidence,
+                    "reward": s.compute_accuracy_reward(),
+                }
+                for s in signals if s.routing_method
+            ]
+        elif phase == "rag":
+            return [
+                {
+                    "query": s.query,
+                    "rewritten": s.rewritten_query,
+                    "keywords": s.search_keywords,
+                    "entities": s.graph_entities,
+                    "evidence_count": s.evidence_count,
+                    "relevance": s.avg_relevance_score,
+                    "reward": s.compute_efficiency_reward(),
+                }
+                for s in signals if s.rag_method
+            ]
+        elif phase == "synthesis":
+            return [
+                {
+                    "query": s.query,
+                    "intent": s.predicted_intent,
+                    "evidence_count": s.evidence_count,
+                    "response_length": s.response_length,
+                    "confidence": s.synthesis_confidence,
+                    "citations": s.citations_count,
+                    "reward": s.compute_satisfaction_reward(),
+                }
+                for s in signals if s.synthesis_method
+            ]
+        else:
+            return [s.to_dict() for s in signals]
+
+    def get_statistics(self) -> Dict[str, Any]:
+        """Get aggregate statistics for collected signals."""
+        if not self._signals:
+            return {
+                "total_signals": 0,
+                "pending_sessions": len(self._pending_sessions),
+            }
+
+        rewards = [s.compute_unified_reward() for s in self._signals]
+        dspy_usage = {
+            "intent": sum(1 for s in self._signals if s.intent_method == "dspy"),
+            "routing": sum(1 for s in self._signals if s.routing_method == "dspy"),
+            "rag": sum(1 for s in self._signals if s.rag_method == "cognitive"),
+            "synthesis": sum(1 for s in self._signals if s.synthesis_method == "dspy"),
+        }
+
+        return {
+            "total_signals": len(self._signals),
+            "pending_sessions": len(self._pending_sessions),
+            "avg_accuracy": sum(r["accuracy"] for r in rewards) / len(rewards),
+            "avg_efficiency": sum(r["efficiency"] for r in rewards) / len(rewards),
+            "avg_satisfaction": sum(r["satisfaction"] for r in rewards) / len(rewards),
+            "avg_overall": sum(r["overall"] for r in rewards) / len(rewards),
+            "dspy_usage": dspy_usage,
+            "high_quality_count": sum(1 for r in rewards if r["overall"] >= 0.6),
+        }
+
+    def clear(self) -> None:
+        """Clear all signals."""
+        self._signals.clear()
+        self._pending_sessions.clear()
+
+    def __len__(self) -> int:
+        return len(self._signals)
+
+    async def persist_signal_to_database(
+        self,
+        signal: ChatbotSessionSignal,
+    ) -> Optional[int]:
+        """
+        Persist a training signal to the database.
+
+        Args:
+            signal: The ChatbotSessionSignal to persist
+
+        Returns:
+            The database ID of the inserted signal, or None if failed
+        """
+        try:
+            from src.memory.services.factories import get_async_supabase_client
+
+            client = await get_async_supabase_client()
+            if not client:
+                logger.warning("No Supabase client available for signal persistence")
+                return None
+
+            # Compute rewards
+            rewards = signal.compute_unified_reward()
+
+            # Convert user_id to UUID if present
+            user_id = None
+            if signal.user_id:
+                try:
+                    import uuid
+                    user_id = str(uuid.UUID(signal.user_id))
+                except (ValueError, TypeError):
+                    # user_id is not a valid UUID, skip it
+                    pass
+
+            # Prepare signal data
+            signal_data = {
+                "session_id": signal.session_id,
+                "thread_id": signal.thread_id,
+                "user_id": user_id,
+                "query": signal.query,
+                "brand_context": signal.brand_context or "",
+                "region_context": signal.region_context or "",
+                "predicted_intent": signal.predicted_intent or "",
+                "intent_confidence": signal.intent_confidence,
+                "intent_method": signal.intent_method or "",
+                "intent_reasoning": signal.intent_reasoning or "",
+                "predicted_agent": signal.predicted_agent or "",
+                "secondary_agents": signal.secondary_agents or [],
+                "routing_confidence": signal.routing_confidence,
+                "routing_method": signal.routing_method or "",
+                "routing_rationale": signal.routing_rationale or "",
+                "rewritten_query": signal.rewritten_query or "",
+                "search_keywords": signal.search_keywords or [],
+                "graph_entities": signal.graph_entities or [],
+                "evidence_count": signal.evidence_count,
+                "hop_count": signal.hop_count,
+                "avg_relevance_score": signal.avg_relevance_score,
+                "rag_method": signal.rag_method or "",
+                "response_length": signal.response_length,
+                "synthesis_confidence": signal.synthesis_confidence or "",
+                "citations_count": signal.citations_count,
+                "synthesis_method": signal.synthesis_method or "",
+                "follow_up_count": signal.follow_up_count,
+                "user_rating": signal.user_rating,
+                "was_helpful": signal.was_helpful,
+                "user_followed_up": signal.user_followed_up,
+                "had_hallucination": signal.had_hallucination,
+                "total_duration_ms": signal.total_duration_ms,
+                "intent_duration_ms": signal.intent_duration_ms,
+                "routing_duration_ms": signal.routing_duration_ms,
+                "rag_duration_ms": signal.rag_duration_ms,
+                "synthesis_duration_ms": signal.synthesis_duration_ms,
+                "reward_accuracy": rewards["accuracy"],
+                "reward_efficiency": rewards["efficiency"],
+                "reward_satisfaction": rewards["satisfaction"],
+                "reward_overall": rewards["overall"],
+                "session_timestamp": signal.timestamp.isoformat(),
+            }
+
+            result = await client.table("chatbot_training_signals").insert(
+                signal_data
+            ).execute()
+
+            if result.data and len(result.data) > 0:
+                db_id = result.data[0].get("id")
+                logger.debug(f"Persisted training signal to database: id={db_id}")
+                return db_id
+            return None
+
+        except Exception as e:
+            logger.warning(f"Failed to persist training signal: {e}")
+            return None
+
+
+# Global unified signal collector singleton
+_chatbot_signal_collector: Optional[ChatbotSignalCollector] = None
+
+
+def get_chatbot_signal_collector() -> ChatbotSignalCollector:
+    """Get the global chatbot signal collector singleton."""
+    global _chatbot_signal_collector
+    if _chatbot_signal_collector is None:
+        _chatbot_signal_collector = ChatbotSignalCollector()
+    return _chatbot_signal_collector
