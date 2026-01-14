@@ -29,7 +29,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from src.rag import (
     EntityExtractor,
@@ -82,8 +82,8 @@ class SearchResultItem(BaseModel):
     source: str = Field(..., description="Source backend (vector/fulltext/graph)")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "document_id": "causal_path_001",
                 "content": "Kisqali TRx decline in Q3 2024 was caused by...",
@@ -92,6 +92,7 @@ class SearchResultItem(BaseModel):
                 "metadata": {"brand": "Kisqali", "region": "northeast", "time_period": "Q3_2024"},
             }
         }
+    )
 
 
 class ExtractedEntitiesResponse(BaseModel):
@@ -122,8 +123,8 @@ class SearchRequest(BaseModel):
     session_id: Optional[str] = Field(None, description="Session ID for logging")
     user_id: Optional[str] = Field(None, description="User ID for logging")
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "query": "Why did Kisqali TRx drop in the West during Q3?",
                 "mode": "hybrid",
@@ -132,6 +133,7 @@ class SearchRequest(BaseModel):
                 "include_graph_boost": True,
             }
         }
+    )
 
 
 class SearchResponse(BaseModel):
@@ -154,8 +156,8 @@ class SearchResponse(BaseModel):
     # Performance
     latency_ms: float = Field(..., description="Total search latency in milliseconds")
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "search_id": "SEARCH-20241220-abc123",
                 "query": "Why did Kisqali TRx drop in the West during Q3?",
@@ -172,6 +174,7 @@ class SearchResponse(BaseModel):
                 "latency_ms": 234.5,
             }
         }
+    )
 
 
 class GraphNode(BaseModel):

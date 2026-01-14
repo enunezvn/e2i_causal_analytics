@@ -5,7 +5,7 @@ Simulation Result Models
 Data models for simulation execution and results.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import UUID, uuid4
@@ -189,7 +189,7 @@ class SimulationResult(BaseModel):
     memory_usage_mb: Optional[float] = None
 
     # Timestamps
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     completed_at: Optional[datetime] = None
 
     @model_validator(mode="after")
@@ -269,7 +269,7 @@ class FidelityRecord(BaseModel):
     confounding_factors: List[str] = Field(default_factory=list)
 
     # Timestamps
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     validated_at: Optional[datetime] = None
     validated_by: Optional[str] = None
 
@@ -299,7 +299,7 @@ class FidelityRecord(BaseModel):
         else:
             self.fidelity_grade = FidelityGrade.POOR
 
-        self.validated_at = datetime.utcnow()
+        self.validated_at = datetime.now(timezone.utc)
 
 
 # =============================================================================

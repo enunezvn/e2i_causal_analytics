@@ -6,7 +6,7 @@ caching, causal library routing, and database integration.
 """
 
 from abc import ABC, abstractmethod
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from loguru import logger
@@ -255,7 +255,7 @@ class KPICalculator:
                 kpi_id=kpi.id,
                 value=value,
                 status=status,
-                calculated_at=datetime.utcnow(),
+                calculated_at=datetime.now(timezone.utc),
                 metadata=metadata,
                 causal_library_used=causal_library,
             )
