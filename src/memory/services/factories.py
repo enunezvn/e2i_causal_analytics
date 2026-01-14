@@ -7,6 +7,7 @@ Usage:
         get_redis_client,
         get_supabase_client,
         get_async_supabase_client,
+        get_async_supabase_service_client,  # For elevated permissions (bypasses RLS)
         get_falkordb_client,
         get_embedding_service,
         get_llm_service,
@@ -16,7 +17,8 @@ Usage:
     # Get clients (cached/pooled)
     redis = get_redis_client()
     supabase = get_supabase_client()
-    async_supabase = await get_async_supabase_client()  # For async contexts
+    async_supabase = await get_async_supabase_client()  # For async contexts (anon key)
+    async_service = await get_async_supabase_service_client()  # For internal ops (service_role key)
     falkordb = get_falkordb_client()
 
     # Get services
@@ -354,6 +356,7 @@ def get_redis_client():
 
 _supabase_client = None
 _async_supabase_client = None
+_async_supabase_service_client = None
 
 
 def get_supabase_client():
@@ -449,6 +452,61 @@ async def get_async_supabase_client():
         return _async_supabase_client
     except Exception as e:
         raise ServiceConnectionError("Supabase", f"Failed to create async client: {e}", e) from e
+
+
+async def get_async_supabase_service_client():
+    """
+    Get async Supabase client with service role key for elevated permissions.
+
+    This client bypasses Row Level Security (RLS) and should be used for
+    internal operations like training signal collection, analytics, and
+    background jobs that need full table access.
+
+    Requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY environment variables.
+    Falls back to SUPABASE_ANON_KEY if service role key is not available.
+    Returns a cached client for connection reuse.
+
+    Returns:
+        AsyncClient: Async Supabase client with service role permissions
+
+    Raises:
+        ServiceConnectionError: If required environment variables are missing or connection fails
+
+    Example:
+        async def persist_training_signal(signal_data):
+            client = await get_async_supabase_service_client()
+            result = await client.table("chatbot_training_signals").insert(signal_data).execute()
+    """
+    global _async_supabase_service_client
+    if _async_supabase_service_client is not None:
+        return _async_supabase_service_client
+
+    try:
+        from supabase import acreate_client
+    except ImportError as e:
+        raise ServiceConnectionError(
+            "Supabase", "supabase package is not installed. Run: pip install supabase"
+        ) from e
+
+    url = os.environ.get("SUPABASE_URL")
+    # Prefer service role key, fall back to anon key
+    key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_ANON_KEY")
+
+    if not url:
+        raise ServiceConnectionError("Supabase", "SUPABASE_URL environment variable is not set")
+    if not key:
+        raise ServiceConnectionError(
+            "Supabase", "SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY environment variable is not set"
+        )
+
+    key_type = "service_role" if os.environ.get("SUPABASE_SERVICE_ROLE_KEY") else "anon"
+    logger.info(f"Creating async Supabase service client for: {url} (using {key_type} key)")
+
+    try:
+        _async_supabase_service_client = await acreate_client(url, key)
+        return _async_supabase_service_client
+    except Exception as e:
+        raise ServiceConnectionError("Supabase", f"Failed to create async service client: {e}", e) from e
 
 
 _falkordb_client = None
@@ -724,11 +782,12 @@ async def test_all_connections() -> Dict[str, bool]:
 
 def reset_all_clients() -> None:
     """Reset all cached clients. Useful for testing."""
-    global _redis_client, _supabase_client, _async_supabase_client, _falkordb_client
+    global _redis_client, _supabase_client, _async_supabase_client, _async_supabase_service_client, _falkordb_client
 
     _redis_client = None
     _supabase_client = None
     _async_supabase_client = None
+    _async_supabase_service_client = None
     _falkordb_client = None
 
     # Clear LRU caches
