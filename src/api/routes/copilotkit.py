@@ -2811,14 +2811,14 @@ async def get_usage_analytics(
     - Tool usage patterns
     """
     try:
-        from datetime import datetime, timedelta
+        from datetime import datetime, timedelta, timezone
 
         from src.repositories import get_chatbot_analytics_repository
 
         repo = get_chatbot_analytics_repository()
 
-        start_date = datetime.utcnow() - timedelta(days=days)
-        end_date = datetime.utcnow()
+        start_date = datetime.now(timezone.utc) - timedelta(days=days)
+        end_date = datetime.now(timezone.utc)
 
         # Get usage summary
         summary = await repo.get_usage_summary(start_date=start_date, end_date=end_date)

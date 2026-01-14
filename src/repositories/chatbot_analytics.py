@@ -5,7 +5,7 @@ Handles usage analytics for the E2I chatbot - tracks queries, performance, and t
 Used for monitoring, capacity planning, and optimization.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from src.repositories.base import BaseRepository
@@ -106,7 +106,7 @@ class ChatbotAnalyticsRepository(BaseRepository):
             "error_message": error_message,
             "message_id": message_id,
             "metadata": metadata or {},
-            "response_completed_at": datetime.utcnow().isoformat()
+            "response_completed_at": datetime.now(timezone.utc).isoformat()
             if response_time_ms
             else None,
         }
@@ -161,7 +161,7 @@ class ChatbotAnalyticsRepository(BaseRepository):
             "error_occurred": error_occurred,
             "error_type": error_type,
             "metadata": metadata or {},
-            "response_completed_at": datetime.utcnow().isoformat()
+            "response_completed_at": datetime.now(timezone.utc).isoformat()
             if response_time_ms
             else None,
         }
@@ -196,9 +196,9 @@ class ChatbotAnalyticsRepository(BaseRepository):
             return {}
 
         if start_date is None:
-            start_date = datetime.utcnow() - timedelta(days=7)
+            start_date = datetime.now(timezone.utc) - timedelta(days=7)
         if end_date is None:
-            end_date = datetime.utcnow()
+            end_date = datetime.now(timezone.utc)
 
         try:
             result = await self.client.rpc(
@@ -342,7 +342,7 @@ class ChatbotAnalyticsRepository(BaseRepository):
         if not self.client:
             return {}
 
-        cutoff = datetime.utcnow() - timedelta(days=days)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
         try:
             result = await (
@@ -382,7 +382,7 @@ class ChatbotAnalyticsRepository(BaseRepository):
         if not self.client:
             return {}
 
-        cutoff = datetime.utcnow() - timedelta(days=days)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
         try:
             result = await (
