@@ -54,6 +54,7 @@ from src.api.routes.chatbot_dspy import (
     CHATBOT_COGNITIVE_RAG_ENABLED,
     synthesize_response_dspy,
     CHATBOT_DSPY_SYNTHESIS_ENABLED,
+    get_chatbot_signal_collector,
 )
 from src.mlops.mlflow_connector import MLflowConnector
 
@@ -62,6 +63,9 @@ CHATBOT_MLFLOW_METRICS_ENABLED = os.getenv("CHATBOT_MLFLOW_METRICS", "true").low
 
 # MLflow experiment name
 CHATBOT_MLFLOW_EXPERIMENT = "chatbot_interactions"
+
+# Phase 7: Training signal collection feature flag
+CHATBOT_SIGNAL_COLLECTION_ENABLED = os.getenv("CHATBOT_SIGNAL_COLLECTION", "true").lower() == "true"
 
 logger = logging.getLogger(__name__)
 
@@ -1263,6 +1267,98 @@ async def finalize_node(state: ChatbotState) -> Dict[str, Any]:
             # Don't fail the response if episodic memory save fails
             logger.warning(f"Episodic memory bridge error: {e}")
 
+        # =================================================================
+        # PHASE 7: UNIFIED TRAINING SIGNAL COLLECTION
+        # Collect signals from all DSPy phases for feedback_learner optimization
+        # =================================================================
+        if CHATBOT_SIGNAL_COLLECTION_ENABLED:
+            try:
+                signal_collector = get_chatbot_signal_collector()
+
+                # Create session signal with all available data
+                signal = signal_collector.start_session(
+                    session_id=session_id or "",
+                    thread_id=state.get("request_id", ""),
+                    query=query,
+                    user_id=state.get("user_id"),
+                    brand_context=state.get("brand_context", "") or "",
+                    region_context=state.get("region_context", "") or "",
+                )
+
+                # Update intent signal (Phase 3)
+                if state.get("intent"):
+                    signal_collector.update_intent(
+                        session_id=session_id or "",
+                        intent=state.get("intent", ""),
+                        confidence=state.get("intent_confidence", 0.0) or 0.0,
+                        method=state.get("intent_classification_method", "") or "",
+                        reasoning=state.get("intent_reasoning", "") or "",
+                    )
+
+                # Update routing signal (Phase 4) - using agent_name/tier from state
+                if state.get("agent_name"):
+                    signal_collector.update_routing(
+                        session_id=session_id or "",
+                        agent=state.get("agent_name", "") or "",
+                        secondary_agents=[],  # Not tracked yet
+                        confidence=0.8 if state.get("agent_name") else 0.0,
+                        method="workflow",  # Implicit routing via workflow
+                        rationale="",
+                    )
+
+                # Update RAG signal (Phase 5)
+                if rag_context:
+                    avg_relevance = 0.0
+                    if rag_context:
+                        scores = [
+                            c.get("relevance_score", c.get("score", 0.5))
+                            for c in rag_context
+                        ]
+                        avg_relevance = sum(scores) / len(scores) if scores else 0.0
+
+                    signal_collector.update_rag(
+                        session_id=session_id or "",
+                        rewritten_query=state.get("rag_rewritten_query", "") or "",
+                        keywords=[],  # Not tracked in state yet
+                        entities=[],  # Not tracked in state yet
+                        evidence_count=len(rag_context),
+                        hop_count=1,  # Default single hop
+                        avg_relevance=avg_relevance,
+                        method=state.get("rag_retrieval_method", "basic") or "basic",
+                    )
+
+                # Update synthesis signal (Phase 6)
+                signal_collector.update_synthesis(
+                    session_id=session_id or "",
+                    response_length=len(response_text),
+                    confidence=_get_confidence_level(state.get("confidence_statement", "")),
+                    citations_count=len(state.get("evidence_citations", []) or []),
+                    method=state.get("synthesis_method", "") or "",
+                    follow_up_count=len(state.get("follow_up_suggestions", []) or []),
+                )
+
+                # Finalize the session signal
+                finalized_signal = signal_collector.finalize_session(
+                    session_id=session_id or ""
+                )
+
+                # Persist to database if signal was finalized
+                if finalized_signal:
+                    db_id = await signal_collector.persist_signal_to_database(
+                        finalized_signal
+                    )
+                    if db_id:
+                        logger.debug(f"Training signal persisted to DB: id={db_id}")
+
+                logger.debug(
+                    f"Collected training signals for session: {session_id}, "
+                    f"collector size: {len(signal_collector)}"
+                )
+
+            except Exception as e:
+                # Don't fail the response if signal collection fails
+                logger.warning(f"Training signal collection error: {e}")
+
     # Execute with tracing if available
     if trace_ctx:
         async with trace_ctx.trace_node("finalize") as node_span:
@@ -1280,6 +1376,18 @@ async def finalize_node(state: ChatbotState) -> Dict[str, Any]:
         "response_text": response_text,
         "streaming_complete": True,
     }
+
+
+def _get_confidence_level(confidence_statement: str) -> str:
+    """Extract confidence level from confidence statement."""
+    if not confidence_statement:
+        return "low"
+    lower = confidence_statement.lower()
+    if "high" in lower:
+        return "high"
+    elif "moderate" in lower or "medium" in lower:
+        return "moderate"
+    return "low"
 
 
 # =============================================================================
