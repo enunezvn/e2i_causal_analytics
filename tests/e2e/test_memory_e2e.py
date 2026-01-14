@@ -154,7 +154,7 @@ class TestFullCognitiveE2E:
         """Test complete causal query cycle through API."""
         # Step 1: Execute cognitive query
         response = client.post(
-            "/cognitive/query",
+            "/api/cognitive/query",
             json={
                 "query": "Why did TRx drop in the northeast region for Kisqali?",
                 "brand": "Kisqali",
@@ -175,7 +175,7 @@ class TestFullCognitiveE2E:
     def test_prediction_query_full_cycle(self, mock_all_services, mock_cognitive_service):
         """Test complete prediction query cycle through API."""
         response = client.post(
-            "/cognitive/query", json={"query": "What will TRx be next quarter?", "brand": "Kisqali"}
+            "/api/cognitive/query", json={"query": "What will TRx be next quarter?", "brand": "Kisqali"}
         )
 
         assert response.status_code == 200
@@ -184,7 +184,7 @@ class TestFullCognitiveE2E:
         """Test that session context persists across multiple queries."""
         # First query creates session
         response1 = client.post(
-            "/cognitive/query",
+            "/api/cognitive/query",
             json={"query": "What are the current TRx trends?", "brand": "Kisqali"},
         )
 
@@ -194,7 +194,7 @@ class TestFullCognitiveE2E:
 
         # Second query reuses session
         response2 = client.post(
-            "/cognitive/query", json={"query": "Why is this happening?", "session_id": session_id}
+            "/api/cognitive/query", json={"query": "Why is this happening?", "session_id": session_id}
         )
 
         assert response2.status_code == 200
@@ -214,7 +214,7 @@ class TestMemoryIntegrationE2E:
         """Test creating and retrieving episodic memory."""
         # Create memory
         create_response = client.post(
-            "/memory/episodic",
+            "/api/memory/episodic",
             json={
                 "content": "User asked about TRx drop in northeast",
                 "event_type": "query",
@@ -230,7 +230,7 @@ class TestMemoryIntegrationE2E:
         assert memory_id == "mem_e2e_001"
 
         # Retrieve memory
-        get_response = client.get(f"/memory/episodic/{memory_id}")
+        get_response = client.get(f"/api/memory/episodic/{memory_id}")
 
         assert get_response.status_code == 200
         data = get_response.json()
@@ -239,7 +239,7 @@ class TestMemoryIntegrationE2E:
     def test_search_finds_relevant_memories(self, mock_all_services):
         """Test hybrid search returns relevant memories."""
         response = client.post(
-            "/memory/search",
+            "/api/memory/search",
             json={"query": "Why did TRx drop?", "k": 10, "filters": {"brand": "Kisqali"}},
         )
 
@@ -251,7 +251,7 @@ class TestMemoryIntegrationE2E:
     def test_procedural_feedback_updates_success_rate(self, mock_all_services):
         """Test that procedural feedback updates success rate."""
         response = client.post(
-            "/memory/procedural/feedback",
+            "/api/memory/procedural/feedback",
             json={
                 "procedure_id": "proc_e2e",
                 "outcome": "success",
@@ -270,7 +270,7 @@ class TestMemoryIntegrationE2E:
     def test_semantic_path_query(self, mock_all_services):
         """Test semantic graph path queries."""
         response = client.get(
-            "/memory/semantic/paths", params={"kpi_name": "TRx", "min_confidence": 0.6}
+            "/api/memory/semantic/paths", params={"kpi_name": "TRx", "min_confidence": 0.6}
         )
 
         assert response.status_code == 200
@@ -289,7 +289,7 @@ class TestLearningSignalE2E:
     def test_learning_signal_recorded_after_feedback(self, mock_all_services):
         """Test that learning signals are recorded after procedural feedback."""
         response = client.post(
-            "/memory/procedural/feedback",
+            "/api/memory/procedural/feedback",
             json={
                 "procedure_id": "proc_test",
                 "outcome": "success",
@@ -305,7 +305,7 @@ class TestLearningSignalE2E:
     def test_feedback_signals_contain_correct_metadata(self, mock_all_services):
         """Test that feedback signals have correct metadata."""
         response = client.post(
-            "/memory/procedural/feedback",
+            "/api/memory/procedural/feedback",
             json={
                 "procedure_id": "proc_meta_test",
                 "outcome": "partial",
@@ -338,7 +338,7 @@ class TestPerformanceE2E:
 
     def test_search_latency_under_sla(self, mock_all_services):
         """Test that search latency is within SLA (<500ms)."""
-        response = client.post("/memory/search", json={"query": "TRx trends", "k": 10})
+        response = client.post("/api/memory/search", json={"query": "TRx trends", "k": 10})
 
         assert response.status_code == 200
         latency = response.json()["search_latency_ms"]
@@ -348,7 +348,7 @@ class TestPerformanceE2E:
 
     def test_path_query_latency_under_sla(self, mock_all_services):
         """Test that semantic path query is within SLA (<500ms)."""
-        response = client.get("/memory/semantic/paths", params={"kpi_name": "TRx"})
+        response = client.get("/api/memory/semantic/paths", params={"kpi_name": "TRx"})
 
         assert response.status_code == 200
         latency = response.json()["query_latency_ms"]
@@ -365,7 +365,7 @@ class TestErrorHandlingE2E:
 
     def test_invalid_query_returns_validation_error(self):
         """Test that empty query returns 422."""
-        response = client.post("/memory/search", json={"query": ""})
+        response = client.post("/api/memory/search", json={"query": ""})
 
         assert response.status_code == 422
 
@@ -373,7 +373,7 @@ class TestErrorHandlingE2E:
         """Test that missing memory returns 404."""
         with patch("src.api.routes.memory.get_memory_by_id") as mock:
             mock.return_value = None
-            response = client.get("/memory/episodic/nonexistent_id")
+            response = client.get("/api/memory/episodic/nonexistent_id")
 
         assert response.status_code == 404
 
@@ -381,7 +381,7 @@ class TestErrorHandlingE2E:
         """Test that cognitive errors are handled gracefully."""
         # This should still return 200 with error info in response
         # because errors are caught and returned as error query_type
-        response = client.post("/cognitive/query", json={"query": "Test query"})
+        response = client.post("/api/cognitive/query", json={"query": "Test query"})
 
         # Should return 200 even with internal error handling
         assert response.status_code in [200, 500]
@@ -400,7 +400,7 @@ class TestConcurrentAccessE2E:
         import concurrent.futures
 
         def make_search():
-            return client.post("/memory/search", json={"query": "TRx analysis", "k": 5})
+            return client.post("/api/memory/search", json={"query": "TRx analysis", "k": 5})
 
         # Execute 5 concurrent searches
         with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
@@ -415,17 +415,17 @@ class TestConcurrentAccessE2E:
         """Test mixed read/write operations."""
         # Create episodic memory
         create_resp = client.post(
-            "/memory/episodic", json={"content": "Concurrent test memory", "event_type": "action"}
+            "/api/memory/episodic", json={"content": "Concurrent test memory", "event_type": "action"}
         )
         assert create_resp.status_code == 200
 
         # Search while creating
-        search_resp = client.post("/memory/search", json={"query": "concurrent test"})
+        search_resp = client.post("/api/memory/search", json={"query": "concurrent test"})
         assert search_resp.status_code == 200
 
         # Record feedback
         feedback_resp = client.post(
-            "/memory/procedural/feedback",
+            "/api/memory/procedural/feedback",
             json={"procedure_id": "proc_concurrent", "outcome": "success", "score": 0.8},
         )
         assert feedback_resp.status_code == 200
