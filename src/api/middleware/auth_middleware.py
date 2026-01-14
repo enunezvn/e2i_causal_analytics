@@ -4,7 +4,7 @@ Protects API routes by validating Supabase JWT tokens.
 Configurable public paths that bypass authentication.
 
 Author: E2I Causal Analytics Team
-Version: 4.2.1
+Version: 4.2.2
 """
 
 import logging
@@ -19,6 +19,10 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from src.api.dependencies.auth import is_auth_enabled, verify_supabase_token
 
 logger = logging.getLogger(__name__)
+
+# Testing mode - bypasses authentication for integration/e2e tests
+# Set E2I_TESTING_MODE=true to disable auth during testing
+TESTING_MODE = os.environ.get("E2I_TESTING_MODE", "").lower() in ("true", "1", "yes")
 
 # Get allowed origins for CORS headers on error responses
 ALLOWED_ORIGINS = os.environ.get(
@@ -149,6 +153,20 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
 
         # Skip auth for OPTIONS (CORS preflight)
         if method == "OPTIONS":
+            return await call_next(request)
+
+        # Skip auth in testing mode (for integration/e2e tests)
+        if TESTING_MODE:
+            # Provide a mock user for testing
+            request.state.user = {
+                "id": "test-user-id",
+                "email": "test@e2i-analytics.com",
+                "role": "authenticated",
+                "aud": "authenticated",
+                "app_metadata": {"role": "admin"},
+                "user_metadata": {"name": "Test User"},
+            }
+            logger.debug(f"Testing mode - bypassing auth for {method} {path}")
             return await call_next(request)
 
         # Check if auth is configured
