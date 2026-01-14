@@ -1,7 +1,7 @@
 # CopilotKit Chatbot DSPy & Observability Integration Plan
 
 **Created**: 2026-01-14
-**Status**: In Progress (Phase 7 & 9 Complete, Pending Deployment)
+**Status**: In Progress (Phases 1-7 & 9 Deployed, Phase 8 & 10 Pending)
 **Priority**: High
 **Last Updated**: 2026-01-14
 
@@ -284,6 +284,7 @@ curl -X POST http://localhost:8001/copilotkit/chat \
 - [x] 7.8 Add unit tests for signal collection (24 tests passing)
 
 **Phase 7 Completed**: 2026-01-14
+**Deployed to Production**: 2026-01-14
 **Verification**:
 - Created `ChatbotSessionSignal` dataclass aggregating all DSPy phases
 - Created `ChatbotSignalCollector` with session lifecycle methods
@@ -291,6 +292,9 @@ curl -X POST http://localhost:8001/copilotkit/chat \
 - Reward computation: accuracy (40%), efficiency (15%), satisfaction (45%)
 - Database persistence via `persist_signal_to_database()` method
 - 24 unit tests passing in `TestChatbotSessionSignal`, `TestChatbotSignalCollector`, `TestChatbotSignalCollectorSingleton`
+- **Production Verified**: Training signals successfully stored in `chatbot_training_signals` table
+- **DSPy Fix Applied**: All DSPy module factories now call `_ensure_dspy_configured()` before instantiation
+- **Live Signals Confirmed**: Signals 7-9 show `intent_method: "dspy"` with 0.95 confidence (vs hardcoded 0.90)
 **Feature Flag**: `CHATBOT_SIGNAL_COLLECTION=true` (enabled by default)
 
 #### Testing (Droplet)
@@ -342,9 +346,15 @@ print(f'Pending chatbot requests: {len([r for r in pending if r.agent == \"chatb
   - `mark_signals_used()` - Mark signals as consumed for training
   - `get_training_signal_stats()` - Statistics on signal collection
   - `update_signal_feedback()` - Update with user feedback
-- [ ] 9.5 Run migration on droplet
+- [x] 9.5 Run migration on droplet
 
-**Phase 9 Completed**: 2026-01-14 (schema created, pending deployment)
+**Phase 9 Completed**: 2026-01-14
+**Deployed to Production**: 2026-01-14
+**Verification**:
+- Schema deployed with 40+ columns, 9 indexes, 5 helper functions
+- RLS policies configured: service_role full access, anon can insert only
+- Service role client added via `get_async_supabase_service_client()` in factories.py
+- Dual key support: checks `SUPABASE_SERVICE_ROLE_KEY` first, falls back to `SUPABASE_SERVICE_KEY`
 **Note**: Schema uses `public.chatbot_training_signals` table (not `ml` schema) to align with other chatbot tables.
 
 #### Testing (Droplet)
@@ -440,7 +450,31 @@ After implementation, verify:
 4. [x] Agent routing returns rationale (VERIFIED 2026-01-14 - Phase 4)
 5. [x] RAG retrieval shows multi-hop decisions (VERIFIED 2026-01-14 - Phase 5)
 6. [x] Response includes evidence citations (VERIFIED 2026-01-14 - Phase 6)
-7. [ ] Training signals accumulating in database
+7. [x] Training signals accumulating in database (VERIFIED 2026-01-14 - Signals 7-9 with intent_method="dspy", 95% confidence)
 8. [ ] feedback_learner receiving optimization requests
 9. [ ] No performance regression (latency <2s p50)
 10. [x] All existing tests still pass (98/98 DSPy tests passing after Phase 6)
+
+---
+
+## Deployment Notes
+
+### 2026-01-14: DSPy Initialization Fix
+
+**Issue**: Training signals were showing `intent_method: "hardcoded"` instead of `"dspy"` despite DSPy being available.
+
+**Root Cause**: DSPy's `ChainOfThought` modules require the global LLM to be configured via `dspy.configure(lm=...)` before instantiation. The `_get_dspy_query_rewriter()` and `_get_dspy_synthesizer()` factory functions were missing the required `_ensure_dspy_configured()` call, causing silent initialization failures.
+
+**Fix Applied** (commit `11e249e`):
+- Added `_ensure_dspy_configured()` call to all four DSPy module factory functions:
+  - `_get_dspy_classifier()` ✓ (already had it)
+  - `_get_dspy_router()` ✓ (already had it)
+  - `_get_dspy_query_rewriter()` ✓ (added)
+  - `_get_dspy_synthesizer()` ✓ (added)
+
+**Verification**:
+- Signal ID 6 (before fix): `intent_method: "hardcoded"`, confidence: 0.90
+- Signals 7-9 (after fix): `intent_method: "dspy"`, confidence: 0.95
+- Intent classifications confirmed working: `kpi_query`, `causal_analysis`
+
+**Impact**: All DSPy-powered chatbot features now initialize correctly, enabling proper training signal collection for GEPA optimization.
