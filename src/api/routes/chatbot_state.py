@@ -75,6 +75,8 @@ class ChatbotState(TypedDict, total=False):
     # RAG context
     rag_context: List[Dict[str, Any]]
     rag_sources: List[str]
+    rag_rewritten_query: Optional[str]  # DSPy cognitive RAG rewritten query
+    rag_retrieval_method: Optional[str]  # "cognitive" or "basic"
 
     # Response generation
     response_text: str
@@ -188,6 +190,8 @@ def create_initial_state(
         tool_results=[],
         rag_context=[],
         rag_sources=[],
+        rag_rewritten_query=None,
+        rag_retrieval_method=None,
         response_text="",
         response_chunks=[],
         streaming_complete=False,
