@@ -489,8 +489,12 @@ async def get_async_supabase_service_client():
         ) from e
 
     url = os.environ.get("SUPABASE_URL")
-    # Prefer service role key, fall back to anon key
-    key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_ANON_KEY")
+    # Prefer service role key (check both naming conventions), fall back to anon key
+    key = (
+        os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+        or os.environ.get("SUPABASE_SERVICE_KEY")
+        or os.environ.get("SUPABASE_ANON_KEY")
+    )
 
     if not url:
         raise ServiceConnectionError("Supabase", "SUPABASE_URL environment variable is not set")
@@ -499,7 +503,10 @@ async def get_async_supabase_service_client():
             "Supabase", "SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY environment variable is not set"
         )
 
-    key_type = "service_role" if os.environ.get("SUPABASE_SERVICE_ROLE_KEY") else "anon"
+    if os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_SERVICE_KEY"):
+        key_type = "service_role"
+    else:
+        key_type = "anon"
     logger.info(f"Creating async Supabase service client for: {url} (using {key_type} key)")
 
     try:
