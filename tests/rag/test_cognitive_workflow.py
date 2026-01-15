@@ -5,7 +5,7 @@ Tests cover:
 - Memory backend adapters (EpisodicMemoryBackend, SemanticMemoryBackend, ProceduralMemoryBackend)
 - SignalCollector for DSPy training
 - CausalRAG.cognitive_search() method
-- API endpoint /cognitive/rag
+- API endpoint /api/cognitive/rag
 
 Author: E2I Causal Analytics Team
 """
@@ -367,7 +367,7 @@ class TestCausalRAGCognitiveSearch:
 
 
 class TestCognitiveRAGEndpoint:
-    """Tests for /cognitive/rag API endpoint."""
+    """Tests for /api/cognitive/rag API endpoint."""
 
     @pytest.fixture
     def client(self):
@@ -400,7 +400,7 @@ class TestCognitiveRAGEndpoint:
             )
             mock_rag_class.return_value = mock_rag
 
-            response = client.post("/cognitive/rag", json={"query": "Why did TRx increase?"})
+            response = client.post("/api/cognitive/rag", json={"query": "Why did TRx increase?"})
 
             assert response.status_code == 200
             data = response.json()
@@ -409,13 +409,13 @@ class TestCognitiveRAGEndpoint:
 
     def test_endpoint_validates_query_required(self, client):
         """Test endpoint requires query field."""
-        response = client.post("/cognitive/rag", json={})
+        response = client.post("/api/cognitive/rag", json={})
 
         assert response.status_code == 422  # Validation error
 
     def test_endpoint_validates_query_min_length(self, client):
         """Test endpoint validates query minimum length."""
-        response = client.post("/cognitive/rag", json={"query": ""})
+        response = client.post("/api/cognitive/rag", json={"query": ""})
 
         assert response.status_code == 422
 
@@ -428,7 +428,7 @@ class TestCognitiveRAGEndpoint:
         mock_module.CausalRAG = MagicMock(side_effect=ImportError("dspy not installed"))
 
         with patch.dict(sys.modules, {"src.rag.causal_rag": mock_module}):
-            response = client.post("/cognitive/rag", json={"query": "Test query"})
+            response = client.post("/api/cognitive/rag", json={"query": "Test query"})
 
             assert response.status_code == 503
             assert "dependencies" in response.json()["detail"].lower()
@@ -455,7 +455,7 @@ class TestCognitiveRAGEndpoint:
             mock_rag_class.return_value = mock_rag
 
             response = client.post(
-                "/cognitive/rag", json={"query": "Test query", "conversation_id": "session-123"}
+                "/api/cognitive/rag", json={"query": "Test query", "conversation_id": "session-123"}
             )
 
             assert response.status_code == 200
