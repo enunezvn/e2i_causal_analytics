@@ -120,7 +120,7 @@ class ABExperimentRepository(BaseRepository):
         """Ensure we have a Supabase client."""
         if self.client is None:
             try:
-                from src.db.supabase_client import get_supabase_client
+                from src.repositories import get_supabase_client
                 self.client = get_supabase_client()
             except ImportError:
                 logger.warning("Supabase client not available, running in mock mode")

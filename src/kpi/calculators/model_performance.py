@@ -43,7 +43,7 @@ class ModelPerformanceCalculator(KPICalculatorBase):
     def db_client(self) -> Any:
         """Get database client, lazily initializing if needed."""
         if self._db_client is None:
-            from src.repositories.base import get_supabase_client
+            from src.repositories import get_supabase_client
 
             self._db_client = get_supabase_client()
         return self._db_client
