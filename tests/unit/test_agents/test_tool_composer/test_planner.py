@@ -475,7 +475,8 @@ class TestErrorHandling:
         self, mock_llm_client, mock_tool_registry, sample_decomposition
     ):
         """Test that LLM errors are wrapped in PlanningError"""
-        mock_llm_client.messages.create = AsyncMock(side_effect=Exception("LLM error"))
+        # Use the LangChain interface to inject an error
+        mock_llm_client.set_error(Exception("LLM error"))
 
         planner = ToolPlanner(llm_client=mock_llm_client, tool_registry=mock_tool_registry)
 
@@ -668,5 +669,6 @@ class TestMemoryIntegration:
         # Verify LLM was called with episodic context (uses call_history, not call_args)
         assert len(mock_llm_client.call_history) > 0
         last_call = mock_llm_client.call_history[-1]
-        user_message = last_call["messages"][0]["content"]
+        # With LangChain interface, user content is stored directly
+        user_message = last_call["user"]
         assert "Similar Past Compositions" in user_message
