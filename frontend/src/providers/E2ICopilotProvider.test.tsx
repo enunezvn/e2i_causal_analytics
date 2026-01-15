@@ -370,7 +370,7 @@ describe('E2ICopilotProvider', () => {
     it('accepts userRole prop (unused but valid)', () => {
       render(
         <CopilotKitWrapper enabled={false}>
-          <E2ICopilotProvider userRole="admin">
+          <E2ICopilotProvider userRole="analyst">
             <TestConsumer />
           </E2ICopilotProvider>
         </CopilotKitWrapper>
