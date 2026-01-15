@@ -120,7 +120,7 @@ def sample_span(trace_id: str, span_id: str) -> ObservabilitySpan:
         agent_name=AgentNameEnum.OBSERVABILITY_CONNECTOR,
         agent_tier=AgentTierEnum.ML_FOUNDATION,
         operation_type="test_operation",
-        started_at=datetime.utcnow(),  # Use naive datetime for complete() compatibility
+        started_at=datetime.now(UTC),  # Use timezone-aware datetime for complete() compatibility
         status=SpanStatusEnum.SUCCESS,
         attributes={"test": True, "integration": True},
     )
@@ -144,7 +144,7 @@ def multiple_spans(trace_id: str) -> list[ObservabilitySpan]:
             agent_name=agents[i % 2],
             agent_tier=tiers[i % 2],
             operation_type=f"test_operation_{i}",
-            started_at=datetime.utcnow(),  # Use naive datetime for complete() compatibility
+            started_at=datetime.now(UTC),  # Use timezone-aware datetime for complete() compatibility
             status=SpanStatusEnum.SUCCESS if i % 3 != 0 else SpanStatusEnum.ERROR,
             duration_ms=50 + i * 10,
             attributes={"index": i, "test": True},
