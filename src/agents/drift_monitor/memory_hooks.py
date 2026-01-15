@@ -234,7 +234,7 @@ class DriftMonitorMemoryHooks:
         """Lazy-load Supabase client for episodic memory."""
         if self._supabase_client is None:
             try:
-                from src.repositories.base import get_supabase_client
+                from src.repositories import get_supabase_client
 
                 self._supabase_client = get_supabase_client()
                 logger.debug("Supabase client initialized for episodic memory")

@@ -186,3 +186,7 @@ filterwarnings = [
 # System has 7.5GB RAM, heavy ML imports use ~500MB/worker
 # Safe default: 4 workers = ~2GB for tests + ~4GB for OS/services
 addopts = "-v --tb=short -n 4 --dist=loadscope"
+# Enable test authentication bypass mode
+env = [
+    "E2I_TESTING_MODE=true",
+]

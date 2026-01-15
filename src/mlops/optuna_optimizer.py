@@ -693,7 +693,7 @@ class OptunaOptimizer:
             Dictionary with study_id, success status, and any errors
         """
         try:
-            from src.repositories.supabase_client import get_supabase_client
+            from src.repositories import get_supabase_client
 
             client = await get_supabase_client()
             if client is None:
