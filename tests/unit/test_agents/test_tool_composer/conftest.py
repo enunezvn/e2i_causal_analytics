@@ -61,14 +61,21 @@ def reset_cache_singleton():
 
 
 class MockLLMResponse:
-    """Mock response from LLM"""
+    """Mock response from LLM (Anthropic-style with content list)"""
 
     def __init__(self, text: str):
         self.content = [Mock(text=text)]
 
 
+class MockAIMessage:
+    """Mock LangChain AIMessage response"""
+
+    def __init__(self, content: str):
+        self.content = content
+
+
 class MockLLMClient:
-    """Mock Anthropic-compatible LLM client for testing"""
+    """Mock LLM client compatible with both Anthropic and LangChain interfaces"""
 
     def __init__(self):
         self.messages = MockMessages(self)
@@ -89,6 +96,39 @@ class MockLLMClient:
     def set_synthesis_response(self, response: str) -> None:
         """Set the response for synthesis calls"""
         self._synthesis_response = response
+
+    async def ainvoke(self, messages: List[Any]) -> MockAIMessage:
+        """
+        LangChain-compatible async invoke method.
+
+        Args:
+            messages: List of LangChain message objects (SystemMessage, HumanMessage, etc.)
+
+        Returns:
+            MockAIMessage with content attribute containing the response
+        """
+        self.call_count += 1
+
+        # Extract system prompt from messages to determine response type
+        system_content = ""
+        user_content = ""
+        for msg in messages:
+            if hasattr(msg, 'content'):
+                # Check message type by class name
+                msg_type = type(msg).__name__
+                if 'System' in msg_type:
+                    system_content = msg.content
+                elif 'Human' in msg_type:
+                    user_content = msg.content
+
+        self.call_history.append({
+            "system": system_content[:100] if system_content else "",
+            "user": user_content[:100] if user_content else "",
+            "messages": [str(m)[:50] for m in messages],
+        })
+
+        response_text = self.get_response_for_phase(system_content)
+        return MockAIMessage(response_text)
 
     def get_response_for_phase(self, system_prompt: str) -> str:
         """Return appropriate response based on system prompt content"""
