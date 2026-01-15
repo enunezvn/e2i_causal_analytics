@@ -159,8 +159,8 @@ class TestErrorHandling:
     @pytest.mark.asyncio
     async def test_unexpected_error(self, mock_llm_client, mock_tool_registry):
         """Test handling of unexpected errors"""
-        # Make the LLM client raise an unexpected error
-        mock_llm_client.messages.create = AsyncMock(side_effect=RuntimeError("Unexpected error"))
+        # Use the LangChain interface to inject an error
+        mock_llm_client.set_error(RuntimeError("Unexpected error"))
 
         composer = ToolComposer(llm_client=mock_llm_client, tool_registry=mock_tool_registry)
         result = await composer.compose("Test query")
