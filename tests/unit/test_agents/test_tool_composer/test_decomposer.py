@@ -6,7 +6,6 @@ into atomic sub-questions.
 """
 
 import json
-from unittest.mock import AsyncMock
 
 import pytest
 
@@ -336,17 +335,19 @@ class TestLLMInteraction:
 
     @pytest.mark.asyncio
     async def test_llm_called_with_correct_params(self, mock_llm_client, simple_query):
-        """Test that LLM is called with correct parameters"""
+        """Test that decomposer is initialized with correct parameters and calls LLM"""
         decomposer = QueryDecomposer(
             llm_client=mock_llm_client, model="test-model", temperature=0.5
         )
         await decomposer.decompose(simple_query)
 
+        # Verify LLM was called
         assert mock_llm_client.call_count == 1
-        call = mock_llm_client.call_history[0]
-        assert call["model"] == "test-model"
-        assert call["temperature"] == 0.5
-        assert call["max_tokens"] == 2000
+        # Verify decomposer stored the configuration correctly
+        # (Note: LangChain's ainvoke doesn't pass model/temp per-call,
+        # they're configured on the client. We verify they're stored on decomposer.)
+        assert decomposer.model == "test-model"
+        assert decomposer.temperature == 0.5
 
     @pytest.mark.asyncio
     async def test_query_included_in_message(self, mock_llm_client, simple_query):
@@ -355,8 +356,9 @@ class TestLLMInteraction:
         await decomposer.decompose(simple_query)
 
         call = mock_llm_client.call_history[0]
-        message_content = call["messages"][0]["content"]
-        assert simple_query in message_content
+        # With LangChain interface, user content is stored directly
+        user_content = call["user"]
+        assert simple_query in user_content
 
 
 @pytest.mark.xdist_group(name="sync_wrappers")
@@ -377,7 +379,8 @@ class TestSyncWrapper:
         )
 
         assert isinstance(result, DecompositionResult)
-        assert mock_llm_client.call_history[0]["model"] == "custom-model"
+        # Verify LLM was called (custom params are stored on decomposer, not passed to ainvoke)
+        assert mock_llm_client.call_count == 1
 
 
 class TestErrorHandling:
@@ -386,8 +389,8 @@ class TestErrorHandling:
     @pytest.mark.asyncio
     async def test_llm_error_wrapped(self, mock_llm_client):
         """Test that LLM errors are wrapped in DecompositionError"""
-        # Make LLM raise an error
-        mock_llm_client.messages.create = AsyncMock(side_effect=Exception("LLM error"))
+        # Make LLM raise an error using the LangChain interface
+        mock_llm_client.set_error(Exception("LLM error"))
 
         decomposer = QueryDecomposer(llm_client=mock_llm_client)
 

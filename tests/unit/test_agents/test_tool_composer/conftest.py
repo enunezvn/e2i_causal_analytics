@@ -82,6 +82,7 @@ class MockLLMClient:
         self._decomposition_response: Optional[str] = None
         self._planning_response: Optional[str] = None
         self._synthesis_response: Optional[str] = None
+        self._error_to_raise: Optional[Exception] = None
         self.call_count = 0
         self.call_history: List[Dict[str, Any]] = []
 
@@ -97,6 +98,10 @@ class MockLLMClient:
         """Set the response for synthesis calls"""
         self._synthesis_response = response
 
+    def set_error(self, error: Exception) -> None:
+        """Set an error to be raised on the next ainvoke call"""
+        self._error_to_raise = error
+
     async def ainvoke(self, messages: List[Any]) -> MockAIMessage:
         """
         LangChain-compatible async invoke method.
@@ -106,8 +111,17 @@ class MockLLMClient:
 
         Returns:
             MockAIMessage with content attribute containing the response
+
+        Raises:
+            Exception: If set_error() was called with an exception
         """
         self.call_count += 1
+
+        # Check if we should raise an error
+        if self._error_to_raise is not None:
+            error = self._error_to_raise
+            self._error_to_raise = None  # Reset after raising
+            raise error
 
         # Extract system prompt from messages to determine response type
         system_content = ""
@@ -121,10 +135,11 @@ class MockLLMClient:
                 elif 'Human' in msg_type:
                     user_content = msg.content
 
+        # Store full content for test verification (not truncated)
         self.call_history.append({
-            "system": system_content[:100] if system_content else "",
-            "user": user_content[:100] if user_content else "",
-            "messages": [str(m)[:50] for m in messages],
+            "system": system_content,
+            "user": user_content,
+            "messages": messages,  # Store full message objects
         })
 
         response_text = self.get_response_for_phase(system_content)
