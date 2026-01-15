@@ -216,7 +216,7 @@ useCopilotAction({
 
 ## Migration Checklist
 
-1. ✅ Run `008_chatbot_memory_tables.sql` in Supabase
+1. ✅ Run `database/chat/008_chatbot_memory_tables.sql` in Supabase
 2. ✅ Verify `user_sessions.preferences` column added
 3. ✅ Test `search_chat_messages()` function
 4. ✅ Wire up `E2ICopilotProvider` to load preferences
