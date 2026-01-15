@@ -4,11 +4,27 @@ Validates that all entities are properly defined with correct:
 - Join keys
 - Descriptions
 - Tags
+
+Note: These tests require the feast package to be installed.
+They are skipped if feast is not available.
 """
 
 import pytest
 import sys
 from pathlib import Path
+
+# Check if feast is installed
+try:
+    import feast
+    HAS_FEAST = True
+except ImportError:
+    HAS_FEAST = False
+
+# Skip entire module if feast is not installed
+pytestmark = pytest.mark.skipif(
+    not HAS_FEAST,
+    reason="feast package not installed - install with: pip install feast"
+)
 
 # Add feature_repo to path for imports
 feature_repo_path = Path(__file__).parent.parent.parent.parent / "feature_repo"
