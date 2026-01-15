@@ -4,10 +4,43 @@ Version: 1.0.0
 Tests the DirectLiNGAM and ICA-LiNGAM algorithm wrappers for causal discovery.
 """
 
+import sys
+import types
+
 import numpy as np
 import pandas as pd
 import pytest
 from unittest.mock import MagicMock, patch
+
+
+# =============================================================================
+# Mock lingam module fixture
+# =============================================================================
+
+
+@pytest.fixture
+def mock_lingam_module():
+    """Create a mock lingam module in sys.modules for testing.
+
+    This fixture creates a fake 'lingam' module that can be patched,
+    allowing tests to run without the actual lingam package installed.
+    """
+    # Create a mock module
+    mock_module = types.ModuleType("lingam")
+    mock_module.DirectLiNGAM = MagicMock
+    mock_module.ICALiNGAM = MagicMock
+
+    # Store original and inject mock
+    original = sys.modules.get("lingam")
+    sys.modules["lingam"] = mock_module
+
+    yield mock_module
+
+    # Restore original state
+    if original is not None:
+        sys.modules["lingam"] = original
+    else:
+        sys.modules.pop("lingam", None)
 
 from src.causal_engine.discovery.algorithms.lingam_wrapper import (
     DirectLiNGAMAlgorithm,
@@ -101,7 +134,7 @@ class TestDirectLiNGAMDiscovery:
 
         return pd.DataFrame({"X": X, "Y": Y, "Z": Z})
 
-    def test_basic_discovery(self, direct_lingam, non_gaussian_data):
+    def test_basic_discovery(self, direct_lingam, non_gaussian_data, mock_lingam_module):
         """Test basic causal discovery with DirectLiNGAM."""
         config = DiscoveryConfig(random_state=42)
 
@@ -123,7 +156,7 @@ class TestDirectLiNGAMDiscovery:
             assert result.runtime_seconds > 0
             assert result.adjacency_matrix.shape == (3, 3)
 
-    def test_causal_order_in_metadata(self, direct_lingam, non_gaussian_data):
+    def test_causal_order_in_metadata(self, direct_lingam, non_gaussian_data, mock_lingam_module):
         """Test that causal order is included in metadata."""
         config = DiscoveryConfig(random_state=42)
 
@@ -142,7 +175,7 @@ class TestDirectLiNGAMDiscovery:
             assert "causal_order" in result.metadata
             assert result.metadata["causal_order"] == ["X", "Y", "Z"]
 
-    def test_adjacency_weights_in_metadata(self, direct_lingam, non_gaussian_data):
+    def test_adjacency_weights_in_metadata(self, direct_lingam, non_gaussian_data, mock_lingam_module):
         """Test that adjacency weights are included in metadata."""
         config = DiscoveryConfig(random_state=42)
 
@@ -186,7 +219,7 @@ class TestDirectLiNGAMErrorHandling:
                 # The actual import error would be caught in the discover method
                 pass
 
-    def test_algorithm_failure_returns_failed_result(self, direct_lingam):
+    def test_algorithm_failure_returns_failed_result(self, direct_lingam, mock_lingam_module):
         """Test that algorithm failure returns non-converged result."""
         config = DiscoveryConfig()
         df = pd.DataFrame({"A": [1.0, 2.0, 3.0], "B": [4.0, 5.0, 6.0]})
@@ -297,7 +330,7 @@ class TestICALiNGAMDiscovery:
 
         return pd.DataFrame({"X": X, "Y": Y, "Z": Z})
 
-    def test_basic_discovery(self, ica_lingam, non_gaussian_data):
+    def test_basic_discovery(self, ica_lingam, non_gaussian_data, mock_lingam_module):
         """Test basic causal discovery with ICA-LiNGAM."""
         config = DiscoveryConfig(random_state=42, max_iter=1000)
 
@@ -319,7 +352,7 @@ class TestICALiNGAMDiscovery:
             assert result.runtime_seconds > 0
             assert result.adjacency_matrix.shape == (3, 3)
 
-    def test_max_iter_in_metadata(self, ica_lingam, non_gaussian_data):
+    def test_max_iter_in_metadata(self, ica_lingam, non_gaussian_data, mock_lingam_module):
         """Test that max_iter is included in metadata."""
         config = DiscoveryConfig(random_state=42, max_iter=5000)
 
@@ -338,7 +371,7 @@ class TestICALiNGAMDiscovery:
             assert "max_iter" in result.metadata
             assert result.metadata["max_iter"] == 5000
 
-    def test_adjacency_weights_in_metadata(self, ica_lingam, non_gaussian_data):
+    def test_adjacency_weights_in_metadata(self, ica_lingam, non_gaussian_data, mock_lingam_module):
         """Test that adjacency weights are included in metadata."""
         config = DiscoveryConfig(random_state=42)
 
@@ -367,7 +400,7 @@ class TestICALiNGAMErrorHandling:
         """Create ICA-LiNGAM algorithm instance."""
         return ICALiNGAMAlgorithm()
 
-    def test_algorithm_failure_returns_failed_result(self, ica_lingam):
+    def test_algorithm_failure_returns_failed_result(self, ica_lingam, mock_lingam_module):
         """Test that algorithm failure returns non-converged result."""
         config = DiscoveryConfig()
         df = pd.DataFrame({"A": [1.0, 2.0, 3.0], "B": [4.0, 5.0, 6.0]})
