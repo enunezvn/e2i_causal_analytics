@@ -50,6 +50,13 @@ ENV/
 coverage/
 htmlcov/
 .tox/
+playwright-report/
+test-results/
+
+# Claude auto-generated stubs
+**/CLAUDE.md
+!.claude/CLAUDE.md
+!CLAUDE.md
 
 # MyPy
 .mypy_cache/
