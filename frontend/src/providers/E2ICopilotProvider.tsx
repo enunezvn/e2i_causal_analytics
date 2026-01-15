@@ -1,594 +1,592 @@
-/**
- * E2I CopilotKit Provider
- * =======================
- *
- * Wraps the application with CopilotKit context and exposes E2I-specific
- * readables and actions for the AI assistant.
- *
- * Features:
- * - Dashboard filter context exposed to AI
- * - Agent tier information
- * - User preferences
- * - UI interaction actions
- *
- * @module providers/E2ICopilotProvider
- */
+// ============================================================================
+// E2I Causal Analytics - CopilotKit Provider
+// Main integration with bidirectional state sync
+// ============================================================================
 
-import * as React from 'react';
+'use client';
+
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useCallback,
+  useEffect,
+  ReactNode,
+} from 'react';
 import { CopilotKit } from '@copilotkit/react-core';
 import {
   useCopilotReadable,
   useCopilotAction,
-  useCoAgent,
+  useCopilotChat,
 } from '@copilotkit/react-core';
-import { useNavigate, useLocation } from 'react-router-dom';
+import {
+  FilterContext,
+  DashboardContext,
+  ValidationSummary,
+  AgentState,
+  AGENT_REGISTRY,
+  E2ICopilotAction,
+} from '../types';
 
-// =============================================================================
-// TYPES
-// =============================================================================
+// -----------------------------------------------------------------------------
+// E2I Context Types
+// -----------------------------------------------------------------------------
 
-export interface E2IFilters {
-  brand: 'Remibrutinib' | 'Fabhalta' | 'Kisqali' | 'All';
-  territory: string | null;
-  dateRange: {
-    start: string;
-    end: string;
-  };
-  hcpSegment: string | null;
-}
-
-export interface AgentInfo {
-  id: string;
-  name: string;
-  tier: 0 | 1 | 2 | 3 | 4 | 5;
-  status: 'active' | 'idle' | 'processing' | 'error';
-  lastActivity?: string;
-  capabilities: string[];
-}
-
-export interface UserPreferences {
-  detailLevel: 'summary' | 'detailed' | 'expert';
-  defaultBrand: E2IFilters['brand'];
-  notificationsEnabled: boolean;
-  theme: 'light' | 'dark' | 'system';
-}
-
-/**
- * E2I Agent State for CoAgent bidirectional sync.
- * This interface mirrors the E2IAgentState TypedDict on the backend.
- * State is emitted from LangGraph nodes via copilotkit_emit_state().
- */
-export interface E2IAgentState {
-  current_node: string;      // "chat", "tools", "synthesize", "idle"
-  progress_steps: string[];  // ["Processing query...", "Calling tools..."]
-  progress_percent: number;  // 0-100
-  tools_executing: string[]; // ["orchestrator_tool", ...]
-  agent_status: string;      // "processing", "waiting", "complete", "error"
-  error_message: string | null;
-}
-
-export interface E2ICopilotContextValue {
-  filters: E2IFilters;
-  setFilters: React.Dispatch<React.SetStateAction<E2IFilters>>;
-  agents: AgentInfo[];
-  preferences: UserPreferences;
-  setPreferences: React.Dispatch<React.SetStateAction<UserPreferences>>;
+interface E2IContextType {
+  // Dashboard state
+  dashboard: DashboardContext;
+  setDashboard: (updates: Partial<DashboardContext>) => void;
+  
+  // Agent state
+  activeAgents: Map<string, AgentState>;
+  lastValidation?: ValidationSummary;
+  
+  // UI state controlled by agents
   highlightedPaths: string[];
-  setHighlightedPaths: React.Dispatch<React.SetStateAction<string[]>>;
-  chatOpen: boolean;
-  setChatOpen: React.Dispatch<React.SetStateAction<boolean>>;
-  // CoAgent state sync (Phase 3 implementation)
-  agentState: E2IAgentState;
-  agentRunning: boolean;
-  agentNodeName: string | undefined;
+  highlightedCharts: Map<string, string[]>;
+  pendingActions: E2ICopilotAction[];
+  
+  // Action handlers
+  clearHighlights: () => void;
+  dismissAction: (index: number) => void;
 }
 
-export interface E2ICopilotProviderProps {
-  children: React.ReactNode;
-  runtimeUrl?: string;
-  initialFilters?: Partial<E2IFilters>;
-  userRole?: string;
-}
+const E2IContext = createContext<E2IContextType | null>(null);
 
-// =============================================================================
-// CONTEXT
-// =============================================================================
+// -----------------------------------------------------------------------------
+// Hook to access E2I context
+// -----------------------------------------------------------------------------
 
-const E2ICopilotContext = React.createContext<E2ICopilotContextValue | null>(null);
-
-export function useE2ICopilot() {
-  const context = React.useContext(E2ICopilotContext);
+export function useE2I() {
+  const context = useContext(E2IContext);
   if (!context) {
-    throw new Error('useE2ICopilot must be used within E2ICopilotProvider');
+    throw new Error('useE2I must be used within E2ICopilotProvider');
   }
   return context;
 }
 
-// =============================================================================
-// DEFAULT DATA
-// =============================================================================
+// -----------------------------------------------------------------------------
+// Main Provider Component
+// -----------------------------------------------------------------------------
 
-const DEFAULT_FILTERS: E2IFilters = {
-  brand: 'Remibrutinib',
-  territory: null,
-  dateRange: {
-    start: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-    end: new Date().toISOString().split('T')[0],
-  },
-  hcpSegment: null,
-};
-
-const DEFAULT_PREFERENCES: UserPreferences = {
-  detailLevel: 'detailed',
-  defaultBrand: 'Remibrutinib',
-  notificationsEnabled: true,
-  theme: 'system',
-};
-
-const DEFAULT_AGENT_STATE: E2IAgentState = {
-  current_node: 'idle',
-  progress_steps: [],
-  progress_percent: 0,
-  tools_executing: [],
-  agent_status: 'idle',
-  error_message: null,
-};
-
-const SAMPLE_AGENTS: AgentInfo[] = [
-  // Tier 0 - ML Foundation
-  { id: 'scope-definer', name: 'Scope Definer', tier: 0, status: 'idle', capabilities: ['problem_scoping', 'requirement_analysis'] },
-  { id: 'data-preparer', name: 'Data Preparer', tier: 0, status: 'idle', capabilities: ['data_validation', 'preprocessing'] },
-  { id: 'feature-analyzer', name: 'Feature Analyzer', tier: 0, status: 'idle', capabilities: ['feature_engineering', 'selection'] },
-  { id: 'model-selector', name: 'Model Selector', tier: 0, status: 'idle', capabilities: ['model_comparison', 'benchmarking'] },
-  { id: 'model-trainer', name: 'Model Trainer', tier: 0, status: 'idle', capabilities: ['training', 'hyperparameter_tuning'] },
-  { id: 'model-deployer', name: 'Model Deployer', tier: 0, status: 'idle', capabilities: ['deployment', 'versioning'] },
-  { id: 'observability-connector', name: 'Observability Connector', tier: 0, status: 'active', capabilities: ['mlflow', 'opik', 'monitoring'] },
-  // Tier 1 - Orchestration
-  { id: 'orchestrator', name: 'Orchestrator', tier: 1, status: 'active', capabilities: ['routing', 'coordination', 'agent_dispatch'] },
-  { id: 'tool-composer', name: 'Tool Composer', tier: 1, status: 'idle', capabilities: ['tool_selection', 'multi_tool'] },
-  // Tier 2 - Causal Analytics
-  { id: 'causal-impact', name: 'Causal Impact', tier: 2, status: 'idle', capabilities: ['ate_estimation', 'effect_chains'] },
-  { id: 'gap-analyzer', name: 'Gap Analyzer', tier: 2, status: 'idle', capabilities: ['roi_analysis', 'opportunity_detection'] },
-  { id: 'heterogeneous-optimizer', name: 'Heterogeneous Optimizer', tier: 2, status: 'idle', capabilities: ['cate_analysis', 'segment_optimization'] },
-  // Tier 3 - Monitoring
-  { id: 'drift-monitor', name: 'Drift Monitor', tier: 3, status: 'active', capabilities: ['data_drift', 'model_drift'] },
-  { id: 'experiment-designer', name: 'Experiment Designer', tier: 3, status: 'idle', capabilities: ['ab_design', 'power_analysis'] },
-  { id: 'health-score', name: 'Health Score', tier: 3, status: 'active', capabilities: ['system_health', 'model_health'] },
-  // Tier 4 - ML Predictions
-  { id: 'prediction-synthesizer', name: 'Prediction Synthesizer', tier: 4, status: 'idle', capabilities: ['prediction_aggregation', 'ensemble'] },
-  { id: 'resource-optimizer', name: 'Resource Optimizer', tier: 4, status: 'idle', capabilities: ['resource_allocation', 'scheduling'] },
-  // Tier 5 - Self-Improvement
-  { id: 'explainer', name: 'Explainer', tier: 5, status: 'idle', capabilities: ['narratives', 'shap_explanations'] },
-  { id: 'feedback-learner', name: 'Feedback Learner', tier: 5, status: 'idle', capabilities: ['prompt_optimization', 'self_improvement'] },
-];
-
-// =============================================================================
-// COPILOT ENABLED CONTEXT
-// =============================================================================
-
-// Context to track if CopilotKit is enabled
-const CopilotEnabledContext = React.createContext<boolean>(false);
-
-/**
- * Hook to check if CopilotKit is enabled
- */
-export function useCopilotEnabled(): boolean {
-  return React.useContext(CopilotEnabledContext);
+interface E2ICopilotProviderProps {
+  children: ReactNode;
+  apiKey?: string;
+  runtimeUrl?: string;
+  initialFilters?: FilterContext;
+  userRole?: DashboardContext['userRole'];
 }
 
-// =============================================================================
-// AGENT STATE SETTERS CONTEXT (for CopilotHooksConnector to update state)
-// =============================================================================
-
-interface AgentStateSetters {
-  setAgentState: React.Dispatch<React.SetStateAction<E2IAgentState>>;
-  setAgentRunning: React.Dispatch<React.SetStateAction<boolean>>;
-  setAgentNodeName: React.Dispatch<React.SetStateAction<string | undefined>>;
-}
-
-const AgentStateSettersContext = React.createContext<AgentStateSetters | null>(null);
-
-// =============================================================================
-// INTERNAL CONTEXT PROVIDER (without CopilotKit hooks)
-// =============================================================================
-
-function E2IBaseContextProvider({ children }: { children: React.ReactNode }) {
-  // State
-  const [filters, setFilters] = React.useState<E2IFilters>(DEFAULT_FILTERS);
-  const [agents] = React.useState<AgentInfo[]>(SAMPLE_AGENTS);
-  const [preferences, setPreferences] = React.useState<UserPreferences>(DEFAULT_PREFERENCES);
-  const [highlightedPaths, setHighlightedPaths] = React.useState<string[]>([]);
-  const [chatOpen, setChatOpen] = React.useState(false);
-
-  // CoAgent state - defaults for when CopilotKit is disabled
-  const [agentState, setAgentState] = React.useState<E2IAgentState>(DEFAULT_AGENT_STATE);
-  const [agentRunning, setAgentRunning] = React.useState(false);
-  const [agentNodeName, setAgentNodeName] = React.useState<string | undefined>(undefined);
-
-  const contextValue: E2ICopilotContextValue = {
-    filters,
-    setFilters,
-    agents,
-    preferences,
-    setPreferences,
-    highlightedPaths,
-    setHighlightedPaths,
-    chatOpen,
-    setChatOpen,
-    // CoAgent state
-    agentState,
-    agentRunning,
-    agentNodeName,
-  };
-
+export const E2ICopilotProvider: React.FC<E2ICopilotProviderProps> = ({
+  children,
+  apiKey,
+  runtimeUrl = '/api/copilotkit',
+  initialFilters = {},
+  userRole = 'analyst',
+}) => {
   return (
-    <E2ICopilotContext.Provider value={contextValue}>
-      <AgentStateSettersContext.Provider value={{ setAgentState, setAgentRunning, setAgentNodeName }}>
+    <CopilotKit
+      runtimeUrl={runtimeUrl}
+      publicApiKey={apiKey}
+      agent="e2i-orchestrator"
+      showDevConsole={process.env.NODE_ENV === 'development'}
+    >
+      <E2IContextProvider initialFilters={initialFilters} userRole={userRole}>
         {children}
-      </AgentStateSettersContext.Provider>
-    </E2ICopilotContext.Provider>
+      </E2IContextProvider>
+    </CopilotKit>
   );
+};
+
+// -----------------------------------------------------------------------------
+// Inner Context Provider (with CopilotKit hooks)
+// -----------------------------------------------------------------------------
+
+interface E2IContextProviderProps {
+  children: ReactNode;
+  initialFilters: FilterContext;
+  userRole: DashboardContext['userRole'];
 }
 
-// =============================================================================
-// COPILOTKIT HOOKS CONNECTOR (only when CopilotKit is enabled)
-// =============================================================================
-
-function CopilotHooksConnector({ children }: { children: React.ReactNode }) {
-  const navigate = useNavigate();
-  const location = useLocation();
-  const { filters, setFilters, agents, preferences, setPreferences, setHighlightedPaths, chatOpen, setChatOpen } = useE2ICopilot();
-
-  // Expose dashboard filters to AI
-  useCopilotReadable({
-    description: 'Current dashboard filters including brand, territory, date range, and HCP segment',
-    value: filters,
+const E2IContextProvider: React.FC<E2IContextProviderProps> = ({
+  children,
+  initialFilters,
+  userRole,
+}) => {
+  // Dashboard state
+  const [dashboard, setDashboardState] = useState<DashboardContext>({
+    filters: initialFilters,
+    activeTab: 'overview',
+    selectedKPIs: [],
+    visibleCharts: [],
+    highlightedElements: [],
+    userRole,
   });
 
-  // Expose current page context
+  // Agent state
+  const [activeAgents, setActiveAgents] = useState<Map<string, AgentState>>(
+    new Map()
+  );
+  const [lastValidation, setLastValidation] = useState<ValidationSummary>();
+
+  // UI state controlled by agents
+  const [highlightedPaths, setHighlightedPaths] = useState<string[]>([]);
+  const [highlightedCharts, setHighlightedCharts] = useState<
+    Map<string, string[]>
+  >(new Map());
+  const [pendingActions, setPendingActions] = useState<E2ICopilotAction[]>([]);
+
+  // Update dashboard helper
+  const setDashboard = useCallback((updates: Partial<DashboardContext>) => {
+    setDashboardState((prev) => ({ ...prev, ...updates }));
+  }, []);
+
+  // ---------------------------------------------------------------------------
+  // useCopilotReadable - Make app state visible to agents
+  // ---------------------------------------------------------------------------
+
+  // Current filter context
   useCopilotReadable({
-    description: 'Current page path and available navigation routes',
-    value: {
-      currentPath: location.pathname,
-      availableRoutes: [
-        '/',
-        '/knowledge-graph',
-        '/causal-discovery',
-        '/model-performance',
-        '/feature-importance',
-        '/data-quality',
-        '/system-health',
-        '/monitoring',
-        '/time-series',
-        '/intervention-impact',
-        '/predictive-analytics',
-        '/agent-orchestration',
-      ],
-    },
+    description:
+      'Current dashboard filters including brand, region, time range, and segments',
+    value: dashboard.filters,
   });
 
-  // Expose agent information to AI
+  // Active dashboard tab
   useCopilotReadable({
-    description: 'E2I agent tier hierarchy with 18 agents across 6 tiers (0-5). Tier 0 is ML Foundation, Tier 1 is Orchestration, Tier 2 is Causal Analytics, Tier 3 is Monitoring, Tier 4 is ML Predictions, Tier 5 is Self-Improvement.',
-    value: agents,
+    description: 'Currently active dashboard tab/view',
+    value: dashboard.activeTab,
   });
 
-  // Expose user preferences
+  // Selected KPIs
   useCopilotReadable({
-    description: 'User preferences for detail level, default brand, and notifications',
-    value: preferences,
+    description: 'KPIs currently selected for analysis',
+    value: dashboard.selectedKPIs,
   });
 
-  // Action: Navigate to a page
+  // Visible charts
+  useCopilotReadable({
+    description: 'Charts currently visible in the dashboard viewport',
+    value: dashboard.visibleCharts,
+  });
+
+  // User role (affects explanation detail level)
+  useCopilotReadable({
+    description:
+      'User role: executive (high-level), analyst (detailed), or data_scientist (technical)',
+    value: dashboard.userRole,
+  });
+
+  // Agent registry (so agents know their capabilities)
+  useCopilotReadable({
+    description: 'Available E2I agents with their tiers and capabilities',
+    value: Object.values(AGENT_REGISTRY).map((a) => ({
+      id: a.id,
+      name: a.name,
+      tier: a.tier,
+      type: a.type,
+      actions: a.actions,
+    })),
+  });
+
+  // ---------------------------------------------------------------------------
+  // useCopilotAction - Agent-triggered UI actions
+  // ---------------------------------------------------------------------------
+
+  // Update filters from agent
   useCopilotAction({
-    name: 'navigateTo',
-    description: 'Navigate to a specific page in the E2I dashboard',
-    parameters: [
-      {
-        name: 'path',
-        type: 'string',
-        description: 'The path to navigate to (e.g., /knowledge-graph, /model-performance)',
-        required: true,
-      },
-    ],
-    handler: ({ path }: { path: string }) => {
-      navigate(path);
-      return `Navigated to ${path}`;
-    },
-  });
-
-  // Action: Set brand filter
-  useCopilotAction({
-    name: 'setBrandFilter',
-    description: 'Change the brand filter to Remibrutinib, Fabhalta, Kisqali, or All',
+    name: 'updateFilters',
+    description:
+      'Update dashboard filters based on analysis context. Use when the agent identifies a specific segment or time period to focus on.',
     parameters: [
       {
         name: 'brand',
         type: 'string',
-        description: 'The brand to filter by',
-        required: true,
+        description: 'Brand to filter: Remibrutinib, Fabhalta, or Kisqali',
+        required: false,
       },
-    ],
-    handler: ({ brand }: { brand: string }) => {
-      const validBrands = ['Remibrutinib', 'Fabhalta', 'Kisqali', 'All'];
-      if (validBrands.includes(brand)) {
-        setFilters((prev) => ({ ...prev, brand: brand as E2IFilters['brand'] }));
-        return `Brand filter set to ${brand}`;
-      }
-      return `Invalid brand. Choose from: ${validBrands.join(', ')}`;
-    },
-  });
-
-  // Action: Set date range
-  useCopilotAction({
-    name: 'setDateRange',
-    description: 'Set the date range for analytics',
-    parameters: [
+      {
+        name: 'region',
+        type: 'string',
+        description: 'Region to filter: northeast, south, midwest, or west',
+        required: false,
+      },
       {
         name: 'startDate',
         type: 'string',
-        description: 'Start date in YYYY-MM-DD format',
-        required: true,
+        description: 'Start date for time range (ISO format)',
+        required: false,
       },
       {
         name: 'endDate',
         type: 'string',
-        description: 'End date in YYYY-MM-DD format',
-        required: true,
-      },
-    ],
-    handler: ({ startDate, endDate }: { startDate: string; endDate: string }) => {
-      setFilters((prev) => ({
-        ...prev,
-        dateRange: { start: startDate, end: endDate },
-      }));
-      return `Date range set to ${startDate} - ${endDate}`;
-    },
-  });
-
-  // Action: Highlight causal paths
-  useCopilotAction({
-    name: 'highlightCausalPaths',
-    description: 'Highlight specific causal paths on the Knowledge Graph or Causal Discovery pages',
-    parameters: [
-      {
-        name: 'pathIds',
-        type: 'string[]',
-        description: 'Array of path IDs to highlight',
-        required: true,
-      },
-    ],
-    handler: ({ pathIds }: { pathIds: string[] }) => {
-      setHighlightedPaths(pathIds);
-      return `Highlighted ${pathIds.length} causal path(s)`;
-    },
-  });
-
-  // Action: Set detail level
-  useCopilotAction({
-    name: 'setDetailLevel',
-    description: 'Set the response detail level for AI explanations',
-    parameters: [
-      {
-        name: 'level',
-        type: 'string',
-        description: 'Detail level: summary, detailed, or expert',
-        required: true,
-      },
-    ],
-    handler: ({ level }: { level: string }) => {
-      const validLevels = ['summary', 'detailed', 'expert'];
-      if (validLevels.includes(level)) {
-        setPreferences((prev) => ({ ...prev, detailLevel: level as UserPreferences['detailLevel'] }));
-        return `Detail level set to ${level}`;
-      }
-      return `Invalid level. Choose from: ${validLevels.join(', ')}`;
-    },
-  });
-
-  // Action: Toggle chat sidebar
-  useCopilotAction({
-    name: 'toggleChat',
-    description: 'Open or close the chat sidebar',
-    parameters: [
-      {
-        name: 'open',
-        type: 'boolean',
-        description: 'Whether to open (true) or close (false) the chat',
+        description: 'End date for time range (ISO format)',
         required: false,
       },
     ],
-    handler: ({ open }: { open?: boolean }) => {
-      const newState = open !== undefined ? open : !chatOpen;
-      setChatOpen(newState);
-      return newState ? 'Chat opened' : 'Chat closed';
+    handler: async ({ brand, region, startDate, endDate }) => {
+      const newFilters: Partial<FilterContext> = {};
+      if (brand) newFilters.brand = brand as FilterContext['brand'];
+      if (region) newFilters.region = region as FilterContext['region'];
+      if (startDate && endDate) {
+        newFilters.timeRange = { start: startDate, end: endDate };
+      }
+      setDashboard({ filters: { ...dashboard.filters, ...newFilters } });
+      return `Filters updated: ${JSON.stringify(newFilters)}`;
     },
   });
 
-  // ==========================================================================
-  // CoAgent State Sync - Bidirectional state between LangGraph and React
-  // ==========================================================================
-
-  // Get setters from context to update shared state
-  const agentStateSetters = React.useContext(AgentStateSettersContext);
-
-  // Subscribe to LangGraph agent state via useCoAgent
-  const { state: coAgentState, running, nodeName } = useCoAgent<E2IAgentState>({
-    name: 'default', // Must match LangGraphAgent name in CopilotKit config
-    initialState: DEFAULT_AGENT_STATE,
+  // Highlight causal path in visualization
+  useCopilotAction({
+    name: 'highlightCausalPath',
+    description:
+      'Highlight a causal relationship in the DAG visualization. Use when explaining a specific causal effect.',
+    parameters: [
+      {
+        name: 'treatment',
+        type: 'string',
+        description: 'Treatment/intervention variable',
+        required: true,
+      },
+      {
+        name: 'outcome',
+        type: 'string',
+        description: 'Outcome variable',
+        required: true,
+      },
+      {
+        name: 'effect',
+        type: 'number',
+        description: 'Estimated causal effect size',
+        required: true,
+      },
+      {
+        name: 'mediators',
+        type: 'string',
+        description: 'Comma-separated list of mediator variables',
+        required: false,
+      },
+    ],
+    handler: async ({ treatment, outcome, effect, mediators }) => {
+      const pathId = `${treatment}->${outcome}`;
+      setHighlightedPaths((prev) => [...prev, pathId]);
+      
+      // Add to pending actions for UI rendering
+      setPendingActions((prev) => [
+        ...prev,
+        {
+          type: 'highlightCausalPath',
+          treatment,
+          outcome,
+          effect,
+          mediators: mediators?.split(',').map((m) => m.trim()),
+        },
+      ]);
+      
+      return `Highlighted causal path: ${treatment} → ${outcome} (effect: ${effect})`;
+    },
   });
 
-  // Sync CoAgent state to shared context when it changes
-  React.useEffect(() => {
-    if (agentStateSetters) {
-      agentStateSetters.setAgentState(coAgentState);
-      agentStateSetters.setAgentRunning(running);
-      agentStateSetters.setAgentNodeName(nodeName);
-    }
-  }, [coAgentState, running, nodeName, agentStateSetters]);
+  // Show validation results
+  useCopilotAction({
+    name: 'showValidationResults',
+    description:
+      'Display causal validation results including refutation tests and gate decision. Use after running causal analysis.',
+    parameters: [
+      {
+        name: 'estimateId',
+        type: 'string',
+        description: 'ID of the causal estimate',
+        required: true,
+      },
+      {
+        name: 'gateDecision',
+        type: 'string',
+        description: 'Gate decision: proceed, review, or block',
+        required: true,
+      },
+      {
+        name: 'confidence',
+        type: 'number',
+        description: 'Overall confidence score (0-1)',
+        required: true,
+      },
+      {
+        name: 'testsPassed',
+        type: 'number',
+        description: 'Number of tests passed',
+        required: true,
+      },
+      {
+        name: 'testsFailed',
+        type: 'number',
+        description: 'Number of tests failed',
+        required: true,
+      },
+    ],
+    handler: async ({
+      estimateId,
+      gateDecision,
+      confidence,
+      testsPassed,
+      testsFailed,
+    }) => {
+      const validation: ValidationSummary = {
+        estimateId,
+        gateDecision: gateDecision as ValidationSummary['gateDecision'],
+        overallConfidence: confidence,
+        testsRun: testsPassed + testsFailed,
+        testsPassed,
+        testsFailed,
+        testsWarning: 0,
+        results: [],
+        timestamp: new Date().toISOString(),
+      };
+      setLastValidation(validation);
+      
+      setPendingActions((prev) => [
+        ...prev,
+        { type: 'showValidationResults', validation },
+      ]);
+      
+      return `Validation results displayed: ${gateDecision} (${Math.round(confidence * 100)}% confidence)`;
+    },
+  });
 
-  return <>{children}</>;
-}
+  // Navigate to dashboard tab
+  useCopilotAction({
+    name: 'navigateToTab',
+    description:
+      'Switch the dashboard to a specific tab/view. Use when directing user attention to relevant analysis.',
+    parameters: [
+      {
+        name: 'tab',
+        type: 'string',
+        description:
+          'Tab to navigate to: overview, ws1-data, ws1-ml, ws2, ws3, causal, validation, knowledge-graph',
+        required: true,
+      },
+    ],
+    handler: async ({ tab }) => {
+      setDashboard({ activeTab: tab });
+      return `Navigated to ${tab} tab`;
+    },
+  });
 
-// =============================================================================
-// INTERNAL CONTEXT PROVIDER (conditional CopilotKit hooks)
-// =============================================================================
+  // Highlight chart element
+  useCopilotAction({
+    name: 'highlightChartElement',
+    description:
+      'Highlight a specific element in a chart. Use when pointing out anomalies, trends, or important data points.',
+    parameters: [
+      {
+        name: 'chartId',
+        type: 'string',
+        description: 'ID of the chart to highlight',
+        required: true,
+      },
+      {
+        name: 'elementId',
+        type: 'string',
+        description: 'ID of the element within the chart',
+        required: true,
+      },
+      {
+        name: 'annotation',
+        type: 'string',
+        description: 'Annotation text to display',
+        required: false,
+      },
+    ],
+    handler: async ({ chartId, elementId, annotation }) => {
+      setHighlightedCharts((prev) => {
+        const newMap = new Map(prev);
+        const existing = newMap.get(chartId) || [];
+        newMap.set(chartId, [...existing, elementId]);
+        return newMap;
+      });
+      
+      setPendingActions((prev) => [
+        ...prev,
+        { type: 'highlightChartElement', chartId, elementId, annotation },
+      ]);
+      
+      return `Highlighted ${elementId} in chart ${chartId}`;
+    },
+  });
 
-function E2ICopilotContextProvider({ children }: { children: React.ReactNode }) {
-  const copilotEnabled = React.useContext(CopilotEnabledContext);
+  // Show gap details
+  useCopilotAction({
+    name: 'showGapDetails',
+    description:
+      'Display detailed information about a performance gap. Use when the Gap Analyzer identifies issues.',
+    parameters: [
+      {
+        name: 'gapId',
+        type: 'string',
+        description: 'Unique identifier for the gap',
+        required: true,
+      },
+      {
+        name: 'kpi',
+        type: 'string',
+        description: 'KPI name',
+        required: true,
+      },
+      {
+        name: 'expected',
+        type: 'number',
+        description: 'Expected value',
+        required: true,
+      },
+      {
+        name: 'actual',
+        type: 'number',
+        description: 'Actual value',
+        required: true,
+      },
+      {
+        name: 'rootCauses',
+        type: 'string',
+        description: 'Comma-separated list of root causes',
+        required: true,
+      },
+    ],
+    handler: async ({ gapId, kpi, expected, actual, rootCauses }) => {
+      setPendingActions((prev) => [
+        ...prev,
+        {
+          type: 'showGapDetails',
+          gapId,
+          kpi,
+          expected,
+          actual,
+          rootCauses: rootCauses.split(',').map((c) => c.trim()),
+        },
+      ]);
+      
+      return `Showing gap details for ${kpi}: ${actual} vs expected ${expected}`;
+    },
+  });
+
+  // Generate report
+  useCopilotAction({
+    name: 'generateReport',
+    description:
+      'Generate an exportable report. Use when user requests documentation or wants to share findings.',
+    parameters: [
+      {
+        name: 'format',
+        type: 'string',
+        description: 'Report format: pdf, pptx, or docx',
+        required: true,
+      },
+      {
+        name: 'sections',
+        type: 'string',
+        description: 'Comma-separated list of sections to include',
+        required: true,
+      },
+    ],
+    handler: async ({ format, sections }) => {
+      setPendingActions((prev) => [
+        ...prev,
+        {
+          type: 'generateReport',
+          format: format as 'pdf' | 'pptx' | 'docx',
+          sections: sections.split(',').map((s) => s.trim()),
+        },
+      ]);
+      
+      return `Generating ${format} report with sections: ${sections}`;
+    },
+  });
+
+  // Update agent status (called by orchestrator)
+  useCopilotAction({
+    name: 'updateAgentStatus',
+    description:
+      'Update the status of an agent. Used by Orchestrator to track agent activity.',
+    parameters: [
+      {
+        name: 'agentId',
+        type: 'string',
+        description: 'ID of the agent',
+        required: true,
+      },
+      {
+        name: 'status',
+        type: 'string',
+        description: 'Status: idle, thinking, computing, complete, or error',
+        required: true,
+      },
+      {
+        name: 'task',
+        type: 'string',
+        description: 'Current task description',
+        required: false,
+      },
+    ],
+    handler: async ({ agentId, status, task }) => {
+      setActiveAgents((prev) => {
+        const newMap = new Map(prev);
+        newMap.set(agentId, {
+          id: agentId,
+          status: status as AgentState['status'],
+          currentTask: task,
+        });
+        return newMap;
+      });
+      
+      return `Agent ${agentId} status: ${status}`;
+    },
+    render: ({ agentId, status }) => {
+      // Custom render for agent status updates
+      const agent = AGENT_REGISTRY[agentId];
+      if (!agent) return null;
+      
+      return (
+        <div className="flex items-center gap-2 text-sm text-gray-500">
+          <span>{agent.icon}</span>
+          <span>{agent.name}</span>
+          <span className="text-xs">({status})</span>
+        </div>
+      );
+    },
+  });
+
+  // ---------------------------------------------------------------------------
+  // Helper functions
+  // ---------------------------------------------------------------------------
+
+  const clearHighlights = useCallback(() => {
+    setHighlightedPaths([]);
+    setHighlightedCharts(new Map());
+  }, []);
+
+  const dismissAction = useCallback((index: number) => {
+    setPendingActions((prev) => prev.filter((_, i) => i !== index));
+  }, []);
+
+  // ---------------------------------------------------------------------------
+  // Context value
+  // ---------------------------------------------------------------------------
+
+  const contextValue: E2IContextType = {
+    dashboard,
+    setDashboard,
+    activeAgents,
+    lastValidation,
+    highlightedPaths,
+    highlightedCharts,
+    pendingActions,
+    clearHighlights,
+    dismissAction,
+  };
 
   return (
-    <E2IBaseContextProvider>
-      {copilotEnabled ? (
-        <CopilotHooksConnector>{children}</CopilotHooksConnector>
-      ) : (
-        children
-      )}
-    </E2IBaseContextProvider>
+    <E2IContext.Provider value={contextValue}>{children}</E2IContext.Provider>
   );
-}
-
-// =============================================================================
-// COPILOTKIT ERROR BOUNDARY
-// =============================================================================
-
-interface CopilotErrorBoundaryState {
-  hasError: boolean;
-  error?: Error;
-}
-
-/**
- * Error boundary that catches CopilotKit errors and gracefully degrades
- * to rendering children without CopilotKit functionality.
- */
-class CopilotGracefulErrorBoundary extends React.Component<
-  { children: React.ReactNode; fallback: React.ReactNode },
-  CopilotErrorBoundaryState
-> {
-  constructor(props: { children: React.ReactNode; fallback: React.ReactNode }) {
-    super(props);
-    this.state = { hasError: false };
-  }
-
-  static getDerivedStateFromError(error: Error): CopilotErrorBoundaryState {
-    return { hasError: true, error };
-  }
-
-  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
-    // Log the error but don't crash the app
-    console.warn(
-      'CopilotKit failed to initialize. Running without AI features.',
-      error.message
-    );
-    console.debug('CopilotKit error details:', errorInfo);
-  }
-
-  render() {
-    if (this.state.hasError) {
-      // Fall back to rendering without CopilotKit
-      return this.props.fallback;
-    }
-    return this.props.children;
-  }
-}
-
-// =============================================================================
-// COPILOTKIT WRAPPER (for main.tsx - outside router)
-// =============================================================================
-
-export interface CopilotKitWrapperProps {
-  children: React.ReactNode;
-  runtimeUrl?: string;
-  enabled?: boolean;
-}
-
-/**
- * CopilotKitWrapper provides the CopilotKit context.
- * Use this in main.tsx to wrap the router.
- *
- * Set enabled=false to disable CopilotKit when backend is not available.
- * When enabled, gracefully degrades to non-AI mode if backend is unavailable.
- *
- * @example
- * ```tsx
- * <CopilotKitWrapper runtimeUrl="/api/copilotkit/">
- *   <AppRouter />
- * </CopilotKitWrapper>
- * ```
- */
-export function CopilotKitWrapper({
-  children,
-  runtimeUrl = '/api/copilotkit/',
-  enabled = true, // Enabled - backend integrations deployed (P1-P6 complete)
-}: CopilotKitWrapperProps) {
-  // Fallback content when CopilotKit is disabled or fails
-  const disabledFallback = (
-    <CopilotEnabledContext.Provider value={false}>
-      {children}
-    </CopilotEnabledContext.Provider>
-  );
-
-  // In development without backend, just render children with disabled context
-  if (!enabled) {
-    return disabledFallback;
-  }
-
-  // When enabled, wrap with error boundary for graceful degradation
-  return (
-    <CopilotGracefulErrorBoundary fallback={disabledFallback}>
-      <CopilotEnabledContext.Provider value={true}>
-        <CopilotKit
-          runtimeUrl={runtimeUrl}
-          transcribeAudioUrl="/api/transcribe"
-          textToSpeechUrl="/api/tts"
-          agent="default"
-          showDevConsole={import.meta.env.DEV}
-          onError={(errorEvent) => {
-            if (import.meta.env.DEV) {
-              console.error('[CopilotKit Error]', {
-                type: errorEvent.type,
-                timestamp: new Date(errorEvent.timestamp).toISOString(),
-                context: errorEvent.context,
-                error: errorEvent.error,
-              });
-            }
-          }}
-        >
-          {children}
-        </CopilotKit>
-      </CopilotEnabledContext.Provider>
-    </CopilotGracefulErrorBoundary>
-  );
-}
-
-// =============================================================================
-// MAIN PROVIDER (for router/index.tsx - inside router)
-// =============================================================================
-
-/**
- * E2ICopilotProvider provides E2I-specific context with readables and actions.
- * Must be used inside the router since it uses useNavigate/useLocation.
- *
- * @example
- * ```tsx
- * <E2ICopilotProvider initialFilters={{ brand: 'Remibrutinib' }}>
- *   <Layout><Outlet /></Layout>
- * </E2ICopilotProvider>
- * ```
- */
-export function E2ICopilotProvider({
-  children,
-  initialFilters: _initialFilters,
-  userRole: _userRole = 'analyst',
-}: Omit<E2ICopilotProviderProps, 'runtimeUrl'>) {
-  // TODO: Use initialFilters and userRole when filter context is implemented
-  void _initialFilters;
-  void _userRole;
-  return (
-    <E2ICopilotContextProvider>
-      {children}
-    </E2ICopilotContextProvider>
-  );
-}
+};
 
 export default E2ICopilotProvider;

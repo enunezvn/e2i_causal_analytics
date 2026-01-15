@@ -20,7 +20,7 @@ import {
   E2ICopilotProvider,
   useE2I,
 } from '../providers/E2ICopilotProvider';
-import { E2IChatSidebar, E2IChatPopup } from '../components/E2IChatSidebar';
+import { E2IChatSidebar, E2IChatPopup } from '../components/chat';
 import {
   useE2IChat,
   useE2IFilters,
