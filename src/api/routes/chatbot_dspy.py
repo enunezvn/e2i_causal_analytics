@@ -11,16 +11,21 @@ This module provides DSPy-based classification with:
 Phases 3-4 of the CopilotKit-DSPy observability integration plan.
 """
 
+import asyncio
 import logging
 import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from functools import wraps
+from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
 
 from .chatbot_state import IntentType
 
 logger = logging.getLogger(__name__)
+
+# Type variable for generic retry function
+T = TypeVar("T")
 
 # Check DSPy availability
 try:
@@ -33,6 +38,11 @@ except ImportError:
 
 # Feature flag for DSPy intent classification
 CHATBOT_DSPY_INTENT_ENABLED = os.getenv("CHATBOT_DSPY_INTENT", "true").lower() == "true"
+
+# DSPy timeout and retry configuration
+CHATBOT_DSPY_TIMEOUT = float(os.getenv("CHATBOT_DSPY_TIMEOUT", "10"))  # seconds
+CHATBOT_DSPY_MAX_RETRIES = int(os.getenv("CHATBOT_DSPY_MAX_RETRIES", "1"))
+CHATBOT_DSPY_RETRY_DELAY = float(os.getenv("CHATBOT_DSPY_RETRY_DELAY", "0.5"))  # initial delay
 
 # DSPy LLM configuration flag (to ensure we only configure once)
 _dspy_lm_configured = False
@@ -57,6 +67,69 @@ def _ensure_dspy_configured():
         logger.info("Configured DSPy LLM for chatbot intent classification")
     except Exception as e:
         logger.warning(f"Failed to configure DSPy LLM: {e}")
+
+
+async def _run_dspy_with_retry(
+    func: Callable[..., T],
+    *args,
+    max_retries: int = None,
+    timeout: float = None,
+    retry_delay: float = None,
+    operation_name: str = "DSPy operation",
+    **kwargs,
+) -> Optional[T]:
+    """
+    Run a DSPy operation with timeout and exponential backoff retry.
+
+    Args:
+        func: The DSPy function to call (sync function, will be run in thread)
+        *args: Positional arguments to pass to func
+        max_retries: Maximum number of retries (default: CHATBOT_DSPY_MAX_RETRIES)
+        timeout: Timeout in seconds (default: CHATBOT_DSPY_TIMEOUT)
+        retry_delay: Initial retry delay in seconds (default: CHATBOT_DSPY_RETRY_DELAY)
+        operation_name: Name for logging purposes
+        **kwargs: Keyword arguments to pass to func
+
+    Returns:
+        Result of func, or None if all retries failed/timed out
+    """
+    max_retries = max_retries if max_retries is not None else CHATBOT_DSPY_MAX_RETRIES
+    timeout = timeout if timeout is not None else CHATBOT_DSPY_TIMEOUT
+    retry_delay = retry_delay if retry_delay is not None else CHATBOT_DSPY_RETRY_DELAY
+
+    last_error = None
+    for attempt in range(max_retries + 1):
+        try:
+            # Run sync DSPy function in thread pool with timeout
+            result = await asyncio.wait_for(
+                asyncio.to_thread(func, *args, **kwargs),
+                timeout=timeout,
+            )
+            if attempt > 0:
+                logger.info(f"{operation_name} succeeded on retry {attempt}")
+            return result
+
+        except asyncio.TimeoutError:
+            last_error = TimeoutError(f"{operation_name} timed out after {timeout}s")
+            logger.warning(
+                f"{operation_name} timeout (attempt {attempt + 1}/{max_retries + 1})"
+            )
+
+        except Exception as e:
+            last_error = e
+            logger.warning(
+                f"{operation_name} failed (attempt {attempt + 1}/{max_retries + 1}): {e}"
+            )
+
+        # Exponential backoff before retry (except on last attempt)
+        if attempt < max_retries:
+            delay = retry_delay * (2**attempt)
+            logger.debug(f"Retrying {operation_name} in {delay:.2f}s")
+            await asyncio.sleep(delay)
+
+    # All retries exhausted
+    logger.warning(f"{operation_name} failed after {max_retries + 1} attempts: {last_error}")
+    return None
 
 
 # =============================================================================
@@ -545,7 +618,12 @@ async def classify_intent_dspy(
     collect_signal: bool = True,
 ) -> Tuple[str, float, str, str]:
     """
-    Classify intent using DSPy with fallback to hardcoded patterns.
+    Classify intent using DSPy with timeout, retry, and fallback to hardcoded patterns.
+
+    Features:
+    - Timeout: Configurable via CHATBOT_DSPY_TIMEOUT (default 10s)
+    - Retry: Configurable via CHATBOT_DSPY_MAX_RETRIES (default 1) with exponential backoff
+    - Fallback: Falls back to hardcoded patterns if DSPy fails/times out
 
     Args:
         query: User's query text
@@ -561,16 +639,19 @@ async def classify_intent_dspy(
     intent = None
     confidence = 0.0
     reasoning = ""
+    use_fallback = False
 
     if classifier is not None:
-        try:
-            # Run DSPy classification
-            result = classifier(
-                query=query,
-                conversation_context=conversation_context,
-                brand_context=brand_context,
-            )
+        # Run DSPy classification with timeout and retry
+        result = await _run_dspy_with_retry(
+            classifier,
+            query=query,
+            conversation_context=conversation_context,
+            brand_context=brand_context,
+            operation_name="Intent classification",
+        )
 
+        if result is not None:
             # Extract and validate results
             intent = _normalize_intent(str(result.intent))
             confidence = _validate_confidence(result.confidence)
@@ -580,13 +661,13 @@ async def classify_intent_dspy(
                 f"DSPy classified '{query[:50]}...' as {intent} "
                 f"(confidence={confidence:.2f})"
             )
+        else:
+            use_fallback = True
+    else:
+        use_fallback = True
 
-        except Exception as e:
-            logger.warning(f"DSPy classification failed, using fallback: {e}")
-            classifier = None  # Trigger fallback
-
-    # Fallback to hardcoded if DSPy unavailable or failed
-    if classifier is None:
+    # Fallback to hardcoded if DSPy unavailable, failed, or timed out
+    if use_fallback:
         intent, confidence, reasoning = classify_intent_hardcoded(query)
         classification_method = "hardcoded"
         logger.debug(f"Hardcoded classified '{query[:50]}...' as {intent}")
@@ -854,7 +935,12 @@ async def route_agent_dspy(
     collect_signal: bool = True,
 ) -> Tuple[str, List[str], float, str, str]:
     """
-    Route query to agent using DSPy with fallback to keyword matching.
+    Route query to agent using DSPy with timeout, retry, and fallback to keyword matching.
+
+    Features:
+    - Timeout: Configurable via CHATBOT_DSPY_TIMEOUT (default 10s)
+    - Retry: Configurable via CHATBOT_DSPY_MAX_RETRIES (default 1) with exponential backoff
+    - Fallback: Falls back to keyword matching if DSPy fails/times out
 
     Args:
         query: User's query text
@@ -871,16 +957,19 @@ async def route_agent_dspy(
     secondary_agents: List[str] = []
     confidence = 0.0
     rationale = ""
+    use_fallback = False
 
     if router is not None:
-        try:
-            # Run DSPy routing
-            result = router(
-                query=query,
-                intent=intent,
-                brand_context=brand_context,
-            )
+        # Run DSPy routing with timeout and retry
+        result = await _run_dspy_with_retry(
+            router,
+            query=query,
+            intent=intent,
+            brand_context=brand_context,
+            operation_name="Agent routing",
+        )
 
+        if result is not None:
             # Extract and validate results
             primary_agent = _normalize_agent(str(result.primary_agent))
 
@@ -902,13 +991,13 @@ async def route_agent_dspy(
                 f"DSPy routed '{query[:50]}...' to {primary_agent} "
                 f"(confidence={confidence:.2f})"
             )
+        else:
+            use_fallback = True
+    else:
+        use_fallback = True
 
-        except Exception as e:
-            logger.warning(f"DSPy routing failed, using fallback: {e}")
-            router = None  # Trigger fallback
-
-    # Fallback to hardcoded if DSPy unavailable or failed
-    if router is None:
+    # Fallback to hardcoded if DSPy unavailable, failed, or timed out
+    if use_fallback:
         primary_agent, secondary_agents, confidence, rationale = route_agent_hardcoded(
             query, intent
         )
@@ -2595,3 +2684,969 @@ def get_chatbot_signal_collector() -> ChatbotSignalCollector:
     if _chatbot_signal_collector is None:
         _chatbot_signal_collector = ChatbotSignalCollector()
     return _chatbot_signal_collector
+
+
+# =============================================================================
+# PHASE 8: FEEDBACK LEARNER INTEGRATION
+# =============================================================================
+
+# Feature flags for optimization
+CHATBOT_GEPA_OPTIMIZATION_ENABLED = os.getenv(
+    "CHATBOT_GEPA_OPTIMIZATION", "true"
+).lower() == "true"
+CHATBOT_AB_TESTING_ENABLED = os.getenv(
+    "CHATBOT_AB_TESTING", "false"
+).lower() == "true"
+
+# Check GEPA availability
+try:
+    from src.optimization.gepa import (
+        create_gepa_optimizer,
+        save_optimized_module,
+        load_optimized_module,
+    )
+    from src.optimization.gepa.metrics.base import ScoreWithFeedback, DSPyTrace
+
+    GEPA_AVAILABLE = True
+except ImportError:
+    GEPA_AVAILABLE = False
+    logger.info("GEPA not available - optimization disabled")
+    create_gepa_optimizer = None
+    save_optimized_module = None
+    load_optimized_module = None
+    ScoreWithFeedback = Dict[str, Any]
+    DSPyTrace = list
+
+
+@dataclass
+class ChatbotGEPAMetric:
+    """GEPA metric for Chatbot DSPy modules optimization.
+
+    Evaluates chatbot performance across four dimensions:
+    - Intent classification accuracy
+    - Agent routing accuracy
+    - RAG retrieval quality
+    - Response synthesis quality
+
+    This metric is used by the feedback_learner to optimize chatbot prompts
+    via GEPA's reflective evolution mechanism.
+
+    Attributes:
+        name: Metric identifier
+        description: Human-readable description
+        intent_weight: Weight for intent classification accuracy
+        routing_weight: Weight for agent routing accuracy
+        rag_weight: Weight for RAG retrieval quality
+        synthesis_weight: Weight for response synthesis quality
+    """
+
+    name: str = "chatbot_gepa"
+    description: str = "GEPA metric for Chatbot DSPy modules - intent, routing, RAG, synthesis"
+
+    intent_weight: float = 0.25
+    routing_weight: float = 0.20
+    rag_weight: float = 0.25
+    synthesis_weight: float = 0.30
+
+    def __call__(
+        self,
+        gold: Any,
+        pred: Any,
+        trace: Optional[list] = None,
+        pred_name: Optional[str] = None,
+        pred_trace: Optional[list] = None,
+    ) -> Dict[str, Any]:
+        """Compute score and feedback for chatbot optimization.
+
+        Args:
+            gold: Ground truth Example with expected outputs
+            pred: Model Prediction to evaluate
+            trace: Full DSPy execution trace (optional)
+            pred_name: Name of the predictor being optimized
+            pred_trace: Execution trace for this specific predictor
+
+        Returns:
+            Dict with 'score' (float 0-1) and 'feedback' (str) for GEPA reflection
+        """
+        feedback_parts = []
+        scores = {}
+
+        # Determine which component to evaluate based on pred_name
+        if pred_name == "intent_classifier" or hasattr(pred, "intent"):
+            scores["intent"], fb = self._score_intent(pred, gold)
+            feedback_parts.append(f"[Intent] {fb}")
+            total = scores["intent"]
+        elif pred_name == "agent_router" or hasattr(pred, "primary_agent"):
+            scores["routing"], fb = self._score_routing(pred, gold)
+            feedback_parts.append(f"[Routing] {fb}")
+            total = scores["routing"]
+        elif pred_name == "query_rewriter" or hasattr(pred, "rewritten_query"):
+            scores["rag"], fb = self._score_rag(pred, gold)
+            feedback_parts.append(f"[RAG] {fb}")
+            total = scores["rag"]
+        elif pred_name == "synthesizer" or hasattr(pred, "response"):
+            scores["synthesis"], fb = self._score_synthesis(pred, gold)
+            feedback_parts.append(f"[Synthesis] {fb}")
+            total = scores["synthesis"]
+        else:
+            # Score all components
+            scores["intent"], fb = self._score_intent(pred, gold)
+            feedback_parts.append(f"[Intent] {fb}")
+
+            scores["routing"], fb = self._score_routing(pred, gold)
+            feedback_parts.append(f"[Routing] {fb}")
+
+            scores["rag"], fb = self._score_rag(pred, gold)
+            feedback_parts.append(f"[RAG] {fb}")
+
+            scores["synthesis"], fb = self._score_synthesis(pred, gold)
+            feedback_parts.append(f"[Synthesis] {fb}")
+
+            total = (
+                self.intent_weight * scores.get("intent", 0.0)
+                + self.routing_weight * scores.get("routing", 0.0)
+                + self.rag_weight * scores.get("rag", 0.0)
+                + self.synthesis_weight * scores.get("synthesis", 0.0)
+            )
+
+        feedback = f"Score: {total:.3f}\n" + "\n".join(feedback_parts)
+        return {"score": total, "feedback": feedback}
+
+    def _score_intent(self, pred: Any, gold: Any) -> Tuple[float, str]:
+        """Score intent classification quality."""
+        predicted_intent = getattr(pred, "intent", None)
+        expected_intent = getattr(gold, "expected_intent", None) or getattr(
+            gold, "intent", None
+        )
+        confidence = getattr(pred, "confidence", 0.5)
+
+        if not predicted_intent:
+            return 0.0, "CRITICAL: No intent predicted"
+
+        if expected_intent and predicted_intent.lower() == expected_intent.lower():
+            score = min(1.0, 0.7 + confidence * 0.3)
+            return score, f"Correct: {predicted_intent} (conf={confidence:.2f})"
+        elif expected_intent:
+            # Partial match for similar intents
+            similar_pairs = [
+                ("kpi_query", "search"),
+                ("causal_analysis", "recommendation"),
+            ]
+            for p1, p2 in similar_pairs:
+                if {predicted_intent.lower(), expected_intent.lower()} == {p1, p2}:
+                    return 0.5, f"Partial: got {predicted_intent}, expected {expected_intent}"
+            return 0.2, f"Wrong: got {predicted_intent}, expected {expected_intent}"
+        else:
+            # No ground truth, use confidence as proxy
+            return confidence * 0.8, f"Predicted: {predicted_intent} (conf={confidence:.2f})"
+
+    def _score_routing(self, pred: Any, gold: Any) -> Tuple[float, str]:
+        """Score agent routing quality."""
+        predicted_agent = getattr(pred, "primary_agent", None)
+        expected_agent = getattr(gold, "expected_agent", None) or getattr(
+            gold, "primary_agent", None
+        )
+        confidence = getattr(pred, "routing_confidence", 0.5)
+
+        if not predicted_agent:
+            return 0.0, "CRITICAL: No agent routed"
+
+        if expected_agent and predicted_agent.lower() == expected_agent.lower():
+            score = min(1.0, 0.7 + confidence * 0.3)
+            return score, f"Correct: {predicted_agent} (conf={confidence:.2f})"
+        elif expected_agent:
+            # Check if in secondary agents
+            secondary = getattr(pred, "secondary_agents", [])
+            if isinstance(secondary, str):
+                secondary = [s.strip() for s in secondary.split(",") if s.strip()]
+            if expected_agent.lower() in [s.lower() for s in secondary]:
+                return 0.6, f"Secondary: expected {expected_agent} was in secondary list"
+            return 0.2, f"Wrong: got {predicted_agent}, expected {expected_agent}"
+        else:
+            return confidence * 0.8, f"Predicted: {predicted_agent} (conf={confidence:.2f})"
+
+    def _score_rag(self, pred: Any, gold: Any) -> Tuple[float, str]:
+        """Score RAG retrieval quality."""
+        rewritten = getattr(pred, "rewritten_query", None)
+        keywords = getattr(pred, "search_keywords", [])
+        entities = getattr(pred, "graph_entities", [])
+        avg_relevance = getattr(gold, "avg_relevance_score", 0.5)
+        evidence_count = getattr(gold, "evidence_count", 0)
+
+        score = 0.0
+        feedback_parts = []
+
+        # Rewriting quality
+        if rewritten and len(rewritten) > len(getattr(gold, "query", "")):
+            score += 0.3
+            feedback_parts.append("Query expanded")
+        elif rewritten:
+            score += 0.15
+            feedback_parts.append("Query rewritten")
+        else:
+            feedback_parts.append("No rewrite")
+
+        # Keyword extraction
+        if keywords and len(keywords) >= 2:
+            score += 0.25
+            feedback_parts.append(f"{len(keywords)} keywords")
+        elif keywords:
+            score += 0.1
+            feedback_parts.append("Few keywords")
+
+        # Entity extraction
+        if entities and len(entities) >= 1:
+            score += 0.2
+            feedback_parts.append(f"{len(entities)} entities")
+
+        # Relevance score from actual retrieval
+        score += avg_relevance * 0.25
+
+        # Evidence count bonus
+        if evidence_count >= 3:
+            feedback_parts.append(f"{evidence_count} evidence items")
+
+        return min(1.0, score), ", ".join(feedback_parts) or "RAG evaluation"
+
+    def _score_synthesis(self, pred: Any, gold: Any) -> Tuple[float, str]:
+        """Score response synthesis quality."""
+        response = getattr(pred, "response", None)
+        confidence_statement = getattr(pred, "confidence_statement", None)
+        citations = getattr(pred, "evidence_citations", [])
+
+        score = 0.0
+        feedback_parts = []
+
+        if not response:
+            return 0.0, "CRITICAL: No response generated"
+
+        # Response length (appropriate length is good)
+        response_len = len(response)
+        if 100 <= response_len <= 500:
+            score += 0.3
+            feedback_parts.append(f"Good length ({response_len})")
+        elif 50 <= response_len <= 800:
+            score += 0.2
+            feedback_parts.append(f"OK length ({response_len})")
+        else:
+            score += 0.1
+            feedback_parts.append(f"Length issue ({response_len})")
+
+        # Confidence statement
+        if confidence_statement:
+            if "high" in confidence_statement.lower():
+                score += 0.25
+                feedback_parts.append("High confidence")
+            elif "moderate" in confidence_statement.lower():
+                score += 0.15
+                feedback_parts.append("Moderate confidence")
+            else:
+                score += 0.1
+                feedback_parts.append("Low confidence")
+
+        # Citations (grounded responses)
+        if citations and len(citations) >= 2:
+            score += 0.25
+            feedback_parts.append(f"{len(citations)} citations")
+        elif citations:
+            score += 0.15
+            feedback_parts.append("Few citations")
+
+        # User feedback if available
+        was_helpful = getattr(gold, "was_helpful", None)
+        if was_helpful is True:
+            score += 0.2
+            feedback_parts.append("User found helpful")
+        elif was_helpful is False:
+            score -= 0.2
+            feedback_parts.append("User found unhelpful")
+
+        return min(1.0, max(0.0, score)), ", ".join(feedback_parts) or "Synthesis evaluation"
+
+
+@dataclass
+class ChatbotOptimizationRequest:
+    """Request to optimize a chatbot DSPy module.
+
+    Used to queue optimization requests for the feedback_learner agent.
+    """
+
+    request_id: str
+    module_name: str  # "intent_classifier", "agent_router", "query_rewriter", "synthesizer"
+    signal_count: int
+    min_reward: float
+    budget: str  # "light", "medium", "heavy"
+    priority: int = 1  # 1=low, 2=medium, 3=high
+    created_at: datetime = field(default_factory=datetime.utcnow)
+    status: str = "pending"  # "pending", "processing", "completed", "failed"
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for storage."""
+        return {
+            "request_id": self.request_id,
+            "module_name": self.module_name,
+            "signal_count": self.signal_count,
+            "min_reward": self.min_reward,
+            "budget": self.budget,
+            "priority": self.priority,
+            "created_at": self.created_at.isoformat(),
+            "status": self.status,
+        }
+
+
+class ChatbotOptimizer:
+    """DSPy optimizer for Chatbot modules using GEPA.
+
+    Integrates with the feedback_learner agent to optimize chatbot DSPy modules
+    based on collected training signals.
+
+    Supports:
+    - GEPA optimization (primary, 10%+ improvement over MIPROv2)
+    - MIPROv2 optimization (fallback)
+    - A/B testing of prompt variants
+    - Periodic batch optimization scheduling
+
+    Usage:
+        optimizer = ChatbotOptimizer()
+        await optimizer.queue_optimization("intent_classifier", budget="medium")
+        # Or run immediately:
+        result = await optimizer.optimize_module("intent_classifier", budget="light")
+    """
+
+    def __init__(
+        self,
+        optimizer_type: str = "gepa",
+        signal_collector: Optional[ChatbotSignalCollector] = None,
+    ):
+        """Initialize optimizer.
+
+        Args:
+            optimizer_type: "gepa" (recommended) or "miprov2"
+            signal_collector: Signal collector to get training data from
+        """
+        # Use explicit None check because ChatbotSignalCollector has __len__
+        # which returns 0 for empty collectors, making bool(collector) False
+        self._signal_collector = (
+            signal_collector
+            if signal_collector is not None
+            else get_chatbot_signal_collector()
+        )
+        self._pending_requests: List[ChatbotOptimizationRequest] = []
+        self._ab_test_variants: Dict[str, List[Any]] = {}
+        self._best_score: float = 0.0
+
+        # Select optimizer based on availability
+        if optimizer_type == "gepa" and GEPA_AVAILABLE:
+            self._optimizer_type = "gepa"
+            logger.info("Chatbot optimizer using GEPA")
+        elif DSPY_AVAILABLE:
+            self._optimizer_type = "miprov2"
+            if optimizer_type == "gepa":
+                logger.warning("GEPA not available, falling back to MIPROv2")
+            else:
+                logger.info("Chatbot optimizer using MIPROv2")
+        else:
+            self._optimizer_type = None
+            logger.warning("No optimizer available - chatbot optimization disabled")
+
+    @property
+    def optimizer_type(self) -> Optional[str]:
+        """Get the current optimizer type."""
+        return self._optimizer_type
+
+    @property
+    def best_score(self) -> float:
+        """Get the best optimization score achieved."""
+        return self._best_score
+
+    async def get_training_signals(
+        self,
+        phase: str,
+        min_reward: float = 0.5,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """Get training signals from database for optimization.
+
+        Args:
+            phase: "intent", "routing", "rag", or "synthesis"
+            min_reward: Minimum reward score to filter signals
+            limit: Maximum number of signals to retrieve
+
+        Returns:
+            List of training signal dictionaries
+        """
+        try:
+            from src.memory.services.factories import get_async_supabase_service_client
+
+            client = await get_async_supabase_service_client()
+            if not client:
+                # Fall back to in-memory collector
+                return self._signal_collector.get_signals_for_training(phase, limit)
+
+            # Build query based on phase
+            method_col = f"{phase}_method" if phase != "rag" else "rag_method"
+            reward_col = (
+                "reward_accuracy" if phase in ("intent", "routing")
+                else "reward_overall"
+            )
+
+            result = await client.table("chatbot_training_signals").select(
+                "*"
+            ).gte(
+                reward_col, min_reward
+            ).neq(
+                method_col, ""
+            ).order(
+                "session_timestamp", desc=True
+            ).limit(limit).execute()
+
+            if result.data:
+                logger.info(f"Retrieved {len(result.data)} training signals for {phase}")
+                return result.data
+            return []
+
+        except Exception as e:
+            logger.warning(f"Failed to get training signals from database: {e}")
+            # Fall back to in-memory collector
+            return self._signal_collector.get_signals_for_training(phase, limit)
+
+    def _signals_to_examples(
+        self,
+        signals: List[Dict[str, Any]],
+        phase: str,
+    ) -> List[Any]:
+        """Convert training signals to DSPy Examples.
+
+        Args:
+            signals: List of signal dictionaries
+            phase: "intent", "routing", "rag", or "synthesis"
+
+        Returns:
+            List of dspy.Example objects
+        """
+        if not DSPY_AVAILABLE:
+            return []
+
+        examples = []
+        for sig in signals:
+            try:
+                if phase == "intent":
+                    example = dspy.Example(
+                        query=sig.get("query", ""),
+                        conversation_context="",
+                        brand_context=sig.get("brand_context", ""),
+                        expected_intent=sig.get("predicted_intent", ""),
+                        intent=sig.get("predicted_intent", ""),
+                        confidence=sig.get("intent_confidence", 0.5),
+                    ).with_inputs("query", "conversation_context", "brand_context")
+
+                elif phase == "routing":
+                    example = dspy.Example(
+                        query=sig.get("query", ""),
+                        intent=sig.get("predicted_intent", ""),
+                        brand_context=sig.get("brand_context", ""),
+                        expected_agent=sig.get("predicted_agent", ""),
+                        primary_agent=sig.get("predicted_agent", ""),
+                        routing_confidence=sig.get("routing_confidence", 0.5),
+                    ).with_inputs("query", "intent", "brand_context")
+
+                elif phase == "rag":
+                    example = dspy.Example(
+                        query=sig.get("query", ""),
+                        brand_context=sig.get("brand_context", ""),
+                        rewritten_query=sig.get("rewritten_query", ""),
+                        search_keywords=sig.get("search_keywords", []),
+                        graph_entities=sig.get("graph_entities", []),
+                        evidence_count=sig.get("evidence_count", 0),
+                        avg_relevance_score=sig.get("avg_relevance_score", 0.5),
+                    ).with_inputs("query", "brand_context")
+
+                elif phase == "synthesis":
+                    example = dspy.Example(
+                        query=sig.get("query", ""),
+                        evidence="",  # Would need to store evidence
+                        expected_response="",
+                        response="",
+                        confidence_statement=sig.get("synthesis_confidence", ""),
+                        evidence_citations=[],
+                        was_helpful=sig.get("was_helpful"),
+                    ).with_inputs("query", "evidence")
+
+                else:
+                    continue
+
+                examples.append(example)
+
+            except Exception as e:
+                logger.warning(f"Failed to convert signal to example: {e}")
+                continue
+
+        return examples
+
+    async def queue_optimization(
+        self,
+        module_name: str,
+        budget: str = "light",
+        min_reward: float = 0.5,
+        priority: int = 1,
+    ) -> str:
+        """Queue an optimization request for later processing.
+
+        Args:
+            module_name: "intent_classifier", "agent_router", "query_rewriter", "synthesizer"
+            budget: "light", "medium", or "heavy"
+            min_reward: Minimum reward threshold for training signals
+            priority: 1=low, 2=medium, 3=high
+
+        Returns:
+            Request ID for tracking
+        """
+        import uuid
+
+        request_id = f"chatbot_opt_{uuid.uuid4().hex[:8]}"
+
+        # Get signal count
+        phase = {
+            "intent_classifier": "intent",
+            "agent_router": "routing",
+            "query_rewriter": "rag",
+            "synthesizer": "synthesis",
+        }.get(module_name, "all")
+
+        signals = await self.get_training_signals(phase, min_reward, limit=1000)
+
+        request = ChatbotOptimizationRequest(
+            request_id=request_id,
+            module_name=module_name,
+            signal_count=len(signals),
+            min_reward=min_reward,
+            budget=budget,
+            priority=priority,
+        )
+
+        self._pending_requests.append(request)
+        self._pending_requests.sort(key=lambda r: (-r.priority, r.created_at))
+
+        logger.info(
+            f"Queued optimization request: {request_id} for {module_name} "
+            f"(signals={len(signals)}, budget={budget})"
+        )
+
+        # Persist to database
+        await self._persist_optimization_request(request)
+
+        return request_id
+
+    async def _persist_optimization_request(
+        self,
+        request: ChatbotOptimizationRequest,
+    ) -> bool:
+        """Persist optimization request to database."""
+        try:
+            from src.memory.services.factories import get_async_supabase_service_client
+
+            client = await get_async_supabase_service_client()
+            if not client:
+                return False
+
+            await client.table("chatbot_optimization_requests").insert(
+                request.to_dict()
+            ).execute()
+
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to persist optimization request: {e}")
+            return False
+
+    async def get_pending_requests(
+        self,
+        module_name: Optional[str] = None,
+    ) -> List[ChatbotOptimizationRequest]:
+        """Get pending optimization requests.
+
+        Args:
+            module_name: Filter by module name (optional)
+
+        Returns:
+            List of pending requests
+        """
+        requests = [r for r in self._pending_requests if r.status == "pending"]
+        if module_name:
+            requests = [r for r in requests if r.module_name == module_name]
+        return requests
+
+    async def optimize_module(
+        self,
+        module_name: str,
+        budget: str = "light",
+        min_reward: float = 0.5,
+    ) -> Dict[str, Any]:
+        """Run optimization for a specific chatbot module.
+
+        Args:
+            module_name: "intent_classifier", "agent_router", "query_rewriter", "synthesizer"
+            budget: "light", "medium", or "heavy"
+            min_reward: Minimum reward threshold for training signals
+
+        Returns:
+            Dict with optimization results including best_score and version_id
+        """
+        if not self._optimizer_type:
+            return {"error": "No optimizer available", "success": False}
+
+        phase = {
+            "intent_classifier": "intent",
+            "agent_router": "routing",
+            "query_rewriter": "rag",
+            "synthesizer": "synthesis",
+        }.get(module_name)
+
+        if not phase:
+            return {"error": f"Unknown module: {module_name}", "success": False}
+
+        logger.info(f"Starting {self._optimizer_type} optimization for {module_name}")
+
+        # Get training signals
+        signals = await self.get_training_signals(phase, min_reward)
+        if len(signals) < 10:
+            return {
+                "error": f"Insufficient training signals: {len(signals)} (need 10+)",
+                "signal_count": len(signals),
+                "success": False,
+            }
+
+        # Convert to DSPy examples
+        examples = self._signals_to_examples(signals, phase)
+        if len(examples) < 10:
+            return {
+                "error": f"Insufficient examples after conversion: {len(examples)}",
+                "success": False,
+            }
+
+        # Split into train/val
+        split_idx = int(len(examples) * 0.8)
+        trainset = examples[:split_idx]
+        valset = examples[split_idx:]
+
+        # Create metric
+        metric = ChatbotGEPAMetric()
+
+        try:
+            if self._optimizer_type == "gepa" and GEPA_AVAILABLE:
+                # Use GEPA optimizer
+                optimizer = create_gepa_optimizer(
+                    metric=metric,
+                    trainset=trainset,
+                    valset=valset,
+                    auto=budget,
+                    enable_tool_optimization=False,
+                )
+
+                # Get the module to optimize
+                module = self._get_module_for_optimization(module_name)
+                if module is None:
+                    return {"error": f"Module not available: {module_name}", "success": False}
+
+                # Run optimization
+                optimized_module = optimizer.compile(module, trainset=trainset)
+
+                # Get best score
+                self._best_score = getattr(optimizer, "best_score", 0.0)
+
+                # Save optimized module
+                version_id = await save_optimized_module(
+                    agent_name=f"chatbot_{module_name}",
+                    optimized_module=optimized_module,
+                    budget=budget,
+                    score=self._best_score,
+                )
+
+                logger.info(
+                    f"Completed GEPA optimization for {module_name}: "
+                    f"score={self._best_score:.3f}, version={version_id}"
+                )
+
+                return {
+                    "success": True,
+                    "optimizer": "gepa",
+                    "module_name": module_name,
+                    "best_score": self._best_score,
+                    "version_id": version_id,
+                    "trainset_size": len(trainset),
+                    "valset_size": len(valset),
+                }
+
+            else:
+                # Fall back to MIPROv2
+                return await self._optimize_with_miprov2(
+                    module_name, trainset, valset, metric, budget
+                )
+
+        except Exception as e:
+            logger.error(f"Optimization failed for {module_name}: {e}")
+            return {
+                "error": str(e),
+                "success": False,
+                "module_name": module_name,
+            }
+
+    def _get_module_for_optimization(self, module_name: str) -> Optional[Any]:
+        """Get the DSPy module to optimize.
+
+        Args:
+            module_name: Name of the module
+
+        Returns:
+            DSPy module or None if not available
+        """
+        if not DSPY_AVAILABLE:
+            return None
+
+        _ensure_dspy_configured()
+
+        if module_name == "intent_classifier":
+            return dspy.ChainOfThought(ChatbotIntentClassificationSignature)
+        elif module_name == "agent_router":
+            return dspy.ChainOfThought(AgentRoutingSignature)
+        elif module_name == "query_rewriter":
+            return dspy.ChainOfThought(QueryRewriteSignature)
+        elif module_name == "synthesizer":
+            return dspy.ChainOfThought(EvidenceSynthesisSignature)
+        return None
+
+    async def _optimize_with_miprov2(
+        self,
+        module_name: str,
+        trainset: List[Any],
+        valset: List[Any],
+        metric: ChatbotGEPAMetric,
+        budget: str,
+    ) -> Dict[str, Any]:
+        """Run MIPROv2 optimization as fallback.
+
+        Args:
+            module_name: Module to optimize
+            trainset: Training examples
+            valset: Validation examples
+            metric: Evaluation metric
+            budget: Optimization budget
+
+        Returns:
+            Dict with optimization results
+        """
+        if not DSPY_AVAILABLE:
+            return {"error": "DSPy not available", "success": False}
+
+        try:
+            from dspy.teleprompt import MIPROv2
+
+            budget_config = {
+                "light": {"num_trials": 20},
+                "medium": {"num_trials": 50},
+                "heavy": {"num_trials": 100},
+            }.get(budget, {"num_trials": 20})
+
+            optimizer = MIPROv2(
+                metric=lambda gold, pred, trace=None: metric(gold, pred, trace)["score"],
+                **budget_config,
+            )
+
+            module = self._get_module_for_optimization(module_name)
+            if module is None:
+                return {"error": f"Module not available: {module_name}", "success": False}
+
+            optimized_module = optimizer.compile(module, trainset=trainset)
+            self._best_score = getattr(optimizer, "best_score", 0.0)
+
+            logger.info(
+                f"Completed MIPROv2 optimization for {module_name}: "
+                f"score={self._best_score:.3f}"
+            )
+
+            return {
+                "success": True,
+                "optimizer": "miprov2",
+                "module_name": module_name,
+                "best_score": self._best_score,
+                "trainset_size": len(trainset),
+                "valset_size": len(valset),
+            }
+
+        except Exception as e:
+            logger.error(f"MIPROv2 optimization failed: {e}")
+            return {"error": str(e), "success": False}
+
+    # =========================================================================
+    # A/B Testing Support
+    # =========================================================================
+
+    def register_ab_variant(
+        self,
+        module_name: str,
+        variant_module: Any,
+        variant_name: str,
+    ) -> None:
+        """Register an A/B test variant for a module.
+
+        Args:
+            module_name: Base module name
+            variant_module: The variant DSPy module
+            variant_name: Name/identifier for this variant
+        """
+        if module_name not in self._ab_test_variants:
+            self._ab_test_variants[module_name] = []
+
+        self._ab_test_variants[module_name].append({
+            "name": variant_name,
+            "module": variant_module,
+            "metrics": [],
+        })
+        logger.info(f"Registered A/B variant '{variant_name}' for {module_name}")
+
+    def get_ab_variant(
+        self,
+        module_name: str,
+        session_id: str,
+    ) -> Tuple[Optional[Any], str]:
+        """Get A/B variant for a session.
+
+        Uses consistent hashing to ensure same session gets same variant.
+
+        Args:
+            module_name: Module name
+            session_id: Session identifier for consistent assignment
+
+        Returns:
+            Tuple of (variant_module, variant_name) or (None, "control")
+        """
+        if not CHATBOT_AB_TESTING_ENABLED:
+            return None, "control"
+
+        variants = self._ab_test_variants.get(module_name, [])
+        if not variants:
+            return None, "control"
+
+        # Consistent hash assignment
+        import hashlib
+        hash_val = int(hashlib.md5(
+            f"{session_id}:{module_name}".encode()
+        ).hexdigest(), 16)
+
+        # 50% control, 50% split among variants
+        if hash_val % 2 == 0:
+            return None, "control"
+
+        variant_idx = hash_val % len(variants)
+        variant = variants[variant_idx]
+        return variant["module"], variant["name"]
+
+    async def record_ab_result(
+        self,
+        module_name: str,
+        variant_name: str,
+        reward: float,
+    ) -> None:
+        """Record A/B test result for a variant.
+
+        Args:
+            module_name: Module name
+            variant_name: Variant identifier
+            reward: Reward score achieved
+        """
+        variants = self._ab_test_variants.get(module_name, [])
+        for variant in variants:
+            if variant["name"] == variant_name:
+                variant["metrics"].append(reward)
+                break
+
+    def get_ab_results(
+        self,
+        module_name: str,
+    ) -> Dict[str, Dict[str, float]]:
+        """Get A/B test results for a module.
+
+        Args:
+            module_name: Module name
+
+        Returns:
+            Dict with variant names as keys and metric summaries as values
+        """
+        variants = self._ab_test_variants.get(module_name, [])
+        results = {}
+
+        for variant in variants:
+            metrics = variant["metrics"]
+            if metrics:
+                results[variant["name"]] = {
+                    "count": len(metrics),
+                    "mean": sum(metrics) / len(metrics),
+                    "min": min(metrics),
+                    "max": max(metrics),
+                }
+
+        return results
+
+
+# Global optimizer singleton
+_chatbot_optimizer: Optional[ChatbotOptimizer] = None
+
+
+def get_chatbot_optimizer() -> ChatbotOptimizer:
+    """Get the global chatbot optimizer singleton."""
+    global _chatbot_optimizer
+    if _chatbot_optimizer is None:
+        _chatbot_optimizer = ChatbotOptimizer()
+    return _chatbot_optimizer
+
+
+async def submit_signals_for_optimization(
+    min_signals: int = 50,
+    min_reward: float = 0.5,
+) -> Dict[str, str]:
+    """Submit collected signals for optimization by feedback_learner.
+
+    This function checks if enough high-quality signals have been collected
+    and queues optimization requests for each chatbot module.
+
+    Args:
+        min_signals: Minimum signals required to trigger optimization
+        min_reward: Minimum reward threshold for signals
+
+    Returns:
+        Dict mapping module names to request IDs (or error messages)
+    """
+    optimizer = get_chatbot_optimizer()
+    results = {}
+
+    modules = ["intent_classifier", "agent_router", "query_rewriter", "synthesizer"]
+
+    for module in modules:
+        phase = {
+            "intent_classifier": "intent",
+            "agent_router": "routing",
+            "query_rewriter": "rag",
+            "synthesizer": "synthesis",
+        }[module]
+
+        signals = await optimizer.get_training_signals(phase, min_reward, limit=1000)
+
+        if len(signals) >= min_signals:
+            # Determine budget based on signal count
+            if len(signals) >= 500:
+                budget = "heavy"
+            elif len(signals) >= 200:
+                budget = "medium"
+            else:
+                budget = "light"
+
+            request_id = await optimizer.queue_optimization(
+                module_name=module,
+                budget=budget,
+                min_reward=min_reward,
+            )
+            results[module] = request_id
+            logger.info(f"Queued optimization for {module}: {request_id}")
+        else:
+            results[module] = f"insufficient_signals:{len(signals)}"
+
+    return results
