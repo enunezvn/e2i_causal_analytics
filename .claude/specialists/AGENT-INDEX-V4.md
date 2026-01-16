@@ -2,14 +2,14 @@
 
 ## Architecture Overview
 
-The E2I Causal Analytics platform implements an **18-agent, 6-tier architecture** for pharmaceutical commercial operations. Each agent has a specialist documentation file (CLAUDE.md) containing complete LangGraph implementation details.
+The E2I Causal Analytics platform implements an **19-agent, 6-tier architecture** for pharmaceutical commercial operations. Each agent has a specialist documentation file (CLAUDE.md) containing complete LangGraph implementation details.
 
-**V4 Changes**: Added Tier 0 (ML Foundation) with 7 new agents for the complete ML lifecycle.
+**V4 Changes**: Added Tier 0 (ML Foundation) with 8 agents for the complete ML lifecycle (including CohortConstructor).
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                          E2I AGENT ARCHITECTURE V4                           │
-│                          18 Agents, 6 Tiers                                  │
+│                          19 Agents, 6 Tiers                                  │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
 │  TIER 0: ML FOUNDATION (NEW)                                                 │
@@ -81,6 +81,7 @@ The E2I Causal Analytics platform implements an **18-agent, 6-tier architecture*
 | Agent | Tier | Type | Model | Latency | Critical Path |
 |-------|------|------|-------|---------|---------------|
 | Scope Definer | 0 | Standard | None | <5s | Yes (ML pipeline) |
+| Cohort Constructor | 0 | Standard | None | <120s | Yes (ML pipeline) |
 | Data Preparer | 0 | Standard | None | <60s | Yes (QC Gate) |
 | Model Selector | 0 | Standard | None | <120s | Yes (ML pipeline) |
 | Model Trainer | 0 | Standard | None | Variable | Yes (ML pipeline) |
@@ -110,6 +111,7 @@ The E2I Causal Analytics platform implements an **18-agent, 6-tier architecture*
 | Agent | Specialist File | Status |
 |-------|-----------------|--------|
 | Scope Definer | [scope_definer/CLAUDE.md](specialists/ml_foundation/scope_definer/CLAUDE.md) | ✅ Complete |
+| Cohort Constructor | [cohort-constructor.md](specialists/Agent_Specialists_Tier%200/cohort-constructor.md) | ✅ Complete |
 | Data Preparer | [data_preparer/CLAUDE.md](specialists/ml_foundation/data_preparer/CLAUDE.md) | ✅ Complete |
 | Model Selector | [model_selector/CLAUDE.md](specialists/ml_foundation/model_selector/CLAUDE.md) | ✅ Complete |
 | Model Trainer | [model_trainer/CLAUDE.md](specialists/ml_foundation/model_trainer/CLAUDE.md) | ✅ Complete |
@@ -156,7 +158,7 @@ The E2I Causal Analytics platform implements an **18-agent, 6-tier architecture*
 - Linear node flow
 - Minimal or no LLM usage
 - Computational focus
-- **Agents**: Orchestrator, Gap Analyzer, Heterogeneous Optimizer, Drift Monitor, Health Score, Prediction Synthesizer, Resource Optimizer, **Scope Definer, Data Preparer, Model Selector, Model Trainer, Model Deployer, Observability Connector**
+- **Agents**: Orchestrator, Gap Analyzer, Heterogeneous Optimizer, Drift Monitor, Health Score, Prediction Synthesizer, Resource Optimizer, **Scope Definer, Cohort Constructor, Data Preparer, Model Selector, Model Trainer, Model Deployer, Observability Connector**
 
 ```
 [Input] → [Node 1] → [Node 2] → [Node 3] → [Output]
@@ -235,7 +237,8 @@ The E2I Causal Analytics platform implements an **18-agent, 6-tier architecture*
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                           TIER 0: ML FOUNDATION                          │
 │                                                                          │
-│  scope_definer → data_preparer → model_selector → model_trainer         │
+│  scope_definer → cohort_constructor → data_preparer → model_selector    │
+│                                                         → model_trainer  │
 │                        │                              │                  │
 │                        ▼                              ▼                  │
 │                   QC GATE                       feature_analyzer         │
@@ -266,7 +269,8 @@ The E2I Causal Analytics platform implements an **18-agent, 6-tier architecture*
 
 | Tier 0 Agent | Consumes From | Provides To |
 |--------------|---------------|-------------|
-| data_preparer | - | drift_monitor (baselines) |
+| cohort_constructor | scope_definer (config) | data_preparer (filtered cohort) |
+| data_preparer | cohort_constructor (cohort) | drift_monitor (baselines) |
 | model_trainer | - | prediction_synthesizer (models) |
 | feature_analyzer | - | causal_impact (feature relationships) |
 | model_deployer | - | prediction_synthesizer (endpoints) |
@@ -279,6 +283,7 @@ See [contracts/](contracts/) directory for detailed integration specifications:
 | Contract | Description |
 |----------|-------------|
 | [tier0-contracts.md](contracts/tier0-contracts.md) | **NEW**: ML Foundation agent contracts |
+| [cohort_constructor.md](contracts/tier0/cohort_constructor.md) | Cohort Constructor agent contract |
 | [orchestrator-dispatch.yaml](contracts/orchestrator-dispatch.yaml) | Orchestrator → Agent dispatch format |
 | [agent-handoff.yaml](contracts/agent-handoff.yaml) | Agent → Orchestrator response format |
 | [tier2-contracts.md](contracts/tier2-contracts.md) | Causal inference agent contracts |
@@ -424,6 +429,7 @@ All agents must implement:
 
 | Date | Change | Reason |
 |------|--------|--------|
+| 2026-01-16 | V4.1: Added Cohort Constructor to Tier 0 (8 agents total) | Patient cohort construction for ML pipeline |
 | 2025-12-08 | V4: Added Tier 0 ML Foundation (7 agents) | Complete ML lifecycle support |
 | 2025-12-08 | V4: Total agents increased 11 → 18 | ML Foundation expansion |
 | 2025-12-08 | V4: Added MLOps tool matrix | Tier 0 tool integration |
