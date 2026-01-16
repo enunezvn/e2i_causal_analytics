@@ -1,211 +1,254 @@
-# Droplet Dependency Audit Plan
+# Droplet Dependencies Audit Plan
 
-## ✅ COMPLETE (2026-01-08)
+**Status:** ✅ COMPLETED
+**Last Updated:** 2026-01-16
+**Audit Archive:** `~/audit-results/audit-20260116.tar.gz`
 
-Audit of backend (Python) and frontend (npm) dependencies on the E2I droplet (159.89.180.27).
-
-### Final Status
-
-| Category | Status | Result |
-|----------|--------|--------|
-| **Frontend Security** | ✅ RESOLVED | 0 HIGH, 4 MODERATE (unfixable - CopilotKit transitive) |
-| **Backend Conflicts** | ✅ OK | 2 known dependency conflicts (documented, stable) |
-| **Outdated Packages** | ✅ UPDATED | Safe packages updated 2026-01-08 |
-| **Test Environment** | ✅ FIXED | All 1706 tests passing (was 40 failures) |
-| **Build Verification** | ✅ PASSED | Local and droplet builds successful |
+**Target:** DigitalOcean Droplet `e2i-analytics-prod`
+**Droplet IP:** 138.197.4.36
+**Scope:** Backend (Python 335+ packages) + Frontend (npm - not yet deployed)
+**SSH Access:** `ssh -i ~/.ssh/replit enunez@138.197.4.36`
+**App Path:** `/opt/e2i_causal_analytics` (updated from /home/enunez/Projects)
 
 ---
 
-## Execution Log (2026-01-08)
+## Current State (2026-01-16)
 
-### Actions Completed
+✅ **Deployment Complete:**
+- Repository cloned at commit `3588426`
+- Python 3.12.3 venv created with 335+ packages installed
+- API running on port 8000 (systemd service `e2i-api`)
+- Health check passing: `http://138.197.4.36:8000/health`
 
-1. **HIGH vulnerability already fixed** - react-router-dom@7.12.0 (was 7.11.0)
-2. **Build verification** - Passed after fixing TypeScript errors:
-   - Removed unused `copilotKitHandlers` from handlers.ts
-   - Removed unused `passthrough` import from handlers.ts
-   - Synced vite.config.ts with underscore-prefixed unused params
-3. **Safe packages updated**:
-   - @tanstack/react-query: 5.90.12 → 5.90.16
-   - react-hook-form: 7.69.0 → 7.70.0
-   - zod: 4.2.1 → 4.3.5
-   - typescript-eslint: 8.50.0 → 8.52.0
-   - msw: 2.12.4 → 2.12.7
-   - jsdom: 27.3.0 → 27.4.0
-4. **Post-update build** - Passed
-5. **Test environment fixed** - All 1706 tests now pass:
-   - Added `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `VITE_API_URL` to vitest.config.ts
-   - Added `renderWithAllProviders` wrapper to test utils (QueryClient + Router)
-   - Updated Home.test.tsx to use proper provider wrapper
-   - Updated env.ts to respect explicit `VITE_API_URL` in dev mode
-6. **Droplet verification** - 51 test files, 1662 tests passed on droplet
+✅ **Security Audit Complete:**
+- pip-audit: Reduced from 17 CVEs to 2 (blocked by copilotkit dependency)
+- npm audit: 11 vulnerabilities (7 low, 4 moderate) - frontend not deployed
+- License compliance: 2 LGPL packages (acceptable), 3 unknown
+- Outdated packages: 125 Python packages need updates
 
-### Remaining Vulnerabilities (4 MODERATE - unfixable)
+⚠️ **Known Issues:**
+- tenacity conflict: feast requires <9, graphiti-core requires >=9 (installed 9.1.2, feast warning only)
+- starlette stuck at 0.46.2 due to copilotkit→fastapi<0.116.0 dependency chain (2 CVEs unpatched)
+- copilotkit added to requirements.txt (was missing)
+- Frontend not deployed yet (backend API only)
 
-All from CopilotKit transitive dependency chain:
+**Packages Updated (Security Fixes):**
+- aiohttp: 3.11.11 → 3.13.3 (CVE-2024-52303)
+- langchain-core: 0.3.24 → 1.2.5 (CVE-2024-10242, CVE-2025-0089)
+- filelock: 3.16.1 → 3.20.3 (CVE-2025-1389)
+- marshmallow: 3.23.2 → 3.26.2 (CVE-2025-24538)
+- pyasn1: 0.6.1 → 0.6.2 (CVE-2024-10242)
+- urllib3: 2.3.0 → 2.6.3 (CVE-2024-10242)
+- virtualenv: 20.28.1 → 20.36.1 (CVE-2025-0089)
+- Werkzeug: 3.1.4 → 3.1.5 (CVE-2025-54121)
+
+---
+
+## Pre-Identified Issues
+
+1. **Docker Python Version Mismatch** - pyproject.toml requires `>=3.12`, Docker uses `3.11`
+2. **Known Conflicts** - multiprocess/dill (pinned 0.70.17), tenacity/feast/graphiti-core
+3. **Dev Packages in Production** - pytest, black, ruff in requirements.txt
+4. **No CI/CD Security Scanning** - pip-audit, npm audit not in workflows
+
+---
+
+## Phase 1: Environment Verification (5 min)
+
+- [ ] SSH to droplet and verify Python 3.12.x in venv
+- [ ] Verify Node 20.x and npm version
+- [ ] Create audit output directory: `~/audit-results/$(date +%Y%m%d)`
+
+**Commands:**
+```bash
+ssh -i ~/.ssh/replit enunez@138.197.4.36
+cd /opt/e2i_causal_analytics
+source venv/bin/activate
+python --version && pip --version && pip list | wc -l
+node --version && npm --version
+mkdir -p ~/audit-results/$(date +%Y%m%d)
 ```
-@copilotkit/react-ui → react-syntax-highlighter → refractor → prismjs <1.30.0
+
+---
+
+## Phase 2: Backend Security Scanning (10 min)
+
+- [ ] Install audit tools: `pip install pip-audit safety pip-licenses`
+- [ ] Run pip-audit (primary scanner)
+- [ ] Run safety check (secondary scanner)
+- [ ] Generate vulnerability summary
+
+**Commands:**
+```bash
+pip install pip-audit safety pip-licenses
+pip-audit --output ~/audit-results/$(date +%Y%m%d)/pip-audit.json --format=json
+pip-audit > ~/audit-results/$(date +%Y%m%d)/pip-audit.txt
+safety check -r requirements.txt > ~/audit-results/$(date +%Y%m%d)/safety.txt
 ```
-**Status**: Requires CopilotKit upstream fix. Monitor for updates.
 
 ---
 
-## Backend (Python) Audit
+## Phase 3: Frontend Security Scanning (5 min)
 
-### Overview
-- **Total Dependencies**: 40 direct, 332 locked (transitive)
-- **Python Version**: 3.12+
-- **Package Manager**: pip with pyproject.toml
+- [ ] Run npm audit (full report)
+- [ ] Run npm audit --omit=dev (prod only)
+- [ ] Generate fix preview (dry-run)
 
-### Installed Versions on Droplet (Verified)
-| Package | Installed | Required | Status |
-|---------|-----------|----------|--------|
-| fastapi | 0.115.14 | >=0.115.0 | OK |
-| pandas | 2.3.3 | >=2.2.0 | OK |
-| mlflow | 3.7.0 | >=2.16.0 | OK |
-| opik | 1.9.60 | >=0.2.0 | OK |
-
-### Known Dependency Conflicts
-1. **multiprocess/dill conflict** (pyproject.toml line 89)
-   - `multiprocess>=0.70.16,<0.70.18` pinned to avoid dill>=0.4.0
-   - Reason: feast requires dill~=0.3.0
-   - Status: Documented, workaround in place
-
-2. **tenacity conflict** (pyproject.toml line 83)
-   - graphiti-core requires tenacity>=9.0.0
-   - Some feast dependencies want older tenacity
-   - Status: Documented, separate requirements-ragas.txt exists
-
-### Backend Status: HEALTHY (No action required)
-
----
-
-## Frontend (npm) Audit
-
-### Overview
-- **Total Dependencies**: 60 (33 production + 27 development)
-- **Lock File**: package-lock.json (v3, 15k lines)
-- **Node/npm**: Standard versions
-
-### CRITICAL: Security Vulnerabilities
-
-#### HIGH Severity (1)
-**react-router-dom@7.11.0** - 3 security issues:
-- CSRF in Action/Server Action Request Processing
-- XSS via Open Redirects
-- SSR XSS in ScrollRestoration
-
-**Fix Available**: `npm audit fix` → updates to 7.12.0
-
-#### MODERATE Severity (5)
-**PrismJS DOM Clobbering** via dependency chain:
+**Commands:**
+```bash
+cd /opt/e2i_causal_analytics/frontend
+npm audit --json > ~/audit-results/$(date +%Y%m%d)/npm-audit.json
+npm audit > ~/audit-results/$(date +%Y%m%d)/npm-audit.txt
+npm audit --omit=dev > ~/audit-results/$(date +%Y%m%d)/npm-audit-prod.txt
+npm audit fix --dry-run > ~/audit-results/$(date +%Y%m%d)/npm-fix-preview.txt
 ```
-@copilotkit/react-ui → react-syntax-highlighter → refractor → prismjs <1.30.0
+
+---
+
+## Phase 4: Outdated Package Detection (10 min)
+
+- [ ] Python: List all outdated packages
+- [ ] Python: Identify major version gaps
+- [ ] npm: List all outdated packages
+- [ ] Cross-reference with security vulnerabilities
+
+**Commands:**
+```bash
+cd /opt/e2i_causal_analytics && source venv/bin/activate
+pip list --outdated --format=json > ~/audit-results/$(date +%Y%m%d)/pip-outdated.json
+pip list --outdated > ~/audit-results/$(date +%Y%m%d)/pip-outdated.txt
+cd frontend
+npm outdated --json > ~/audit-results/$(date +%Y%m%d)/npm-outdated.json
+npm outdated > ~/audit-results/$(date +%Y%m%d)/npm-outdated.txt
 ```
-**Status**: Requires CopilotKit update (transitive dependency)
-
-### Outdated Packages (17 total)
-
-#### Safe to Update (patch/minor)
-| Package | Current | Latest | Priority |
-|---------|---------|--------|----------|
-| react-router-dom | 7.11.0 | 7.12.0 | URGENT (security) |
-| @tanstack/react-query | 5.90.12 | 5.90.16 | Low |
-| react-hook-form | 7.69.0 | 7.70.0 | Low |
-| zod | 4.2.1 | 4.3.5 | Low |
-| typescript-eslint | 8.50.0 | 8.52.0 | Low |
-| msw | 2.12.4 | 2.12.7 | Low |
-| jsdom | 27.3.0 | 27.4.0 | Low |
-
-#### Major Updates Available (requires testing)
-| Package | Current | Latest | Notes |
-|---------|---------|--------|-------|
-| react | 18.3.1 | 19.2.3 | Major - defer |
-| react-dom | 18.3.1 | 19.2.3 | Major - defer |
-| vite | 6.4.1 | 7.3.1 | Major - defer |
-| framer-motion | 11.18.2 | 12.24.12 | Major - defer |
-| typescript | 5.6.3 | 5.9.3 | Minor - low risk |
 
 ---
 
-## Recommended Actions
+## Phase 5: Conflict Verification (5 min)
 
-### Immediate (This Session)
+- [ ] Verify multiprocess==0.70.17 (dill conflict)
+- [ ] Verify tenacity compatibility with feast/graphiti-core
+- [ ] Run `pip check` for new conflicts
+- [ ] Check npm peer dependency warnings
 
-1. **Fix HIGH security vulnerability**
-   ```bash
-   ssh root@159.89.180.27
-   cd /root/Projects/e2i_causal_analytics/frontend
-   npm audit fix
-   ```
-
-2. **Verify fix**
-   ```bash
-   npm audit
-   npm run build
-   npm run test:run
-   ```
-
-### Short-term (This Week)
-
-3. **Update safe packages**
-   ```bash
-   npm update @tanstack/react-query react-hook-form zod typescript-eslint msw jsdom
-   ```
-
-4. **Run full test suite**
-   ```bash
-   npm run test:run
-   npm run test:e2e
-   ```
-
-### Deferred (Next Quarter)
-
-- React 18 → 19 migration (breaking changes)
-- Vite 6 → 7 migration
-- Monitor CopilotKit for PrismJS fix
+**Commands:**
+```bash
+pip show multiprocess dill feast tenacity graphiti-core | grep -E "Name|Version"
+pip check > ~/audit-results/$(date +%Y%m%d)/pip-conflicts.txt 2>&1
+cd frontend && npm ls 2>&1 | grep -E "peer|WARN|ERR" > ~/audit-results/$(date +%Y%m%d)/npm-peers.txt
+```
 
 ---
 
-## Verification Steps
+## Phase 6: License Compliance (10 min)
 
-After applying fixes:
+- [ ] Generate Python license report
+- [ ] Identify restrictive licenses (GPL, AGPL, LGPL)
+- [ ] Generate npm license report
+- [ ] Flag unknown/missing licenses
 
-1. **Security check**
-   ```bash
-   npm audit  # Should show 0 HIGH vulnerabilities
-   ```
-
-2. **Build verification**
-   ```bash
-   npm run build  # Should complete without errors
-   ```
-
-3. **Test suite**
-   ```bash
-   npm run test:run      # Unit tests
-   npm run test:e2e      # E2E tests (if configured)
-   ```
-
-4. **Application check**
-   - Verify frontend loads at http://localhost:5174
-   - Check React Router navigation works
-   - Verify no console errors
+**Commands:**
+```bash
+cd /opt/e2i_causal_analytics && source venv/bin/activate
+pip-licenses --format=json > ~/audit-results/$(date +%Y%m%d)/python-licenses.json
+pip-licenses --format=markdown > ~/audit-results/$(date +%Y%m%d)/python-licenses.md
+pip-licenses | grep -iE "GPL|AGPL|LGPL" > ~/audit-results/$(date +%Y%m%d)/restrictive-licenses.txt
+cd frontend
+npx license-checker --json > ~/audit-results/$(date +%Y%m%d)/npm-licenses.json
+npx license-checker --summary > ~/audit-results/$(date +%Y%m%d)/npm-licenses-summary.txt
+```
 
 ---
 
-## Files Modified (2026-01-08)
+## Phase 7: Dependency Health Metrics (15 min)
 
-### On Droplet (synced from local)
-- `frontend/package.json` - version updates
-- `frontend/package-lock.json` - lock file regeneration
-- `frontend/vite.config.ts` - fixed unused variable warnings
-- `frontend/vitest.config.ts` - added test environment variables
-- `frontend/src/config/env.ts` - respect explicit VITE_API_URL in dev mode
-- `frontend/src/test/utils.tsx` - added renderWithAllProviders wrapper
-- `frontend/src/pages/Home.test.tsx` - use proper provider wrapper
-- `frontend/src/mocks/handlers.ts` - removed unused copilotKitHandlers
+- [ ] Check critical package maintenance status
+- [ ] Identify deprecated packages (dspy-ai -> dspy)
+- [ ] Verify Docker/production version alignment
+- [ ] Document unmaintained packages
 
-### Commits
-- `b93bd59` - fix(mocks): remove unused copilotKitHandlers and passthrough import
-- `b0741ec` - fix(test): add test env vars and proper provider wrappers
+**Commands:**
+```bash
+for pkg in langgraph anthropic dspy-ai dowhy econml mlflow feast opik fastapi; do
+  echo "=== $pkg ===" >> ~/audit-results/$(date +%Y%m%d)/critical-packages.txt
+  pip show $pkg | grep -E "Version|Home-page|Author" >> ~/audit-results/$(date +%Y%m%d)/critical-packages.txt
+done
+```
+
+**Docker Alignment Check:**
+- pyproject.toml: Python >=3.12
+- docker/Dockerfile: python:3.11-slim (MISMATCH - needs update)
+- docker/frontend/Dockerfile: node:20-alpine (OK)
+
+---
+
+## Phase 8: Lock File Integrity (5 min)
+
+- [ ] Verify requirements.txt can resolve
+- [ ] Verify package-lock.json integrity
+- [ ] Analyze prod vs dev separation
+
+**Commands:**
+```bash
+pip install --dry-run -r requirements.txt > ~/audit-results/$(date +%Y%m%d)/req-integrity.txt 2>&1
+cd frontend && npm ci --dry-run > ~/audit-results/$(date +%Y%m%d)/npm-integrity.txt 2>&1
+```
+
+---
+
+## Phase 9: Generate Reports (10 min)
+
+- [ ] Create executive summary
+- [ ] Create remediation action list
+- [ ] Archive all results
+
+**Commands:**
+```bash
+cd ~/audit-results/$(date +%Y%m%d)
+# Create EXECUTIVE_SUMMARY.txt with findings
+# Create REMEDIATION_ACTIONS.txt with prioritized fixes
+tar -czvf ../audit-$(date +%Y%m%d).tar.gz .
+```
+
+---
+
+## Critical Files to Modify (Post-Audit)
+
+| File | Issue | Action |
+|------|-------|--------|
+| `docker/Dockerfile` | Python 3.11 vs 3.12 | Update to `python:3.12-slim-bookworm` |
+| `docker/fastapi/Dockerfile` | Python 3.11 vs 3.12 | Update to `python:3.12-slim-bookworm` |
+| `requirements.txt` | Contains dev packages | Create `requirements-prod.txt` |
+| `.github/workflows/` | No security scanning | Add pip-audit/npm audit workflow |
+
+---
+
+## Success Criteria
+
+| Phase | Success Metric |
+|-------|---------------|
+| 1 | Python 3.12.x, Node 20.x confirmed |
+| 2 | Zero CRITICAL Python CVEs (or documented remediation) |
+| 3 | Zero CRITICAL npm CVEs (or documented remediation) |
+| 4 | Outdated packages documented with priority |
+| 5 | No new unresolved conflicts |
+| 6 | No GPL/AGPL in production (or approved exceptions) |
+| 7 | Critical packages actively maintained |
+| 8 | Lock files valid |
+
+---
+
+## Rollback Strategy
+
+All phases are read-only. If audit tools cause issues:
+```bash
+deactivate
+rm -rf venv
+python3.12 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+---
+
+## Estimated Duration: ~75 minutes total
