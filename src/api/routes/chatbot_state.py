@@ -68,6 +68,11 @@ class ChatbotState(TypedDict, total=False):
     routing_confidence: Optional[float]  # Routing confidence (0.0-1.0)
     routing_rationale: Optional[str]  # Explanation for routing decision
 
+    # Orchestrator integration (multi-agent dispatch)
+    orchestrator_used: bool  # Whether orchestrator processed this query
+    agents_dispatched: List[str]  # Agents that orchestrator dispatched to
+    response_confidence: Optional[float]  # Orchestrator response confidence (0.0-1.0)
+
     # E2I context filters
     brand_context: Optional[str]
     region_context: Optional[str]
@@ -200,6 +205,9 @@ def create_initial_state(
         secondary_agents=[],
         routing_confidence=None,
         routing_rationale=None,
+        orchestrator_used=False,
+        agents_dispatched=[],
+        response_confidence=None,
         brand_context=brand_context,
         region_context=region_context,
         messages=[],

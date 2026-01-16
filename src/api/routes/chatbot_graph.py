@@ -6,10 +6,16 @@ Builds a LangGraph agent workflow for the E2I chatbot with:
 - E2I-specific tool integration
 - RAG retrieval for context
 - Intent classification
+- Orchestrator integration for multi-agent dispatch
 - Streaming response support
 
-Workflow:
-    init → load_context → retrieve_rag → classify_intent → generate → [tools] → finalize
+Workflow (with orchestrator integration):
+    init → load_context → classify_intent → retrieve_rag → orchestrator → generate → [tools] → finalize
+
+The orchestrator node routes complex queries (causal_analysis, kpi_query,
+recommendation, search, multi_faceted) through the 20-agent orchestrator
+for specialized processing. Simple queries (greeting, help, agent_status,
+general) skip orchestrator and generate responses directly.
 """
 
 import logging
@@ -58,6 +64,7 @@ from src.api.routes.chatbot_dspy import (
     route_agent_hardcoded,
 )
 from src.mlops.mlflow_connector import MLflowConnector
+from src.api.routes.cognitive import get_orchestrator
 
 # MLflow metrics feature flag
 CHATBOT_MLFLOW_METRICS_ENABLED = os.getenv("CHATBOT_MLFLOW_METRICS", "true").lower() == "true"
@@ -67,6 +74,18 @@ CHATBOT_MLFLOW_EXPERIMENT = "chatbot_interactions"
 
 # Phase 7: Training signal collection feature flag
 CHATBOT_SIGNAL_COLLECTION_ENABLED = os.getenv("CHATBOT_SIGNAL_COLLECTION", "true").lower() == "true"
+
+# Orchestrator integration feature flag - routes complex queries through orchestrator/tool_composer
+CHATBOT_ORCHESTRATOR_ENABLED = os.getenv("CHATBOT_ORCHESTRATOR", "true").lower() == "true"
+
+# Intents that should be routed through the orchestrator for agent dispatch
+ORCHESTRATOR_ROUTED_INTENTS = {
+    IntentType.CAUSAL_ANALYSIS,
+    IntentType.KPI_QUERY,
+    IntentType.RECOMMENDATION,
+    IntentType.SEARCH,
+    IntentType.MULTI_FACETED,
+}
 
 logger = logging.getLogger(__name__)
 
@@ -714,6 +733,126 @@ async def classify_intent_node(state: ChatbotState) -> Dict[str, Any]:
     }
 
 
+async def orchestrator_node(state: ChatbotState) -> Dict[str, Any]:
+    """
+    Route complex queries through the orchestrator for agent dispatch.
+
+    The orchestrator provides:
+    - Multi-agent coordination (20 agents across 6 tiers)
+    - Tool composer for multi-faceted queries
+    - Specialized agent dispatch (causal_impact, experiment_designer, etc.)
+
+    For simple intents (greeting, help, agent_status), this node is skipped
+    and the chatbot generates responses directly via generate_node.
+    """
+    intent = state.get("intent")
+    query = state.get("query", "")
+    session_id = state.get("session_id", "")
+    user_id = state.get("user_id", "")
+    rag_context = state.get("rag_context", [])
+    brand_context = state.get("brand_context")
+    region_context = state.get("region_context")
+
+    # Get active trace context for observability
+    trace_ctx = _active_trace_context.get()
+
+    # Initialize result with pass-through behavior (no changes)
+    result = {}
+    orchestrator_used = False
+    agents_dispatched = []
+    response_text = ""
+    response_confidence = 0.0
+
+    async def _execute_orchestrator():
+        """Execute query through orchestrator."""
+        nonlocal result, orchestrator_used, agents_dispatched, response_text, response_confidence
+
+        orchestrator = get_orchestrator()
+        if not orchestrator:
+            logger.warning("Orchestrator not available, falling back to direct generation")
+            return
+
+        try:
+            # Build evidence context from RAG results
+            evidence = [ctx.get("content", "") for ctx in rag_context[:5]] if rag_context else []
+
+            # Call orchestrator
+            orchestrator_result = await orchestrator.run({
+                "query": query,
+                "session_id": session_id,
+                "user_id": user_id,
+                "user_context": {
+                    "brand": brand_context,
+                    "region": region_context,
+                    "evidence": evidence,
+                },
+            })
+
+            orchestrator_used = True
+            response_text = orchestrator_result.get("response_text", "")
+            response_confidence = orchestrator_result.get("response_confidence", 0.0)
+            agents_dispatched = orchestrator_result.get("agents_dispatched", [])
+
+            # Determine primary agent from orchestrator dispatch
+            primary_agent = "orchestrator"
+            if agents_dispatched:
+                primary_agent = agents_dispatched[0]
+
+            logger.info(
+                f"Orchestrator processed query: agents={agents_dispatched}, "
+                f"confidence={response_confidence:.2f}"
+            )
+
+            # Create response message and update state
+            if response_text:
+                response_msg = AIMessage(content=response_text)
+                result = {
+                    "messages": [response_msg],
+                    "response_text": response_text,
+                    "agent_name": primary_agent,
+                    "routed_agent": primary_agent,
+                    "agents_dispatched": agents_dispatched,
+                    "orchestrator_used": True,
+                    "response_confidence": response_confidence,
+                    "metadata": {
+                        **(state.get("metadata") or {}),
+                        "orchestrator_used": True,
+                        "agents_dispatched": agents_dispatched,
+                        "orchestrator_confidence": response_confidence,
+                    },
+                }
+
+        except Exception as e:
+            logger.warning(f"Orchestrator execution failed: {e}")
+            # Fall through to generate_node by returning empty result
+
+    # Only route through orchestrator for complex intents
+    should_use_orchestrator = (
+        CHATBOT_ORCHESTRATOR_ENABLED
+        and intent in ORCHESTRATOR_ROUTED_INTENTS
+    )
+
+    if should_use_orchestrator:
+        if trace_ctx:
+            async with trace_ctx.trace_node("orchestrator") as node_span:
+                await _execute_orchestrator()
+                node_span.log_metadata({
+                    "orchestrator_used": orchestrator_used,
+                    "agents_dispatched": agents_dispatched,
+                    "response_confidence": response_confidence,
+                    "response_length": len(response_text),
+                })
+        else:
+            await _execute_orchestrator()
+    else:
+        logger.debug(
+            f"Skipping orchestrator: intent={intent} not in ORCHESTRATOR_ROUTED_INTENTS "
+            f"or feature disabled (enabled={CHATBOT_ORCHESTRATOR_ENABLED})"
+        )
+
+    return result
+
+
 async def generate_node(state: ChatbotState) -> Dict[str, Any]:
     """
     Generate response using Claude with tools or DSPy synthesis.
@@ -721,7 +860,16 @@ async def generate_node(state: ChatbotState) -> Dict[str, Any]:
     Phase 6 DSPy integration: When we have good RAG evidence, uses DSPy
     synthesis for structured responses with confidence statements and citations.
     Falls back to LLM with tools for complex queries requiring tool execution.
+
+    NOTE: If orchestrator_node already produced a response (orchestrator_used=True),
+    this node returns the existing response without re-generating.
     """
+    # Check if orchestrator already handled this query
+    if state.get("orchestrator_used") and state.get("response_text"):
+        logger.debug("Skipping generate_node: orchestrator already produced response")
+        # Pass through the orchestrator's response - no further generation needed
+        return {}
+
     messages = list(state.get("messages", []))
     rag_context = state.get("rag_context", [])
     brand = state.get("brand_context")
@@ -1465,12 +1613,17 @@ def create_e2i_chatbot_graph() -> StateGraph:
     """
     Create the E2I chatbot LangGraph workflow.
 
-    Workflow:
-        init → load_context → classify_intent → retrieve_rag → generate
-            ↓                                                      ↓
-            ↓                                            [tools] ←→ ↑
-            ↓                                                      ↓
-            └──────────────────────────────────────────→ finalize → END
+    Workflow (with orchestrator integration):
+        init → load_context → classify_intent → retrieve_rag → orchestrator → generate
+            ↓                                                                     ↓
+            ↓                                                          [tools] ←→ ↑
+            ↓                                                                     ↓
+            └───────────────────────────────────────────────────────→ finalize → END
+
+    The orchestrator node routes complex queries (causal_analysis, kpi_query,
+    recommendation, search, multi_faceted) through the 20-agent orchestrator.
+    Simple queries (greeting, help, agent_status, general) skip orchestrator
+    and generate responses directly.
 
     Returns:
         Compiled LangGraph StateGraph
@@ -1483,6 +1636,7 @@ def create_e2i_chatbot_graph() -> StateGraph:
     workflow.add_node("load_context", load_context_node)
     workflow.add_node("classify_intent", classify_intent_node)
     workflow.add_node("retrieve_rag", retrieve_rag_node)
+    workflow.add_node("orchestrator", orchestrator_node)  # Routes complex queries to specialized agents
     workflow.add_node("generate", generate_node)
     workflow.add_node("tools", ToolNode(E2I_CHATBOT_TOOLS))
     workflow.add_node("finalize", finalize_node)
@@ -1494,7 +1648,8 @@ def create_e2i_chatbot_graph() -> StateGraph:
     workflow.add_edge("init", "load_context")
     workflow.add_edge("load_context", "classify_intent")
     workflow.add_edge("classify_intent", "retrieve_rag")
-    workflow.add_edge("retrieve_rag", "generate")
+    workflow.add_edge("retrieve_rag", "orchestrator")  # Route through orchestrator for potential agent dispatch
+    workflow.add_edge("orchestrator", "generate")  # generate_node skips if orchestrator handled query
 
     # Conditional edge: generate → tools or finalize
     workflow.add_conditional_edges(
