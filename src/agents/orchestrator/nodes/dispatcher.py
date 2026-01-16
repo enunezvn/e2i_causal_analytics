@@ -249,6 +249,17 @@ class DispatcherNode:
                 ],
                 "confidence": 0.76,
             },
+            "cohort_constructor": {
+                "narrative": "Cohort construction complete. Applied inclusion/exclusion criteria to patient population.",
+                "recommendations": [
+                    "Review eligibility log for detailed filtering breakdown",
+                    "Monitor cohort size against SLA thresholds",
+                ],
+                "confidence": 0.92,
+                "eligible_count": 150,
+                "total_input": 500,
+                "eligibility_rate": 0.30,
+            },
         }
 
         # Get mock response or default
