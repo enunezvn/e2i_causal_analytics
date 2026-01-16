@@ -31,6 +31,7 @@ DOMAIN_TO_AGENT = {
     Domain.PREDICTION: "prediction_synthesizer",
     Domain.MONITORING: "drift_monitor",
     Domain.EXPLANATION: "explainer",
+    Domain.COHORT_DEFINITION: "cohort_constructor",
 }
 
 

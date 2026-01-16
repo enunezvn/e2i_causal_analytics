@@ -30,6 +30,7 @@ class Domain(str, Enum):
     PREDICTION = "PREDICTION"
     MONITORING = "MONITORING"
     EXPLANATION = "EXPLANATION"
+    COHORT_DEFINITION = "COHORT_DEFINITION"  # Patient/HCP cohort construction
 
 
 class RoutingPattern(str, Enum):
@@ -93,6 +94,7 @@ class IntentSignals(BaseModel):
     design_keywords: list[str] = Field(default_factory=list)
     explanation_keywords: list[str] = Field(default_factory=list)
     monitoring_keywords: list[str] = Field(default_factory=list)
+    cohort_keywords: list[str] = Field(default_factory=list)  # Cohort construction signals
 
 
 class ExtractedFeatures(BaseModel):

@@ -160,6 +160,31 @@ class FeatureExtractor:
         "outlier",
     }
 
+    COHORT_KEYWORDS = {
+        "cohort",
+        "define cohort",
+        "define a cohort",
+        "build cohort",
+        "build a cohort",
+        "construct cohort",
+        "create cohort",
+        "create a cohort",
+        "patient population",
+        "eligible patients",
+        "eligibility",
+        "inclusion",
+        "exclusion",
+        "criteria",
+        "filter patients",
+        "patient selection",
+        "target population",
+        "patient segment",
+        "patient group",
+        "patients with",  # Common pattern: "patients with [condition]"
+        "hcp cohort",
+        "hcp selection",
+    }
+
     # Entity patterns (simplified - would use NER in production)
     ENTITY_PATTERNS = {
         "HCP": [
@@ -324,4 +349,5 @@ class FeatureExtractor:
             design_keywords=find_matches(self.DESIGN_KEYWORDS),
             explanation_keywords=find_matches(self.EXPLANATION_KEYWORDS),
             monitoring_keywords=find_matches(self.MONITORING_KEYWORDS),
+            cohort_keywords=find_matches(self.COHORT_KEYWORDS),
         )
