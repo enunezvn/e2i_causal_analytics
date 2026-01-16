@@ -69,6 +69,11 @@ class DomainMapper:
             "intent_keywords": 0.7,  # explanation_keywords
             "base": 0.3,
         },
+        Domain.COHORT_DEFINITION: {
+            "intent_keywords": 0.7,  # cohort_keywords are strong signal
+            "entity_segments": 0.2,  # segment/cohort entities boost
+            "base": 0.1,
+        },
     }
 
     # Minimum confidence to include a domain
@@ -179,6 +184,7 @@ class DomainMapper:
             Domain.PREDICTION: signals.prediction_keywords,
             Domain.MONITORING: signals.monitoring_keywords,
             Domain.EXPLANATION: signals.explanation_keywords,
+            Domain.COHORT_DEFINITION: signals.cohort_keywords,
         }
 
         keywords = keyword_map.get(domain, [])
