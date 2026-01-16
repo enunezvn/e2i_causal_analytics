@@ -720,6 +720,7 @@ CHATBOT_DSPY_ROUTING_ENABLED = os.getenv("CHATBOT_DSPY_ROUTING", "true").lower()
 
 # Valid agents for routing
 VALID_AGENTS = {
+    "cohort_constructor",
     "causal_impact",
     "gap_analyzer",
     "heterogeneous_optimizer",
@@ -734,6 +735,7 @@ VALID_AGENTS = {
 
 # Agent capability keywords for fallback routing
 AGENT_CAPABILITIES = {
+    "cohort_constructor": ["cohort", "eligib", "inclusion", "exclusion", "patient set", "patient population", "criteria", "filter patient"],
     "causal_impact": ["why", "cause", "caused", "effect", "impact", "driver", "factor", "causal"],
     "gap_analyzer": ["gap", "opportunity", "roi", "underperforming", "potential", "growth"],
     "heterogeneous_optimizer": ["segment", "cate", "heterogeneous", "subgroup", "cohort"],
@@ -757,6 +759,9 @@ def _normalize_agent(agent: str) -> str:
 
     # Handle common variations
     mappings = {
+        "cohort": "cohort_constructor",
+        "cohort_builder": "cohort_constructor",
+        "patient_cohort": "cohort_constructor",
         "causal": "causal_impact",
         "causal_analysis": "causal_impact",
         "gap": "gap_analyzer",

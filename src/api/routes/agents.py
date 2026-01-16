@@ -5,7 +5,7 @@ E2I Agent Orchestration API
 FastAPI endpoints for agent status monitoring and orchestration.
 
 Endpoints:
-- GET /agents/status: Get status of all 18 agents in the tier hierarchy
+- GET /agents/status: Get status of all 20 agents in the tier hierarchy
 
 Author: E2I Causal Analytics Team
 Version: 4.2.0
@@ -80,9 +80,9 @@ class AgentStatusResponse(BaseModel):
 # SAMPLE DATA
 # =============================================================================
 
-# Default agent configuration matching the 18-agent tier hierarchy
+# Default agent configuration matching the 20-agent tier hierarchy
 AGENT_REGISTRY = [
-    # Tier 0 - ML Foundation (7 agents)
+    # Tier 0 - ML Foundation (8 agents)
     AgentInfo(
         id="scope-definer",
         name="Scope Definer",
@@ -131,6 +131,13 @@ AGENT_REGISTRY = [
         tier=0,
         status=AgentStatusEnum.ACTIVE,
         capabilities=["mlflow", "opik", "monitoring"],
+    ),
+    AgentInfo(
+        id="cohort-constructor",
+        name="Cohort Constructor",
+        tier=0,
+        status=AgentStatusEnum.ACTIVE,
+        capabilities=["cohort_definition", "patient_eligibility", "inclusion_exclusion"],
     ),
     # Tier 1 - Orchestration (2 agents)
     AgentInfo(
