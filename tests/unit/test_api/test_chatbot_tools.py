@@ -281,7 +281,7 @@ class TestAgentRoutingTool:
 
         assert result["success"] is True
         assert result["routed_to"] == "explainer"
-        assert "Default routing" in result["reason"]
+        assert "Default routing" in result["rationale"]
 
     @pytest.mark.asyncio
     async def test_routes_to_specific_target_agent(self):
@@ -292,7 +292,7 @@ class TestAgentRoutingTool:
 
         assert result["success"] is True
         assert result["routed_to"] == "drift_monitor"
-        assert result["reason"] == "Explicit agent selection"
+        assert result["rationale"] == "Explicit agent selection"
 
     @pytest.mark.asyncio
     async def test_rejects_unknown_target_agent(self):
@@ -609,19 +609,32 @@ class TestToolComposerTool:
     @patch("src.api.routes.chatbot_tools.compose_query")
     async def test_executes_multi_faceted_query(self, mock_compose_query):
         """Test executing a multi-faceted query through the Tool Composer."""
-        mock_compose_query.return_value = {
-            "sub_questions": [
-                "What is the TRx trend for Kisqali?",
-                "What is the TRx trend for Fabhalta?",
-                "What factors are driving these trends?",
-            ],
-            "tools_executed": ["e2i_data_query_tool", "e2i_data_query_tool", "causal_analysis_tool"],
-            "execution_order": [1, 2, 3],
-            "parallel_groups": [[1, 2], [3]],
-            "synthesized_response": "Kisqali shows 15% TRx growth while Fabhalta shows 8% growth...",
-            "confidence": 0.88,
-            "agent_outputs": {"causal_impact": {"effect": 0.15}},
-        }
+        # Create mock CompositionResult-like structure
+        mock_sub_question = MagicMock()
+        mock_sub_question.id = "sq_1"
+        mock_sub_question.question = "What is the TRx trend for Kisqali?"
+        mock_sub_question.intent = "kpi_query"
+
+        mock_sub_question2 = MagicMock()
+        mock_sub_question2.id = "sq_2"
+        mock_sub_question2.question = "What is the TRx trend for Fabhalta?"
+        mock_sub_question2.intent = "kpi_query"
+
+        mock_sub_question3 = MagicMock()
+        mock_sub_question3.id = "sq_3"
+        mock_sub_question3.question = "What factors are driving these trends?"
+        mock_sub_question3.intent = "causal_query"
+
+        mock_result = MagicMock()
+        mock_result.decomposition.sub_questions = [mock_sub_question, mock_sub_question2, mock_sub_question3]
+        mock_result.execution.tools_executed = ["e2i_data_query_tool", "e2i_data_query_tool", "causal_analysis_tool"]
+        mock_result.plan.get_execution_order.return_value = [1, 2, 3]
+        mock_result.plan.parallel_groups = [[1, 2], [3]]
+        mock_result.response.answer = "Kisqali shows 15% TRx growth while Fabhalta shows 8% growth..."
+        mock_result.response.confidence = 0.88
+        mock_result.execution.get_all_outputs.return_value = {"causal_impact": {"effect": 0.15}}
+
+        mock_compose_query.return_value = mock_result
 
         result = await tool_composer_tool.ainvoke(
             {
@@ -641,15 +654,17 @@ class TestToolComposerTool:
     @patch("src.api.routes.chatbot_tools.compose_query")
     async def test_passes_context_to_composer(self, mock_compose_query):
         """Test that context is passed correctly to Tool Composer."""
-        mock_compose_query.return_value = {
-            "sub_questions": [],
-            "tools_executed": [],
-            "execution_order": [],
-            "parallel_groups": [],
-            "synthesized_response": "OK",
-            "confidence": 0.9,
-            "agent_outputs": {},
-        }
+        # Create CompositionResult-like mock structure
+        mock_result = MagicMock()
+        mock_result.decomposition.sub_questions = []
+        mock_result.execution.tools_executed = []
+        mock_result.plan.get_execution_order.return_value = []
+        mock_result.plan.parallel_groups = []
+        mock_result.response.answer = "OK"
+        mock_result.response.confidence = 0.9
+        mock_result.execution.get_all_outputs.return_value = {}
+
+        mock_compose_query.return_value = mock_result
 
         await tool_composer_tool.ainvoke(
             {
@@ -714,15 +729,17 @@ class TestToolComposerTool:
     @patch("src.api.routes.chatbot_tools.compose_query")
     async def test_generates_session_id_when_not_provided(self, mock_compose_query):
         """Test that a session ID is generated when not provided."""
-        mock_compose_query.return_value = {
-            "sub_questions": [],
-            "tools_executed": [],
-            "execution_order": [],
-            "parallel_groups": [],
-            "synthesized_response": "OK",
-            "confidence": 0.9,
-            "agent_outputs": {},
-        }
+        # Create CompositionResult-like mock structure
+        mock_result = MagicMock()
+        mock_result.decomposition.sub_questions = []
+        mock_result.execution.tools_executed = []
+        mock_result.plan.get_execution_order.return_value = []
+        mock_result.plan.parallel_groups = []
+        mock_result.response.answer = "OK"
+        mock_result.response.confidence = 0.9
+        mock_result.execution.get_all_outputs.return_value = {}
+
+        mock_compose_query.return_value = mock_result
 
         result = await tool_composer_tool.ainvoke(
             {"query": "Test query"}
