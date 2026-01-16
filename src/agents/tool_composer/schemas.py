@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field
 class ToolCategory(str, Enum):
     """Tool capability categories."""
 
+    COHORT = "COHORT"  # Tier 0: Patient cohort construction
     CAUSAL = "CAUSAL"
     SEGMENTATION = "SEGMENTATION"
     GAP = "GAP"
