@@ -156,7 +156,7 @@ class TestGraphStats:
             patch("src.api.routes.graph._get_graphiti_service", return_value=mock_graphiti_service),
         ):
 
-            response = client.get("/graph/stats")
+            response = client.get("/api/graph/stats")
 
             assert response.status_code == 200
             data = response.json()
@@ -172,7 +172,7 @@ class TestGraphStats:
             patch("src.api.routes.graph._get_graphiti_service", return_value=None),
         ):
 
-            response = client.get("/graph/stats")
+            response = client.get("/api/graph/stats")
 
             assert response.status_code == 200
             data = response.json()
@@ -192,7 +192,7 @@ class TestListNodes:
         """Test successful listing of nodes."""
         with patch("src.api.routes.graph._get_semantic_memory", return_value=mock_semantic_memory):
 
-            response = client.get("/graph/nodes")
+            response = client.get("/api/graph/nodes")
 
             assert response.status_code == 200
             data = response.json()
@@ -205,7 +205,7 @@ class TestListNodes:
         """Test listing nodes with entity type filter."""
         with patch("src.api.routes.graph._get_semantic_memory", return_value=mock_semantic_memory):
 
-            response = client.get("/graph/nodes?entity_types=Patient")
+            response = client.get("/api/graph/nodes?entity_types=Patient")
 
             assert response.status_code == 200
             mock_semantic_memory.list_nodes.assert_called_once()
@@ -216,7 +216,7 @@ class TestListNodes:
         """Test listing nodes with search query."""
         with patch("src.api.routes.graph._get_semantic_memory", return_value=mock_semantic_memory):
 
-            response = client.get("/graph/nodes?search=Sarah")
+            response = client.get("/api/graph/nodes?search=Sarah")
 
             assert response.status_code == 200
             call_args = mock_semantic_memory.list_nodes.call_args
@@ -226,7 +226,7 @@ class TestListNodes:
         """Test listing nodes with pagination parameters."""
         with patch("src.api.routes.graph._get_semantic_memory", return_value=mock_semantic_memory):
 
-            response = client.get("/graph/nodes?limit=10&offset=5")
+            response = client.get("/api/graph/nodes?limit=10&offset=5")
 
             assert response.status_code == 200
             call_args = mock_semantic_memory.list_nodes.call_args
@@ -237,7 +237,7 @@ class TestListNodes:
         """Test listing nodes when service unavailable."""
         with patch("src.api.routes.graph._get_semantic_memory", return_value=None):
 
-            response = client.get("/graph/nodes")
+            response = client.get("/api/graph/nodes")
 
             assert response.status_code == 200
             data = response.json()
@@ -257,7 +257,7 @@ class TestGetNode:
         """Test successful retrieval of a specific node."""
         with patch("src.api.routes.graph._get_semantic_memory", return_value=mock_semantic_memory):
 
-            response = client.get("/graph/nodes/patient_001")
+            response = client.get("/api/graph/nodes/patient_001")
 
             assert response.status_code == 200
             data = response.json()
@@ -270,7 +270,7 @@ class TestGetNode:
 
         with patch("src.api.routes.graph._get_semantic_memory", return_value=mock_semantic_memory):
 
-            response = client.get("/graph/nodes/nonexistent")
+            response = client.get("/api/graph/nodes/nonexistent")
 
             assert response.status_code == 404
 
@@ -278,7 +278,7 @@ class TestGetNode:
         """Test get node when service unavailable."""
         with patch("src.api.routes.graph._get_semantic_memory", return_value=None):
 
-            response = client.get("/graph/nodes/patient_001")
+            response = client.get("/api/graph/nodes/patient_001")
 
             assert response.status_code == 503
 
@@ -295,7 +295,7 @@ class TestNodeNetwork:
         """Test successful retrieval of patient network."""
         with patch("src.api.routes.graph._get_semantic_memory", return_value=mock_semantic_memory):
 
-            response = client.get("/graph/nodes/patient_001/network")
+            response = client.get("/api/graph/nodes/patient_001/network")
 
             assert response.status_code == 200
             data = response.json()
@@ -333,7 +333,7 @@ class TestNodeNetwork:
 
         with patch("src.api.routes.graph._get_semantic_memory", return_value=mock_semantic_memory):
 
-            response = client.get("/graph/nodes/hcp_001/network")
+            response = client.get("/api/graph/nodes/hcp_001/network")
 
             assert response.status_code == 200
             data = response.json()
@@ -354,7 +354,7 @@ class TestNodeNetwork:
         """Test network retrieval with custom max_depth."""
         with patch("src.api.routes.graph._get_semantic_memory", return_value=mock_semantic_memory):
 
-            response = client.get("/graph/nodes/patient_001/network?max_depth=3")
+            response = client.get("/api/graph/nodes/patient_001/network?max_depth=3")
 
             assert response.status_code == 200
             data = response.json()
@@ -368,11 +368,11 @@ class TestNodeNetwork:
         with patch("src.api.routes.graph._get_semantic_memory", return_value=mock_semantic_memory):
 
             # Test max_depth too high
-            response = client.get("/graph/nodes/patient_001/network?max_depth=10")
+            response = client.get("/api/graph/nodes/patient_001/network?max_depth=10")
             assert response.status_code == 422  # Validation error
 
             # Test max_depth too low
-            response = client.get("/graph/nodes/patient_001/network?max_depth=0")
+            response = client.get("/api/graph/nodes/patient_001/network?max_depth=0")
             assert response.status_code == 422
 
     def test_network_node_not_found(self, mock_semantic_memory):
@@ -381,7 +381,7 @@ class TestNodeNetwork:
 
         with patch("src.api.routes.graph._get_semantic_memory", return_value=mock_semantic_memory):
 
-            response = client.get("/graph/nodes/nonexistent/network")
+            response = client.get("/api/graph/nodes/nonexistent/network")
 
             assert response.status_code == 404
 
@@ -389,7 +389,7 @@ class TestNodeNetwork:
         """Test network when service unavailable."""
         with patch("src.api.routes.graph._get_semantic_memory", return_value=None):
 
-            response = client.get("/graph/nodes/patient_001/network")
+            response = client.get("/api/graph/nodes/patient_001/network")
 
             assert response.status_code == 503
 
@@ -402,7 +402,7 @@ class TestNodeNetwork:
 
         with patch("src.api.routes.graph._get_semantic_memory", return_value=mock_semantic_memory):
 
-            response = client.get("/graph/nodes/trigger_001/network")
+            response = client.get("/api/graph/nodes/trigger_001/network")
 
             assert response.status_code == 200
             data = response.json()
@@ -427,7 +427,7 @@ class TestNodeNetwork:
 
         with patch("src.api.routes.graph._get_semantic_memory", return_value=mock_semantic_memory):
 
-            response = client.get("/graph/nodes/patient_001/network")
+            response = client.get("/api/graph/nodes/patient_001/network")
 
             assert response.status_code == 200
             data = response.json()
@@ -446,7 +446,7 @@ class TestListRelationships:
         """Test successful listing of relationships."""
         with patch("src.api.routes.graph._get_semantic_memory", return_value=mock_semantic_memory):
 
-            response = client.get("/graph/relationships")
+            response = client.get("/api/graph/relationships")
 
             assert response.status_code == 200
             data = response.json()
@@ -458,7 +458,7 @@ class TestListRelationships:
         """Test listing relationships with type filter."""
         with patch("src.api.routes.graph._get_semantic_memory", return_value=mock_semantic_memory):
 
-            response = client.get("/graph/relationships?relationship_types=TREATED_BY")
+            response = client.get("/api/graph/relationships?relationship_types=TREATED_BY")
 
             assert response.status_code == 200
             call_args = mock_semantic_memory.list_relationships.call_args
@@ -481,7 +481,7 @@ class TestGraphSearch:
         ):
 
             response = client.post(
-                "/graph/search", json={"query": "What treatments does Dr. Chen prescribe?"}
+                "/api/graph/search", json={"query": "What treatments does Dr. Chen prescribe?"}
             )
 
             assert response.status_code == 200
@@ -498,7 +498,7 @@ class TestGraphSearch:
         ):
 
             response = client.post(
-                "/graph/search",
+                "/api/graph/search",
                 json={"query": "Find HCPs", "entity_types": ["HCP"], "k": 5, "min_score": 0.5},
             )
 
@@ -520,7 +520,7 @@ class TestGraphHealth:
             patch("src.api.routes.graph._get_graphiti_service", return_value=mock_graphiti_service),
         ):
 
-            response = client.get("/graph/health")
+            response = client.get("/api/graph/health")
 
             assert response.status_code == 200
             data = response.json()
@@ -536,7 +536,7 @@ class TestGraphHealth:
             patch("src.api.routes.graph._get_graphiti_service", return_value=None),
         ):
 
-            response = client.get("/graph/health")
+            response = client.get("/api/graph/health")
 
             assert response.status_code == 200
             data = response.json()

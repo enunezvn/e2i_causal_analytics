@@ -141,7 +141,7 @@ class TestGetWorkflowEntries:
             "src.api.routes.audit.get_audit_service",
             return_value=mock_audit_service,
         ):
-            response = client.get(f"/audit/workflow/{mock_workflow_id}")
+            response = client.get(f"/api/audit/workflow/{mock_workflow_id}")
 
         assert response.status_code == 200
         data = response.json()
@@ -162,7 +162,7 @@ class TestGetWorkflowEntries:
             return_value=mock_audit_service,
         ):
             response = client.get(
-                f"/audit/workflow/{mock_workflow_id}",
+                f"/api/audit/workflow/{mock_workflow_id}",
                 params={"limit": 10, "offset": 5},
             )
 
@@ -181,7 +181,7 @@ class TestGetWorkflowEntries:
             "src.api.routes.audit.get_audit_service",
             return_value=mock_audit_service,
         ):
-            response = client.get(f"/audit/workflow/{mock_workflow_id}")
+            response = client.get(f"/api/audit/workflow/{mock_workflow_id}")
 
         assert response.status_code == 200
         data = response.json()
@@ -193,7 +193,7 @@ class TestGetWorkflowEntries:
             "src.api.routes.audit.get_audit_service",
             return_value=None,
         ):
-            response = client.get(f"/audit/workflow/{mock_workflow_id}")
+            response = client.get(f"/api/audit/workflow/{mock_workflow_id}")
 
         assert response.status_code == 503
         assert "unavailable" in response.json()["detail"].lower()
@@ -208,7 +208,7 @@ class TestVerifyWorkflowChain:
             "src.api.routes.audit.get_audit_service",
             return_value=mock_audit_service,
         ):
-            response = client.get(f"/audit/workflow/{mock_workflow_id}/verify")
+            response = client.get(f"/api/audit/workflow/{mock_workflow_id}/verify")
 
         assert response.status_code == 200
         data = response.json()
@@ -234,7 +234,7 @@ class TestVerifyWorkflowChain:
             "src.api.routes.audit.get_audit_service",
             return_value=mock_audit_service,
         ):
-            response = client.get(f"/audit/workflow/{mock_workflow_id}/verify")
+            response = client.get(f"/api/audit/workflow/{mock_workflow_id}/verify")
 
         assert response.status_code == 200
         data = response.json()
@@ -249,7 +249,7 @@ class TestVerifyWorkflowChain:
             "src.api.routes.audit.get_audit_service",
             return_value=None,
         ):
-            response = client.get(f"/audit/workflow/{mock_workflow_id}/verify")
+            response = client.get(f"/api/audit/workflow/{mock_workflow_id}/verify")
 
         assert response.status_code == 503
 
@@ -280,7 +280,7 @@ class TestGetWorkflowSummary:
             "src.api.routes.audit.get_audit_service",
             return_value=mock_audit_service,
         ):
-            response = client.get(f"/audit/workflow/{mock_workflow_id}/summary")
+            response = client.get(f"/api/audit/workflow/{mock_workflow_id}/summary")
 
         assert response.status_code == 200
         data = response.json()
@@ -302,7 +302,7 @@ class TestGetWorkflowSummary:
             "src.api.routes.audit.get_audit_service",
             return_value=mock_audit_service,
         ):
-            response = client.get(f"/audit/workflow/{mock_workflow_id}/summary")
+            response = client.get(f"/api/audit/workflow/{mock_workflow_id}/summary")
 
         assert response.status_code == 404
         # Handle different response structures
@@ -321,7 +321,7 @@ class TestGetWorkflowSummary:
             "src.api.routes.audit.get_audit_service",
             return_value=mock_audit_service,
         ):
-            response = client.get(f"/audit/workflow/{mock_workflow_id}/summary")
+            response = client.get(f"/api/audit/workflow/{mock_workflow_id}/summary")
 
         assert response.status_code == 200
         data = response.json()
@@ -341,7 +341,7 @@ class TestGetRecentWorkflows:
             "src.api.routes.audit.get_audit_service",
             return_value=mock_audit_service,
         ):
-            response = client.get("/audit/recent")
+            response = client.get("/api/audit/recent")
 
         assert response.status_code == 200
         data = response.json()
@@ -364,7 +364,7 @@ class TestGetRecentWorkflows:
             "src.api.routes.audit.get_audit_service",
             return_value=mock_audit_service,
         ):
-            response = client.get("/audit/recent", params={"limit": 5})
+            response = client.get("/api/audit/recent", params={"limit": 5})
 
         assert response.status_code == 200
         # Verify RPC was called with limit param
@@ -380,7 +380,7 @@ class TestGetRecentWorkflows:
             "src.api.routes.audit.get_audit_service",
             return_value=mock_audit_service,
         ):
-            response = client.get("/audit/recent", params={"brand": "Kisqali"})
+            response = client.get("/api/audit/recent", params={"brand": "Kisqali"})
 
         assert response.status_code == 200
         # RPC should have been called with brand filter
@@ -397,7 +397,7 @@ class TestGetRecentWorkflows:
             "src.api.routes.audit.get_audit_service",
             return_value=mock_audit_service,
         ):
-            response = client.get("/audit/recent", params={"agent_name": "causal_impact"})
+            response = client.get("/api/audit/recent", params={"agent_name": "causal_impact"})
 
         assert response.status_code == 200
         call_args = mock_audit_service.db.rpc.call_args
@@ -426,7 +426,7 @@ class TestGetRecentWorkflows:
             "src.api.routes.audit.get_audit_service",
             return_value=mock_audit_service,
         ):
-            response = client.get("/audit/recent")
+            response = client.get("/api/audit/recent")
 
         assert response.status_code == 200
 
@@ -436,7 +436,7 @@ class TestGetRecentWorkflows:
             "src.api.routes.audit.get_audit_service",
             return_value=None,
         ):
-            response = client.get("/audit/recent")
+            response = client.get("/api/audit/recent")
 
         assert response.status_code == 503
 
@@ -452,7 +452,7 @@ class TestGetRecentWorkflows:
             "src.api.routes.audit.get_audit_service",
             return_value=mock_audit_service,
         ):
-            response = client.get("/audit/recent")
+            response = client.get("/api/audit/recent")
 
         assert response.status_code == 200
         data = response.json()
