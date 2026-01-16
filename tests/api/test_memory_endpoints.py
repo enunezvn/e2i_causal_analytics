@@ -117,7 +117,7 @@ class TestMemorySearch:
     def test_search_returns_results(self, mock_hybrid_search):
         """search should return hybrid search results."""
         response = client.post(
-            "/memory/search", json={"query": "Why did TRx drop in northeast?", "k": 10}
+            "/api/memory/search", json={"query": "Why did TRx drop in northeast?", "k": 10}
         )
 
         assert response.status_code == 200
@@ -129,7 +129,7 @@ class TestMemorySearch:
     def test_search_with_filters(self, mock_hybrid_search):
         """search should pass filters to hybrid_search."""
         response = client.post(
-            "/memory/search",
+            "/api/memory/search",
             json={
                 "query": "TRx trends",
                 "k": 5,
@@ -145,7 +145,7 @@ class TestMemorySearch:
     def test_search_with_kpi_name(self, mock_hybrid_search):
         """search should pass kpi_name for targeted retrieval."""
         response = client.post(
-            "/memory/search", json={"query": "What impacts TRx?", "kpi_name": "TRx"}
+            "/api/memory/search", json={"query": "What impacts TRx?", "kpi_name": "TRx"}
         )
 
         assert response.status_code == 200
@@ -154,7 +154,7 @@ class TestMemorySearch:
 
     def test_search_filters_by_min_score(self, mock_hybrid_search):
         """search should filter results below min_score."""
-        response = client.post("/memory/search", json={"query": "TRx analysis", "min_score": 0.8})
+        response = client.post("/api/memory/search", json={"query": "TRx analysis", "min_score": 0.8})
 
         assert response.status_code == 200
         data = response.json()
@@ -164,7 +164,7 @@ class TestMemorySearch:
 
     def test_search_includes_latency(self, mock_hybrid_search):
         """search should include search latency in response."""
-        response = client.post("/memory/search", json={"query": "test query"})
+        response = client.post("/api/memory/search", json={"query": "test query"})
 
         assert response.status_code == 200
         data = response.json()
@@ -173,7 +173,7 @@ class TestMemorySearch:
 
     def test_search_validates_query_length(self):
         """search should reject empty queries."""
-        response = client.post("/memory/search", json={"query": ""})
+        response = client.post("/api/memory/search", json={"query": ""})
 
         assert response.status_code == 422  # Validation error
 
@@ -189,7 +189,7 @@ class TestEpisodicMemory:
     def test_create_episodic_memory(self, mock_episodic_memory_functions):
         """POST /memory/episodic should create a new memory."""
         response = client.post(
-            "/memory/episodic",
+            "/api/memory/episodic",
             json={
                 "content": "User asked about TRx trends",
                 "event_type": "query",
@@ -208,14 +208,14 @@ class TestEpisodicMemory:
     def test_create_episodic_memory_minimal(self, mock_episodic_memory_functions):
         """POST /memory/episodic should work with minimal fields."""
         response = client.post(
-            "/memory/episodic", json={"content": "Minimal memory", "event_type": "action"}
+            "/api/memory/episodic", json={"content": "Minimal memory", "event_type": "action"}
         )
 
         assert response.status_code == 200
 
     def test_get_episodic_memory_by_id(self, mock_episodic_memory_functions):
         """GET /memory/episodic/{id} should retrieve a memory."""
-        response = client.get("/memory/episodic/mem_123")
+        response = client.get("/api/memory/episodic/mem_123")
 
         assert response.status_code == 200
         data = response.json()
@@ -227,7 +227,7 @@ class TestEpisodicMemory:
         """GET /memory/episodic/{id} should return 404 for missing memory."""
         with patch("src.api.routes.memory.get_memory_by_id") as mock_get:
             mock_get.return_value = None
-            response = client.get("/memory/episodic/nonexistent")
+            response = client.get("/api/memory/episodic/nonexistent")
 
         assert response.status_code == 404
 
@@ -243,7 +243,7 @@ class TestProceduralFeedback:
     def test_record_feedback_success(self, mock_procedural_memory_functions):
         """Should record feedback and return new success rate."""
         response = client.post(
-            "/memory/procedural/feedback",
+            "/api/memory/procedural/feedback",
             json={
                 "procedure_id": "proc_001",
                 "outcome": "success",
@@ -266,7 +266,7 @@ class TestProceduralFeedback:
     def test_record_feedback_minimal(self, mock_procedural_memory_functions):
         """Should work with minimal required fields."""
         response = client.post(
-            "/memory/procedural/feedback",
+            "/api/memory/procedural/feedback",
             json={"procedure_id": "proc_002", "outcome": "partial", "score": 0.6},
         )
 
@@ -285,7 +285,7 @@ class TestSemanticPaths:
         """Should find paths for a given KPI."""
         with patch("src.api.routes.memory.get_semantic_memory", return_value=mock_semantic_memory):
             response = client.get(
-                "/memory/semantic/paths", params={"kpi_name": "TRx", "min_confidence": 0.6}
+                "/api/memory/semantic/paths", params={"kpi_name": "TRx", "min_confidence": 0.6}
             )
 
         assert response.status_code == 200
@@ -300,7 +300,7 @@ class TestSemanticPaths:
         """Should traverse from a starting entity."""
         with patch("src.api.routes.memory.get_semantic_memory", return_value=mock_semantic_memory):
             response = client.get(
-                "/memory/semantic/paths", params={"start_entity_id": "ent_001", "max_depth": 2}
+                "/api/memory/semantic/paths", params={"start_entity_id": "ent_001", "max_depth": 2}
             )
 
         assert response.status_code == 200
@@ -317,7 +317,7 @@ class TestMemoryStats:
 
     def test_get_stats_returns_structure(self):
         """Should return stats for all memory types."""
-        response = client.get("/memory/stats")
+        response = client.get("/api/memory/stats")
 
         assert response.status_code == 200
         data = response.json()

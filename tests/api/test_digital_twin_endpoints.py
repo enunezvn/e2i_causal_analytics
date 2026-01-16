@@ -187,7 +187,7 @@ class TestRunSimulation:
         with patch("src.digital_twin.twin_generator.TwinGenerator", return_value=mock_generator), \
              patch("src.digital_twin.simulation_engine.SimulationEngine", return_value=mock_engine), \
              patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo):
-            response = client.post("/digital-twin/simulate", json=simulate_request)
+            response = client.post("/api/digital-twin/simulate", json=simulate_request)
 
         assert response.status_code == 200
         data = response.json()
@@ -219,7 +219,7 @@ class TestRunSimulation:
         with patch("src.digital_twin.twin_generator.TwinGenerator", return_value=mock_generator), \
              patch("src.digital_twin.simulation_engine.SimulationEngine", return_value=mock_engine), \
              patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo):
-            response = client.post("/digital-twin/simulate", json=simulate_request)
+            response = client.post("/api/digital-twin/simulate", json=simulate_request)
 
         assert response.status_code == 200
 
@@ -227,7 +227,7 @@ class TestRunSimulation:
         """Should return 422 for invalid brand."""
         simulate_request["brand"] = "invalid_brand"
 
-        response = client.post("/digital-twin/simulate", json=simulate_request)
+        response = client.post("/api/digital-twin/simulate", json=simulate_request)
 
         assert response.status_code == 422
 
@@ -241,7 +241,7 @@ class TestListSimulations:
         mock_repo.list_simulations = AsyncMock(return_value=[mock_simulation_data])
 
         with patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo):
-            response = client.get("/digital-twin/simulations")
+            response = client.get("/api/digital-twin/simulations")
 
         assert response.status_code == 200
         data = response.json()
@@ -257,7 +257,7 @@ class TestListSimulations:
 
         with patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo):
             response = client.get(
-                "/digital-twin/simulations",
+                "/api/digital-twin/simulations",
                 params={"brand": "Remibrutinib"},
             )
 
@@ -270,7 +270,7 @@ class TestListSimulations:
 
         with patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo):
             response = client.get(
-                "/digital-twin/simulations",
+                "/api/digital-twin/simulations",
                 params={"page": 2, "page_size": 10},
             )
 
@@ -329,7 +329,7 @@ class TestGetSimulation:
         mock_repo.get_simulation = AsyncMock(return_value=mock_result)
 
         with patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo):
-            response = client.get("/digital-twin/simulations/550e8400-e29b-41d4-a716-446655440000")
+            response = client.get("/api/digital-twin/simulations/550e8400-e29b-41d4-a716-446655440000")
 
         assert response.status_code == 200
         data = response.json()
@@ -343,7 +343,7 @@ class TestGetSimulation:
         mock_repo.get_simulation = AsyncMock(return_value=None)
 
         with patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo):
-            response = client.get("/digital-twin/simulations/999e8400-e29b-41d4-a716-446655440000")
+            response = client.get("/api/digital-twin/simulations/999e8400-e29b-41d4-a716-446655440000")
 
         assert response.status_code == 404
 
@@ -362,7 +362,7 @@ class TestValidateSimulation:
 
         with patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo), \
              patch("src.digital_twin.fidelity_tracker.FidelityTracker", return_value=mock_tracker):
-            response = client.post("/digital-twin/validate", json=validate_request)
+            response = client.post("/api/digital-twin/validate", json=validate_request)
 
         assert response.status_code == 200
         data = response.json()
@@ -377,7 +377,7 @@ class TestValidateSimulation:
         mock_repo.get_simulation = AsyncMock(return_value=None)
 
         with patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo):
-            response = client.post("/digital-twin/validate", json=validate_request)
+            response = client.post("/api/digital-twin/validate", json=validate_request)
 
         assert response.status_code == 404
 
@@ -396,7 +396,7 @@ class TestListModels:
         mock_repo.list_active_models = AsyncMock(return_value=[mock_model_data])
 
         with patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo):
-            response = client.get("/digital-twin/models")
+            response = client.get("/api/digital-twin/models")
 
         assert response.status_code == 200
         data = response.json()
@@ -410,7 +410,7 @@ class TestListModels:
         mock_repo.list_active_models = AsyncMock(return_value=[mock_model_data])
 
         with patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo):
-            response = client.get("/digital-twin/models", params={"brand": "Remibrutinib"})
+            response = client.get("/api/digital-twin/models", params={"brand": "Remibrutinib"})
 
         assert response.status_code == 200
 
@@ -420,7 +420,7 @@ class TestListModels:
         mock_repo.list_active_models = AsyncMock(return_value=[mock_model_data])
 
         with patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo):
-            response = client.get("/digital-twin/models", params={"twin_type": "hcp"})
+            response = client.get("/api/digital-twin/models", params={"twin_type": "hcp"})
 
         assert response.status_code == 200
 
@@ -434,7 +434,7 @@ class TestGetModel:
         mock_repo.get_model = AsyncMock(return_value=mock_model_data)
 
         with patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo):
-            response = client.get("/digital-twin/models/770e8400-e29b-41d4-a716-446655440000")
+            response = client.get("/api/digital-twin/models/770e8400-e29b-41d4-a716-446655440000")
 
         assert response.status_code == 200
         data = response.json()
@@ -449,7 +449,7 @@ class TestGetModel:
         mock_repo.get_model = AsyncMock(return_value=None)
 
         with patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo):
-            response = client.get("/digital-twin/models/999e8400-e29b-41d4-a716-446655440000")
+            response = client.get("/api/digital-twin/models/999e8400-e29b-41d4-a716-446655440000")
 
         assert response.status_code == 404
 
@@ -463,7 +463,7 @@ class TestGetModelFidelity:
         mock_repo.get_model_fidelity_records = AsyncMock(return_value=[mock_fidelity_record])
 
         with patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo):
-            response = client.get("/digital-twin/models/770e8400-e29b-41d4-a716-446655440000/fidelity")
+            response = client.get("/api/digital-twin/models/770e8400-e29b-41d4-a716-446655440000/fidelity")
 
         assert response.status_code == 200
         data = response.json()
@@ -479,7 +479,7 @@ class TestGetModelFidelity:
 
         with patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo):
             response = client.get(
-                "/digital-twin/models/770e8400-e29b-41d4-a716-446655440000/fidelity",
+                "/api/digital-twin/models/770e8400-e29b-41d4-a716-446655440000/fidelity",
                 params={"validated_only": True},
             )
 
@@ -509,7 +509,7 @@ class TestGetFidelityReport:
 
         with patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo), \
              patch("src.digital_twin.fidelity_tracker.FidelityTracker", return_value=mock_tracker):
-            response = client.get("/digital-twin/models/770e8400-e29b-41d4-a716-446655440000/fidelity/report")
+            response = client.get("/api/digital-twin/models/770e8400-e29b-41d4-a716-446655440000/fidelity/report")
 
         assert response.status_code == 200
         data = response.json()
@@ -538,7 +538,7 @@ class TestGetFidelityReport:
         with patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo), \
              patch("src.digital_twin.fidelity_tracker.FidelityTracker", return_value=mock_tracker):
             response = client.get(
-                "/digital-twin/models/770e8400-e29b-41d4-a716-446655440000/fidelity/report",
+                "/api/digital-twin/models/770e8400-e29b-41d4-a716-446655440000/fidelity/report",
                 params={"lookback_days": 30},
             )
 
@@ -561,7 +561,7 @@ class TestGetFidelityReport:
 
         with patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo), \
              patch("src.digital_twin.fidelity_tracker.FidelityTracker", return_value=mock_tracker):
-            response = client.get("/digital-twin/models/770e8400-e29b-41d4-a716-446655440000/fidelity/report")
+            response = client.get("/api/digital-twin/models/770e8400-e29b-41d4-a716-446655440000/fidelity/report")
 
         assert response.status_code == 200
         data = response.json()

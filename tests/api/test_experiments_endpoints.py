@@ -234,7 +234,7 @@ class TestRandomizeUnits:
             return_value=mock_service,
         ):
             response = client.post(
-                "/experiments/11111111-1111-1111-1111-111111111111/randomize",
+                "/api/experiments/11111111-1111-1111-1111-111111111111/randomize",
                 json={
                     "units": [
                         {"unit_id": "hcp_001", "unit_type": "hcp", "region": "northeast"},
@@ -264,7 +264,7 @@ class TestRandomizeUnits:
             return_value=mock_service,
         ):
             response = client.post(
-                "/experiments/11111111-1111-1111-1111-111111111111/randomize",
+                "/api/experiments/11111111-1111-1111-1111-111111111111/randomize",
                 json={
                     "units": [
                         {"unit_id": "hcp_001", "unit_type": "hcp"},
@@ -289,7 +289,7 @@ class TestRandomizeUnits:
             return_value=mock_service,
         ):
             response = client.post(
-                "/experiments/11111111-1111-1111-1111-111111111111/randomize",
+                "/api/experiments/11111111-1111-1111-1111-111111111111/randomize",
                 json={
                     "units": [
                         {"unit_id": "hcp_001", "unit_type": "hcp"},
@@ -315,7 +315,7 @@ class TestRandomizeUnits:
             return_value=mock_service,
         ):
             response = client.post(
-                "/experiments/11111111-1111-1111-1111-111111111111/randomize",
+                "/api/experiments/11111111-1111-1111-1111-111111111111/randomize",
                 json={
                     "units": [{"unit_id": "hcp_001", "unit_type": "hcp"}],
                     "method": "stratified",
@@ -338,7 +338,7 @@ class TestGetAssignments:
             return_value=mock_repo,
         ):
             response = client.get(
-                "/experiments/11111111-1111-1111-1111-111111111111/assignments"
+                "/api/experiments/11111111-1111-1111-1111-111111111111/assignments"
             )
 
         assert response.status_code == 200
@@ -358,7 +358,7 @@ class TestGetAssignments:
             return_value=mock_repo,
         ):
             response = client.get(
-                "/experiments/11111111-1111-1111-1111-111111111111/assignments",
+                "/api/experiments/11111111-1111-1111-1111-111111111111/assignments",
                 params={"variant": "treatment", "unit_type": "hcp", "limit": 50},
             )
 
@@ -375,7 +375,7 @@ class TestGetAssignments:
             return_value=mock_repo,
         ):
             response = client.get(
-                "/experiments/11111111-1111-1111-1111-111111111111/assignments"
+                "/api/experiments/11111111-1111-1111-1111-111111111111/assignments"
             )
 
         assert response.status_code == 200
@@ -401,7 +401,7 @@ class TestEnrollUnit:
             return_value=mock_service,
         ):
             response = client.post(
-                "/experiments/11111111-1111-1111-1111-111111111111/enroll",
+                "/api/experiments/11111111-1111-1111-1111-111111111111/enroll",
                 json={
                     "unit_id": "hcp_001",
                     "unit_type": "hcp",
@@ -427,7 +427,7 @@ class TestEnrollUnit:
             return_value=mock_service,
         ):
             response = client.post(
-                "/experiments/11111111-1111-1111-1111-111111111111/enroll",
+                "/api/experiments/11111111-1111-1111-1111-111111111111/enroll",
                 json={
                     "unit_id": "hcp_999",
                     "unit_type": "hcp",
@@ -446,7 +446,7 @@ class TestEnrollUnit:
             return_value=mock_service,
         ):
             response = client.post(
-                "/experiments/11111111-1111-1111-1111-111111111111/enroll",
+                "/api/experiments/11111111-1111-1111-1111-111111111111/enroll",
                 json={
                     "unit_id": "hcp_001",
                     "unit_type": "hcp",
@@ -470,7 +470,7 @@ class TestWithdrawUnit:
         ):
             response = client.request(
                 "DELETE",
-                "/experiments/11111111-1111-1111-1111-111111111111/enrollments/22222222-2222-2222-2222-222222222222",
+                "/api/experiments/11111111-1111-1111-1111-111111111111/enrollments/22222222-2222-2222-2222-222222222222",
                 json={"reason": "Subject requested withdrawal"},
             )
 
@@ -492,7 +492,7 @@ class TestWithdrawUnit:
         ):
             response = client.request(
                 "DELETE",
-                "/experiments/11111111-1111-1111-1111-111111111111/enrollments/99999999-9999-9999-9999-999999999999",
+                "/api/experiments/11111111-1111-1111-1111-111111111111/enrollments/99999999-9999-9999-9999-999999999999",
                 json={"reason": "Test withdrawal"},
             )
 
@@ -512,7 +512,7 @@ class TestGetEnrollmentStats:
             return_value=mock_service,
         ):
             response = client.get(
-                "/experiments/11111111-1111-1111-1111-111111111111/enrollments"
+                "/api/experiments/11111111-1111-1111-1111-111111111111/enrollments"
             )
 
         assert response.status_code == 200
@@ -532,7 +532,7 @@ class TestGetEnrollmentStats:
             return_value=mock_service,
         ):
             response = client.get(
-                "/experiments/11111111-1111-1111-1111-111111111111/enrollments"
+                "/api/experiments/11111111-1111-1111-1111-111111111111/enrollments"
             )
 
         assert response.status_code == 500
@@ -558,7 +558,7 @@ class TestTriggerInterimAnalysis:
             return_value=mock_service,
         ):
             response = client.post(
-                "/experiments/11111111-1111-1111-1111-111111111111/interim-analysis",
+                "/api/experiments/11111111-1111-1111-1111-111111111111/interim-analysis",
                 json={"analysis_number": 2, "force": False},
             )
 
@@ -575,7 +575,7 @@ class TestTriggerInterimAnalysis:
             sample_celery_task,
         ):
             response = client.post(
-                "/experiments/11111111-1111-1111-1111-111111111111/interim-analysis",
+                "/api/experiments/11111111-1111-1111-1111-111111111111/interim-analysis",
                 params={"async_mode": "true"},
                 json={"force": False},
             )
@@ -597,7 +597,7 @@ class TestTriggerInterimAnalysis:
             return_value=mock_service,
         ):
             response = client.post(
-                "/experiments/11111111-1111-1111-1111-111111111111/interim-analysis",
+                "/api/experiments/11111111-1111-1111-1111-111111111111/interim-analysis",
                 json={"analysis_number": 5, "force": False},
             )
 
@@ -617,7 +617,7 @@ class TestListInterimAnalyses:
             return_value=mock_repo,
         ):
             response = client.get(
-                "/experiments/11111111-1111-1111-1111-111111111111/interim-analyses"
+                "/api/experiments/11111111-1111-1111-1111-111111111111/interim-analyses"
             )
 
         assert response.status_code == 200
@@ -639,7 +639,7 @@ class TestGetExperimentResults:
             return_value=mock_repo,
         ):
             response = client.get(
-                "/experiments/11111111-1111-1111-1111-111111111111/results"
+                "/api/experiments/11111111-1111-1111-1111-111111111111/results"
             )
 
         assert response.status_code == 200
@@ -658,7 +658,7 @@ class TestGetExperimentResults:
             return_value=mock_service,
         ):
             response = client.get(
-                "/experiments/11111111-1111-1111-1111-111111111111/results",
+                "/api/experiments/11111111-1111-1111-1111-111111111111/results",
                 params={"recompute": "true"},
             )
 
@@ -682,7 +682,7 @@ class TestGetSegmentResults:
             return_value=mock_service,
         ):
             response = client.get(
-                "/experiments/11111111-1111-1111-1111-111111111111/results/segments",
+                "/api/experiments/11111111-1111-1111-1111-111111111111/results/segments",
                 params={"segments": ["region"]},
             )
 
@@ -705,7 +705,7 @@ class TestGetSRMChecks:
             return_value=mock_repo,
         ):
             response = client.get(
-                "/experiments/11111111-1111-1111-1111-111111111111/srm-checks"
+                "/api/experiments/11111111-1111-1111-1111-111111111111/srm-checks"
             )
 
         assert response.status_code == 200
@@ -725,7 +725,7 @@ class TestGetSRMChecks:
             return_value=mock_repo,
         ):
             response = client.get(
-                "/experiments/11111111-1111-1111-1111-111111111111/srm-checks"
+                "/api/experiments/11111111-1111-1111-1111-111111111111/srm-checks"
             )
 
         assert response.status_code == 200
@@ -746,7 +746,7 @@ class TestRunSRMCheck:
             return_value=mock_service,
         ):
             response = client.post(
-                "/experiments/11111111-1111-1111-1111-111111111111/srm-check"
+                "/api/experiments/11111111-1111-1111-1111-111111111111/srm-check"
             )
 
         assert response.status_code == 200
@@ -770,7 +770,7 @@ class TestGetFidelityComparisons:
             return_value=mock_repo,
         ):
             response = client.get(
-                "/experiments/11111111-1111-1111-1111-111111111111/fidelity"
+                "/api/experiments/11111111-1111-1111-1111-111111111111/fidelity"
             )
 
         assert response.status_code == 200
@@ -789,7 +789,7 @@ class TestGetFidelityComparisons:
             return_value=mock_repo,
         ):
             response = client.get(
-                "/experiments/11111111-1111-1111-1111-111111111111/fidelity"
+                "/api/experiments/11111111-1111-1111-1111-111111111111/fidelity"
             )
 
         assert response.status_code == 200
@@ -812,7 +812,7 @@ class TestUpdateFidelityComparison:
             return_value=mock_service,
         ):
             response = client.post(
-                "/experiments/11111111-1111-1111-1111-111111111111/fidelity/77777777-7777-7777-7777-777777777777"
+                "/api/experiments/11111111-1111-1111-1111-111111111111/fidelity/77777777-7777-7777-7777-777777777777"
             )
 
         assert response.status_code == 200
@@ -839,7 +839,7 @@ class TestTriggerExperimentMonitoring:
             return_value=mock_agent,
         ):
             response = client.post(
-                "/experiments/monitor",
+                "/api/experiments/monitor",
                 json={
                     "check_srm": True,
                     "check_enrollment": True,
@@ -862,7 +862,7 @@ class TestTriggerExperimentMonitoring:
             sample_celery_task,
         ):
             response = client.post(
-                "/experiments/monitor",
+                "/api/experiments/monitor",
                 params={"async_mode": "true"},
                 json={"check_srm": True},
             )
@@ -881,7 +881,7 @@ class TestTriggerExperimentMonitoring:
             return_value=mock_agent,
         ):
             response = client.post(
-                "/experiments/monitor",
+                "/api/experiments/monitor",
                 json={
                     "experiment_ids": ["11111111-1111-1111-1111-111111111111"],
                     "check_srm": True,
@@ -904,7 +904,7 @@ class TestGetExperimentHealth:
             return_value=mock_agent,
         ):
             response = client.get(
-                "/experiments/11111111-1111-1111-1111-111111111111/health"
+                "/api/experiments/11111111-1111-1111-1111-111111111111/health"
             )
 
         assert response.status_code == 200
@@ -926,7 +926,7 @@ class TestGetExperimentHealth:
             return_value=mock_agent,
         ):
             response = client.get(
-                "/experiments/99999999-9999-9999-9999-999999999999/health"
+                "/api/experiments/99999999-9999-9999-9999-999999999999/health"
             )
 
         assert response.status_code == 404
@@ -945,7 +945,7 @@ class TestGetExperimentAlerts:
             return_value=mock_repo,
         ):
             response = client.get(
-                "/experiments/11111111-1111-1111-1111-111111111111/alerts"
+                "/api/experiments/11111111-1111-1111-1111-111111111111/alerts"
             )
 
         assert response.status_code == 200
@@ -964,7 +964,7 @@ class TestGetExperimentAlerts:
             return_value=mock_repo,
         ):
             response = client.get(
-                "/experiments/11111111-1111-1111-1111-111111111111/alerts",
+                "/api/experiments/11111111-1111-1111-1111-111111111111/alerts",
                 params={"severity": "critical"},
             )
 
@@ -981,7 +981,7 @@ class TestGetExperimentAlerts:
             return_value=mock_repo,
         ):
             response = client.get(
-                "/experiments/11111111-1111-1111-1111-111111111111/alerts"
+                "/api/experiments/11111111-1111-1111-1111-111111111111/alerts"
             )
 
         assert response.status_code == 200

@@ -100,7 +100,7 @@ class TestCognitiveQuery:
         """Should process query and create new session."""
         with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory):
             response = client.post(
-                "/cognitive/query",
+                "/api/cognitive/query",
                 json={
                     "query": "Why did TRx drop in northeast region?",
                     "brand": "Kisqali",
@@ -122,7 +122,7 @@ class TestCognitiveQuery:
         """Should continue existing session."""
         with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory):
             response = client.post(
-                "/cognitive/query",
+                "/api/cognitive/query",
                 json={"query": "What else impacts this?", "session_id": "sess_existing"},
             )
 
@@ -134,7 +134,7 @@ class TestCognitiveQuery:
         """Should include evidence when requested."""
         with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory):
             response = client.post(
-                "/cognitive/query", json={"query": "Analyze TRx trends", "include_evidence": True}
+                "/api/cognitive/query", json={"query": "Analyze TRx trends", "include_evidence": True}
             )
 
         assert response.status_code == 200
@@ -147,7 +147,7 @@ class TestCognitiveQuery:
         """Should exclude evidence when not requested."""
         with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory):
             response = client.post(
-                "/cognitive/query", json={"query": "Quick question", "include_evidence": False}
+                "/api/cognitive/query", json={"query": "Quick question", "include_evidence": False}
             )
 
         assert response.status_code == 200
@@ -157,7 +157,7 @@ class TestCognitiveQuery:
     def test_process_query_includes_latency(self, mock_working_memory, mock_hybrid_search):
         """Should include processing time."""
         with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory):
-            response = client.post("/cognitive/query", json={"query": "Test query"})
+            response = client.post("/api/cognitive/query", json={"query": "Test query"})
 
         assert response.status_code == 200
         data = response.json()
@@ -168,7 +168,7 @@ class TestCognitiveQuery:
         """Should detect prediction query type."""
         with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory):
             response = client.post(
-                "/cognitive/query", json={"query": "What will TRx be next quarter?"}
+                "/api/cognitive/query", json={"query": "What will TRx be next quarter?"}
             )
 
         assert response.status_code == 200
@@ -180,7 +180,7 @@ class TestCognitiveQuery:
         """Should detect optimization query type."""
         with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory):
             response = client.post(
-                "/cognitive/query", json={"query": "How can we optimize resource allocation?"}
+                "/api/cognitive/query", json={"query": "How can we optimize resource allocation?"}
             )
 
         assert response.status_code == 200
@@ -192,7 +192,7 @@ class TestCognitiveQuery:
         """Should use explicit query type when provided."""
         with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory):
             response = client.post(
-                "/cognitive/query", json={"query": "Analyze this data", "query_type": "monitoring"}
+                "/api/cognitive/query", json={"query": "Analyze this data", "query_type": "monitoring"}
             )
 
         assert response.status_code == 200
@@ -212,7 +212,7 @@ class TestSessionManagement:
         """POST /cognitive/session should create new session."""
         with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory):
             response = client.post(
-                "/cognitive/session",
+                "/api/cognitive/session",
                 json={"user_id": "user_001", "brand": "Kisqali", "region": "northeast"},
             )
 
@@ -225,14 +225,14 @@ class TestSessionManagement:
     def test_create_session_minimal(self, mock_working_memory):
         """POST /cognitive/session should work with no body."""
         with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory):
-            response = client.post("/cognitive/session", json={})
+            response = client.post("/api/cognitive/session", json={})
 
         assert response.status_code == 200
 
     def test_get_session(self, mock_working_memory):
         """GET /cognitive/session/{id} should return session state."""
         with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory):
-            response = client.get("/cognitive/session/sess_123")
+            response = client.get("/api/cognitive/session/sess_123")
 
         assert response.status_code == 200
         data = response.json()
@@ -246,14 +246,14 @@ class TestSessionManagement:
         mock_working_memory.get_session.return_value = None
 
         with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory):
-            response = client.get("/cognitive/session/nonexistent")
+            response = client.get("/api/cognitive/session/nonexistent")
 
         assert response.status_code == 404
 
     def test_get_session_includes_messages(self, mock_working_memory):
         """GET /cognitive/session/{id} should include message history."""
         with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory):
-            response = client.get("/cognitive/session/sess_123")
+            response = client.get("/api/cognitive/session/sess_123")
 
         assert response.status_code == 200
         data = response.json()
@@ -264,7 +264,7 @@ class TestSessionManagement:
     def test_delete_session(self, mock_working_memory):
         """DELETE /cognitive/session/{id} should delete session."""
         with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory):
-            response = client.delete("/cognitive/session/sess_123")
+            response = client.delete("/api/cognitive/session/sess_123")
 
         assert response.status_code == 200
         data = response.json()
@@ -284,7 +284,7 @@ class TestHelperFunctions:
     def test_kpi_extraction(self, mock_working_memory, mock_hybrid_search):
         """Should extract KPI from query for targeted retrieval."""
         with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory):
-            response = client.post("/cognitive/query", json={"query": "Why did TRx drop?"})
+            response = client.post("/api/cognitive/query", json={"query": "Why did TRx drop?"})
 
         assert response.status_code == 200
         # Verify hybrid_search was called with kpi_name
@@ -296,7 +296,7 @@ class TestHelperFunctions:
         """Should build filters from brand and region."""
         with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory):
             response = client.post(
-                "/cognitive/query",
+                "/api/cognitive/query",
                 json={"query": "Analyze data", "brand": "Kisqali", "region": "northeast"},
             )
 
@@ -315,7 +315,7 @@ class TestErrorHandling:
 
     def test_query_validation_error(self):
         """Should return 422 for invalid request."""
-        response = client.post("/cognitive/query", json={"query": ""})  # Empty query
+        response = client.post("/api/cognitive/query", json={"query": ""})  # Empty query
 
         assert response.status_code == 422
 
@@ -324,7 +324,7 @@ class TestErrorHandling:
         mock_working_memory.create_session.side_effect = Exception("Memory error")
 
         with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory):
-            response = client.post("/cognitive/query", json={"query": "Test query"})
+            response = client.post("/api/cognitive/query", json={"query": "Test query"})
 
         assert response.status_code == 500
         assert "Query processing failed" in response.json()["detail"]
