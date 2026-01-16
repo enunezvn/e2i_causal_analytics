@@ -209,6 +209,29 @@ class TestRouterNode:
         assert result["dispatch_plan"][0]["timeout_ms"] == 30000
 
     @pytest.mark.asyncio
+    async def test_route_cohort_definition(self):
+        """Test routing for cohort_definition intent."""
+        router = RouterNode()
+
+        state = {
+            "intent": {
+                "primary_intent": "cohort_definition",
+                "confidence": 0.92,
+                "secondary_intents": [],
+                "requires_multi_agent": False,
+            }
+        }
+
+        result = await router.execute(state)
+
+        assert result["dispatch_plan"][0]["agent_name"] == "cohort_constructor"
+        assert result["dispatch_plan"][0]["priority"] == "critical"
+        assert result["dispatch_plan"][0]["timeout_ms"] == 120000  # 120s SLA for 100K patients
+        assert result["dispatch_plan"][0]["parameters"] == {"validation_mode": "strict"}
+        assert result["dispatch_plan"][0]["fallback_agent"] == "explainer"
+        assert result["current_phase"] == "dispatching"
+
+    @pytest.mark.asyncio
     async def test_route_multi_agent_causal_segment(self):
         """Test multi-agent routing for causal_effect + segment_analysis."""
         router = RouterNode()
@@ -478,6 +501,7 @@ class TestIntentToAgentMapping:
             "system_health",
             "drift_check",
             "feedback",
+            "cohort_definition",  # Tier 0: Patient cohort construction
         ]
 
         for intent in expected_intents:
@@ -508,7 +532,8 @@ class TestIntentToAgentMapping:
             for dispatch in dispatches:
                 timeout = dispatch["timeout_ms"]
                 assert timeout > 0, f"Invalid timeout for {intent}"
-                assert timeout <= 60000, f"Timeout too high for {intent}"
+                # cohort_constructor has 120s SLA for processing 100K patients
+                assert timeout <= 120000, f"Timeout too high for {intent}"
 
     def test_multi_agent_patterns_exist(self):
         """Test that multi-agent patterns are defined."""
