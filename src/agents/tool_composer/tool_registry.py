@@ -13,6 +13,9 @@ from .schemas import ToolCategory, ToolSchema
 
 # Domain to category mapping
 DOMAIN_TO_CATEGORY = {
+    "COHORT_CONSTRUCTION": ToolCategory.COHORT,
+    "COHORT_DEFINITION": ToolCategory.COHORT,
+    "PATIENT_ELIGIBILITY": ToolCategory.COHORT,
     "CAUSAL_ANALYSIS": ToolCategory.CAUSAL,
     "HETEROGENEITY": ToolCategory.SEGMENTATION,
     "GAP_ANALYSIS": ToolCategory.GAP,
@@ -212,6 +215,114 @@ def create_default_tools() -> list[ToolSchema]:
     populated when agents register their actual implementations.
     """
     return [
+        # =====================================================================
+        # COHORT CONSTRUCTOR TOOLS (Tier 0 - ML Foundation)
+        # =====================================================================
+        ToolSchema(
+            name="cohort_builder",
+            description="Constructs patient cohorts by applying inclusion/exclusion criteria based on FDA/EMA label requirements",
+            category=ToolCategory.COHORT,
+            source_agent="cohort_constructor",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "brand": {"type": "string", "description": "Brand name (Remibrutinib, Fabhalta, Kisqali)"},
+                    "indication": {"type": "string", "description": "Disease indication (CSU, PNH, etc.)"},
+                    "inclusion_criteria": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of inclusion criteria expressions",
+                    },
+                    "exclusion_criteria": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of exclusion criteria expressions",
+                    },
+                    "lookback_days": {"type": "integer", "default": 365},
+                    "followup_days": {"type": "integer", "default": 90},
+                },
+                "required": ["brand"],
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "eligible_patient_ids": {"type": "array", "items": {"type": "string"}},
+                    "total_evaluated": {"type": "integer"},
+                    "total_eligible": {"type": "integer"},
+                    "eligibility_rate": {"type": "number"},
+                    "criteria_breakdown": {
+                        "type": "object",
+                        "description": "Count of patients passing each criterion",
+                    },
+                    "execution_time_ms": {"type": "number"},
+                },
+            },
+            can_consume_from=[],  # Root tool - no dependencies
+            avg_latency_ms=5000.0,  # Can take up to 120s for large cohorts
+            success_rate=0.98,
+        ),
+        ToolSchema(
+            name="cohort_validator",
+            description="Validates a constructed cohort against clinical trial requirements and data quality standards",
+            category=ToolCategory.COHORT,
+            source_agent="cohort_constructor",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "cohort_result": {"type": "object", "description": "Output from cohort_builder"},
+                    "min_cohort_size": {"type": "integer", "default": 100},
+                    "required_completeness": {"type": "number", "default": 0.8},
+                },
+                "required": ["cohort_result"],
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "is_valid": {"type": "boolean"},
+                    "validation_checks": {"type": "array"},
+                    "quality_score": {"type": "number"},
+                    "warnings": {"type": "array", "items": {"type": "string"}},
+                    "recommendations": {"type": "array", "items": {"type": "string"}},
+                },
+            },
+            can_consume_from=["cohort_builder"],
+            avg_latency_ms=1000.0,
+            success_rate=0.99,
+        ),
+        ToolSchema(
+            name="cohort_statistics",
+            description="Computes descriptive statistics for a patient cohort including demographics and clinical characteristics",
+            category=ToolCategory.COHORT,
+            source_agent="cohort_constructor",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "cohort_result": {"type": "object", "description": "Output from cohort_builder"},
+                    "include_demographics": {"type": "boolean", "default": True},
+                    "include_clinical": {"type": "boolean", "default": True},
+                },
+                "required": ["cohort_result"],
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "cohort_size": {"type": "integer"},
+                    "demographics": {
+                        "type": "object",
+                        "properties": {
+                            "age_mean": {"type": "number"},
+                            "age_std": {"type": "number"},
+                            "gender_distribution": {"type": "object"},
+                        },
+                    },
+                    "clinical_characteristics": {"type": "object"},
+                    "summary_table": {"type": "array"},
+                },
+            },
+            can_consume_from=["cohort_builder"],
+            avg_latency_ms=2000.0,
+            success_rate=0.97,
+        ),
         # =====================================================================
         # CAUSAL IMPACT TOOLS
         # =====================================================================

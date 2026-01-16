@@ -68,6 +68,12 @@ AGENT_REGISTRY_CONFIG = {
         "class_name": "ObservabilityConnectorAgent",
         "enabled": True,
     },
+    "cohort_constructor": {
+        "tier": 0,
+        "module": "src.agents.cohort_constructor",
+        "class_name": "CohortConstructorAgent",
+        "enabled": True,
+    },
     # Tier 1: Coordination
     "orchestrator": {
         "tier": 1,
