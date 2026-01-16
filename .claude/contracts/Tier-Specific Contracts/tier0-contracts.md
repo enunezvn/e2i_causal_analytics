@@ -6,6 +6,7 @@ Tier 0 agents handle the complete ML lifecycle from problem definition through d
 
 **Agents Covered:**
 - `scope_definer` - ML problem definition and success criteria
+- `cohort_constructor` - Patient cohort construction with eligibility filtering (NEW)
 - `data_preparer` - Data quality validation and QC gating
 - `model_selector` - Algorithm selection and registry
 - `model_trainer` - Training execution with split enforcement
@@ -15,18 +16,19 @@ Tier 0 agents handle the complete ML lifecycle from problem definition through d
 
 **Pipeline Flow:**
 ```
-scope_definer → data_preparer → model_selector → model_trainer → feature_analyzer → model_deployer
-                     │                                                    
-                 QC GATE                                                  
-              (blocks on failure)                                         
-                                                                          
-                     observability_connector (cross-cutting, all agents)
+scope_definer → cohort_constructor → data_preparer → model_selector → model_trainer → feature_analyzer → model_deployer
+                       │                   │
+                 ELIGIBILITY GATE      QC GATE
+               (validates cohort)   (blocks on failure)
+
+                                   observability_connector (cross-cutting, all agents)
 ```
 
 **Latency Budgets:**
 | Agent | Budget | Notes |
 |-------|--------|-------|
 | scope_definer | <5s | Fast problem definition |
+| cohort_constructor | <120s | Eligibility filtering for 100K patients |
 | data_preparer | <60s | Great Expectations validation |
 | model_selector | <120s | Algorithm evaluation |
 | model_trainer | Variable | Depends on data size, algorithm |
@@ -152,6 +154,135 @@ REQUIRED_KEYS = ["scope_spec", "success_criteria", "experiment_id"]
 3. **Metrics Specified**: At least one success metric required
 4. **Baseline Set**: Random baseline must be defined
 5. **Constraints Captured**: All regulatory constraints documented
+
+---
+
+## Cohort Constructor Contract
+
+### Purpose
+Constructs patient cohorts based on eligibility criteria, applies inclusion/exclusion rules, and validates cohort composition before data preparation.
+
+### Input Contract
+
+```yaml
+# cohort_constructor_input.yaml
+cohort_request:
+  request_id: string              # UUID
+  experiment_id: string           # From scope_definer
+  timestamp: datetime             # ISO 8601
+
+  # Scope reference
+  scope_spec:
+    problem_type: string
+    target_variable: string
+    observation_unit: string      # "patient" | "hcp"
+    population: object
+
+  # Cohort specification
+  cohort_spec:
+    brand: string                 # "Remibrutinib" | "Fabhalta" | "Kisqali"
+    condition: string             # "CSU" | "PNH" | "HR+/HER2- breast cancer"
+
+    inclusion_criteria:
+      - criterion: string         # "diagnosis_confirmed"
+        description: string       # "ICD-10 L50.1 confirmed diagnosis"
+        sql_predicate: string     # "diagnosis_code LIKE 'L50.1%'"
+
+    exclusion_criteria:
+      - criterion: string         # "prior_biologic_treatment"
+        description: string       # "Previous biologic therapy in 12 months"
+        sql_predicate: string     # "biologic_treatment_date > NOW() - INTERVAL '12 months'"
+
+    temporal_constraints:
+      index_date_definition: string  # "first_diagnosis_date"
+      min_lookback_days: int         # 365
+      min_followup_days: int         # 90
+
+  # Validation configuration
+  validation_config:
+    min_cohort_size: int          # 100
+    max_cohort_size: int          # 100000
+    min_eligibility_rate: float   # 0.05 (5%)
+    require_balanced_arms: bool   # For causal inference
+```
+
+### Output Contract
+
+```yaml
+# cohort_constructor_output.yaml
+cohort_response:
+  request_id: string              # Echo from input
+  experiment_id: string
+  timestamp: datetime
+  processing_time_ms: int
+
+  # Cohort specification (for downstream agents)
+  cohort_spec:
+    cohort_id: string             # "cohort_{brand}_{condition}_{timestamp}"
+    brand: string
+    condition: string
+
+    # Applied criteria
+    inclusion_criteria_applied: list[object]
+    exclusion_criteria_applied: list[object]
+    temporal_constraints: object
+
+  # Eligible patients
+  eligible_patients:
+    patient_ids: list[string]     # List of patient IDs
+    total_count: int
+
+  # Eligibility statistics
+  eligibility_stats:
+    initial_population: int       # Before any filtering
+    after_inclusion: int          # After inclusion criteria
+    after_exclusion: int          # After exclusion criteria (final)
+    eligibility_rate: float       # final / initial
+
+    # Criterion-level breakdown
+    criterion_breakdown:
+      - criterion: string
+        type: string              # "inclusion" | "exclusion"
+        patients_affected: int
+        percentage: float
+
+  # Cohort quality metrics
+  cohort_quality:
+    size_valid: bool              # Within min/max bounds
+    eligibility_rate_valid: bool  # Above minimum threshold
+    temporal_coverage_valid: bool # Meets lookback/followup requirements
+
+    # Balance check (for causal inference)
+    arm_balance:
+      treatment_count: int
+      control_count: int
+      ratio: float
+      is_balanced: bool           # ratio between 0.2 and 5.0
+
+  # Validation summary
+  validation:
+    all_checks_passed: bool
+    blocking_issues: list[string]
+    warnings: list[string]
+
+  # Status
+  status: enum                    # "success" | "validation_failed" | "failed"
+  errors: list[object]
+```
+
+### Required Output Keys
+
+```python
+REQUIRED_KEYS = ["cohort_spec", "eligible_patients", "eligibility_stats"]
+```
+
+### Validation Rules
+
+1. **Cohort Size Valid**: Must be within min_cohort_size and max_cohort_size
+2. **Eligibility Rate**: Must exceed min_eligibility_rate threshold
+3. **Temporal Coverage**: All patients must meet lookback/followup constraints
+4. **Arm Balance**: For causal inference, treatment/control ratio between 0.2-5.0
+5. **No Duplicate Patients**: Patient IDs must be unique
 
 ---
 
@@ -1062,26 +1193,31 @@ REQUIRED_KEYS = ["span", "context"]
 # tier0_pipeline.yaml
 pipeline_flow:
   - from: scope_definer
-    to: data_preparer
+    to: cohort_constructor
     data: scope_spec, success_criteria, experiment_id
-    
+
+  - from: cohort_constructor
+    to: data_preparer
+    data: cohort_spec, eligible_patients, eligibility_stats
+    gate: validation.all_checks_passed == true  # ELIGIBILITY GATE
+
   - from: data_preparer
     to: model_selector
     data: qc_report, baseline_metrics, data_readiness
-    gate: qc_report.status == "PASSED"  # CRITICAL GATE
-    
+    gate: qc_report.status == "PASSED"  # QC GATE
+
   - from: model_selector
     to: model_trainer
     data: recommended_model, baseline_models
-    
+
   - from: model_trainer
     to: feature_analyzer
     data: trained_model, metrics, run_id
-    
+
   - from: feature_analyzer
     to: model_deployer
     data: shap_analysis, interpretation
-    
+
   - from: model_deployer
     to: END
     data: deployment, version_record
@@ -1142,6 +1278,17 @@ handoffs:
 | `SD_001` | Invalid problem type | Suggest valid types |
 | `SD_002` | Missing target definition | Request clarification |
 | `SD_003` | Constraint conflict | Flag incompatible constraints |
+
+#### Cohort Constructor
+| Error Code | Description | Recovery |
+|------------|-------------|----------|
+| `CC_001` | Cohort too small | Relax criteria, warn user |
+| `CC_002` | Cohort too large | Add stricter criteria |
+| `CC_003` | Low eligibility rate | Review exclusion criteria |
+| `CC_004` | Temporal coverage insufficient | Extend date range |
+| `CC_005` | Unbalanced treatment arms | Apply propensity matching |
+| `CC_006` | Invalid criteria SQL | Validate predicate syntax |
+| `CC_007` | Missing required criteria | Request clarification |
 
 #### Data Preparer
 | Error Code | Description | Recovery |
@@ -1275,5 +1422,6 @@ pytest tests/integration/test_tier0_contracts.py::test_tier0_to_tier1_handoff
 
 | Date | Change |
 |------|--------|
+| 2026-01-16 | V4.5: Added Cohort Constructor agent to Tier 0 pipeline (between scope_definer and data_preparer), including input/output contracts, error codes (CC_001-CC_007), and eligibility gate |
 | 2025-12-31 | V4.4: Added causal discovery integration to Feature Analyzer (discovery_config input, causal_rankings output, causal_interpretation in interpretation) |
 | 2025-12-08 | Initial creation for V4 architecture |

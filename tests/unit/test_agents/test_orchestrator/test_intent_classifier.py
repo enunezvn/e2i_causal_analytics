@@ -116,6 +116,56 @@ class TestIntentClassifierNode:
         assert result["confidence"] >= 0.8
 
     @pytest.mark.asyncio
+    async def test_pattern_classify_cohort_definition(self):
+        """Test pattern matching for cohort definition queries."""
+        classifier = IntentClassifierNode()
+
+        result = classifier._pattern_classify(
+            "define a patient cohort with inclusion and exclusion criteria"
+        )
+
+        assert result["primary_intent"] == "cohort_definition"
+        assert result["confidence"] >= 0.8
+
+    @pytest.mark.asyncio
+    async def test_pattern_classify_cohort_brand_specific(self):
+        """Test pattern matching for brand-specific cohort queries."""
+        classifier = IntentClassifierNode()
+
+        # Test Remibrutinib CSU cohort
+        result = classifier._pattern_classify(
+            "build a remibrutinib patient cohort for CSU"
+        )
+        assert result["primary_intent"] == "cohort_definition"
+        assert result["confidence"] >= 0.8
+
+        # Test Fabhalta PNH cohort
+        result = classifier._pattern_classify(
+            "create a fabhalta cohort for PNH patients"
+        )
+        assert result["primary_intent"] == "cohort_definition"
+        assert result["confidence"] >= 0.8
+
+        # Test Kisqali breast cancer cohort
+        result = classifier._pattern_classify(
+            "construct a kisqali patient population for breast cancer"
+        )
+        assert result["primary_intent"] == "cohort_definition"
+        assert result["confidence"] >= 0.8
+
+    @pytest.mark.asyncio
+    async def test_pattern_classify_patient_eligibility(self):
+        """Test pattern matching for patient eligibility queries."""
+        classifier = IntentClassifierNode()
+
+        result = classifier._pattern_classify(
+            "filter patients by eligibility criteria"
+        )
+
+        assert result["primary_intent"] == "cohort_definition"
+        assert result["confidence"] >= 0.8
+
+    @pytest.mark.asyncio
     async def test_pattern_classify_general(self):
         """Test pattern matching for general/unclear queries."""
         classifier = IntentClassifierNode()

@@ -3,7 +3,7 @@
 ## Purpose
 This file defines the contracts between system components. Before completing any cross-domain task, validate that changes comply with these contracts.
 
-**Last Updated**: 2025-12-04
+**Last Updated**: 2026-01-16
 
 ---
 
@@ -67,6 +67,8 @@ class AgentResponseContract:
         "resource_optimizer": ["resource_allocation"],
         "explainer": ["explanation"],
         "feedback_learner": ["learned_patterns"],
+        # Tier 0: ML Foundation agents
+        "cohort_constructor": ["cohort_spec", "eligible_patients", "eligibility_stats"],
     }
     
     @staticmethod
@@ -231,20 +233,22 @@ class TierPriorityContract:
     """
     
     TIER_ORDER = {
+        0: ["scope_definer", "cohort_constructor", "data_preparer", "model_selector",
+            "model_trainer", "feature_analyzer", "model_deployer", "observability_connector"],
         1: ["orchestrator"],
         2: ["causal_impact", "gap_analyzer", "heterogeneous_optimizer"],
         3: ["experiment_designer", "drift_monitor", "health_score"],
         4: ["prediction_synthesizer", "resource_optimizer"],
         5: ["explainer", "feedback_learner"],
     }
-    
+
     AGENT_TYPES = {
         "standard": [
             "orchestrator", "gap_analyzer", "heterogeneous_optimizer",
             "drift_monitor", "health_score", "prediction_synthesizer",
-            "resource_optimizer"
+            "resource_optimizer", "cohort_constructor", "data_preparer"
         ],
-        "hybrid": ["causal_impact", "experiment_designer"],
+        "hybrid": ["causal_impact", "experiment_designer", "feature_analyzer"],
         "deep": ["explainer", "feedback_learner"],
     }
     
@@ -406,6 +410,9 @@ When adding cross-domain functionality:
 
 | Date | Contract | Change |
 |------|----------|--------|
+| 2026-01-16 | Contract 2 | Added cohort_constructor to REQUIRED_KEYS_BY_AGENT |
+| 2026-01-16 | Contract 7 | Added Tier 0 agents including cohort_constructor to TIER_ORDER |
+| 2026-01-16 | Contract 7 | Added cohort_constructor, data_preparer, feature_analyzer to AGENT_TYPES |
 | 2025-12-04 | Contract 7 | Confirmed Experiment Designer in Tier 3 |
 | 2025-12-04 | Contract 7 | Added AGENT_TYPES classification |
 | 2025-12-04 | Contract 9 | Added Agent Specialist File Compliance contract |

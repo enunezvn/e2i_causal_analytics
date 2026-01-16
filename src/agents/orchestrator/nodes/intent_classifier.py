@@ -93,6 +93,16 @@ class IntentClassifierNode:
             r"feedback|learn.*from",
             r"improve.*based on",
         ],
+        "cohort_definition": [
+            r"(define|create|build|construct).*(cohort|patient set|patient population)",
+            r"cohort.*(definition|construction|criteria)",
+            r"(inclusion|exclusion).*(criteria|rules)",
+            r"patient.*eligib",
+            r"eligible.*patient",
+            r"filter.*patients",
+            r"(remibrutinib|fabhalta|kisqali).*(cohort|patient)",
+            r"(csu|pnh|breast cancer).*(cohort|patient|population)",
+        ],
     }
 
     def __init__(self):
@@ -202,6 +212,7 @@ Intents:
 - system_health: Model/pipeline status, system performance
 - drift_check: Data/model drift, distribution changes
 - feedback: Learning from outcomes, improvement suggestions
+- cohort_definition: Patient cohort construction, eligibility criteria, inclusion/exclusion rules
 - general: Other/unclear
 
 Respond with ONLY a JSON object:

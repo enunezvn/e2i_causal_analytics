@@ -124,6 +124,16 @@ class RouterNode:
                 fallback_agent=None,
             )
         ],
+        # Tier 0: Patient cohort construction for ML pipelines
+        "cohort_definition": [
+            AgentDispatch(
+                agent_name="cohort_constructor",
+                priority="critical",
+                parameters={"validation_mode": "strict"},
+                timeout_ms=120000,  # SLA: <120s for 100K patients
+                fallback_agent="explainer",
+            )
+        ],
     }
 
     # Multi-agent patterns for complex queries (priority: critical > high > medium > low)
