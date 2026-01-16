@@ -227,8 +227,12 @@ logger.info("Security Headers: ENABLED")
 
 # Rate Limiting middleware
 # Protects API from abuse with configurable limits per endpoint
-app.add_middleware(RateLimitMiddleware, use_redis=True)
-logger.info("Rate Limiting: ENABLED")
+# Can be disabled for testing via DISABLE_RATE_LIMITING env var
+if not os.environ.get("DISABLE_RATE_LIMITING", "").lower() in ("1", "true", "yes"):
+    app.add_middleware(RateLimitMiddleware, use_redis=True)
+    logger.info("Rate Limiting: ENABLED")
+else:
+    logger.info("Rate Limiting: DISABLED (DISABLE_RATE_LIMITING set)")
 
 # =============================================================================
 # ROOT ENDPOINTS

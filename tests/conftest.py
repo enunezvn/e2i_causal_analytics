@@ -167,11 +167,15 @@ def pytest_configure(config: pytest.Config) -> None:
     """Configure pytest with service availability information.
 
     This runs once at the start of the test session to:
-    1. Check which services are available
-    2. Store results for skip decision making
-    3. Print service status to console
+    1. Disable rate limiting for tests
+    2. Check which services are available
+    3. Store results for skip decision making
+    4. Print service status to console
     """
     global SERVICES_AVAILABLE
+
+    # Disable rate limiting for tests to prevent 429 errors from state accumulation
+    os.environ["DISABLE_RATE_LIMITING"] = "1"
 
     # Run service checks
     start_time = time.time()
