@@ -72,7 +72,7 @@ econml==0.16.0
 entrypoints==0.4
 exceptiongroup==1.3.1
 FalkorDB==1.2.2
-fastapi==0.125.0
+fastapi==0.128.0
 fasttext==0.9.3
 fastuuid==0.14.0
 feast==0.58.0
