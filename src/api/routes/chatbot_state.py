@@ -62,6 +62,12 @@ class ChatbotState(TypedDict, total=False):
     intent_reasoning: Optional[str]  # DSPy classification reasoning
     intent_classification_method: Optional[str]  # "dspy" or "hardcoded"
 
+    # Agent routing
+    routed_agent: Optional[str]  # Primary agent routed for this query
+    secondary_agents: List[str]  # Additional agents that may assist
+    routing_confidence: Optional[float]  # Routing confidence (0.0-1.0)
+    routing_rationale: Optional[str]  # Explanation for routing decision
+
     # E2I context filters
     brand_context: Optional[str]
     region_context: Optional[str]
@@ -190,6 +196,10 @@ def create_initial_state(
         intent_confidence=None,
         intent_reasoning=None,
         intent_classification_method=None,
+        routed_agent=None,
+        secondary_agents=[],
+        routing_confidence=None,
+        routing_rationale=None,
         brand_context=brand_context,
         region_context=region_context,
         messages=[],

@@ -55,6 +55,7 @@ from src.api.routes.chatbot_dspy import (
     synthesize_response_dspy,
     CHATBOT_DSPY_SYNTHESIS_ENABLED,
     get_chatbot_signal_collector,
+    route_agent_hardcoded,
 )
 from src.mlops.mlflow_connector import MLflowConnector
 
@@ -627,10 +628,12 @@ async def retrieve_rag_node(state: ChatbotState) -> Dict[str, Any]:
 
 async def classify_intent_node(state: ChatbotState) -> Dict[str, Any]:
     """
-    Classify the user's query intent using DSPy (with hardcoded fallback).
+    Classify the user's query intent and route to specialized agent.
 
     Phase 3 DSPy integration: Uses ChatbotIntentClassifier for ML-based
     classification with confidence scores and training signal collection.
+
+    Also routes to a specialized agent based on query keywords and intent.
     """
     query = state.get("query", "")
     brand_context = state.get("brand_context", "") or ""
@@ -656,8 +659,16 @@ async def classify_intent_node(state: ChatbotState) -> Dict[str, Any]:
     reasoning = ""
     classification_method = "unknown"
 
+    # Agent routing variables
+    routed_agent = "chatbot"
+    secondary_agents = []
+    routing_confidence = 0.0
+    routing_rationale = ""
+
     async def _execute_classify():
         nonlocal intent, confidence, reasoning, classification_method
+        nonlocal routed_agent, secondary_agents, routing_confidence, routing_rationale
+
         # Use DSPy classifier with fallback to hardcoded
         intent, confidence, reasoning, classification_method = await classify_intent_dspy(
             query=query,
@@ -667,6 +678,16 @@ async def classify_intent_node(state: ChatbotState) -> Dict[str, Any]:
         )
         logger.debug(
             f"Intent classified: {intent} (confidence={confidence:.2f}, method={classification_method})"
+        )
+
+        # Route to specialized agent based on query and intent
+        routed_agent, secondary_agents, routing_confidence, routing_rationale = route_agent_hardcoded(
+            query=query,
+            intent=intent,
+        )
+        logger.debug(
+            f"Routed to agent: {routed_agent} (confidence={routing_confidence:.2f}, "
+            f"secondary={secondary_agents}, rationale={routing_rationale})"
         )
 
     # Execute with tracing if available
@@ -686,6 +707,10 @@ async def classify_intent_node(state: ChatbotState) -> Dict[str, Any]:
         "intent_confidence": confidence,
         "intent_reasoning": reasoning,
         "intent_classification_method": classification_method,
+        "routed_agent": routed_agent,
+        "secondary_agents": secondary_agents,
+        "routing_confidence": routing_confidence,
+        "routing_rationale": routing_rationale,
     }
 
 
@@ -703,6 +728,8 @@ async def generate_node(state: ChatbotState) -> Dict[str, Any]:
     region = state.get("region_context")
     intent = state.get("intent", "general")
     query = state.get("query", "")
+    # Get routed agent from classify_intent_node (defaults to "chatbot" if not set)
+    routed_agent = state.get("routed_agent") or "chatbot"
 
     # Get active trace context for observability
     trace_ctx = _active_trace_context.get()
@@ -781,7 +808,7 @@ async def generate_node(state: ChatbotState) -> Dict[str, Any]:
 
         result = {
             "messages": [response_msg],
-            "agent_name": "chatbot_synthesis",
+            "agent_name": routed_agent,
             "agent_tier": 1,
             "response_text": synthesis_result.response,
             "confidence_statement": confidence_statement,
@@ -853,7 +880,7 @@ async def generate_node(state: ChatbotState) -> Dict[str, Any]:
 
             result = {
                 "messages": [response],
-                "agent_name": "chatbot",
+                "agent_name": routed_agent,
                 "agent_tier": 1,
             }
 
@@ -905,6 +932,7 @@ def _generate_fallback_response(state: ChatbotState) -> Dict[str, Any]:
     """Generate a fallback response when LLM is unavailable."""
     intent = state.get("intent", IntentType.GENERAL)
     query = state.get("query", "")
+    routed_agent = state.get("routed_agent") or "chatbot"
 
     responses = {
         IntentType.GREETING: "Hello! I'm the E2I Analytics Assistant. I can help you with KPI analysis, causal inference, and insights for pharmaceutical brands. What would you like to know?",
@@ -924,7 +952,7 @@ def _generate_fallback_response(state: ChatbotState) -> Dict[str, Any]:
     return {
         "messages": [AIMessage(content=response_text)],
         "response_text": response_text,
-        "agent_name": "chatbot_fallback",
+        "agent_name": routed_agent,
     }
 
 
