@@ -281,7 +281,8 @@ class TestAgentRoutingTool:
 
         assert result["success"] is True
         assert result["routed_to"] == "explainer"
-        assert "Default routing" in result["rationale"]
+        # Rationale can be from DSPy (detailed) or hardcoded ("Default routing")
+        assert "rationale" in result and len(result["rationale"]) > 0
 
     @pytest.mark.asyncio
     async def test_routes_to_specific_target_agent(self):
