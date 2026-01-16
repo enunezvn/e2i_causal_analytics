@@ -125,7 +125,7 @@ class TestExplainPrediction:
             new=AsyncMock(return_value=mock_shap_service),
         ):
             response = client.post(
-                "/explain/predict",
+                "/api/explain/predict",
                 json={
                     "patient_id": "PAT-2024-001234",
                     "model_type": "propensity",
@@ -150,7 +150,7 @@ class TestExplainPrediction:
             new=AsyncMock(return_value=mock_shap_service),
         ):
             response = client.post(
-                "/explain/predict",
+                "/api/explain/predict",
                 json={
                     "patient_id": "PAT-2024-001234",
                     "model_type": "propensity",
@@ -172,7 +172,7 @@ class TestExplainPrediction:
             new=AsyncMock(return_value=mock_shap_service),
         ):
             response = client.post(
-                "/explain/predict",
+                "/api/explain/predict",
                 json={
                     "patient_id": "PAT-2024-001234",
                     "model_type": "propensity",
@@ -192,7 +192,7 @@ class TestExplainPrediction:
             new=AsyncMock(return_value=mock_shap_service),
         ):
             response = client.post(
-                "/explain/predict",
+                "/api/explain/predict",
                 json={
                     "patient_id": "PAT-2024-001234",
                     "hcp_id": "HCP-NE-5678",
@@ -212,7 +212,7 @@ class TestExplainPrediction:
                 new=AsyncMock(return_value=mock_shap_service),
             ):
                 response = client.post(
-                    "/explain/predict",
+                    "/api/explain/predict",
                     json={
                         "patient_id": "PAT-2024-001234",
                         "model_type": model_type,
@@ -227,7 +227,7 @@ class TestExplainPrediction:
             new=AsyncMock(return_value=mock_shap_service),
         ):
             response = client.post(
-                "/explain/predict",
+                "/api/explain/predict",
                 json={
                     "patient_id": "PAT-2024-001234",
                     "model_type": "propensity",
@@ -250,7 +250,7 @@ class TestBatchExplanation:
             new=AsyncMock(return_value=mock_shap_service),
         ):
             response = client.post(
-                "/explain/predict/batch",
+                "/api/explain/predict/batch",
                 json={
                     "requests": [
                         {"patient_id": "PAT-001", "model_type": "propensity"},
@@ -276,7 +276,7 @@ class TestBatchExplanation:
             new=AsyncMock(return_value=mock_shap_service),
         ):
             response = client.post(
-                "/explain/predict/batch",
+                "/api/explain/predict/batch",
                 json={
                     "requests": [
                         {"patient_id": "PAT-001", "model_type": "propensity"},
@@ -311,7 +311,7 @@ class TestBatchExplanation:
             new=AsyncMock(return_value=mock_shap_service),
         ):
             response = client.post(
-                "/explain/predict/batch",
+                "/api/explain/predict/batch",
                 json={
                     "requests": [
                         {"patient_id": "PAT-001", "model_type": "propensity"},
@@ -349,7 +349,7 @@ class TestExplanationHistory:
         )
 
         with patch("src.api.routes.explain.get_shap_analysis_repository", return_value=mock_repo):
-            response = client.get("/explain/history/PAT-2024-001234")
+            response = client.get("/api/explain/history/PAT-2024-001234")
 
         assert response.status_code == 200
         data = response.json()
@@ -370,7 +370,7 @@ class TestExplanationHistory:
         )
 
         with patch("src.api.routes.explain.get_shap_analysis_repository", return_value=mock_repo):
-            response = client.get("/explain/history/PAT-2024-001234?limit=5")
+            response = client.get("/api/explain/history/PAT-2024-001234?limit=5")
 
         assert response.status_code == 200
 
@@ -380,7 +380,7 @@ class TestExplanationHistory:
         mock_repo.client = None
 
         with patch("src.api.routes.explain.get_shap_analysis_repository", return_value=mock_repo):
-            response = client.get("/explain/history/PAT-2024-001234")
+            response = client.get("/api/explain/history/PAT-2024-001234")
 
         assert response.status_code == 200
         data = response.json()
@@ -402,7 +402,7 @@ class TestListExplainableModels:
             "src.api.routes.explain.get_shap_service",
             new=AsyncMock(return_value=mock_shap_service),
         ):
-            response = client.get("/explain/models")
+            response = client.get("/api/explain/models")
 
         assert response.status_code == 200
         data = response.json()
@@ -416,7 +416,7 @@ class TestListExplainableModels:
             "src.api.routes.explain.get_shap_service",
             new=AsyncMock(return_value=mock_shap_service),
         ):
-            response = client.get("/explain/models")
+            response = client.get("/api/explain/models")
 
         assert response.status_code == 200
         data = response.json()
@@ -431,7 +431,7 @@ class TestListExplainableModels:
             "src.api.routes.explain.get_shap_service",
             new=AsyncMock(return_value=mock_shap_service),
         ):
-            response = client.get("/explain/models")
+            response = client.get("/api/explain/models")
 
         assert response.status_code == 200
         data = response.json()
@@ -447,7 +447,7 @@ class TestExplainHealthCheck:
             "src.api.routes.explain.get_shap_service",
             new=AsyncMock(return_value=mock_shap_service),
         ):
-            response = client.get("/explain/health")
+            response = client.get("/api/explain/health")
 
         assert response.status_code == 200
         data = response.json()
@@ -463,7 +463,7 @@ class TestExplainHealthCheck:
             "src.api.routes.explain.get_shap_service",
             new=AsyncMock(return_value=mock_shap_service),
         ):
-            response = client.get("/explain/health")
+            response = client.get("/api/explain/health")
 
         assert response.status_code == 200
         data = response.json()
@@ -481,7 +481,7 @@ class TestExplainHealthCheck:
             "src.api.routes.explain.get_shap_service",
             new=AsyncMock(return_value=mock_shap_service),
         ):
-            response = client.get("/explain/health")
+            response = client.get("/api/explain/health")
 
         assert response.status_code == 200
         data = response.json()

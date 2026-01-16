@@ -139,7 +139,7 @@ class TestTriggerDriftDetection:
             mock_celery_task,
         ):
             response = client.post(
-                "/monitoring/drift/detect",
+                "/api/monitoring/drift/detect",
                 json={
                     "model_id": "propensity_v2.1.0",
                     "time_window": "7d",
@@ -173,7 +173,7 @@ class TestTriggerDriftDetection:
             return_value=mock_result,
         ):
             response = client.post(
-                "/monitoring/drift/detect?async_mode=false",
+                "/api/monitoring/drift/detect?async_mode=false",
                 json={
                     "model_id": "propensity_v2.1.0",
                     "time_window": "7d",
@@ -189,7 +189,7 @@ class TestTriggerDriftDetection:
     def test_trigger_drift_validation_error(self):
         """Should return 422 for missing required fields."""
         response = client.post(
-            "/monitoring/drift/detect",
+            "/api/monitoring/drift/detect",
             json={},  # Missing model_id
         )
 
@@ -202,7 +202,7 @@ class TestTriggerDriftDetection:
             side_effect=Exception("Detection failed"),
         ):
             response = client.post(
-                "/monitoring/drift/detect?async_mode=false",
+                "/api/monitoring/drift/detect?async_mode=false",
                 json={"model_id": "propensity_v2.1.0"},
             )
 
@@ -221,7 +221,7 @@ class TestGetDriftStatus:
 
         with patch("celery.result.AsyncResult", return_value=mock_result):
             with patch("src.workers.celery_app.celery_app"):
-                response = client.get("/monitoring/drift/status/task_123")
+                response = client.get("/api/monitoring/drift/status/task_123")
 
         assert response.status_code == 200
         data = response.json()
@@ -242,7 +242,7 @@ class TestGetDriftStatus:
 
         with patch("celery.result.AsyncResult", return_value=mock_result):
             with patch("src.workers.celery_app.celery_app"):
-                response = client.get("/monitoring/drift/status/task_123")
+                response = client.get("/api/monitoring/drift/status/task_123")
 
         assert response.status_code == 200
         data = response.json()
@@ -260,7 +260,7 @@ class TestGetDriftStatus:
 
         with patch("celery.result.AsyncResult", return_value=mock_result):
             with patch("src.workers.celery_app.celery_app"):
-                response = client.get("/monitoring/drift/status/task_123")
+                response = client.get("/api/monitoring/drift/status/task_123")
 
         assert response.status_code == 200
         data = response.json()
@@ -282,7 +282,7 @@ class TestGetLatestDriftStatus:
             "src.repositories.drift_monitoring.DriftHistoryRepository",
             return_value=mock_repo,
         ):
-            response = client.get("/monitoring/drift/latest/propensity_v2.1.0")
+            response = client.get("/api/monitoring/drift/latest/propensity_v2.1.0")
 
         assert response.status_code == 200
         data = response.json()
@@ -299,7 +299,7 @@ class TestGetLatestDriftStatus:
             "src.repositories.drift_monitoring.DriftHistoryRepository",
             return_value=mock_repo,
         ):
-            response = client.get("/monitoring/drift/latest/unknown_model")
+            response = client.get("/api/monitoring/drift/latest/unknown_model")
 
         assert response.status_code == 200
         data = response.json()
@@ -317,7 +317,7 @@ class TestGetLatestDriftStatus:
             "src.repositories.drift_monitoring.DriftHistoryRepository",
             return_value=mock_repo,
         ):
-            response = client.get("/monitoring/drift/latest/propensity_v2.1.0?limit=5")
+            response = client.get("/api/monitoring/drift/latest/propensity_v2.1.0?limit=5")
 
         assert response.status_code == 200
         # Verify limit was passed to repo
@@ -334,7 +334,7 @@ class TestGetLatestDriftStatus:
             "src.repositories.drift_monitoring.DriftHistoryRepository",
             return_value=mock_repo,
         ):
-            response = client.get("/monitoring/drift/latest/propensity_v2.1.0")
+            response = client.get("/api/monitoring/drift/latest/propensity_v2.1.0")
 
         assert response.status_code == 500
 
@@ -358,7 +358,7 @@ class TestGetDriftHistory:
             "src.repositories.drift_monitoring.DriftHistoryRepository",
             return_value=mock_repo,
         ):
-            response = client.get("/monitoring/drift/history/propensity_v2.1.0")
+            response = client.get("/api/monitoring/drift/history/propensity_v2.1.0")
 
         assert response.status_code == 200
         data = response.json()
@@ -376,7 +376,7 @@ class TestGetDriftHistory:
             return_value=mock_repo,
         ):
             response = client.get(
-                "/monitoring/drift/history/propensity_v2.1.0"
+                "/api/monitoring/drift/history/propensity_v2.1.0"
                 "?feature_name=days_since_last_visit"
             )
 
@@ -392,7 +392,7 @@ class TestGetDriftHistory:
             "src.repositories.drift_monitoring.DriftHistoryRepository",
             return_value=mock_repo,
         ):
-            response = client.get("/monitoring/drift/history/unknown_model")
+            response = client.get("/api/monitoring/drift/history/unknown_model")
 
         assert response.status_code == 200
         data = response.json()
@@ -417,7 +417,7 @@ class TestListAlerts:
             "src.repositories.drift_monitoring.MonitoringAlertRepository",
             return_value=mock_repo,
         ):
-            response = client.get("/monitoring/alerts")
+            response = client.get("/api/monitoring/alerts")
 
         assert response.status_code == 200
         data = response.json()
@@ -434,7 +434,7 @@ class TestListAlerts:
             "src.repositories.drift_monitoring.MonitoringAlertRepository",
             return_value=mock_repo,
         ):
-            response = client.get("/monitoring/alerts?status=active&severity=high")
+            response = client.get("/api/monitoring/alerts?status=active&severity=high")
 
         assert response.status_code == 200
 
@@ -447,7 +447,7 @@ class TestListAlerts:
             "src.repositories.drift_monitoring.MonitoringAlertRepository",
             return_value=mock_repo,
         ):
-            response = client.get("/monitoring/alerts")
+            response = client.get("/api/monitoring/alerts")
 
         assert response.status_code == 200
         data = response.json()
@@ -467,7 +467,7 @@ class TestGetAlert:
             "src.repositories.drift_monitoring.MonitoringAlertRepository",
             return_value=mock_repo,
         ):
-            response = client.get("/monitoring/alerts/alert_001")
+            response = client.get("/api/monitoring/alerts/alert_001")
 
         assert response.status_code == 200
         data = response.json()
@@ -483,7 +483,7 @@ class TestGetAlert:
             "src.repositories.drift_monitoring.MonitoringAlertRepository",
             return_value=mock_repo,
         ):
-            response = client.get("/monitoring/alerts/unknown_alert")
+            response = client.get("/api/monitoring/alerts/unknown_alert")
 
         assert response.status_code == 404
 
@@ -506,7 +506,7 @@ class TestUpdateAlert:
             return_value=mock_repo,
         ):
             response = client.post(
-                "/monitoring/alerts/alert_001/action",
+                "/api/monitoring/alerts/alert_001/action",
                 json={
                     "action": "acknowledge",
                     "user_id": "user_123",
@@ -533,7 +533,7 @@ class TestUpdateAlert:
             return_value=mock_repo,
         ):
             response = client.post(
-                "/monitoring/alerts/alert_001/action",
+                "/api/monitoring/alerts/alert_001/action",
                 json={"action": "resolve", "user_id": "user_123"},
             )
 
@@ -551,7 +551,7 @@ class TestUpdateAlert:
             return_value=mock_repo,
         ):
             response = client.post(
-                "/monitoring/alerts/unknown_alert/action",
+                "/api/monitoring/alerts/unknown_alert/action",
                 json={"action": "acknowledge"},
             )
 
@@ -575,7 +575,7 @@ class TestListMonitoringRuns:
             "src.repositories.drift_monitoring.MonitoringRunRepository",
             return_value=mock_repo,
         ):
-            response = client.get("/monitoring/runs")
+            response = client.get("/api/monitoring/runs")
 
         assert response.status_code == 200
         data = response.json()
@@ -591,7 +591,7 @@ class TestListMonitoringRuns:
             "src.repositories.drift_monitoring.MonitoringRunRepository",
             return_value=mock_repo,
         ):
-            response = client.get("/monitoring/runs?model_id=propensity_v2.1.0")
+            response = client.get("/api/monitoring/runs?model_id=propensity_v2.1.0")
 
         assert response.status_code == 200
         data = response.json()
@@ -636,7 +636,7 @@ class TestGetModelHealth:
                     "src.repositories.drift_monitoring.MonitoringRunRepository",
                     return_value=mock_run_repo,
                 ):
-                    response = client.get("/monitoring/health/propensity_v2.1.0")
+                    response = client.get("/api/monitoring/health/propensity_v2.1.0")
 
         assert response.status_code == 200
         data = response.json()
@@ -675,7 +675,7 @@ class TestGetModelHealth:
                     "src.repositories.drift_monitoring.MonitoringRunRepository",
                     return_value=mock_run_repo,
                 ):
-                    response = client.get("/monitoring/health/propensity_v2.1.0")
+                    response = client.get("/api/monitoring/health/propensity_v2.1.0")
 
         assert response.status_code == 200
         data = response.json()
@@ -741,7 +741,7 @@ class TestRecordPerformance:
         ) as mock_tracker:
             mock_tracker.delay = MagicMock(return_value=mock_task)
             response = client.post(
-                "/monitoring/performance/record",
+                "/api/monitoring/performance/record",
                 json={
                     "model_id": "propensity_v2.1.0",
                     "predictions": [1, 0, 1, 1, 0],
@@ -758,7 +758,7 @@ class TestRecordPerformance:
     def test_record_performance_validation_error(self):
         """Should return 422 for invalid request."""
         response = client.post(
-            "/monitoring/performance/record",
+            "/api/monitoring/performance/record",
             json={
                 "model_id": "propensity_v2.1.0",
                 # Missing predictions and actuals
@@ -790,7 +790,7 @@ class TestGetPerformanceTrend:
                 return_value=mock_repo,
             ):
                 response = client.get(
-                    "/monitoring/performance/propensity_v2.1.0/trend?metric_name=accuracy"
+                    "/api/monitoring/performance/propensity_v2.1.0/trend?metric_name=accuracy"
                 )
 
         assert response.status_code == 200
@@ -810,7 +810,7 @@ class TestGetPerformanceTrend:
             "src.services.performance_tracking.get_performance_tracker",
             return_value=mock_tracker,
         ):
-            response = client.get("/monitoring/performance/propensity_v2.1.0/trend")
+            response = client.get("/api/monitoring/performance/propensity_v2.1.0/trend")
 
         assert response.status_code == 500
 
@@ -837,7 +837,7 @@ class TestEvaluateRetraining:
             return_value=mock_service,
         ):
             response = client.post(
-                "/monitoring/retraining/evaluate/propensity_v2.1.0"
+                "/api/monitoring/retraining/evaluate/propensity_v2.1.0"
             )
 
         assert response.status_code == 200
@@ -865,7 +865,7 @@ class TestEvaluateRetraining:
             return_value=mock_service,
         ):
             response = client.post(
-                "/monitoring/retraining/evaluate/propensity_v2.1.0"
+                "/api/monitoring/retraining/evaluate/propensity_v2.1.0"
             )
 
         assert response.status_code == 200
@@ -886,7 +886,7 @@ class TestTriggerRetraining:
             return_value=mock_service,
         ):
             response = client.post(
-                "/monitoring/retraining/trigger/propensity_v2.1.0",
+                "/api/monitoring/retraining/trigger/propensity_v2.1.0",
                 json={
                     "reason": "data_drift",
                     "notes": "Significant drift detected",
@@ -915,7 +915,7 @@ class TestGetRetrainingStatus:
             "src.services.retraining_trigger.get_retraining_trigger_service",
             return_value=mock_service,
         ):
-            response = client.get("/monitoring/retraining/status/retrain_001")
+            response = client.get("/api/monitoring/retraining/status/retrain_001")
 
         assert response.status_code == 200
         data = response.json()
@@ -931,6 +931,6 @@ class TestGetRetrainingStatus:
             "src.services.retraining_trigger.get_retraining_trigger_service",
             return_value=mock_service,
         ):
-            response = client.get("/monitoring/retraining/status/unknown_job")
+            response = client.get("/api/monitoring/retraining/status/unknown_job")
 
         assert response.status_code == 404

@@ -177,7 +177,7 @@ class TestRunHierarchicalAnalysis:
             "src.causal_engine.hierarchical.nested_ci.SegmentEstimate",
         ):
             response = client.post(
-                "/causal/hierarchical/analyze",
+                "/api/causal/hierarchical/analyze",
                 json=hierarchical_analysis_request,
             )
 
@@ -192,7 +192,7 @@ class TestRunHierarchicalAnalysis:
     def test_hierarchical_analysis_async_mode(self, hierarchical_analysis_request):
         """Should return pending status in async mode."""
         response = client.post(
-            "/causal/hierarchical/analyze",
+            "/api/causal/hierarchical/analyze",
             params={"async_mode": "true"},
             json=hierarchical_analysis_request,
         )
@@ -205,7 +205,7 @@ class TestRunHierarchicalAnalysis:
     def test_hierarchical_analysis_invalid_request(self):
         """Should return 422 for invalid request."""
         response = client.post(
-            "/causal/hierarchical/analyze",
+            "/api/causal/hierarchical/analyze",
             json={"treatment_var": "x"},  # Missing required fields
         )
 
@@ -219,14 +219,14 @@ class TestGetHierarchicalAnalysis:
         """Should return analysis result from cache."""
         # First create an analysis to populate the cache
         response = client.post(
-            "/causal/hierarchical/analyze",
+            "/api/causal/hierarchical/analyze",
             params={"async_mode": "true"},
             json=hierarchical_analysis_request,
         )
         analysis_id = response.json()["analysis_id"]
 
         # Now fetch it
-        response = client.get(f"/causal/hierarchical/{analysis_id}")
+        response = client.get(f"/api/causal/hierarchical/{analysis_id}")
 
         assert response.status_code == 200
         data = response.json()
@@ -234,7 +234,7 @@ class TestGetHierarchicalAnalysis:
 
     def test_get_analysis_not_found(self):
         """Should return 404 for missing analysis."""
-        response = client.get("/causal/hierarchical/nonexistent-id-12345")
+        response = client.get("/api/causal/hierarchical/nonexistent-id-12345")
 
         assert response.status_code == 404
 
@@ -244,7 +244,7 @@ class TestListEstimators:
 
     def test_list_all_estimators(self):
         """Should list all available estimators."""
-        response = client.get("/causal/estimators")
+        response = client.get("/api/causal/estimators")
 
         assert response.status_code == 200
         data = response.json()
@@ -255,7 +255,7 @@ class TestListEstimators:
 
     def test_list_estimators_filtered_by_library(self):
         """Should filter estimators by library."""
-        response = client.get("/causal/estimators", params={"library": "econml"})
+        response = client.get("/api/causal/estimators", params={"library": "econml"})
 
         assert response.status_code == 200
         data = response.json()
@@ -264,7 +264,7 @@ class TestListEstimators:
 
     def test_list_estimators_dowhy(self):
         """Should list DoWhy estimators."""
-        response = client.get("/causal/estimators", params={"library": "dowhy"})
+        response = client.get("/api/causal/estimators", params={"library": "dowhy"})
 
         assert response.status_code == 200
         data = response.json()
@@ -285,7 +285,7 @@ class TestRouteCausalQuery:
     def test_route_causal_effect_question(self):
         """Should route causal effect question to DoWhy."""
         response = client.post(
-            "/causal/route",
+            "/api/causal/route",
             json={"query": "Does detailing cause an increase in prescriptions?"},
         )
 
@@ -301,7 +301,7 @@ class TestRouteCausalQuery:
         # Note: Query must avoid causal_effect keywords (cause, causes, effect of, impact of, does)
         # Use heterogeneity keywords: vary, heterogen, different, segment, subgroup
         response = client.post(
-            "/causal/route",
+            "/api/causal/route",
             json={"query": "Show variation in treatment response by segment and subgroup"},
         )
 
@@ -313,7 +313,7 @@ class TestRouteCausalQuery:
     def test_route_targeting_question(self):
         """Should route targeting question to CausalML."""
         response = client.post(
-            "/causal/route",
+            "/api/causal/route",
             json={"query": "Which HCPs should we target for the campaign?"},
         )
 
@@ -326,7 +326,7 @@ class TestRouteCausalQuery:
         """Should route network question to NetworkX."""
         # Note: Query must use network keywords without triggering causal_effect keywords first
         response = client.post(
-            "/causal/route",
+            "/api/causal/route",
             json={"query": "How do changes propagate through the network dependencies?"},
         )
 
@@ -338,7 +338,7 @@ class TestRouteCausalQuery:
     def test_route_with_library_preference(self):
         """Should respect library preference in routing."""
         response = client.post(
-            "/causal/route",
+            "/api/causal/route",
             json={
                 "query": "What is the effect?",
                 "prefer_library": "causalml",
@@ -356,7 +356,7 @@ class TestCausalHealthCheck:
 
     def test_health_check_success(self):
         """Should return health status with library availability."""
-        response = client.get("/causal/health")
+        response = client.get("/api/causal/health")
 
         assert response.status_code == 200
         data = response.json()
@@ -369,7 +369,7 @@ class TestCausalHealthCheck:
 
     def test_health_check_returns_library_status(self):
         """Should indicate which libraries are available."""
-        response = client.get("/causal/health")
+        response = client.get("/api/causal/health")
 
         assert response.status_code == 200
         data = response.json()
@@ -385,7 +385,7 @@ class TestCrossValidation:
     def test_cross_validation_success(self, cross_validation_request):
         """Should run cross-library validation."""
         response = client.post(
-            "/causal/validate",
+            "/api/causal/validate",
             json=cross_validation_request,
         )
 
@@ -404,7 +404,7 @@ class TestCrossValidation:
         """Should check against agreement threshold."""
         cross_validation_request["agreement_threshold"] = 0.9
         response = client.post(
-            "/causal/validate",
+            "/api/causal/validate",
             json=cross_validation_request,
         )
 
@@ -424,7 +424,7 @@ class TestSequentialPipeline:
     def test_sequential_pipeline_sync_success(self, sequential_pipeline_request):
         """Should run sequential pipeline synchronously."""
         response = client.post(
-            "/causal/pipeline/sequential",
+            "/api/causal/pipeline/sequential",
             json=sequential_pipeline_request,
         )
 
@@ -439,7 +439,7 @@ class TestSequentialPipeline:
     def test_sequential_pipeline_async_mode(self, sequential_pipeline_request):
         """Should return pending status in async mode."""
         response = client.post(
-            "/causal/pipeline/sequential",
+            "/api/causal/pipeline/sequential",
             params={"async_mode": "true"},
             json=sequential_pipeline_request,
         )
@@ -452,7 +452,7 @@ class TestSequentialPipeline:
     def test_sequential_pipeline_computes_consensus(self, sequential_pipeline_request):
         """Should compute consensus effect from stages."""
         response = client.post(
-            "/causal/pipeline/sequential",
+            "/api/causal/pipeline/sequential",
             json=sequential_pipeline_request,
         )
 
@@ -469,7 +469,7 @@ class TestParallelPipeline:
     def test_parallel_pipeline_success(self, parallel_pipeline_request):
         """Should run parallel pipeline across libraries."""
         response = client.post(
-            "/causal/pipeline/parallel",
+            "/api/causal/pipeline/parallel",
             json=parallel_pipeline_request,
         )
 
@@ -484,7 +484,7 @@ class TestParallelPipeline:
     def test_parallel_pipeline_consensus(self, parallel_pipeline_request):
         """Should compute consensus from parallel results."""
         response = client.post(
-            "/causal/pipeline/parallel",
+            "/api/causal/pipeline/parallel",
             json=parallel_pipeline_request,
         )
 
@@ -499,7 +499,7 @@ class TestParallelPipeline:
         # Note: timeout_seconds must be >= 30 per schema constraint
         parallel_pipeline_request["timeout_seconds"] = 30
         response = client.post(
-            "/causal/pipeline/parallel",
+            "/api/causal/pipeline/parallel",
             json=parallel_pipeline_request,
         )
 
@@ -514,14 +514,14 @@ class TestGetPipelineStatus:
         """Should return pipeline status from cache."""
         # First create a pipeline to populate the cache
         response = client.post(
-            "/causal/pipeline/sequential",
+            "/api/causal/pipeline/sequential",
             params={"async_mode": "true"},
             json=sequential_pipeline_request,
         )
         pipeline_id = response.json()["pipeline_id"]
 
         # Now fetch status
-        response = client.get(f"/causal/pipeline/{pipeline_id}")
+        response = client.get(f"/api/causal/pipeline/{pipeline_id}")
 
         assert response.status_code == 200
         data = response.json()
@@ -529,6 +529,6 @@ class TestGetPipelineStatus:
 
     def test_get_pipeline_status_not_found(self):
         """Should return 404 for missing pipeline."""
-        response = client.get("/causal/pipeline/nonexistent-pipeline-12345")
+        response = client.get("/api/causal/pipeline/nonexistent-pipeline-12345")
 
         assert response.status_code == 404
