@@ -123,3 +123,7 @@ PyCausalSim/
 
 # Optuna journal files
 optuna_studies.db-journal
+
+# Windows NTFS alternate data streams
+*:Zone.Identifier
+*:sec.endpointdlp
