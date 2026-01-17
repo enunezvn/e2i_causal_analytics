@@ -63,31 +63,62 @@ from src.rag.evaluation import (
 # =============================================================================
 
 # Core RAG components (require anthropic, networkx, etc.)
+# Each import is wrapped separately so individual failures don't block others
 _CORE_RAG_EXPORTS: list[str] = []
+
 try:
     from src.rag.causal_rag import CausalRAG
-    from src.rag.chunk_processor import ChunkProcessor
-    from src.rag.entity_extractor import EntityExtractor
-    from src.rag.health_monitor import HealthMonitor
-    from src.rag.insight_enricher import InsightEnricher
-    from src.rag.query_optimizer import QueryOptimizer
-    from src.rag.reranker import CrossEncoderReranker
-    from src.rag.retriever import HybridRetriever
-    from src.rag.search_logger import SearchLogger
-
-    _CORE_RAG_EXPORTS = [
-        "CausalRAG",
-        "HybridRetriever",
-        "CrossEncoderReranker",
-        "QueryOptimizer",
-        "InsightEnricher",
-        "ChunkProcessor",
-        "EntityExtractor",
-        "HealthMonitor",
-        "SearchLogger",
-    ]
+    _CORE_RAG_EXPORTS.append("CausalRAG")
 except ImportError as e:
-    _logger.debug(f"Core RAG components not available: {e}")
+    _logger.debug(f"CausalRAG not available: {e}")
+
+try:
+    from src.rag.chunk_processor import ChunkProcessor
+    _CORE_RAG_EXPORTS.append("ChunkProcessor")
+except ImportError as e:
+    _logger.debug(f"ChunkProcessor not available: {e}")
+
+try:
+    from src.rag.entity_extractor import EntityExtractor
+    _CORE_RAG_EXPORTS.append("EntityExtractor")
+except ImportError as e:
+    _logger.debug(f"EntityExtractor not available: {e}")
+
+try:
+    from src.rag.health_monitor import HealthMonitor
+    _CORE_RAG_EXPORTS.append("HealthMonitor")
+except ImportError as e:
+    _logger.debug(f"HealthMonitor not available: {e}")
+
+try:
+    from src.rag.insight_enricher import InsightEnricher
+    _CORE_RAG_EXPORTS.append("InsightEnricher")
+except ImportError as e:
+    _logger.debug(f"InsightEnricher not available: {e}")
+
+try:
+    from src.rag.query_optimizer import QueryOptimizer
+    _CORE_RAG_EXPORTS.append("QueryOptimizer")
+except ImportError as e:
+    _logger.debug(f"QueryOptimizer not available: {e}")
+
+try:
+    from src.rag.reranker import CrossEncoderReranker
+    _CORE_RAG_EXPORTS.append("CrossEncoderReranker")
+except ImportError as e:
+    _logger.debug(f"CrossEncoderReranker not available: {e}")
+
+try:
+    from src.rag.retriever import HybridRetriever
+    _CORE_RAG_EXPORTS.append("HybridRetriever")
+except ImportError as e:
+    _logger.debug(f"HybridRetriever not available: {e}")
+
+try:
+    from src.rag.search_logger import SearchLogger
+    _CORE_RAG_EXPORTS.append("SearchLogger")
+except ImportError as e:
+    _logger.debug(f"SearchLogger not available: {e}")
 
 # Cognitive RAG exports (require dspy, langchain, etc.)
 _COGNITIVE_EXPORTS: list[str] = []
