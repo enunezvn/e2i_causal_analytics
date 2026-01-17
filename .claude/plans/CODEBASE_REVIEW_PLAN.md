@@ -275,15 +275,14 @@ All 18 documented agents plus 1 additional (experiment_monitor) are implemented:
 
 ## 4. Medium Priority Improvements
 
-### 4.1 Entity Extraction Enhancement
+### 4.1 Entity Extraction Enhancement - ✅ COMPLETED
 
-**Problem**: `src/agents/explainer/memory_hooks.py:225` - TODO for entity extraction
+**Status**: Implemented on 2026-01-17 (commit `d3cccf6`)
 
-**Impact**: Semantic memory not enriched from explainer queries
-
-**Action**: Implement NER using existing entity_extractor patterns
-
-**Effort**: 3-4 hours
+**Solution**:
+- `_get_semantic_context()` method uses `EntityExtractor` to identify domain entities
+- Extracts brands, KPIs from queries and queries FalkorDB for relationships
+- Supports treatment lookups, causal path discovery, and relationship traversal
 
 ---
 
@@ -299,39 +298,37 @@ Both methods translate to PostgreSQL's `@>` operator for JSONB containment queri
 
 ---
 
-### 4.3 Feature Store Statistics
+### 4.3 Feature Store Statistics - ✅ COMPLETED
 
-**Problem**: `src/feature_store/client.py:427` - Statistics computation not implemented
+**Status**: Implemented on 2026-01-17 (commit `ad14040`)
 
-**Impact**: Feature store health metrics unavailable
-
-**Action**: Implement aggregation queries for feature statistics
-
-**Effort**: 2-3 hours
-
----
-
-### 4.4 Memory Stats Population
-
-**Problem**: `src/api/routes/memory.py:512` - Returns placeholder stats
-
-**Impact**: Memory system monitoring incomplete
-
-**Action**: Wire actual query counts from database
-
-**Effort**: 2 hours
+**Solution**:
+- `get_feature_statistics()` method in `FeatureStoreClient`
+- Queries `feature_values` table for aggregation statistics
+- Computes count, min, max, mean, std, percentiles, and unique counts
 
 ---
 
-### 4.5 RAG Stats Backend
+### 4.4 Memory Stats Population - ✅ COMPLETED
 
-**Problem**: `src/api/routes/rag.py:752` - Returns hardcoded zeros
+**Status**: Implemented on 2026-01-17 (commit `dca42f0`)
 
-**Impact**: RAG performance monitoring unavailable
+**Solution**:
+- `/stats` endpoint now returns actual database counts
+- Episodic stats: Uses `count_memories_by_type()` from `episodic_memory.py`
+- Procedural stats: Uses `get_memory_statistics()` from `procedural_memory.py`
+- Semantic stats: Uses `semantic.get_graph_stats()` for FalkorDB node/relationship counts
 
-**Action**: Implement search latency and quality tracking
+---
 
-**Effort**: 3-4 hours
+### 4.5 RAG Stats Backend - ✅ COMPLETED
+
+**Status**: Implemented on 2026-01-17 (commit `99e3035`)
+
+**Solution**:
+- `/stats` endpoint calls `get_rag_search_stats` database RPC function
+- Returns: total_searches, avg_latency_ms, p95_latency_ms, error_rate
+- Includes backend_usage breakdown (vector, fulltext, graph) and top_queries
 
 ---
 
@@ -577,20 +574,22 @@ Both methods translate to PostgreSQL's `@>` operator for JSONB containment queri
 
 ---
 
-### Phase 2: Core Completeness (Weeks 2-3)
+### Phase 2: Core Completeness (Weeks 2-3) ✅ COMPLETED
 
 **Goal**: Complete core system functionality
+
+**Status**: All tasks completed on 2026-01-17
 
 | Task | Priority | Effort | Dependencies | Status |
 |------|----------|--------|--------------|--------|
 | Experiment Monitor integration | HIGH | 3 hrs | None | ✅ Done |
 | MLOps service initialization | HIGH | 3 hrs | None | ✅ Done |
 | Optuna HPO → DB linkage | HIGH | 6 hrs | None | ✅ Done |
-| Entity extraction enhancement | MEDIUM | 4 hrs | None | Pending |
+| Entity extraction enhancement | MEDIUM | 4 hrs | None | ✅ Done |
 | Agent registry array query | MEDIUM | 1 hr | None | ✅ Done |
-| Feature store statistics | MEDIUM | 3 hrs | None | Pending |
-| Memory stats population | MEDIUM | 2 hrs | None | Pending |
-| RAG stats backend | MEDIUM | 4 hrs | None | Pending |
+| Feature store statistics | MEDIUM | 3 hrs | None | ✅ Done |
+| Memory stats population | MEDIUM | 2 hrs | None | ✅ Done |
+| RAG stats backend | MEDIUM | 4 hrs | None | ✅ Done |
 
 **Total Effort**: ~26 hours
 
