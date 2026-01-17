@@ -22,6 +22,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
+import tempfile
 from datetime import datetime, timedelta
 from enum import Enum
 from pathlib import Path
@@ -32,6 +34,34 @@ import yaml
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
+
+
+def _expand_env_vars(text: str) -> str:
+    """Expand shell-style environment variables in text.
+
+    Supports both ${VAR} and ${VAR:-default} syntax.
+    Handles YAML-safe empty string output for values in key: value positions.
+
+    Args:
+        text: Text containing environment variable references.
+
+    Returns:
+        Text with environment variables expanded.
+    """
+    # Pattern matches ${VAR} or ${VAR:-default}
+    pattern = r'\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}'
+
+    def replace_var(match: re.Match) -> str:
+        var_name = match.group(1)
+        default_value = match.group(2) if match.group(2) is not None else ""
+        value = os.environ.get(var_name, default_value)
+        # For empty values that will be in YAML key: value positions,
+        # return quoted empty string to prevent YAML null
+        if value == "":
+            return '""'
+        return value
+
+    return re.sub(pattern, replace_var, text)
 
 # Feature repo path - relative to project root
 FEATURE_REPO_PATH = Path(__file__).parent.parent.parent / "feature_repo"
@@ -161,6 +191,7 @@ class FeastClient:
         self._custom_store = None  # Fallback custom store
         self._stats_cache: Dict[str, FeatureStatistics] = {}
         self._stats_cache_time: Dict[str, datetime] = {}
+        self._temp_dir: Optional[str] = None  # Temp directory for expanded config
 
         # Load materialization config for freshness thresholds
         self._materialization_config = load_feast_config(materialization_config_path)
@@ -172,6 +203,7 @@ class FeastClient:
         """Initialize Feast store connection.
 
         Lazily initializes the connection to avoid blocking at import time.
+        Pre-processes feature_store.yaml to expand environment variables.
         """
         if self._initialized:
             return
@@ -185,7 +217,32 @@ class FeastClient:
                 logger.warning(f"Feast repo not found at {repo_path}. Creating minimal setup.")
                 os.makedirs(repo_path, exist_ok=True)
 
-            self._store = FeatureStore(repo_path=repo_path)
+            # Pre-process feature_store.yaml to expand environment variables
+            feature_store_yaml = Path(repo_path) / "feature_store.yaml"
+            expanded_repo_path = repo_path
+
+            if feature_store_yaml.exists():
+                logger.info(f"Found feature_store.yaml at {feature_store_yaml}")
+                with open(feature_store_yaml, "r") as f:
+                    original_yaml = f.read()
+
+                # Check if YAML contains env var syntax that needs expansion
+                if "${" in original_yaml:
+                    logger.info("Expanding environment variables in Feast config")
+                    expanded_yaml = _expand_env_vars(original_yaml)
+
+                    # Create temp directory with expanded config
+                    self._temp_dir = tempfile.mkdtemp(prefix="feast_expanded_")
+                    expanded_repo_path = self._temp_dir
+                    expanded_yaml_path = Path(self._temp_dir) / "feature_store.yaml"
+
+                    with open(expanded_yaml_path, "w") as f:
+                        f.write(expanded_yaml)
+
+                    logger.info(f"Feast config expanded to {expanded_repo_path}")
+                    logger.info(f"Using expanded repo path: {expanded_repo_path}")
+
+            self._store = FeatureStore(repo_path=expanded_repo_path)
             self._initialized = True
             logger.info(f"Feast client initialized with repo: {repo_path}")
 
@@ -1086,13 +1143,25 @@ class FeastClient:
             return False
 
     async def close(self) -> None:
-        """Close client connections."""
+        """Close client connections and cleanup temp files."""
+        import shutil
+
         self._store = None
         self._custom_store = None
         self._initialized = False
         self._stats_cache.clear()
         self._stats_cache_time.clear()
         self._materialization_timestamps.clear()
+
+        # Clean up temp directory if created
+        if self._temp_dir and os.path.exists(self._temp_dir):
+            try:
+                shutil.rmtree(self._temp_dir)
+                logger.debug(f"Cleaned up temp directory: {self._temp_dir}")
+            except Exception as e:
+                logger.warning(f"Failed to cleanup temp directory: {e}")
+            self._temp_dir = None
+
         logger.info("Feast client closed")
 
 

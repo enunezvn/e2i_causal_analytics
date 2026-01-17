@@ -23,24 +23,6 @@ offline_store:
 online_store:
   type: redis
   connection_string: ${REDIS_URL:-redis://localhost:6382}
-  # Redis key prefix for all feature values
-  key_prefix: e2i_feast_
 
 # Entity key serialization
 entity_key_serialization_version: 3
-
-# Feature transformation settings
-transformation_server:
-  enabled: false  # Enable when using on-demand transformations
-
-# Batch engine settings
-batch_engine:
-  type: local  # Use 'spark' for large-scale processing
-
-# Feature freshness monitoring
-feature_validation:
-  enabled: true
-
-# Logging configuration
-logging:
-  level: INFO

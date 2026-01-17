@@ -58,7 +58,7 @@ All 18 documented agents plus 1 additional (experiment_monitor) are implemented:
 | **Tier 0** (ML Foundation) | 7 agents + cohort_constructor | ✅ 100% | No DSPy by design (fast path) |
 | **Tier 1** (Coordination) | orchestrator, tool_composer | ✅ 100% | tool_composer enabled (fixed 2026-01-17) |
 | **Tier 2** (Causal Analytics) | 3 agents | ✅ 100% | Full DSPy + memory integration |
-| **Tier 3** (Monitoring) | 3 agents + experiment_monitor | ⚠️ 75% | experiment_monitor missing DSPy |
+| **Tier 3** (Monitoring) | 3 agents + experiment_monitor | ✅ 100% | All agents with DSPy + memory |
 | **Tier 4** (ML Predictions) | 2 agents | ✅ 100% | Full implementation |
 | **Tier 5** (Self-Improvement) | 2 agents | ✅ 100% | GEPA optimization enabled |
 
@@ -80,7 +80,7 @@ All 18 documented agents plus 1 additional (experiment_monitor) are implemented:
 |------|---------|--------|-------------------|
 | MLflow | 2.16.0+ | ✅ | Experiment tracking active |
 | Opik | 0.2.0+ | ✅ | Agent observability complete |
-| Feast | 0.40.0+ | ⚠️ | Client exists, registry incomplete |
+| Feast | 0.40.0+ | ✅ | Client initialized, env var expansion fixed (2026-01-17) |
 | Great Expectations | 1.0.0+ | ✅ | Data validation active |
 | Optuna | 3.6.0+ | ⚠️ | HPO working, DB linkage missing |
 | BentoML | 1.3.0+ | ⚠️ | Templates exist, E2E untested |
@@ -179,34 +179,40 @@ All 18 documented agents plus 1 additional (experiment_monitor) are implemented:
 
 ## 3. High Priority Enhancements
 
-### 3.1 Experiment Monitor Integration
+### 3.1 Experiment Monitor Integration ✅ COMPLETED (2026-01-17)
 
-**Current State**: Agent implemented but missing DSPy and memory hooks
+**Status**: Fully implemented with DSPy and memory hooks
 
-**Missing Files**:
-- `dspy_integration.py` - Cannot use prompt optimization
-- `memory_hooks.py` - Cannot contribute to memory systems
-- Not registered in factory
+**Implemented Files**:
+- `dspy_integration.py` - Complete DSPy signatures (MonitorSummarySignature, AlertGenerationSignature, SRMDescriptionSignature) and optimized prompt templates
+- `memory_hooks.py` - Full memory integration with ExperimentMonitorMemoryHooks class providing working memory caching, episodic memory storage, and historical alert retrieval
+- `agent.py` - Properly imports and uses memory_hooks with `contribute_to_memory()` call after execution
+- Factory registration - Enabled in `src/agents/factory.py` (Tier 3)
 
 **Location**: `src/agents/experiment_monitor/`
 
-**Action**: Copy templates from similar agents (health_score, drift_monitor)
-
-**Effort**: 2-3 hours
+**Remaining**: Unit tests needed (no test files exist yet)
 
 ---
 
-### 3.2 MLOps Service Initialization
+### 3.2 MLOps Service Initialization ✅ COMPLETED (2026-01-17)
 
-**Current State**: Services not initialized at API startup
+**Status**: All three MLOps services now initialize at API startup
 
-**Problem**: `src/api/main.py:142` - TODO comment for MLflow, Feast, Opik initialization
+**Implemented**:
+- Added `src/api/main.py` lifespan context manager with `init_mlops_services()` and `cleanup_mlops_services()`
+- MLflow: Singleton connector initialized with proper error handling
+- Opik: Client initialized using `get_opik_client()` singleton
+- Feast: `FeastFeatureStore` initialized with env var expansion fix
 
-**Impact**: MLOps integration not active in API runtime
+**Feast Configuration Fix**:
+- Created `_expand_env_vars()` function in `src/feature_store/feast_client.py` to handle shell-style `${VAR:-default}` syntax
+- Pre-processes `feature_store.yaml` to expand environment variables before Feast loads it
+- Handles YAML empty values (returns `""` instead of null)
+- Uses temp directory for expanded config, cleans up on close
+- Removed unsupported Feast config fields (`key_prefix`, `transformation_server`, etc.)
 
-**Action**: Add initialization logic with proper error handling
-
-**Effort**: 2-3 hours
+**Verified**: Service healthy on production droplet (138.197.4.36)
 
 ---
 
@@ -470,10 +476,10 @@ All 18 documented agents plus 1 additional (experiment_monitor) are implemented:
 
 | Location | Description | Priority |
 |----------|-------------|----------|
-| `src/rag/cognitive_backends.py:98` | Episode storage via Supabase | CRITICAL |
-| `src/rag/cognitive_backends.py:235` | Relationship storage via FalkorDB | CRITICAL |
-| `src/api/main.py:142` | MLOps service initialization | HIGH |
-| `src/api/main.py:204` | CORS origin restriction | CRITICAL |
+| `src/rag/cognitive_backends.py:98` | Episode storage via Supabase | ✅ Done |
+| `src/rag/cognitive_backends.py:235` | Relationship storage via FalkorDB | ✅ Done |
+| ~~`src/api/main.py:142`~~ | ~~MLOps service initialization~~ | ✅ Done |
+| ~~`src/api/main.py:204`~~ | ~~CORS origin restriction~~ | ✅ Done |
 | `src/feature_store/client.py:427` | Statistics computation | MEDIUM |
 | `src/repositories/agent_registry.py:72` | Array contains query | MEDIUM |
 | `src/causal_engine/discovery/runner.py:349` | Process-based parallelism | LOW |
@@ -575,16 +581,16 @@ All 18 documented agents plus 1 additional (experiment_monitor) are implemented:
 
 **Goal**: Complete core system functionality
 
-| Task | Priority | Effort | Dependencies |
-|------|----------|--------|--------------|
-| Experiment Monitor integration | HIGH | 3 hrs | None |
-| MLOps service initialization | HIGH | 3 hrs | None |
-| Optuna HPO → DB linkage | HIGH | 6 hrs | None |
-| Entity extraction enhancement | MEDIUM | 4 hrs | None |
-| Agent registry array query | MEDIUM | 1 hr | None |
-| Feature store statistics | MEDIUM | 3 hrs | None |
-| Memory stats population | MEDIUM | 2 hrs | None |
-| RAG stats backend | MEDIUM | 4 hrs | None |
+| Task | Priority | Effort | Dependencies | Status |
+|------|----------|--------|--------------|--------|
+| Experiment Monitor integration | HIGH | 3 hrs | None | ✅ Done |
+| MLOps service initialization | HIGH | 3 hrs | None | ✅ Done |
+| Optuna HPO → DB linkage | HIGH | 6 hrs | None | Pending |
+| Entity extraction enhancement | MEDIUM | 4 hrs | None | Pending |
+| Agent registry array query | MEDIUM | 1 hr | None | Pending |
+| Feature store statistics | MEDIUM | 3 hrs | None | Pending |
+| Memory stats population | MEDIUM | 2 hrs | None | Pending |
+| RAG stats backend | MEDIUM | 4 hrs | None | Pending |
 
 **Total Effort**: ~26 hours
 
