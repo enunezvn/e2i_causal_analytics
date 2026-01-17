@@ -85,6 +85,7 @@ ORCHESTRATOR_ROUTED_INTENTS = {
     IntentType.RECOMMENDATION,
     IntentType.SEARCH,
     IntentType.MULTI_FACETED,
+    IntentType.COHORT_DEFINITION,  # Route cohort queries through orchestrator to CohortConstructor
 }
 
 logger = logging.getLogger(__name__)
@@ -306,6 +307,15 @@ def classify_intent(query: str) -> str:
     # Search patterns
     if _matches_pattern(query_lower, ["search", "find", "look for", "show me", "trend"]):
         return IntentType.SEARCH
+
+    # Cohort definition patterns (patient/HCP cohort construction)
+    if _matches_pattern(query_lower, [
+        "cohort", "build a cohort", "create a cohort", "define a cohort",
+        "patient population", "patient set", "eligibility", "eligible patient",
+        "inclusion criteria", "exclusion criteria", "high-value hcp", "high value hcp",
+        "hcp cohort", "physician cohort", "filter patient"
+    ]):
+        return IntentType.COHORT_DEFINITION
 
     return IntentType.GENERAL
 
