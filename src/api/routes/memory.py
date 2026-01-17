@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from src.memory.episodic_memory import (
     E2IEntityReferences,
+    count_memories_by_type,
     get_memory_by_id,
     insert_episodic_memory_with_text,
 )
@@ -30,6 +31,7 @@ from src.memory.episodic_memory import (
 )
 from src.memory.procedural_memory import (
     LearningSignalInput,
+    get_memory_statistics,
     get_procedure_by_id,
     record_learning_signal,
     update_procedure_outcome,
@@ -506,14 +508,54 @@ async def get_memory_stats() -> Dict[str, Any]:
     """
     Get statistics about the memory systems.
 
-    Returns counts and metrics for each memory type.
+    Returns counts and metrics for each memory type:
+    - Episodic: total memories, recent 24h count
+    - Procedural: total procedures, average success rate
+    - Semantic: total entities (nodes), total relationships
     """
     try:
-        # Placeholder - will be implemented with actual stats queries
+        # Get episodic memory stats
+        total_episodic = await count_memories_by_type(days_back=365 * 10)  # All time
+        recent_episodic = await count_memories_by_type(days_back=1)  # Last 24h
+
+        # Get procedural memory stats
+        proc_stats = await get_memory_statistics(days_back=30)
+        proc_totals = proc_stats.get("totals_by_type", {})
+        total_procedures = sum(proc_totals.values()) if proc_totals else 0
+
+        # Calculate average success rate from daily breakdown
+        daily_stats = proc_stats.get("daily_breakdown", [])
+        success_rates = [
+            s.get("success_rate", 0.0) for s in daily_stats if s.get("success_rate")
+        ]
+        avg_success_rate = (
+            sum(success_rates) / len(success_rates) if success_rates else 0.0
+        )
+
+        # Get semantic memory stats from FalkorDB
+        semantic = get_semantic_memory()
+        try:
+            graph_stats = semantic.get_graph_stats()
+            total_entities = graph_stats.get("total_nodes", 0)
+            total_relationships = graph_stats.get("total_relationships", 0)
+        except Exception as e:
+            logger.warning(f"Failed to get semantic graph stats: {e}")
+            total_entities = 0
+            total_relationships = 0
+
         return {
-            "episodic": {"total_memories": 0, "recent_24h": 0},
-            "procedural": {"total_procedures": 0, "average_success_rate": 0.0},
-            "semantic": {"total_entities": 0, "total_relationships": 0},
+            "episodic": {
+                "total_memories": total_episodic,
+                "recent_24h": recent_episodic,
+            },
+            "procedural": {
+                "total_procedures": total_procedures,
+                "average_success_rate": round(avg_success_rate, 3),
+            },
+            "semantic": {
+                "total_entities": total_entities,
+                "total_relationships": total_relationships,
+            },
             "last_updated": datetime.now(timezone.utc).isoformat(),
         }
     except Exception as e:
