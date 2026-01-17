@@ -760,7 +760,7 @@ def _persist_message_sync(
         )
 
         if result.data:
-            logger.error(f"[DEBUG] _persist_message_sync: inserted message id={result.data[0].get('id')}")
+            logger.debug(f"_persist_message_sync: inserted message id={result.data[0].get('id')}")
             return result.data[0]
         return None
     except Exception as e:
@@ -886,9 +886,9 @@ async def _ensure_conversation_exists(session_id: str) -> bool:
         True if conversation exists or was created, False on failure
     """
     try:
-        logger.error(f"[DEBUG] _ensure_conversation_exists: Starting for session_id={session_id[:20]}...")
+        logger.debug(f"_ensure_conversation_exists: Starting for session_id={session_id[:20]}...")
         conv_repo = _get_chatbot_conversation_repository()
-        logger.error(f"[DEBUG] _ensure_conversation_exists: conv_repo={conv_repo is not None}")
+        logger.debug(f"_ensure_conversation_exists: conv_repo={conv_repo is not None}")
         if not conv_repo:
             logger.warning("[CopilotKit] Could not get conversation repository")
             return False
@@ -896,7 +896,7 @@ async def _ensure_conversation_exists(session_id: str) -> bool:
         # Check if conversation already exists (don't use .single() which throws on no results)
         # Use direct query with limit instead (Supabase client is synchronous, no await)
         try:
-            logger.error(f"[DEBUG] _ensure_conversation_exists: Checking existing...")
+            logger.debug("_ensure_conversation_exists: Checking existing...")
             if conv_repo.client:
                 check_result = (
                     conv_repo.client.table("chatbot_conversations")
@@ -906,19 +906,19 @@ async def _ensure_conversation_exists(session_id: str) -> bool:
                     .execute()
                 )
                 existing = check_result.data if check_result.data else None
-                logger.error(f"[DEBUG] _ensure_conversation_exists: existing={existing}")
+                logger.debug(f"_ensure_conversation_exists: existing={existing}")
                 if existing:
                     return True
             else:
-                logger.error("[DEBUG] _ensure_conversation_exists: No client!")
+                logger.debug("_ensure_conversation_exists: No client!")
                 return False
         except Exception as check_err:
-            logger.error(f"[DEBUG] _ensure_conversation_exists: Check error: {check_err}")
+            logger.debug(f"_ensure_conversation_exists: Check error: {check_err}")
             # Continue to try creating if check fails
 
         # Create new conversation for this session (use 'general' query_type from enum)
         # NOTE: Using direct synchronous Supabase call since supabase-py is synchronous
-        logger.error(f"[DEBUG] _ensure_conversation_exists: Creating new conversation...")
+        logger.debug("_ensure_conversation_exists: Creating new conversation...")
         try:
             conversation_data = {
                 "session_id": session_id,
@@ -932,15 +932,15 @@ async def _ensure_conversation_exists(session_id: str) -> bool:
                 .insert(conversation_data)
                 .execute()
             )
-            logger.error(f"[DEBUG] _ensure_conversation_exists: create result data={result.data}")
+            logger.debug(f"_ensure_conversation_exists: create result data={result.data}")
             if result.data:
-                logger.error(f"[CopilotKit] Created conversation for session_id={session_id[:20]}...")
+                logger.info(f"[CopilotKit] Created conversation for session_id={session_id[:20]}...")
                 return True
             else:
                 logger.warning(f"[CopilotKit] Failed to create conversation for session_id={session_id}")
                 return False
         except Exception as create_err:
-            logger.error(f"[DEBUG] _ensure_conversation_exists: Create error: {create_err}")
+            logger.debug(f"_ensure_conversation_exists: Create error: {create_err}")
             return False
     except Exception as e:
         logger.error(f"[CopilotKit] Error ensuring conversation exists: {e}")
@@ -1569,13 +1569,12 @@ def create_e2i_chat_agent():
 
         # Persist user message to database
         user_message_id = None
-        # DEBUG: Trace persistence path (using ERROR level to ensure visibility)
-        logger.error(f"[DEBUG] Persistence check: last_human_message={last_human_message[:50] if last_human_message else 'None'}..., session_id={session_id[:20] if session_id else 'None'}... (source={session_id_source})")
+        logger.debug(f"Persistence check: last_human_message={last_human_message[:50] if last_human_message else 'None'}..., session_id={session_id[:20] if session_id else 'None'}... (source={session_id_source})")
         if last_human_message and session_id:
             try:
                 # Ensure conversation exists before inserting messages (FK constraint)
                 conv_exists = await _ensure_conversation_exists(session_id)
-                logger.error(f"[DEBUG] Conversation exists: {conv_exists}")
+                logger.debug(f"Conversation exists: {conv_exists}")
                 if conv_exists:
                     # Use synchronous helper to persist message (supabase-py is sync)
                     result = _persist_message_sync(
