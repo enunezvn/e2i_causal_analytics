@@ -31,6 +31,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.memory.services.factories import get_supabase_client
 from src.rag import (
     EntityExtractor,
     ExtractedEntities,
@@ -736,18 +737,64 @@ async def get_stats(
     hours: int = Query(default=24, ge=1, le=168, description="Hours to look back"),
     service: RAGService = Depends(get_rag_service),
 ) -> Dict[str, Any]:
-    """Get RAG usage statistics."""
-    # In production, this would query the search_logs table
-    return {
-        "period_hours": hours,
-        "total_searches": 0,
-        "avg_latency_ms": 0,
-        "top_queries": [],
-        "backend_usage": {
-            "vector": 0,
-            "fulltext": 0,
-            "graph": 0,
-        },
-        "error_rate": 0.0,
-        "message": "Statistics will be populated once search logging is configured",
-    }
+    """
+    Get RAG usage statistics from the rag_search_logs table.
+
+    Returns metrics including:
+    - total_searches: Number of searches in period
+    - avg_latency_ms: Average search latency
+    - p95_latency_ms: 95th percentile latency
+    - error_rate: Percentage of searches with errors
+    - backend_usage: Counts by backend (vector, fulltext, graph)
+    - top_queries: Most frequent queries with their latencies
+    """
+    try:
+        supabase = get_supabase_client()
+
+        # Call the get_rag_search_stats database function
+        result = supabase.rpc("get_rag_search_stats", {"hours_lookback": hours}).execute()
+
+        if result.data:
+            stats = result.data
+            # The RPC returns JSONB which comes as a dict
+            return {
+                "period_hours": stats.get("period_hours", hours),
+                "total_searches": stats.get("total_searches", 0),
+                "avg_latency_ms": stats.get("avg_latency_ms", 0),
+                "p95_latency_ms": stats.get("p95_latency_ms", 0),
+                "avg_results": stats.get("avg_results", 0),
+                "error_rate": stats.get("error_rate", 0.0),
+                "backend_usage": stats.get("backend_usage", {
+                    "vector": 0,
+                    "fulltext": 0,
+                    "graph": 0,
+                }),
+                "top_queries": stats.get("top_queries", []),
+            }
+
+        # Return empty stats if no data
+        return {
+            "period_hours": hours,
+            "total_searches": 0,
+            "avg_latency_ms": 0,
+            "p95_latency_ms": 0,
+            "avg_results": 0,
+            "error_rate": 0.0,
+            "backend_usage": {"vector": 0, "fulltext": 0, "graph": 0},
+            "top_queries": [],
+        }
+
+    except Exception as e:
+        logger.warning(f"Failed to get RAG stats from database: {e}")
+        # Return empty stats on error rather than failing
+        return {
+            "period_hours": hours,
+            "total_searches": 0,
+            "avg_latency_ms": 0,
+            "p95_latency_ms": 0,
+            "avg_results": 0,
+            "error_rate": 0.0,
+            "backend_usage": {"vector": 0, "fulltext": 0, "graph": 0},
+            "top_queries": [],
+            "error": str(e),
+        }
