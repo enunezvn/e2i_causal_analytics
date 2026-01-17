@@ -46,10 +46,10 @@ sudo systemctl status nginx
 - **Public IPv4**: 138.197.4.36
 - **Region**: NYC3 (New York)
 - **Image**: Ubuntu 24.04.3 LTS x64
-- **Size**: s-4vcpu-8gb-amd
+- **Size**: s-4vcpu-16gb-amd
   - 4 vCPUs (AMD)
-  - 8 GB RAM
-  - 160 GB SSD
+  - 16 GB RAM
+  - 200 GB SSD
 - **Status**: Active
 - **Features**: droplet_agent, monitoring
 
@@ -62,7 +62,7 @@ sudo systemctl status nginx
 | **SSH Key Auth** | ✅ ED25519 | Password auth disabled |
 | **UFW Firewall** | ✅ Active | Ports 22, 80, 443, 8000 |
 | **Fail2ban** | ✅ Active | sshd jail enabled |
-| **Swap** | ✅ Configured | 2GB swapfile |
+| **Swap** | ✅ Configured | 4GB swapfile |
 
 ### SSH Access
 
@@ -185,8 +185,8 @@ doctl compute size list
 ```
 
 Current size specs:
-- `s-4vcpu-8gb-amd`: 4 vCPU, 8 GB RAM, 160 GB SSD (AMD) - **current**
-- `s-4vcpu-8gb-intel`: 4 vCPU, 8 GB RAM, similar (Intel variant)
+- `s-4vcpu-16gb-amd`: 4 vCPU, 16 GB RAM, 200 GB SSD (AMD) - **current**
+- `s-4vcpu-8gb-amd`: 4 vCPU, 8 GB RAM, 160 GB SSD (AMD) - previous size
 
 ### Firewall & Security
 
@@ -284,8 +284,8 @@ sudo journalctl -u nginx -f
 
 ### Cost Information
 
-- **Current Plan**: s-4vcpu-8gb-amd
-- **Estimated Cost**: ~$48/month (verify current pricing on DigitalOcean)
+- **Current Plan**: s-4vcpu-16gb-amd
+- **Estimated Cost**: $84/month
 
 ### SSH Keys
 
@@ -386,7 +386,7 @@ runcmd:
 
 swap:
   filename: /swapfile
-  size: 2G
+  size: 4G
 ```
 
 ### Notes
@@ -395,7 +395,7 @@ swap:
 - ✅ Root SSH login disabled
 - ✅ Fail2ban active with sshd jail
 - ✅ UFW firewall configured
-- ✅ 2GB swap configured
+- ✅ 4GB swap configured
 - ✅ Docker and Docker Compose installed
 - ✅ Nginx installed
 
@@ -406,7 +406,7 @@ swap:
 - [x] Disable root SSH login
 - [x] Set up UFW firewall rules
 - [x] Configure fail2ban for SSH protection
-- [x] Configure swap (2GB)
+- [x] Configure swap (4GB)
 - [x] Install Docker and Docker Compose
 - [x] Install Nginx
 
