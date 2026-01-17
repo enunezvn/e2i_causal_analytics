@@ -287,15 +287,15 @@ All 18 documented agents plus 1 additional (experiment_monitor) are implemented:
 
 ---
 
-### 4.2 Agent Registry Array Query
+### 4.2 Agent Registry Array Query - ✅ COMPLETED
 
-**Problem**: `src/repositories/agent_registry.py:72` - Array contains query not implemented
+**Status**: Implemented on 2026-01-17 (commit `a0f9713`)
 
-**Impact**: Cannot filter agents by capabilities array
+**Solution**:
+- `get_by_intent()` - Uses Supabase `contains()` for `routes_from_intents` JSONB array
+- `get_by_capability()` - Uses Supabase `contains()` for `capabilities` JSONB array
 
-**Action**: Implement PostgreSQL array contains (`@>`) query
-
-**Effort**: 1 hour
+Both methods translate to PostgreSQL's `@>` operator for JSONB containment queries.
 
 ---
 
@@ -587,7 +587,7 @@ All 18 documented agents plus 1 additional (experiment_monitor) are implemented:
 | MLOps service initialization | HIGH | 3 hrs | None | ✅ Done |
 | Optuna HPO → DB linkage | HIGH | 6 hrs | None | ✅ Done |
 | Entity extraction enhancement | MEDIUM | 4 hrs | None | Pending |
-| Agent registry array query | MEDIUM | 1 hr | None | Pending |
+| Agent registry array query | MEDIUM | 1 hr | None | ✅ Done |
 | Feature store statistics | MEDIUM | 3 hrs | None | Pending |
 | Memory stats population | MEDIUM | 2 hrs | None | Pending |
 | RAG stats backend | MEDIUM | 4 hrs | None | Pending |
