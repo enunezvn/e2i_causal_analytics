@@ -7,6 +7,8 @@ Provides unified interface for feature retrieval, writing, and management.
 
 import logging
 import os
+import statistics
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import mlflow
@@ -423,9 +425,145 @@ class FeatureStoreClient:
     def get_feature_statistics(
         self, feature_group_name: str, feature_name: str
     ) -> Optional[FeatureStatistics]:
-        """Get statistics for a specific feature."""
-        # TODO: Implement statistics computation
-        pass
+        """
+        Get statistics for a specific feature.
+
+        Computes aggregation statistics from feature_values table including
+        count, min, max, mean, std, percentiles (for numeric), and unique counts.
+
+        Args:
+            feature_group_name: Name of the feature group
+            feature_name: Name of the feature
+
+        Returns:
+            FeatureStatistics with computed metrics or None if feature not found
+        """
+        # Get feature definition
+        feature = self.get_feature(feature_group_name, feature_name)
+        if not feature:
+            logger.warning(f"Feature not found: {feature_group_name}.{feature_name}")
+            return None
+
+        # Query all values for this feature
+        try:
+            response = (
+                self.supabase.table("feature_values")
+                .select("value, event_timestamp")
+                .eq("feature_id", str(feature.id))
+                .order("event_timestamp", desc=True)
+                .limit(10000)  # Limit for performance
+                .execute()
+            )
+        except Exception as e:
+            logger.error(f"Failed to query feature values: {e}")
+            return None
+
+        if not response.data:
+            # Return empty statistics if no values
+            return FeatureStatistics(
+                feature_id=feature.id,
+                feature_name=feature_name,
+                feature_group=feature_group_name,
+                count=0,
+                null_count=0,
+                computed_at=datetime.now(timezone.utc),
+            )
+
+        # Extract values
+        values = [row.get("value") for row in response.data]
+        total_count = len(values)
+
+        # Count nulls
+        null_count = sum(1 for v in values if v is None)
+        non_null_values = [v for v in values if v is not None]
+
+        # Initialize statistics
+        stats = FeatureStatistics(
+            feature_id=feature.id,
+            feature_name=feature_name,
+            feature_group=feature_group_name,
+            count=total_count,
+            null_count=null_count,
+            computed_at=datetime.now(timezone.utc),
+        )
+
+        # Compute unique count
+        try:
+            stats.unique_count = len(set(str(v) for v in non_null_values))
+        except Exception:
+            stats.unique_count = None
+
+        # Compute numeric statistics if applicable
+        numeric_values = []
+        for v in non_null_values:
+            try:
+                if isinstance(v, (int, float)) and not isinstance(v, bool):
+                    numeric_values.append(float(v))
+                elif isinstance(v, str):
+                    # Try to parse as number
+                    numeric_values.append(float(v))
+            except (ValueError, TypeError):
+                continue
+
+        if numeric_values:
+            stats.min_value = min(numeric_values)
+            stats.max_value = max(numeric_values)
+            stats.mean = statistics.mean(numeric_values)
+
+            if len(numeric_values) > 1:
+                stats.std = statistics.stdev(numeric_values)
+
+                # Compute percentiles
+                sorted_values = sorted(numeric_values)
+                n = len(sorted_values)
+                stats.percentiles = {
+                    "p25": sorted_values[int(n * 0.25)],
+                    "p50": sorted_values[int(n * 0.50)],
+                    "p75": sorted_values[int(n * 0.75)],
+                    "p90": sorted_values[int(n * 0.90)],
+                    "p95": sorted_values[int(n * 0.95)] if n >= 20 else None,
+                    "p99": sorted_values[int(n * 0.99)] if n >= 100 else None,
+                }
+                # Remove None percentiles
+                stats.percentiles = {
+                    k: v for k, v in stats.percentiles.items() if v is not None
+                }
+
+        logger.debug(
+            f"Computed statistics for {feature_group_name}.{feature_name}: "
+            f"count={stats.count}, mean={stats.mean}"
+        )
+
+        return stats
+
+    def get_feature_group_statistics(
+        self, feature_group_name: str
+    ) -> Dict[str, FeatureStatistics]:
+        """
+        Get statistics for all features in a feature group.
+
+        Args:
+            feature_group_name: Name of the feature group
+
+        Returns:
+            Dict mapping feature names to their FeatureStatistics
+        """
+        features = self.list_features(feature_group_name)
+        if not features:
+            logger.warning(f"No features found in group: {feature_group_name}")
+            return {}
+
+        stats_dict = {}
+        for feature in features:
+            stats = self.get_feature_statistics(feature_group_name, feature.name)
+            if stats:
+                stats_dict[feature.name] = stats
+
+        logger.info(
+            f"Computed statistics for {len(stats_dict)} features "
+            f"in group {feature_group_name}"
+        )
+        return stats_dict
 
     def update_freshness_status(self) -> None:
         """Update freshness status for all features."""
