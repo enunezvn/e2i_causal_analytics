@@ -47,7 +47,14 @@ click-plugins==1.1.1.2
 click-repl==0.3.0
 cloudpickle==3.1.2
 colorama==0.4.6
-copilotkit==0.1.76
+# Patched ag-ui-langgraph with relaxed fastapi constraint (>=0.115.12 instead of ^0.115.12)
+# Required to allow fastapi 0.116+ which fixes starlette CVEs (CVE-2025-54121, CVE-2025-62727)
+# See patches/ag-ui-langgraph/README.md for details
+./patches/ag-ui-langgraph[fastapi]
+# Patched copilotkit with relaxed fastapi constraint (>=0.115.12 instead of <0.116.0)
+# Required to allow fastapi 0.116+ which fixes starlette CVEs (CVE-2025-54121, CVE-2025-62727)
+# See patches/copilotkit/README.md for details
+./patches/copilotkit
 colorlog==6.10.1
 contourpy==1.3.3
 coverage==7.13.0

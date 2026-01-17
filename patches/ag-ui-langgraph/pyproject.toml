@@ -1,0 +1,31 @@
+# ag-ui-langgraph fork with relaxed fastapi constraint
+# Original: https://github.com/ag-ui-protocol/ag-ui/tree/main/integrations/langgraph/python
+# Reason: Allow fastapi >=0.116.0 to fix starlette CVEs (CVE-2025-54121, CVE-2025-62727)
+# Date: 2026-01-16
+
+[tool.poetry]
+name = "ag-ui-langgraph"
+version = "0.0.23.post1"
+description = "Implementation of the AG-UI protocol for LangGraph. (Patched for fastapi >=0.116)"
+authors = ["Ran Shem Tov <ran@copilotkit.ai>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "<3.14,>=3.10"
+ag-ui-protocol = "^0.1.10"
+# PATCHED: Changed from "^0.115.12" to ">=0.115.12" to allow fastapi 0.116+
+fastapi = { version = ">=0.115.12", optional = true }
+langchain = ">=0.3.0"
+langchain-core = ">=0.3.0"
+langgraph = ">=0.3.25,<1.1.0"
+pydantic = ">=2.0.0"
+
+[tool.poetry.extras]
+fastapi = ["fastapi"]
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.scripts]
+dev = "ag_ui_langgraph.dojo:main"
