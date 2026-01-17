@@ -286,10 +286,10 @@ In addition to the E2I domain-specific agents, the framework provides BMAD-inspi
 
 ### Infrastructure
 - **Cloud Provider**: DigitalOcean
-- **Droplet**: ubuntu-s-2vcpu-4gb-120gb-intel-nyc3-01
+- **Droplet**: e2i-analytics-prod
 - **Region**: NYC3 (New York)
-- **Specs**: 4 vCPU, 8 GB RAM, 120 GB SSD (Ubuntu 24.04 LTS)
-- **Public IP**: 159.89.180.27
+- **Specs**: 4 vCPU, 8 GB RAM, 160 GB SSD (Ubuntu 24.04 LTS)
+- **Public IP**: 138.197.4.36
 - **Reference**: See `INFRASTRUCTURE.md` for full details
 
 ---
@@ -300,21 +300,20 @@ This project is deployed on a DigitalOcean droplet. Key details:
 
 | Property | Value |
 |----------|-------|
-| **Droplet Name** | ubuntu-s-2vcpu-4gb-120gb-intel-nyc3-01 |
-| **Droplet ID** | 538064298 |
-| **Public IPv4** | 159.89.180.27 |
-| **Private IPv4** | 10.108.0.2 |
+| **Droplet Name** | e2i-analytics-prod |
+| **Droplet ID** | 544907207 |
+| **Public IPv4** | 138.197.4.36 |
 | **Region** | NYC3 (New York) |
 | **OS** | Ubuntu 24.04 LTS x64 |
-| **Specs** | 4 vCPU, 8 GB RAM, 120 GB SSD |
+| **Specs** | 4 vCPU, 8 GB RAM, 160 GB SSD |
 
 ### SSH Access
 ```bash
-# Using configured SSH key
-ssh -i ~/.ssh/replit root@159.89.180.27
+# Using configured SSH key (as non-root user)
+ssh -i ~/.ssh/replit enunez@138.197.4.36
 
-# Or with default config
-ssh root@159.89.180.27
+# Or with SSH config alias
+ssh e2i-prod
 ```
 
 ### Common doctl Commands
@@ -323,15 +322,15 @@ ssh root@159.89.180.27
 source .env && doctl auth init --access-token "$DIGITALOCEAN_TOKEN"
 
 # Droplet status
-doctl compute droplet get 538064298
+doctl compute droplet get 544907207
 
 # Reboot/power cycle
-doctl compute droplet-action reboot 538064298
-doctl compute droplet-action power-off 538064298
-doctl compute droplet-action power-on 538064298
+doctl compute droplet-action reboot 544907207
+doctl compute droplet-action power-off 544907207
+doctl compute droplet-action power-on 544907207
 
 # Create snapshot backup
-doctl compute droplet-action snapshot 538064298 --snapshot-name "backup-$(date +%Y%m%d)"
+doctl compute droplet-action snapshot 544907207 --snapshot-name "backup-$(date +%Y%m%d)"
 ```
 
 **Full documentation**: See `INFRASTRUCTURE.md` for complete reference including firewall setup, SSH key management, and cost information.

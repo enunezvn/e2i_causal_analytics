@@ -1,31 +1,90 @@
 # Infrastructure Reference
 
+## Quick Connect
+
+```bash
+# SSH to droplet
+ssh -i ~/.ssh/replit enunez@138.197.4.36
+
+# Or if you have ~/.ssh/config configured:
+ssh e2i-prod
+```
+
+**API Endpoints:**
+| Endpoint | URL |
+|----------|-----|
+| Health Check | http://138.197.4.36/health |
+| API (via nginx) | http://138.197.4.36/ |
+| API (direct) | http://138.197.4.36:8000/ |
+
+**Common Commands (run on droplet):**
+```bash
+# Check API status
+sudo systemctl status e2i-api
+
+# Restart API
+sudo systemctl restart e2i-api
+
+# View API logs
+sudo journalctl -u e2i-api -f
+
+# Check nginx status
+sudo systemctl status nginx
+```
+
+---
+
 ## DigitalOcean Droplets
 
 ### Primary Droplet - E2I Causal Analytics
 
-**Created**: 2025-12-18
+**Created**: 2026-01-16 (Recreated with security hardening)
 
 **Droplet Details:**
-- **Name**: ubuntu-s-2vcpu-4gb-120gb-intel-nyc3-01
-- **Droplet ID**: 538064298
-- **Public IPv4**: 159.89.180.27
-- **Private IPv4**: 10.108.0.2
+- **Name**: e2i-analytics-prod
+- **Droplet ID**: 544907207
+- **Public IPv4**: 138.197.4.36
 - **Region**: NYC3 (New York)
-- **Image**: Ubuntu 24.04 LTS x64
-- **Size**: s-4vcpu-8gb-120gb-intel (resized from s-2vcpu-4gb-120gb-intel)
-  - 4 vCPUs
+- **Image**: Ubuntu 24.04.3 LTS x64
+- **Size**: s-4vcpu-8gb-amd
+  - 4 vCPUs (AMD)
   - 8 GB RAM
-  - 120 GB SSD
-- **VPC UUID**: acd58f3d-4e52-4e14-bce4-e5e002521914
+  - 160 GB SSD
 - **Status**: Active
-- **Features**: droplet_agent, private_networking
+- **Features**: droplet_agent, monitoring
+
+### Security Configuration
+
+| Feature | Status | Details |
+|---------|--------|---------|
+| **Non-root User** | ✅ Enabled | `enunez` with sudo |
+| **Root Login** | ✅ Disabled | `PermitRootLogin no` |
+| **SSH Key Auth** | ✅ ED25519 | Password auth disabled |
+| **UFW Firewall** | ✅ Active | Ports 22, 80, 443, 8000 |
+| **Fail2ban** | ✅ Active | sshd jail enabled |
+| **Swap** | ✅ Configured | 2GB swapfile |
 
 ### SSH Access
 
 ```bash
-ssh root@159.89.180.27
+# Connect as enunez (recommended)
+ssh -i ~/.ssh/replit enunez@138.197.4.36
+
+# Or with SSH config alias (if configured)
+ssh e2i-prod
 ```
+
+**Note**: Root login is disabled for security. Use `enunez` user with `sudo` for admin tasks.
+
+**Recommended: Add to ~/.ssh/config for easy access:**
+```
+Host e2i-prod
+    HostName 138.197.4.36
+    User enunez
+    IdentityFile ~/.ssh/replit
+```
+
+Then simply use: `ssh e2i-prod`
 
 ### Useful doctl Commands
 
@@ -41,25 +100,25 @@ source .env && doctl auth init --access-token "$DIGITALOCEAN_TOKEN"
 doctl compute droplet list
 
 # Get specific droplet info
-doctl compute droplet get 538064298
+doctl compute droplet get 544907207
 
 # Get droplet by name
-doctl compute droplet get ubuntu-s-2vcpu-4gb-120gb-intel-nyc3-01
+doctl compute droplet get e2i-analytics-prod
 
 # Delete droplet (CAREFUL!)
-doctl compute droplet delete 538064298
+doctl compute droplet delete 544907207
 
 # Create droplet snapshot
-doctl compute droplet-action snapshot 538064298 --snapshot-name "backup-$(date +%Y%m%d)"
+doctl compute droplet-action snapshot 544907207 --snapshot-name "backup-$(date +%Y%m%d)"
 
 # Reboot droplet
-doctl compute droplet-action reboot 538064298
+doctl compute droplet-action reboot 544907207
 
 # Power off droplet
-doctl compute droplet-action power-off 538064298
+doctl compute droplet-action power-off 544907207
 
 # Power on droplet
-doctl compute droplet-action power-on 538064298
+doctl compute droplet-action power-on 544907207
 ```
 
 #### SSH Key Management
@@ -67,24 +126,16 @@ doctl compute droplet-action power-on 538064298
 # List SSH keys
 doctl compute ssh-key list
 
-# Add SSH key to account
-doctl compute ssh-key create "my-key-name" --public-key "$(cat ~/.ssh/id_rsa.pub)"
-
-# Create droplet with SSH key
-doctl compute droplet create my-droplet \
-    --image ubuntu-24-04-x64 \
-    --size s-2vcpu-4gb-120gb-intel \
-    --region nyc3 \
-    --ssh-keys <key-id>
+# Current key: replit-ed25519 (ID: 53352421)
 ```
 
 #### Monitoring
 ```bash
 # Get droplet actions
-doctl compute droplet-action list 538064298
+doctl compute droplet-action list 544907207
 
 # Get droplet neighbors (VMs on same hypervisor)
-doctl compute droplet neighbors 538064298
+doctl compute droplet neighbors 544907207
 ```
 
 ### Environment Variables
@@ -92,16 +143,20 @@ doctl compute droplet neighbors 538064298
 Location: `.env`
 
 ```bash
-DIGITALOCEAN_TOKEN=REDACTED_DO_TOKEN
+DIGITALOCEAN_TOKEN=dop_v1_...
 ```
 
 ### Creation Command Reference
 
 ```bash
-doctl compute droplet create ubuntu-s-2vcpu-4gb-120gb-intel-nyc3-01 \
+# Create with cloud-init for secure setup
+doctl compute droplet create e2i-analytics-prod \
     --image ubuntu-24-04-x64 \
-    --size s-2vcpu-4gb-120gb-intel \
+    --size s-4vcpu-8gb-amd \
     --region nyc3 \
+    --ssh-keys 53352421 \
+    --user-data-file cloud-init.yaml \
+    --enable-monitoring \
     --wait
 ```
 
@@ -130,20 +185,26 @@ doctl compute size list
 ```
 
 Current size specs:
-- `s-4vcpu-8gb-120gb-intel`: 4 vCPU, 8 GB RAM, 120 GB SSD (Intel) - current
-- `s-2vcpu-4gb-120gb-intel`: 2 vCPU, 4 GB RAM, 120 GB SSD (Intel) - original
+- `s-4vcpu-8gb-amd`: 4 vCPU, 8 GB RAM, 160 GB SSD (AMD) - **current**
+- `s-4vcpu-8gb-intel`: 4 vCPU, 8 GB RAM, similar (Intel variant)
 
 ### Firewall & Security
 
-```bash
-# List firewalls
-doctl compute firewall list
+**UFW Firewall Rules (Configured via cloud-init):**
 
-# Create firewall
-doctl compute firewall create \
-    --name "web-firewall" \
-    --inbound-rules "protocol:tcp,ports:22,sources:addresses:0.0.0.0/0,sources:addresses:::/0 protocol:tcp,ports:80,sources:addresses:0.0.0.0/0,sources:addresses:::/0 protocol:tcp,ports:443,sources:addresses:0.0.0.0/0,sources:addresses:::/0" \
-    --droplet-ids 538064298
+| Port | Protocol | Purpose |
+|------|----------|---------|
+| 22 | TCP | SSH |
+| 80 | TCP | HTTP |
+| 443 | TCP | HTTPS |
+| 8000 | TCP | API |
+
+```bash
+# Check firewall status on droplet
+ssh -i ~/.ssh/replit enunez@138.197.4.36 "sudo ufw status verbose"
+
+# Check fail2ban status
+ssh -i ~/.ssh/replit enunez@138.197.4.36 "sudo fail2ban-client status sshd"
 ```
 
 ### Systemd Services
@@ -152,114 +213,125 @@ E2I application services managed by systemd:
 
 | Service | Description | Port | Status |
 |---------|-------------|------|--------|
-| `e2i-api.service` | FastAPI backend (uvicorn) | 8001 | Enabled |
-| `e2i-frontend.service` | React frontend (vite preview) | 5174 | Enabled |
+| `e2i-api.service` | FastAPI backend (uvicorn) | 8000 | ✅ Active |
+| `nginx` | Reverse proxy | 80/443 | ✅ Active |
+| `docker` | Container runtime | - | ✅ Active |
+| `fail2ban` | Intrusion prevention | - | ✅ Active |
+
+**Nginx Reverse Proxy Configuration:**
+- Config file: `/etc/nginx/sites-available/e2i-api`
+- Proxies port 80 → 8000 (API)
+- WebSocket support at `/ws`
+- Security headers enabled
+- Logs: `/var/log/nginx/e2i-api.access.log`, `/var/log/nginx/e2i-api.error.log`
+
+### Application Paths (on droplet)
+
+| Path | Description |
+|------|-------------|
+| `/home/enunez/Projects/e2i_causal_analytics` | Application root |
+| `/home/enunez/Projects/e2i_causal_analytics/venv` | Python virtual environment |
+| `/home/enunez/Projects/e2i_causal_analytics/.env` | Environment variables |
+| `/etc/systemd/system/e2i-api.service` | API systemd service file |
+| `/etc/nginx/sites-available/e2i-api` | Nginx config |
+| `/var/log/nginx/e2i-api.access.log` | Nginx access logs |
+| `/var/log/nginx/e2i-api.error.log` | Nginx error logs |
+
+### Updating the Application
+
+```bash
+# SSH to droplet
+ssh -i ~/.ssh/replit enunez@138.197.4.36
+
+# Navigate to app directory
+cd ~/Projects/e2i_causal_analytics
+
+# Pull latest changes
+git pull origin main
+
+# Activate virtual environment
+source venv/bin/activate
+
+# Install any new dependencies
+pip install -r requirements.txt
+
+# Restart the API service
+sudo systemctl restart e2i-api
+
+# Verify it's running
+sudo systemctl status e2i-api
+curl localhost:8000/health
+```
 
 **Service Management:**
 
 ```bash
+# SSH to droplet first
+ssh -i ~/.ssh/replit enunez@138.197.4.36
+
 # Check status
-systemctl status e2i-api
-systemctl status e2i-frontend
+sudo systemctl status e2i-api
+sudo systemctl status nginx
 
 # Restart services
-systemctl restart e2i-api
-systemctl restart e2i-frontend
+sudo systemctl restart e2i-api
+sudo systemctl restart nginx
 
 # View logs
-journalctl -u e2i-api -f
-journalctl -u e2i-frontend -f
-
-# Stop/Start
-systemctl stop e2i-frontend
-systemctl start e2i-frontend
-```
-
-**Service Files:**
-- `/etc/systemd/system/e2i-api.service`
-- `/etc/systemd/system/e2i-frontend.service`
-
-**Health Check:**
-
-```bash
-curl -s http://localhost:8001/health | jq .status  # API
-curl -s -o /dev/null -w "%{http_code}" http://localhost:5174/  # Frontend
+sudo journalctl -u e2i-api -f
+sudo journalctl -u nginx -f
 ```
 
 ### Cost Information
 
-- **Current Plan**: s-4vcpu-8gb-120gb-intel
+- **Current Plan**: s-4vcpu-8gb-amd
 - **Estimated Cost**: ~$48/month (verify current pricing on DigitalOcean)
-- **Previous Plan**: s-2vcpu-4gb-120gb-intel (~$24/month)
 
 ### SSH Keys
 
 **Registered Keys in DigitalOcean:**
-- **Name**: replit-key
-- **ID**: 52751421
+- **Name**: replit-ed25519
+- **ID**: 53352421
 - **Fingerprint**: 72:91:c9:d1:2e:e5:09:bd:f4:68:4d:7c:d5:5c:1a:b0
 - **Public Key**: `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIF7j9C0aZuxZ4YUXOW+IrosLczi/dTR1wBc38dgbWsyB enunez@PHUSEH-L88724`
 - **Private Key Location**: `~/.ssh/replit`
 
 **SSH Access:**
 ```bash
-# Passwordless SSH with replit key
-ssh -i ~/.ssh/replit root@159.89.180.27
-
-# Or simply (if using default SSH config)
-ssh root@159.89.180.27
+# Connect as enunez user
+ssh -i ~/.ssh/replit enunez@138.197.4.36
 ```
 
 **Status**: ✅ SSH key successfully configured on droplet
 
-### SSH Tunneling (Corporate Proxy Bypass)
+### Corporate Proxy Configuration
+
+When behind a corporate proxy (e.g., Novartis), direct HTTP requests to the droplet are blocked. Add the droplet IP to `no_proxy`:
+
+```bash
+# Add to ~/.bashrc for persistence
+export no_proxy="$no_proxy,138.197.4.36"
+
+# Or use --noproxy flag with curl
+curl --noproxy '*' http://138.197.4.36:8000/health
+```
+
+### SSH Tunneling (Alternative Proxy Bypass)
 
 When behind a corporate proxy (e.g., Novartis Netskope), direct access to web UIs on non-standard ports is blocked. Use SSH tunneling to access services via localhost.
 
-#### Quick Start (Recommended)
-
-Use the connection manager script for automated health checks and tunnel setup:
+#### Quick Start
 
 ```bash
-# Full check + start tunnel
-./scripts/droplet-connect.sh
+# Forward E2I services (API)
+ssh -i ~/.ssh/replit -L 8000:localhost:8000 -N -f enunez@138.197.4.36
 
-# Just check health (no tunnel)
-./scripts/droplet-connect.sh --check-only
-
-# Skip checks, just start tunnel
-./scripts/droplet-connect.sh --tunnel-only
-
-# Stop existing tunnels
-./scripts/droplet-connect.sh --kill-tunnel
-```
-
-#### Manual Setup
-
-**Available Services:**
-
-| Service | Remote Port | Local URL (via tunnel) |
-|---------|-------------|------------------------|
-| E2I Frontend | 5174 | http://localhost:5174 |
-| E2I API | 8001 | http://localhost:8001 |
-| MLflow | 5000 | http://localhost:5000 |
-| Opik UI | 5173 | http://localhost:5173 |
-| Opik Backend | 8080 | http://localhost:8080 |
-
-**Start SSH Tunnel:**
-
-```bash
-# Forward E2I services (frontend + API)
-ssh -i ~/.ssh/replit -L 5174:localhost:5174 -L 8001:localhost:8001 -N -f root@159.89.180.27
-
-# Forward all services
+# Forward all services (when configured)
 ssh -i ~/.ssh/replit \
-    -L 5174:localhost:5174 \
-    -L 8001:localhost:8001 \
+    -L 8000:localhost:8000 \
     -L 5000:localhost:5000 \
     -L 5173:localhost:5173 \
-    -L 8080:localhost:8080 \
-    -N -f root@159.89.180.27
+    -N -f enunez@138.197.4.36
 ```
 
 **Flags:**
@@ -267,23 +339,11 @@ ssh -i ~/.ssh/replit \
 - `-N` - Don't execute remote command (tunnel only)
 - `-f` - Run in background
 
-**Verify Tunnel:**
-
-```bash
-# Check if tunnel is working
-curl -s -o /dev/null -w "MLflow: HTTP %{http_code}\n" http://localhost:5000/
-curl -s -o /dev/null -w "Opik: HTTP %{http_code}\n" http://localhost:5173/
-```
-
 **Stop SSH Tunnel:**
 
 ```bash
 # Kill all SSH tunnels to the droplet
-pkill -f "ssh.*-L 5000:localhost:5000"
-
-# Or find and kill specific tunnel
-ps aux | grep "ssh.*-L" | grep -v grep
-kill <PID>
+pkill -f "ssh.*138.197.4.36.*-L"
 ```
 
 **Persistent Tunnel (Optional):**
@@ -291,33 +351,122 @@ kill <PID>
 Add to `~/.ssh/config` for easier access:
 
 ```
-Host e2i-tunnel
-    HostName 159.89.180.27
-    User root
+Host e2i-prod
+    HostName 138.197.4.36
+    User enunez
     IdentityFile ~/.ssh/replit
-    LocalForward 5174 localhost:5174
-    LocalForward 8001 localhost:8001
+    LocalForward 8000 localhost:8000
     LocalForward 5000 localhost:5000
-    LocalForward 5173 localhost:5173
-    LocalForward 8080 localhost:8080
 ```
 
-Then connect with: `ssh -N -f e2i-tunnel`
+Then connect with: `ssh -N -f e2i-prod`
+
+### Cloud-Init Configuration
+
+The droplet was provisioned with cloud-init for automated setup:
+
+```yaml
+#cloud-config
+users:
+  - name: enunez
+    groups: sudo, docker
+    shell: /bin/bash
+    sudo: ['ALL=(ALL) NOPASSWD:ALL']
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIF7j9C0aZuxZ4YUXOW+IrosLczi/dTR1wBc38dgbWsyB
+
+packages:
+  - fail2ban, ufw, docker.io, docker-compose, nginx, python3-pip, git, htop
+
+runcmd:
+  - systemctl enable ssh && systemctl start ssh
+  - ufw allow 22,80,443,8000/tcp && ufw --force enable
+  - systemctl enable fail2ban docker
+  - sed -i 's/^PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
+
+swap:
+  filename: /swapfile
+  size: 2G
+```
 
 ### Notes
 
-- Droplet is running in a VPC for private networking
-- Droplet agent is enabled for enhanced monitoring
-- Default user is `root` - consider creating a sudo user for security
-- SSH key `replit-key` (ID: 52751421) registered in DigitalOcean account
-- ✅ SSH key configured for passwordless authentication
+- ✅ Non-root user `enunez` with sudo access (security best practice)
+- ✅ Root SSH login disabled
+- ✅ Fail2ban active with sshd jail
+- ✅ UFW firewall configured
+- ✅ 2GB swap configured
+- ✅ Docker and Docker Compose installed
+- ✅ Nginx installed
+
+### Completed Setup
+
+- [x] Create non-root sudo user (`enunez`)
+- [x] Configure SSH key authentication (ED25519)
+- [x] Disable root SSH login
+- [x] Set up UFW firewall rules
+- [x] Configure fail2ban for SSH protection
+- [x] Configure swap (2GB)
+- [x] Install Docker and Docker Compose
+- [x] Install Nginx
+
+### Troubleshooting
+
+**API not responding:**
+```bash
+# Check if service is running
+sudo systemctl status e2i-api
+
+# Check if port is listening
+ss -tlnp | grep 8000
+
+# View recent logs
+sudo journalctl -u e2i-api -n 100 --no-pager
+
+# Restart the service
+sudo systemctl restart e2i-api
+```
+
+**SSH connection refused:**
+```bash
+# Check if droplet is running (from local machine)
+doctl compute droplet get 544907207
+
+# Reboot droplet if needed
+doctl compute droplet-action reboot 544907207
+```
+
+**Nginx issues:**
+```bash
+# Test nginx config
+sudo nginx -t
+
+# Reload nginx
+sudo systemctl reload nginx
+
+# Check nginx logs
+tail -f /var/log/nginx/e2i-api.error.log
+```
+
+**Check system resources:**
+```bash
+# Memory usage
+free -h
+
+# Disk usage
+df -h
+
+# CPU/processes
+htop
+```
 
 ### Next Steps / TODO
 
-- [x] Add SSH key for passwordless authentication (Completed: 2025-12-18)
-- [ ] Create non-root sudo user
-- [ ] Set up firewall rules
-- [ ] Configure automatic backups (if needed)
-- [ ] Install required software for E2I Causal Analytics
+- [x] Clone E2I repository to droplet
+- [x] Configure E2I API systemd service
+- [x] Set up Nginx reverse proxy for API
+- [ ] Configure SSL/TLS certificates (Let's Encrypt)
+- [ ] Install and configure MLflow
 - [ ] Set up monitoring/alerting
+- [ ] Configure automatic backups
 - [ ] Configure domain/DNS (if applicable)
