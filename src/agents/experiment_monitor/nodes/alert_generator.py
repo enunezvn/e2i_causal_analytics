@@ -6,16 +6,22 @@ with severity levels and recommended actions.
 Performance Target: <500ms
 """
 
+import logging
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import List
+from typing import List, Optional
 
+from src.agents.experiment_monitor.dspy_integration import (
+    get_experiment_monitor_dspy_integration,
+)
 from src.agents.experiment_monitor.state import (
     ErrorDetails,
     ExperimentMonitorState,
     MonitorAlert,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class AlertGeneratorNode:
@@ -30,9 +36,25 @@ class AlertGeneratorNode:
     Performance Target: <500ms
     """
 
-    def __init__(self):
-        """Initialize alert generator node."""
-        pass
+    def __init__(self, use_dspy_prompts: bool = True):
+        """Initialize alert generator node.
+
+        Args:
+            use_dspy_prompts: Whether to use DSPy-optimized prompts for messages
+        """
+        self.use_dspy_prompts = use_dspy_prompts
+        self._dspy_integration = None
+
+    @property
+    def dspy_integration(self):
+        """Lazy-load DSPy integration."""
+        if self._dspy_integration is None and self.use_dspy_prompts:
+            try:
+                self._dspy_integration = get_experiment_monitor_dspy_integration()
+                logger.debug("DSPy integration loaded for alert generation")
+            except Exception as e:
+                logger.warning(f"DSPy integration unavailable: {e}")
+        return self._dspy_integration
 
     async def execute(self, state: ExperimentMonitorState) -> ExperimentMonitorState:
         """Execute alert generation.
@@ -100,6 +122,41 @@ class AlertGeneratorNode:
 
         return state
 
+    def _get_srm_message(
+        self,
+        exp_name: str,
+        chi_squared: float,
+        p_value: float,
+        expected_ratio: str,
+        actual_counts: str,
+    ) -> str:
+        """Get SRM alert message, using DSPy prompt if available.
+
+        Args:
+            exp_name: Experiment name
+            chi_squared: Chi-squared test statistic
+            p_value: P-value from test
+            expected_ratio: Expected ratio string
+            actual_counts: Actual counts string
+
+        Returns:
+            Formatted message string
+        """
+        if self.dspy_integration:
+            try:
+                return self.dspy_integration.get_srm_prompt(
+                    experiment_name=exp_name,
+                    chi_squared=chi_squared,
+                    p_value=p_value,
+                    expected_ratio=expected_ratio,
+                    actual_counts=actual_counts,
+                )
+            except Exception as e:
+                logger.debug(f"DSPy prompt failed, using fallback: {e}")
+
+        # Fallback to hardcoded message
+        return f"Sample Ratio Mismatch detected in '{exp_name}' (p={p_value:.6f})"
+
     def _generate_srm_alerts(
         self, state: ExperimentMonitorState
     ) -> List[MonitorAlert]:
@@ -124,13 +181,22 @@ class AlertGeneratorNode:
             exp_id = issue["experiment_id"]
             exp_name = experiments.get(exp_id, "Unknown Experiment")
 
+            # Get message (uses DSPy prompt if available)
+            message = self._get_srm_message(
+                exp_name=exp_name,
+                chi_squared=issue["chi_squared"],
+                p_value=issue["p_value"],
+                expected_ratio=str(issue["expected_ratio"]),
+                actual_counts=str(issue["actual_counts"]),
+            )
+
             alert = MonitorAlert(
                 alert_id=str(uuid.uuid4()),
                 alert_type="srm",
                 severity=issue.get("severity", "warning"),
                 experiment_id=exp_id,
                 experiment_name=exp_name,
-                message=f"Sample Ratio Mismatch detected in '{exp_name}' (p={issue['p_value']:.6f})",
+                message=message,
                 details={
                     "p_value": issue["p_value"],
                     "chi_squared": issue["chi_squared"],
@@ -144,6 +210,41 @@ class AlertGeneratorNode:
             alerts.append(alert)
 
         return alerts
+
+    def _get_enrollment_message(
+        self,
+        exp_name: str,
+        current_rate: float,
+        expected_rate: float,
+        days_below_threshold: int,
+    ) -> str:
+        """Get enrollment alert message, using DSPy prompt if available.
+
+        Args:
+            exp_name: Experiment name
+            current_rate: Current enrollment rate
+            expected_rate: Expected enrollment rate
+            days_below_threshold: Days below threshold
+
+        Returns:
+            Formatted message string
+        """
+        if self.dspy_integration:
+            try:
+                return self.dspy_integration.get_enrollment_prompt(
+                    experiment_name=exp_name,
+                    current_rate=current_rate,
+                    expected_rate=expected_rate,
+                    days_below_threshold=days_below_threshold,
+                )
+            except Exception as e:
+                logger.debug(f"DSPy prompt failed, using fallback: {e}")
+
+        # Fallback to hardcoded message
+        return (
+            f"Low enrollment rate in '{exp_name}': "
+            f"{current_rate:.1f}/day (expected: {expected_rate:.1f}/day)"
+        )
 
     def _generate_enrollment_alerts(
         self, state: ExperimentMonitorState
@@ -166,14 +267,21 @@ class AlertGeneratorNode:
             exp_id = issue["experiment_id"]
             exp_name = experiments.get(exp_id, "Unknown Experiment")
 
+            # Get message (uses DSPy prompt if available)
+            message = self._get_enrollment_message(
+                exp_name=exp_name,
+                current_rate=issue["current_rate"],
+                expected_rate=issue["expected_rate"],
+                days_below_threshold=issue["days_below_threshold"],
+            )
+
             alert = MonitorAlert(
                 alert_id=str(uuid.uuid4()),
                 alert_type="enrollment",
                 severity=issue.get("severity", "warning"),
                 experiment_id=exp_id,
                 experiment_name=exp_name,
-                message=f"Low enrollment rate in '{exp_name}': "
-                f"{issue['current_rate']:.1f}/day (expected: {issue['expected_rate']:.1f}/day)",
+                message=message,
                 details={
                     "current_rate": issue["current_rate"],
                     "expected_rate": issue["expected_rate"],
@@ -280,6 +388,50 @@ class AlertGeneratorNode:
 
         return alerts
 
+    def _get_fidelity_message(
+        self,
+        exp_name: str,
+        predicted_effect: float,
+        actual_effect: float,
+        prediction_error: float,
+        calibration_needed: bool,
+    ) -> str:
+        """Get fidelity alert message, using DSPy prompt if available.
+
+        Args:
+            exp_name: Experiment name
+            predicted_effect: Digital Twin predicted effect
+            actual_effect: Actual observed effect
+            prediction_error: Prediction error as decimal
+            calibration_needed: Whether calibration is needed
+
+        Returns:
+            Formatted message string
+        """
+        if self.dspy_integration:
+            try:
+                return self.dspy_integration.get_fidelity_prompt(
+                    experiment_name=exp_name,
+                    predicted_effect=predicted_effect,
+                    actual_effect=actual_effect,
+                    prediction_error=prediction_error,
+                    calibration_needed=calibration_needed,
+                )
+            except Exception as e:
+                logger.debug(f"DSPy prompt failed, using fallback: {e}")
+
+        # Fallback to hardcoded message
+        if calibration_needed:
+            return (
+                f"Digital Twin calibration needed for '{exp_name}': "
+                f"prediction error = {prediction_error:.2%}"
+            )
+        else:
+            return (
+                f"Digital Twin fidelity check for '{exp_name}': "
+                f"prediction error = {prediction_error:.2%}"
+            )
+
     def _generate_fidelity_alerts(
         self, state: ExperimentMonitorState
     ) -> List[MonitorAlert]:
@@ -301,20 +453,22 @@ class AlertGeneratorNode:
             exp_id = issue["experiment_id"]
             exp_name = experiments.get(exp_id, "Unknown Experiment")
 
-            if issue.get("calibration_needed"):
-                severity = "warning"
-                message = (
-                    f"Digital Twin calibration needed for '{exp_name}': "
-                    f"prediction error = {issue['prediction_error']:.2%}"
-                )
-                action = "Recalibrate Digital Twin model using actual experiment data."
-            else:
-                severity = "info"
-                message = (
-                    f"Digital Twin fidelity check for '{exp_name}': "
-                    f"prediction error = {issue['prediction_error']:.2%}"
-                )
-                action = "No action required - prediction within acceptable range."
+            calibration_needed = issue.get("calibration_needed", False)
+            severity = "warning" if calibration_needed else "info"
+            action = (
+                "Recalibrate Digital Twin model using actual experiment data."
+                if calibration_needed
+                else "No action required - prediction within acceptable range."
+            )
+
+            # Get message (uses DSPy prompt if available)
+            message = self._get_fidelity_message(
+                exp_name=exp_name,
+                predicted_effect=issue["predicted_effect"],
+                actual_effect=issue["actual_effect"],
+                prediction_error=issue["prediction_error"],
+                calibration_needed=calibration_needed,
+            )
 
             alert = MonitorAlert(
                 alert_id=str(uuid.uuid4()),

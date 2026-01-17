@@ -7,15 +7,23 @@ Agent Type: Standard (Fast Path)
 Performance Target: <5s per experiment check
 """
 
-from dataclasses import dataclass, field
-from typing import List, Optional
+import logging
+import uuid
+from dataclasses import asdict, dataclass, field
+from typing import Any, Dict, List, Optional
 
 from src.agents.experiment_monitor.graph import experiment_monitor_graph
+from src.agents.experiment_monitor.memory_hooks import (
+    contribute_to_memory,
+    get_experiment_monitor_memory_hooks,
+)
 from src.agents.experiment_monitor.state import (
     ExperimentMonitorState,
     ExperimentSummary,
     MonitorAlert,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -94,19 +102,44 @@ class ExperimentMonitorAgent:
         print(f"Alerts: {len(result.alerts)}")
     """
 
-    def __init__(self):
-        """Initialize experiment monitor agent."""
-        self.graph = experiment_monitor_graph
+    def __init__(self, enable_memory: bool = True):
+        """Initialize experiment monitor agent.
 
-    async def run_async(self, input_data: ExperimentMonitorInput) -> ExperimentMonitorOutput:
+        Args:
+            enable_memory: Whether to enable memory integration (default: True)
+        """
+        self.graph = experiment_monitor_graph
+        self.enable_memory = enable_memory
+        self._memory_hooks = None
+
+    @property
+    def memory_hooks(self):
+        """Lazy-load memory hooks."""
+        if self._memory_hooks is None and self.enable_memory:
+            try:
+                self._memory_hooks = get_experiment_monitor_memory_hooks()
+            except Exception as e:
+                logger.warning(f"Failed to initialize memory hooks: {e}")
+        return self._memory_hooks
+
+    async def run_async(
+        self,
+        input_data: ExperimentMonitorInput,
+        session_id: Optional[str] = None,
+    ) -> ExperimentMonitorOutput:
         """Run the experiment monitor agent asynchronously.
 
         Args:
             input_data: ExperimentMonitorInput with monitoring parameters
+            session_id: Optional session ID for memory tracking (generates UUID if not provided)
 
         Returns:
             ExperimentMonitorOutput with monitoring results
         """
+        # Generate session ID if not provided
+        if session_id is None:
+            session_id = str(uuid.uuid4())
+
         # Build initial state
         initial_state: ExperimentMonitorState = {
             "query": input_data.query,
@@ -138,7 +171,7 @@ class ExperimentMonitorAgent:
 
         # Build output
         experiments = final_state.get("experiments", [])
-        return ExperimentMonitorOutput(
+        output = ExperimentMonitorOutput(
             experiments=experiments,
             alerts=final_state.get("alerts", []),
             experiments_checked=final_state.get("experiments_checked", 0),
@@ -151,11 +184,60 @@ class ExperimentMonitorAgent:
             errors=[e["error"] for e in final_state.get("errors", [])],
         )
 
-    def run(self, input_data: ExperimentMonitorInput) -> ExperimentMonitorOutput:
+        # Contribute to memory if enabled
+        if self.enable_memory:
+            try:
+                result_dict = self._output_to_dict(output)
+                memory_stats = await contribute_to_memory(
+                    result=result_dict,
+                    state=final_state,
+                    memory_hooks=self.memory_hooks,
+                    session_id=session_id,
+                )
+                logger.debug(
+                    f"Memory contribution complete: {memory_stats.get('alerts_stored', 0)} alerts, "
+                    f"{memory_stats.get('check_stored', 0)} checks stored"
+                )
+            except Exception as e:
+                logger.warning(f"Memory contribution failed (non-blocking): {e}")
+
+        return output
+
+    def _output_to_dict(self, output: ExperimentMonitorOutput) -> Dict[str, Any]:
+        """Convert output dataclass to dictionary for memory storage.
+
+        Args:
+            output: ExperimentMonitorOutput instance
+
+        Returns:
+            Dictionary representation
+        """
+        return {
+            "experiments": output.experiments,
+            "alerts": [
+                a if isinstance(a, dict) else asdict(a) if hasattr(a, "__dataclass_fields__") else a
+                for a in output.alerts
+            ],
+            "experiments_checked": output.experiments_checked,
+            "healthy_count": output.healthy_count,
+            "warning_count": output.warning_count,
+            "critical_count": output.critical_count,
+            "monitor_summary": output.monitor_summary,
+            "recommended_actions": output.recommended_actions,
+            "check_latency_ms": output.check_latency_ms,
+            "errors": output.errors,
+        }
+
+    def run(
+        self,
+        input_data: ExperimentMonitorInput,
+        session_id: Optional[str] = None,
+    ) -> ExperimentMonitorOutput:
         """Run the experiment monitor agent synchronously.
 
         Args:
             input_data: ExperimentMonitorInput with monitoring parameters
+            session_id: Optional session ID for memory tracking
 
         Returns:
             ExperimentMonitorOutput with monitoring results
@@ -168,7 +250,7 @@ class ExperimentMonitorAgent:
                 import nest_asyncio
 
                 nest_asyncio.apply()
-                return loop.run_until_complete(self.run_async(input_data))
-            return loop.run_until_complete(self.run_async(input_data))
+                return loop.run_until_complete(self.run_async(input_data, session_id))
+            return loop.run_until_complete(self.run_async(input_data, session_id))
         except RuntimeError:
-            return asyncio.run(self.run_async(input_data))
+            return asyncio.run(self.run_async(input_data, session_id))
