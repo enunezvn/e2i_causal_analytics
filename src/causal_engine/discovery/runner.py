@@ -15,7 +15,7 @@ Author: E2I Causal Analytics Team
 
 import asyncio
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple, Type
 from uuid import UUID
 
@@ -44,6 +44,56 @@ from .base import (
 
 if TYPE_CHECKING:
     from .observability import DiscoveryTracer
+
+
+def _run_algorithm_in_process(
+    algo_class: Type["BaseDiscoveryAlgorithm"],
+    data_dict: Dict[str, Any],
+    config_dict: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Run a single algorithm in a separate process.
+
+    This function is defined at module level to enable pickling for ProcessPoolExecutor.
+
+    Args:
+        algo_class: The algorithm class to instantiate
+        data_dict: DataFrame as dict for serialization
+        config_dict: Config as dict for serialization
+
+    Returns:
+        AlgorithmResult as dict for serialization
+    """
+    import pandas as pd
+    from .base import DiscoveryConfig, DiscoveryAlgorithmType
+
+    # Reconstruct objects from dicts
+    data = pd.DataFrame(data_dict)
+    config = DiscoveryConfig(
+        algorithms=[DiscoveryAlgorithmType(a) for a in config_dict["algorithms"]],
+        alpha=config_dict["alpha"],
+        max_cond_vars=config_dict.get("max_cond_vars"),
+        ensemble_threshold=config_dict["ensemble_threshold"],
+        max_iter=config_dict["max_iter"],
+        random_state=config_dict["random_state"],
+        score_func=config_dict["score_func"],
+        assume_linear=config_dict["assume_linear"],
+        assume_gaussian=config_dict["assume_gaussian"],
+    )
+
+    # Run algorithm
+    algorithm = algo_class()
+    result = algorithm.discover(data, config)
+
+    # Convert result to dict for serialization
+    return {
+        "algorithm": result.algorithm.value,
+        "adjacency_matrix": result.adjacency_matrix.tolist(),
+        "edge_list": [(e.source, e.target, e.edge_type.value, e.confidence)
+                      for e in result.edge_list],
+        "runtime_seconds": result.runtime_seconds,
+        "converged": result.converged,
+        "metadata": result.metadata,
+    }
 
 
 class DiscoveryRunner:
@@ -345,41 +395,136 @@ class DiscoveryRunner:
         """
         results = []
 
-        # Run algorithms sequentially for now (causal-learn is not thread-safe)
-        # TODO: Consider process-based parallelism for true parallelism
-        for algo_type in config.algorithms:
-            try:
-                algorithm = self._get_algorithm(algo_type)
-                logger.debug(f"Running {algo_type.value} algorithm...")
+        # Use ProcessPoolExecutor for true parallelism when configured
+        # (causal-learn is not thread-safe, so processes are preferred)
+        if config.use_process_pool and len(config.algorithms) > 1:
+            logger.info(
+                f"Using ProcessPoolExecutor with {config.max_workers or 'auto'} workers "
+                f"for {len(config.algorithms)} algorithms"
+            )
+            results = await self._run_algorithms_parallel(data, config)
+        else:
+            # Sequential execution (default, safer for single algorithm or debugging)
+            for algo_type in config.algorithms:
+                try:
+                    algorithm = self._get_algorithm(algo_type)
+                    logger.debug(f"Running {algo_type.value} algorithm...")
 
-                # Run in executor to not block event loop
-                loop = asyncio.get_event_loop()
-                result = await loop.run_in_executor(
-                    None,
-                    lambda: algorithm.discover(data, config),
-                )
-
-                results.append(result)
-                logger.debug(
-                    f"{algo_type.value} found {len(result.edge_list)} edges "
-                    f"in {result.runtime_seconds:.2f}s"
-                )
-
-            except Exception as e:
-                logger.error(f"Algorithm {algo_type.value} failed: {e}")
-                # Create failed result
-                results.append(
-                    AlgorithmResult(
-                        algorithm=algo_type,
-                        adjacency_matrix=np.zeros(
-                            (len(data.columns), len(data.columns)), dtype=int
-                        ),
-                        edge_list=[],
-                        runtime_seconds=0.0,
-                        converged=False,
-                        metadata={"error": str(e)},
+                    # Run in executor to not block event loop
+                    loop = asyncio.get_event_loop()
+                    result = await loop.run_in_executor(
+                        None,
+                        lambda a=algorithm: a.discover(data, config),
                     )
+
+                    results.append(result)
+                    logger.debug(
+                        f"{algo_type.value} found {len(result.edge_list)} edges "
+                        f"in {result.runtime_seconds:.2f}s"
+                    )
+
+                except Exception as e:
+                    logger.error(f"Algorithm {algo_type.value} failed: {e}")
+                    # Create failed result
+                    results.append(
+                        AlgorithmResult(
+                            algorithm=algo_type,
+                            adjacency_matrix=np.zeros(
+                                (len(data.columns), len(data.columns)), dtype=int
+                            ),
+                            edge_list=[],
+                            runtime_seconds=0.0,
+                            converged=False,
+                            metadata={"error": str(e)},
+                        )
+                    )
+
+        return results
+
+    async def _run_algorithms_parallel(
+        self,
+        data: pd.DataFrame,
+        config: DiscoveryConfig,
+    ) -> List[AlgorithmResult]:
+        """Run algorithms in parallel using ProcessPoolExecutor.
+
+        This provides true parallelism since causal-learn is not thread-safe.
+
+        Args:
+            data: Input data
+            config: Discovery configuration
+
+        Returns:
+            List of results from each algorithm
+        """
+        results = []
+        loop = asyncio.get_event_loop()
+
+        # Prepare serializable data
+        data_dict = data.to_dict()
+        config_dict = config.to_dict()
+
+        # Create process pool
+        with ProcessPoolExecutor(max_workers=config.max_workers) as executor:
+            # Submit all algorithms
+            futures = []
+            for algo_type in config.algorithms:
+                algo_class = self.ALGORITHM_REGISTRY.get(algo_type)
+                if not algo_class:
+                    logger.warning(f"Unknown algorithm type: {algo_type}")
+                    continue
+
+                future = loop.run_in_executor(
+                    executor,
+                    _run_algorithm_in_process,
+                    algo_class,
+                    data_dict,
+                    config_dict,
                 )
+                futures.append((algo_type, future))
+
+            # Gather results
+            for algo_type, future in futures:
+                try:
+                    result_dict = await future
+
+                    # Reconstruct AlgorithmResult from dict
+                    result = AlgorithmResult(
+                        algorithm=DiscoveryAlgorithmType(result_dict["algorithm"]),
+                        adjacency_matrix=np.array(result_dict["adjacency_matrix"]),
+                        edge_list=[
+                            DiscoveredEdge(
+                                source=e[0],
+                                target=e[1],
+                                edge_type=EdgeType(e[2]),
+                                confidence=e[3],
+                            )
+                            for e in result_dict["edge_list"]
+                        ],
+                        runtime_seconds=result_dict["runtime_seconds"],
+                        converged=result_dict["converged"],
+                        metadata=result_dict["metadata"],
+                    )
+                    results.append(result)
+                    logger.debug(
+                        f"{algo_type.value} found {len(result.edge_list)} edges "
+                        f"in {result.runtime_seconds:.2f}s (parallel)"
+                    )
+
+                except Exception as e:
+                    logger.error(f"Algorithm {algo_type.value} failed in process: {e}")
+                    results.append(
+                        AlgorithmResult(
+                            algorithm=algo_type,
+                            adjacency_matrix=np.zeros(
+                                (len(data.columns), len(data.columns)), dtype=int
+                            ),
+                            edge_list=[],
+                            runtime_seconds=0.0,
+                            converged=False,
+                            metadata={"error": str(e)},
+                        )
+                    )
 
         return results
 
