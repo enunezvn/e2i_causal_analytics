@@ -53,10 +53,11 @@ class IntentClassifierNode:
             r"untapped",
         ],
         "segment_analysis": [
-            r"(segment|cohort|group|heterogen)",
+            r"(segment|group|heterogen)",  # Removed "cohort" - handled by cohort_definition
             r"which.*(respond|perform).*(best|better)",
             r"\bcate\b|treatment effect.*by",
             r"differentiat.*strategy",
+            r"subgroup.*analysis",
         ],
         "experiment_design": [
             r"(design|run|plan).*(experiment|test|trial)",
@@ -102,6 +103,9 @@ class IntentClassifierNode:
             r"filter.*patients",
             r"(remibrutinib|fabhalta|kisqali).*(cohort|patient)",
             r"(csu|pnh|breast cancer).*(cohort|patient|population)",
+            r"\bcohort\b.*\bhcp",  # "cohort of HCPs" type queries
+            r"\bhcp\b.*\bcohort",  # "HCP cohort" type queries
+            r"(high.?value|high.?priority).*\b(hcp|physician|doctor)",  # high-value HCP queries
         ],
     }
 
