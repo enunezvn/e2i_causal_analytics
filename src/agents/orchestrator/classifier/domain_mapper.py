@@ -249,4 +249,12 @@ class DomainMapper:
                 score += 0.5
                 evidence.append("entity:region")
 
+        if domain == Domain.COHORT_DEFINITION:
+            # Boost cohort scoring for cohort-relevant entities
+            cohort_entities = {"cohort", "patient", "population", "HCP", "segment"}
+            matched_entities = cohort_entities.intersection(entities.entity_types)
+            if matched_entities:
+                score += 0.5
+                evidence.extend([f"entity:{t}" for t in matched_entities])
+
         return min(score, 1.0), evidence
