@@ -100,6 +100,8 @@ class DiscoveryConfig:
         score_func: Scoring function for score-based methods (BIC, BDeu)
         assume_linear: Assume linear relationships (enables LiNGAM)
         assume_gaussian: Assume Gaussian errors
+        use_process_pool: Use ProcessPoolExecutor for true parallelism (default: False)
+        max_workers: Maximum worker processes/threads (default: None = CPU count)
     """
 
     algorithms: List[DiscoveryAlgorithmType] = field(
@@ -113,6 +115,8 @@ class DiscoveryConfig:
     score_func: str = "local_score_BIC"
     assume_linear: bool = True
     assume_gaussian: bool = False
+    use_process_pool: bool = False
+    max_workers: Optional[int] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert config to dictionary."""
@@ -126,6 +130,8 @@ class DiscoveryConfig:
             "score_func": self.score_func,
             "assume_linear": self.assume_linear,
             "assume_gaussian": self.assume_gaussian,
+            "use_process_pool": self.use_process_pool,
+            "max_workers": self.max_workers,
         }
 
 
