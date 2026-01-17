@@ -288,7 +288,7 @@ In addition to the E2I domain-specific agents, the framework provides BMAD-inspi
 - **Cloud Provider**: DigitalOcean
 - **Droplet**: e2i-analytics-prod
 - **Region**: NYC3 (New York)
-- **Specs**: 4 vCPU, 8 GB RAM, 160 GB SSD (Ubuntu 24.04 LTS)
+- **Specs**: 4 vCPU, 16 GB RAM, 200 GB SSD (Ubuntu 24.04 LTS)
 - **Public IP**: 138.197.4.36
 - **Reference**: See `INFRASTRUCTURE.md` for full details
 
