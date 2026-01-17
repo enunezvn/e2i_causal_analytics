@@ -5,6 +5,8 @@ Tests the complete chatbot workflow including state management,
 node execution, and tool integration.
 """
 
+from dataclasses import dataclass
+from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -16,6 +18,19 @@ from src.api.routes.chatbot_graph import (
     run_chatbot,
 )
 from src.api.routes.chatbot_state import ChatbotState, IntentType, create_initial_state
+
+
+# Mock CognitiveRAGResult for testing (mirrors chatbot_dspy.CognitiveRAGResult)
+@dataclass
+class MockCognitiveRAGResult:
+    """Mock result of cognitive RAG retrieval."""
+    rewritten_query: str
+    search_keywords: List[str]
+    graph_entities: List[str]
+    evidence: List[Dict[str, Any]]
+    hop_count: int
+    avg_relevance_score: float
+    retrieval_method: str
 
 
 class TestIntentClassification:
@@ -241,14 +256,66 @@ class TestMessagePersistence:
 
 
 class TestRAGIntegration:
-    """Tests for RAG retrieval integration."""
+    """Tests for RAG retrieval integration (both cognitive and basic)."""
 
     @pytest.mark.asyncio
     @patch("src.api.routes.chatbot_graph.get_async_supabase_client", new_callable=AsyncMock)
-    @patch("src.api.routes.chatbot_graph.hybrid_search")
-    async def test_retrieves_rag_context(self, mock_hybrid_search, mock_get_client):
-        """Test that RAG context is retrieved."""
+    @patch("src.api.routes.chatbot_graph.cognitive_rag_retrieve", new_callable=AsyncMock)
+    @patch("src.api.routes.chatbot_graph.get_chat_llm")
+    async def test_retrieves_cognitive_rag_context(
+        self, mock_get_chat_llm, mock_cognitive_rag, mock_get_client
+    ):
+        """Test that cognitive RAG retrieval works when enabled (default)."""
         mock_get_client.return_value = None
+
+        # Mock LLM to trigger fallback (avoids real API calls/timeout)
+        mock_get_chat_llm.side_effect = ValueError("ANTHROPIC_API_KEY not set")
+
+        # Mock cognitive RAG result with full evidence
+        mock_cognitive_rag.return_value = MockCognitiveRAGResult(
+            rewritten_query="TRx metrics for Kisqali brand",
+            search_keywords=["TRx", "Kisqali", "metrics"],
+            graph_entities=["Kisqali", "TRx"],
+            evidence=[
+                {
+                    "source_id": "doc-1",
+                    "content": "TRx analysis for Kisqali shows 15% growth...",
+                    "relevance_score": 0.92,
+                    "source": "business_metrics",
+                    "key_insight": "15% YoY growth in TRx",
+                }
+            ],
+            hop_count=1,
+            avg_relevance_score=0.92,
+            retrieval_method="cognitive",
+        )
+
+        result = await run_chatbot(
+            query="What is TRx for Kisqali?",
+            user_id="user-123",
+            request_id="req-456",
+            brand_context="Kisqali",
+        )
+
+        # Cognitive RAG should have been called (enabled by default)
+        mock_cognitive_rag.assert_called()
+        assert "rag_context" in result
+        # Check that retrieval method is cognitive
+        assert result.get("rag_retrieval_method") == "cognitive"
+
+    @pytest.mark.asyncio
+    @patch("src.api.routes.chatbot_graph.CHATBOT_COGNITIVE_RAG_ENABLED", False)
+    @patch("src.api.routes.chatbot_graph.get_async_supabase_client", new_callable=AsyncMock)
+    @patch("src.api.routes.chatbot_graph.hybrid_search", new_callable=AsyncMock)
+    @patch("src.api.routes.chatbot_graph.get_chat_llm")
+    async def test_retrieves_basic_rag_context_when_cognitive_disabled(
+        self, mock_get_chat_llm, mock_hybrid_search, mock_get_client
+    ):
+        """Test that basic hybrid search works when cognitive RAG is disabled."""
+        mock_get_client.return_value = None
+
+        # Mock LLM to trigger fallback (avoids real API calls/timeout)
+        mock_get_chat_llm.side_effect = ValueError("ANTHROPIC_API_KEY not set")
 
         mock_result = MagicMock()
         mock_result.source_id = "doc-1"
@@ -257,32 +324,75 @@ class TestRAGIntegration:
         mock_result.source = "business_metrics"
         mock_hybrid_search.return_value = [mock_result]
 
-        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": ""}):
-            result = await run_chatbot(
-                query="What is TRx for Kisqali?",
-                user_id="user-123",
-                request_id="req-456",
-                brand_context="Kisqali",
-            )
+        result = await run_chatbot(
+            query="What is TRx for Kisqali?",
+            user_id="user-123",
+            request_id="req-456",
+            brand_context="Kisqali",
+        )
 
-        # Hybrid search should have been called
+        # Hybrid search should have been called (cognitive RAG disabled)
         mock_hybrid_search.assert_called()
         assert "rag_context" in result
 
     @pytest.mark.asyncio
     @patch("src.api.routes.chatbot_graph.get_async_supabase_client", new_callable=AsyncMock)
-    @patch("src.api.routes.chatbot_graph.hybrid_search")
-    async def test_handles_rag_error_gracefully(self, mock_hybrid_search, mock_get_client):
+    @patch("src.api.routes.chatbot_graph.cognitive_rag_retrieve", new_callable=AsyncMock)
+    @patch("src.api.routes.chatbot_graph.hybrid_search", new_callable=AsyncMock)
+    @patch("src.api.routes.chatbot_graph.get_chat_llm")
+    async def test_falls_back_to_basic_rag_on_cognitive_error(
+        self, mock_get_chat_llm, mock_hybrid_search, mock_cognitive_rag, mock_get_client
+    ):
+        """Test that basic RAG is used when cognitive RAG fails."""
+        mock_get_client.return_value = None
+
+        # Mock LLM to trigger fallback (avoids real API calls/timeout)
+        mock_get_chat_llm.side_effect = ValueError("ANTHROPIC_API_KEY not set")
+
+        # Cognitive RAG fails
+        mock_cognitive_rag.side_effect = Exception("Cognitive RAG pipeline error")
+
+        # Basic RAG succeeds
+        mock_result = MagicMock()
+        mock_result.source_id = "doc-1"
+        mock_result.content = "TRx analysis for Kisqali..."
+        mock_result.score = 0.9
+        mock_result.source = "business_metrics"
+        mock_hybrid_search.return_value = [mock_result]
+
+        result = await run_chatbot(
+            query="What is TRx for Kisqali?",
+            user_id="user-123",
+            request_id="req-456",
+            brand_context="Kisqali",
+        )
+
+        # Cognitive RAG was attempted
+        mock_cognitive_rag.assert_called()
+        # Fallback to basic RAG
+        mock_hybrid_search.assert_called()
+        assert "rag_context" in result
+
+    @pytest.mark.asyncio
+    @patch("src.api.routes.chatbot_graph.CHATBOT_COGNITIVE_RAG_ENABLED", False)
+    @patch("src.api.routes.chatbot_graph.get_async_supabase_client", new_callable=AsyncMock)
+    @patch("src.api.routes.chatbot_graph.hybrid_search", new_callable=AsyncMock)
+    @patch("src.api.routes.chatbot_graph.get_chat_llm")
+    async def test_handles_rag_error_gracefully(
+        self, mock_get_chat_llm, mock_hybrid_search, mock_get_client
+    ):
         """Test that RAG errors don't crash the workflow."""
         mock_get_client.return_value = None
         mock_hybrid_search.side_effect = Exception("RAG search failed")
 
-        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": ""}):
-            result = await run_chatbot(
-                query="What is TRx?",
-                user_id="user-123",
-                request_id="req-456",
-            )
+        # Mock LLM to trigger fallback (avoids real API calls/timeout)
+        mock_get_chat_llm.side_effect = ValueError("ANTHROPIC_API_KEY not set")
+
+        result = await run_chatbot(
+            query="What is TRx?",
+            user_id="user-123",
+            request_id="req-456",
+        )
 
         # Workflow should complete even with RAG error
         assert result is not None
