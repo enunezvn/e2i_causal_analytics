@@ -125,6 +125,12 @@ AGENT_REGISTRY_CONFIG = {
         "class_name": "HealthScoreAgent",
         "enabled": True,
     },
+    "experiment_monitor": {
+        "tier": 3,
+        "module": "src.agents.experiment_monitor",
+        "class_name": "ExperimentMonitorAgent",
+        "enabled": True,
+    },
     # Tier 4: ML Predictions
     "prediction_synthesizer": {
         "tier": 4,
