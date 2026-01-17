@@ -85,7 +85,7 @@ AGENT_REGISTRY_CONFIG = {
         "tier": 1,
         "module": "src.agents.tool_composer",
         "class_name": "ToolComposerAgent",
-        "enabled": False,  # Not yet implemented
+        "enabled": True,  # Enabled in v4.2.1
     },
     # Tier 2: Causal Analytics
     "causal_impact": {
