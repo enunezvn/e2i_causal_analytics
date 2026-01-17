@@ -25,11 +25,8 @@ from fastapi import FastAPI, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from src.api.routes.audit import router as audit_router
-from src.api.routes.causal import router as causal_router
-from src.api.routes.cognitive import router as cognitive_router
-from src.api.routes.digital_twin import router as digital_twin_router
-from src.api.routes.kpi import router as kpi_router
+# Import middleware
+from src.api.dependencies.auth import is_auth_enabled
 
 # Import dependencies
 from src.api.dependencies.bentoml_client import (
@@ -52,23 +49,26 @@ from src.api.dependencies.supabase_client import (
     init_supabase,
     supabase_health_check,
 )
+from src.api.middleware.auth_middleware import JWTAuthMiddleware
+from src.api.middleware.rate_limit_middleware import RateLimitMiddleware
+from src.api.middleware.security_middleware import SecurityHeadersMiddleware
 
 # Import routers
 from src.api.routes.agents import router as agents_router
-from src.api.routes.explain import router as explain_router
+from src.api.routes.audit import router as audit_router
+from src.api.routes.causal import router as causal_router
+from src.api.routes.cognitive import router as cognitive_router
+from src.api.routes.copilotkit import add_copilotkit_routes
+from src.api.routes.copilotkit import router as copilotkit_router
+from src.api.routes.digital_twin import router as digital_twin_router
 from src.api.routes.experiments import router as experiments_router
+from src.api.routes.explain import router as explain_router
 from src.api.routes.graph import router as graph_router
+from src.api.routes.kpi import router as kpi_router
 from src.api.routes.memory import router as memory_router
 from src.api.routes.monitoring import router as monitoring_router
 from src.api.routes.predictions import router as predictions_router
 from src.api.routes.rag import router as rag_router
-from src.api.routes.copilotkit import add_copilotkit_routes, router as copilotkit_router
-
-# Import middleware
-from src.api.dependencies.auth import is_auth_enabled
-from src.api.middleware.auth_middleware import JWTAuthMiddleware, get_public_paths
-from src.api.middleware.rate_limit_middleware import RateLimitMiddleware
-from src.api.middleware.security_middleware import SecurityHeadersMiddleware
 
 # Configure logging
 logging.basicConfig(
@@ -201,18 +201,76 @@ app = FastAPI(
 # =============================================================================
 
 # CORS middleware for frontend integration
-# TODO: Restrict origins for production deployment
-ALLOWED_ORIGINS = os.environ.get(
-    "ALLOWED_ORIGINS",
-    "http://localhost:3000,http://localhost:5173,http://localhost:5174,http://localhost:8080,http://127.0.0.1:5173,http://127.0.0.1:5174"
-).split(",")
+# Production-ready configuration with explicit origins, methods, and headers
+_DEFAULT_ORIGINS = [
+    # Production
+    "http://138.197.4.36",
+    "http://138.197.4.36:8000",
+    "https://138.197.4.36",
+    # Development
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://localhost:8080",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:5174",
+    "http://127.0.0.1:8080",
+]
+
+# Allow override via environment variable (comma-separated list)
+# Set ALLOWED_ORIGINS="*" only for development/testing, never in production
+_env_origins = os.environ.get("ALLOWED_ORIGINS", "").strip()
+if _env_origins:
+    if _env_origins == "*":
+        logger.warning(
+            "CORS: Wildcard origin (*) configured - this is insecure for production!"
+        )
+        ALLOWED_ORIGINS = ["*"]
+    else:
+        # Parse and validate origins from environment
+        ALLOWED_ORIGINS = [
+            origin.strip()
+            for origin in _env_origins.split(",")
+            if origin.strip() and (
+                origin.strip().startswith("http://") or
+                origin.strip().startswith("https://")
+            )
+        ]
+        if not ALLOWED_ORIGINS:
+            logger.warning(
+                "CORS: No valid origins in ALLOWED_ORIGINS env var, using defaults"
+            )
+            ALLOWED_ORIGINS = _DEFAULT_ORIGINS
+else:
+    ALLOWED_ORIGINS = _DEFAULT_ORIGINS
+
+# Explicitly define allowed methods (not wildcard)
+ALLOWED_METHODS = ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
+
+# Explicitly define allowed headers
+ALLOWED_HEADERS = [
+    "Accept",
+    "Accept-Language",
+    "Authorization",
+    "Content-Language",
+    "Content-Type",
+    "Origin",
+    "X-Requested-With",
+    "X-Request-ID",
+    "X-Correlation-ID",
+]
+
+logger.info(f"CORS: Configured with {len(ALLOWED_ORIGINS)} allowed origins")
+logger.debug(f"CORS: Origins: {ALLOWED_ORIGINS}")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS if ALLOWED_ORIGINS != ["*"] else ["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=ALLOWED_METHODS,
+    allow_headers=ALLOWED_HEADERS,
+    expose_headers=["X-Request-ID", "X-Correlation-ID"],
 )
 
 # JWT Authentication middleware (Supabase)
@@ -228,7 +286,7 @@ logger.info("Security Headers: ENABLED")
 # Rate Limiting middleware
 # Protects API from abuse with configurable limits per endpoint
 # Can be disabled for testing via DISABLE_RATE_LIMITING env var
-if not os.environ.get("DISABLE_RATE_LIMITING", "").lower() in ("1", "true", "yes"):
+if os.environ.get("DISABLE_RATE_LIMITING", "").lower() not in ("1", "true", "yes"):
     app.add_middleware(RateLimitMiddleware, use_redis=True)
     logger.info("Rate Limiting: ENABLED")
 else:
