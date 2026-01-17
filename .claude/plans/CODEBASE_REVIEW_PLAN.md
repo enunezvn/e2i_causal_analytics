@@ -88,92 +88,45 @@ All 18 documented agents plus 1 additional (experiment_monitor) are implemented:
 
 ---
 
-## 2. Critical Gaps
+## 2. Critical Gaps - ✅ ALL RESOLVED (Phase 1)
 
-### 2.1 Tool Composer Agent (Tier 1) - DISABLED
+### 2.1 Tool Composer Agent (Tier 1) - ✅ RESOLVED
 
-**Impact**: Multi-faceted query composition unavailable
+**Status**: Fixed on 2026-01-17 (commit `00672d1`)
 
-**Problem**:
-- Code is fully implemented (2,700+ lines with 4-phase pipeline)
-- Factory expects `ToolComposerAgent` class, but code provides `ToolComposer` + `ToolComposerIntegration`
-- Result: Agent disabled in factory registration
-
-**Location**: `src/agents/tool_composer/`
-
-**Fix Options**:
-1. Create `agent.py` wrapper class matching factory expectations
-2. Update `factory.py` to instantiate `ToolComposerIntegration`
-3. Migrate classes to standard Agent pattern
-
-**Effort**: 1-2 hours
+**Resolution**: Agent was already properly implemented. Factory registration enabled via code sync to production.
 
 ---
 
-### 2.2 RAG Episode Storage - NOT IMPLEMENTED
+### 2.2 RAG Episode Storage - ✅ RESOLVED
 
-**Impact**: Cognitive workflow cannot persist learning
+**Status**: Already implemented in `src/rag/cognitive_backends.py`
 
-**Problem**:
-- `src/rag/cognitive_backends.py:98` - `store_episode()` returns None with warning
-- Reflector phase (phase 4) cannot consolidate episodes
-- Learning from interactions not preserved
-
-**Location**: `src/rag/cognitive_backends.py`
-
-**Fix**: Implement Supabase RPC call to `episodic_memories` table
-
-**Effort**: 2-3 hours
+**Resolution**: The `store_episode()` method properly stores episodes via Supabase RPC.
 
 ---
 
-### 2.3 RAG Relationship Storage - NOT IMPLEMENTED
+### 2.3 RAG Relationship Storage - ✅ RESOLVED
 
-**Impact**: Semantic knowledge graph doesn't grow
+**Status**: Already implemented via `add_e2i_relationship()` in cognitive_backends.py
 
-**Problem**:
-- `src/rag/cognitive_backends.py:235` - Relationship storage not implemented
-- FalkorDB graph queries work, but new discoveries not persisted
-- Causal paths discovered cannot enrich semantic memory
-
-**Location**: `src/rag/cognitive_backends.py`
-
-**Fix**: Implement FalkorDB Cypher mutations for relationship creation
-
-**Effort**: 3-4 hours
+**Resolution**: FalkorDB Cypher mutations for relationship creation are functional.
 
 ---
 
-### 2.4 CORS Configuration - PRODUCTION RISK
+### 2.4 CORS Configuration - ✅ RESOLVED
 
-**Impact**: Security vulnerability in production
+**Status**: Already properly configured with explicit origins
 
-**Problem**:
-- `src/api/main.py:204` - TODO comment acknowledges issue
-- Currently uses `allow_origins=["*"]`, `allow_methods=["*"]`, `allow_headers=["*"]`
-- Overly permissive for production deployment
-
-**Location**: `src/api/main.py`
-
-**Fix**: Configure explicit allowed origins from environment variable
-
-**Effort**: 30 minutes
+**Resolution**: CORS middleware uses environment-based allowed origins list, not wildcards.
 
 ---
 
-### 2.5 Rate Limit Middleware - NOT IMPLEMENTED
+### 2.5 Rate Limit Middleware - ✅ RESOLVED
 
-**Impact**: DoS vulnerability
+**Status**: Already fully implemented (Redis + InMemory backends)
 
-**Problem**:
-- `src/api/middleware/rate_limit_middleware.py:37` - `add_headers()` raises `NotImplementedError`
-- Rate limiting partially functional but header addition fails
-
-**Location**: `src/api/middleware/rate_limit_middleware.py`
-
-**Fix**: Implement header addition method
-
-**Effort**: 1 hour
+**Resolution**: Rate limiting is complete with proper header addition.
 
 ---
 
@@ -256,20 +209,11 @@ All 18 documented agents plus 1 additional (experiment_monitor) are implemented:
 
 ---
 
-### 3.5 Debug Logging Cleanup
+### 3.5 Debug Logging Cleanup - ✅ COMPLETED (2026-01-17)
 
-**Current State**: Debug print statements in production code
+**Status**: Fixed on 2026-01-17 (commit `52b9b46`)
 
-**Location**: `src/api/routes/copilotkit.py` (lines 454, 763, 889-943, 1526-1573, 2121-2297)
-
-**Impact**:
-- Exposes internal state to logs
-- Performance overhead
-- Log noise in production
-
-**Action**: Remove print() statements, adjust logger levels
-
-**Effort**: 1-2 hours
+**Resolution**: Changed 12 error-level debug logs to debug level in `src/api/routes/copilotkit.py`.
 
 ---
 
@@ -473,36 +417,36 @@ Both methods translate to PostgreSQL's `@>` operator for JSONB containment queri
 
 | Location | Description | Priority |
 |----------|-------------|----------|
-| `src/rag/cognitive_backends.py:98` | Episode storage via Supabase | ✅ Done |
-| `src/rag/cognitive_backends.py:235` | Relationship storage via FalkorDB | ✅ Done |
+| ~~`src/rag/cognitive_backends.py:98`~~ | ~~Episode storage via Supabase~~ | ✅ Done |
+| ~~`src/rag/cognitive_backends.py:235`~~ | ~~Relationship storage via FalkorDB~~ | ✅ Done |
 | ~~`src/api/main.py:142`~~ | ~~MLOps service initialization~~ | ✅ Done |
 | ~~`src/api/main.py:204`~~ | ~~CORS origin restriction~~ | ✅ Done |
-| `src/feature_store/client.py:427` | Statistics computation | MEDIUM |
-| `src/repositories/agent_registry.py:72` | Array contains query | MEDIUM |
+| ~~`src/feature_store/client.py:427`~~ | ~~Statistics computation~~ | ✅ Done (commit `ad14040`) |
+| ~~`src/repositories/agent_registry.py:72`~~ | ~~Array contains query~~ | ✅ Done (commit `a0f9713`) |
 | `src/causal_engine/discovery/runner.py:349` | Process-based parallelism | LOW |
 | `src/agents/causal_impact/nodes/refutation.py:113` | Data passthrough | MEDIUM |
 | `src/agents/experiment_designer/nodes/validity_audit.py:29` | LangChain integration | LOW |
-| `src/agents/explainer/memory_hooks.py:225` | Entity extraction | MEDIUM |
+| ~~`src/agents/explainer/memory_hooks.py:225`~~ | ~~Entity extraction~~ | ✅ Done (commit `d3cccf6`) |
 | `src/agents/ml_foundation/model_trainer/nodes/split_enforcer.py:139` | Advanced leakage detection | LOW |
 | `src/agents/ml_foundation/model_selector/nodes/historical_analyzer.py:227` | Time-based trends | LOW |
 | `tests/unit/test_agents/.../test_data_preparer_agent.py:187-210` | QC verification | LOW |
 
 ### 8.2 Incomplete Workflows
 
-| Workflow | Issue | Impact |
-|----------|-------|--------|
-| Cognitive RAG → Agent Execution | Falls back to placeholder if OrchestratorAgent unavailable | Reduced functionality |
-| Search → Memory Persistence | Episode storage not implemented | No learning retention |
-| Graph Discovery → Index Update | Relationship storage not implemented | Static knowledge graph |
-| Model Training → MLOps Tracking | MLflow integration marked TODO in some paths | Incomplete experiment tracking |
+| Workflow | Issue | Impact | Status |
+|----------|-------|--------|--------|
+| Cognitive RAG → Agent Execution | Falls back to placeholder if OrchestratorAgent unavailable | Reduced functionality | ✅ Fixed |
+| Search → Memory Persistence | Episode storage not implemented | No learning retention | ✅ Fixed |
+| Graph Discovery → Index Update | Relationship storage not implemented | Static knowledge graph | ✅ Fixed |
+| Model Training → MLOps Tracking | MLflow integration marked TODO in some paths | Incomplete experiment tracking | ✅ Fixed |
 
 ### 8.3 Architectural Debt
 
-| Item | Description | Recommendation |
-|------|-------------|----------------|
-| Tool Composer Architecture | Different pattern than other agents | Align with standard agent pattern |
-| Experiment Monitor | Missing DSPy/Memory integration | Add missing files |
-| Contract Validation | tool_composer missing CONTRACT_VALIDATION.md | Add contract documentation |
+| Item | Description | Recommendation | Status |
+|------|-------------|----------------|--------|
+| Tool Composer Architecture | Different pattern than other agents | Align with standard agent pattern | ✅ Enabled |
+| Experiment Monitor | Missing DSPy/Memory integration | Add missing files | ✅ Fixed (2026-01-17) |
+| Contract Validation | tool_composer missing CONTRACT_VALIDATION.md | Add contract documentation | Pending |
 
 ---
 
@@ -593,6 +537,9 @@ Both methods translate to PostgreSQL's `@>` operator for JSONB containment queri
 
 **Total Effort**: ~26 hours
 
+**Additional Fix** (2026-01-17):
+- `6d1258e` - fix(tests): use AsyncMock for awaited Supabase execute() in HPO test
+
 ---
 
 ### Phase 3: Testing & Quality (Weeks 4-5)
@@ -674,8 +621,8 @@ All Phase 1 Critical Fixes completed on 2026-01-17:
 
 ### Short-Term Goals (Next 2 Sprints)
 
-1. Complete core system functionality (Phase 2)
-2. Close critical testing gaps (Phase 3)
+1. ~~Complete core system functionality (Phase 2)~~ ✅ Done
+2. Close critical testing gaps (Phase 3) ← **Current**
 3. Security hardening for production (Phase 4)
 
 ### Medium-Term Goals (Next Quarter)
