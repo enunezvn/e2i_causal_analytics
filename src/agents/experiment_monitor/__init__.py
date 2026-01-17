@@ -35,7 +35,22 @@ from src.agents.experiment_monitor.agent import (
     ExperimentMonitorInput,
     ExperimentMonitorOutput,
 )
+from src.agents.experiment_monitor.dspy_integration import (
+    DSPY_AVAILABLE,
+    ExperimentMonitorDSPyIntegration,
+    ExperimentMonitorPrompts,
+    get_experiment_monitor_dspy_integration,
+    reset_dspy_integration,
+)
 from src.agents.experiment_monitor.graph import experiment_monitor_graph
+from src.agents.experiment_monitor.memory_hooks import (
+    ExperimentMonitorMemoryHooks,
+    MonitoringContext,
+    MonitoringRecord,
+    contribute_to_memory,
+    get_experiment_monitor_memory_hooks,
+    reset_memory_hooks,
+)
 from src.agents.experiment_monitor.state import (
     EnrollmentIssue,
     ErrorDetails,
@@ -63,4 +78,17 @@ __all__ = [
     "InterimTrigger",
     "MonitorAlert",
     "ErrorDetails",
+    # DSPy integration
+    "ExperimentMonitorDSPyIntegration",
+    "ExperimentMonitorPrompts",
+    "get_experiment_monitor_dspy_integration",
+    "reset_dspy_integration",
+    "DSPY_AVAILABLE",
+    # Memory hooks
+    "ExperimentMonitorMemoryHooks",
+    "MonitoringContext",
+    "MonitoringRecord",
+    "contribute_to_memory",
+    "get_experiment_monitor_memory_hooks",
+    "reset_memory_hooks",
 ]
