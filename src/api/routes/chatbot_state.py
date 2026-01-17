@@ -158,6 +158,7 @@ class IntentType:
     GREETING = "greeting"
     HELP = "help"
     MULTI_FACETED = "multi_faceted"  # Complex queries requiring Tool Composer
+    COHORT_DEFINITION = "cohort_definition"  # Patient/HCP cohort construction queries
 
 
 # Default initial state
