@@ -78,6 +78,7 @@ class ExplanationMemoryHooks:
         """Initialize memory hooks with lazy-loaded clients."""
         self._working_memory = None
         self._semantic_memory = None
+        self._entity_extractor = None
 
     # =========================================================================
     # LAZY-LOADED MEMORY CLIENTS
@@ -110,6 +111,20 @@ class ExplanationMemoryHooks:
                 logger.warning(f"Failed to initialize semantic memory: {e}")
                 self._semantic_memory = None
         return self._semantic_memory
+
+    @property
+    def entity_extractor(self):
+        """Lazy-load EntityExtractor for query entity extraction."""
+        if self._entity_extractor is None:
+            try:
+                from src.rag.entity_extractor import EntityExtractor
+
+                self._entity_extractor = EntityExtractor()
+                logger.debug("Entity extractor initialized")
+            except Exception as e:
+                logger.warning(f"Failed to initialize entity extractor: {e}")
+                self._entity_extractor = None
+        return self._entity_extractor
 
     # =========================================================================
     # CONTEXT RETRIEVAL
@@ -212,23 +227,115 @@ class ExplanationMemoryHooks:
             return []
 
     async def _get_semantic_context(self, query: str) -> Dict[str, Any]:
-        """Query semantic memory for entity relationships."""
+        """Query semantic memory for entity relationships.
+
+        Uses EntityExtractor to identify domain entities in the query,
+        then queries FalkorDB for those entities and their relationships.
+        """
         if not self.semantic_memory:
             return {"entities": [], "relationships": [], "causal_paths": []}
 
         try:
+            from src.memory.semantic_memory import E2IEntityType
+
             # Get graph statistics for context
             stats = self.semantic_memory.get_graph_stats()
 
             # Extract entities mentioned in the query
-            # For now, return basic graph context
-            # TODO: Implement entity extraction from query
+            extracted_entities = []
+            relationships = []
+
+            if self.entity_extractor:
+                entities = self.entity_extractor.extract(query)
+
+                # Query semantic memory for each extracted entity type
+                # Brands map to general entity lookups
+                for brand in entities.brands:
+                    entity_data = self.semantic_memory.get_entity(
+                        E2IEntityType.TREATMENT, brand
+                    )
+                    if entity_data:
+                        extracted_entities.append({
+                            "type": "brand",
+                            "id": brand,
+                            "data": entity_data,
+                        })
+                        # Get relationships for this entity
+                        rels = self.semantic_memory.get_relationships(
+                            E2IEntityType.TREATMENT, brand, direction="both"
+                        )
+                        relationships.extend(rels[:5])  # Limit to 5 per entity
+
+                # KPIs - look up as triggers or causal paths
+                for kpi in entities.kpis:
+                    # Try as trigger first
+                    entity_data = self.semantic_memory.get_entity(
+                        E2IEntityType.TRIGGER, kpi
+                    )
+                    if entity_data:
+                        extracted_entities.append({
+                            "type": "kpi",
+                            "id": kpi,
+                            "data": entity_data,
+                        })
+                        rels = self.semantic_memory.get_relationships(
+                            E2IEntityType.TRIGGER, kpi, direction="both"
+                        )
+                        relationships.extend(rels[:5])
+
+                # Agents - look up agent activities
+                for agent in entities.agents:
+                    entity_data = self.semantic_memory.get_entity(
+                        E2IEntityType.AGENT_ACTIVITY, agent
+                    )
+                    if entity_data:
+                        extracted_entities.append({
+                            "type": "agent",
+                            "id": agent,
+                            "data": entity_data,
+                        })
+
+                # HCP segments
+                for segment in entities.hcp_segments:
+                    entity_data = self.semantic_memory.get_entity(
+                        E2IEntityType.HCP, segment
+                    )
+                    if entity_data:
+                        extracted_entities.append({
+                            "type": "hcp_segment",
+                            "id": segment,
+                            "data": entity_data,
+                        })
+
+                logger.debug(
+                    f"Extracted {len(extracted_entities)} entities, "
+                    f"{len(relationships)} relationships from query"
+                )
+
+            # Get causal paths if any causal-related entities found
+            causal_paths = []
+            if any(e.get("type") == "kpi" for e in extracted_entities):
+                try:
+                    # Query for causal paths related to extracted KPIs
+                    kpi_ids = [e["id"] for e in extracted_entities if e.get("type") == "kpi"]
+                    for kpi_id in kpi_ids[:2]:  # Limit to first 2 KPIs
+                        paths = self.semantic_memory.get_relationships(
+                            E2IEntityType.CAUSAL_PATH, kpi_id, direction="both"
+                        )
+                        causal_paths.extend(paths[:3])  # Limit paths per KPI
+                except Exception as e:
+                    logger.debug(f"Failed to get causal paths: {e}")
 
             return {
-                "entities": [],
-                "relationships": [],
-                "causal_paths": [],
+                "entities": extracted_entities,
+                "relationships": relationships[:20],  # Cap total relationships
+                "causal_paths": causal_paths[:10],  # Cap causal paths
                 "graph_stats": stats,
+                "extraction_summary": {
+                    "brands_found": len(entities.brands) if self.entity_extractor else 0,
+                    "kpis_found": len(entities.kpis) if self.entity_extractor else 0,
+                    "agents_found": len(entities.agents) if self.entity_extractor else 0,
+                },
             }
         except Exception as e:
             logger.warning(f"Failed to query semantic memory: {e}")
