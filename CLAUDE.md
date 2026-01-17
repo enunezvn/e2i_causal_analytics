@@ -335,6 +335,20 @@ doctl compute droplet-action snapshot 544907207 --snapshot-name "backup-$(date +
 
 **Full documentation**: See `INFRASTRUCTURE.md` for complete reference including firewall setup, SSH key management, and cost information.
 
+### Production Python Environment (IMPORTANT)
+
+The API runs from `/opt/e2i_causal_analytics/` with the venv at `/opt/e2i_causal_analytics/venv/`. This is the proper production environment for running tests and commands.
+
+```bash
+# Run tests on droplet using production venv
+ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/venv/bin/pytest tests/unit/test_utils/ -v -n 4"
+
+# Run Python commands with production venv
+ssh -i ~/.ssh/replit enunez@138.197.4.36 "/opt/e2i_causal_analytics/venv/bin/python -c 'import src; print(src)'"
+```
+
+**Note**: The `~/Projects/e2i_causal_analytics/` directory is for code syncing only. Always use `/opt/e2i_causal_analytics/` for execution.
+
 ### Droplet Service Discovery (IMPORTANT)
 
 **ALWAYS check for running services before rebuilding or installing dependencies locally.** The production droplet typically has all services running via Docker.
