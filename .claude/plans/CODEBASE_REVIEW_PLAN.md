@@ -392,13 +392,13 @@ Both methods translate to PostgreSQL's `@>` operator for JSONB containment queri
 
 ### 7.3 API Routes Without Tests
 
-- `src/api/routes/agents/` - Agent orchestration endpoints
+- ~~`src/api/routes/agents/`~~ - ✅ Agent orchestration endpoints (29 tests)
 - `src/api/routes/chatbot_dspy/` - DSPy-based chatbot
 - `src/api/routes/chatbot_graph/` - Graph-based conversation
 - `src/api/routes/chatbot_state/` - State management
 - `src/api/routes/chatbot_tools/` - Tool integration
 - `src/api/routes/chatbot_tracer/` - Request tracing
-- `src/api/routes/copilotkit/` - CopilotKit integration
+- ~~`src/api/routes/copilotkit/`~~ - ✅ CopilotKit integration (46 tests)
 
 ### 7.4 Test Infrastructure Improvements
 
@@ -542,21 +542,39 @@ Both methods translate to PostgreSQL's `@>` operator for JSONB containment queri
 
 ---
 
-### Phase 3: Testing & Quality (Weeks 4-5)
+### Phase 3: Testing & Quality (Weeks 4-5) - IN PROGRESS
 
 **Goal**: Close critical testing gaps
 
-| Task | Priority | Effort | Dependencies |
-|------|----------|--------|--------------|
-| Test utils module | HIGH | 4 hrs | None |
-| Test workers module | HIGH | 4 hrs | None |
-| Test causal discovery (8 files) | HIGH | 8 hrs | None |
-| Test API routes (7 routes) | HIGH | 8 hrs | None |
-| DSPy test markers | HIGH | 2 hrs | None |
-| Centralized fixture library | MEDIUM | 6 hrs | None |
-| Coverage tracking | MEDIUM | 2 hrs | None |
+**Status**: Major progress on 2026-01-17
 
-**Total Effort**: ~34 hours
+| Task | Priority | Effort | Dependencies | Status |
+|------|----------|--------|--------------|--------|
+| Test utils module (2 files) | HIGH | 4 hrs | None | ✅ Done (79 tests) |
+| Test workers module (1 file) | HIGH | 4 hrs | None | ✅ Done (45 tests) |
+| Test causal discovery (11 files) | HIGH | 8 hrs | None | ✅ Done (260 tests) |
+| Test causal pipeline (6 files) | HIGH | 4 hrs | None | ✅ Done (195 tests) |
+| Test causal energy score (3 files) | HIGH | 4 hrs | None | ✅ Done (122 tests) |
+| Test API routes (5/7 routes) | HIGH | 8 hrs | None | ⚠️ Partial (200 tests) |
+| DSPy test markers | HIGH | 2 hrs | None | Pending |
+| Centralized fixture library | MEDIUM | 6 hrs | None | Pending |
+| Coverage tracking | MEDIUM | 2 hrs | None | Pending |
+
+**New Tests Added (2026-01-17)**: 901 tests
+- `tests/unit/test_utils/` - test_audit_chain.py (44 tests), test_llm_factory.py (35 tests)
+- `tests/unit/test_workers/` - test_celery_app.py (45 tests)
+- `tests/unit/test_causal_engine/test_discovery/` - 11 test files (260 tests)
+- `tests/unit/test_causal_engine/test_pipeline/` - 6 test files (195 tests)
+- `tests/unit/test_causal_engine/test_energy_score/` - 3 test files (122 tests)
+- `tests/unit/test_api/test_routes/` - test_audit.py, test_graph.py, test_monitoring.py (125 tests)
+- `tests/unit/test_api/test_routes/test_agents.py` - Agent status endpoint tests (29 tests)
+- `tests/unit/test_api/test_routes/test_copilotkit.py` - CopilotKit integration tests (46 tests)
+
+**Remaining API Routes (2/7)**:
+- `src/api/routes/chatbot_dspy/` - DSPy-based chatbot
+- `src/api/routes/chatbot_tools/` - Tool integration
+
+**Total Effort**: ~34 hours (20 hrs completed)
 
 ---
 
