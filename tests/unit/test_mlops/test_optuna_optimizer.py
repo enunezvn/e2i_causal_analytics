@@ -913,8 +913,7 @@ class TestSaveToDatabase:
             "duration_seconds": 10.0,
         }
 
-        # Mock Supabase client - using sync MagicMock for table operations
-        # since the Supabase client uses sync methods for table().insert().execute()
+        # Mock Supabase client - the code uses `await ... .execute()` so execute must be AsyncMock
         mock_execute_result = MagicMock()
         mock_execute_result.data = [{"id": "study-uuid-123"}]
 
@@ -927,26 +926,17 @@ class TestSaveToDatabase:
         mock_client = MagicMock()
         mock_client.table = MagicMock(return_value=mock_table)
 
-        # Patch using sys.modules for dynamic import
-        import sys
-        original_module = sys.modules.get("src.repositories.supabase_client")
-
-        mock_supabase_module = MagicMock()
-        mock_supabase_module.get_supabase_client = AsyncMock(return_value=mock_client)
-        sys.modules["src.repositories.supabase_client"] = mock_supabase_module
-
-        try:
+        # Patch get_supabase_client at the location where it's imported
+        # The code does: from src.repositories import get_supabase_client
+        with patch(
+            "src.repositories.get_supabase_client",
+            new=AsyncMock(return_value=mock_client),
+        ):
             result = await optimizer.save_to_database(
                 study=mock_study,
                 optimization_results=optimization_results,
                 algorithm_name="XGBoost",
             )
-        finally:
-            # Restore original module
-            if original_module is not None:
-                sys.modules["src.repositories.supabase_client"] = original_module
-            else:
-                sys.modules.pop("src.repositories.supabase_client", None)
 
         assert result["success"] is True
         assert result["study_id"] == "study-uuid-123"
