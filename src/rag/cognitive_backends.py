@@ -19,6 +19,11 @@ Usage:
 import logging
 from typing import Any, Dict, List, Optional
 
+from src.memory.episodic_memory import (
+    E2IEntityReferences,
+    EpisodicMemoryInput,
+    insert_episodic_memory_with_text,
+)
 from src.memory.procedural_memory import (
     LearningSignalInput,
     ProceduralMemoryInput,
@@ -26,6 +31,7 @@ from src.memory.procedural_memory import (
     insert_procedural_memory,
     record_learning_signal,
 )
+from src.memory.semantic_memory import E2IEntityType, get_semantic_memory
 from src.rag.memory_connector import get_memory_connector
 
 logger = logging.getLogger(__name__)
@@ -90,14 +96,58 @@ class EpisodicMemoryBackend:
         Args:
             content: Episode content
             episode_type: Type of episode (conversation, agent_action, etc.)
-            metadata: Additional metadata
+            metadata: Additional metadata including:
+                - agent_name: Agent that generated this episode
+                - brand: E2I brand context
+                - region: E2I region context
+                - session_id: Session identifier
+                - cycle_id: Cognitive cycle identifier
+                - importance_score: Episode importance (0.0-1.0)
 
         Returns:
             Episode ID if successful, None otherwise
         """
-        # TODO: Implement episode storage via Supabase
-        logger.warning("Episode storage not yet implemented")
-        return None
+        try:
+            meta = metadata or {}
+
+            # Build E2I entity references from metadata
+            e2i_refs = E2IEntityReferences(
+                brand=meta.get("brand"),
+                patient_id=meta.get("patient_id"),
+                hcp_id=meta.get("hcp_id"),
+                trigger_id=meta.get("trigger_id"),
+                causal_path_id=meta.get("causal_path_id"),
+            )
+
+            # Create episodic memory input
+            memory = EpisodicMemoryInput(
+                event_type=episode_type,
+                description=content,
+                event_subtype=meta.get("subtype"),
+                raw_content=meta.get("raw_content"),
+                entities=meta.get("entities"),
+                outcome_type=meta.get("outcome_type"),
+                outcome_details=meta.get("outcome_details"),
+                user_satisfaction_score=meta.get("satisfaction_score"),
+                agent_name=meta.get("agent_name"),
+                importance_score=meta.get("importance_score", 0.5),
+                e2i_refs=e2i_refs,
+            )
+
+            # Store with auto-generated embedding
+            memory_id = await insert_episodic_memory_with_text(
+                memory=memory,
+                text_to_embed=content,
+                session_id=meta.get("session_id"),
+                cycle_id=meta.get("cycle_id"),
+            )
+
+            logger.info(f"Stored episode {memory_id} of type {episode_type}")
+            return memory_id
+
+        except Exception as e:
+            logger.error(f"Episode storage failed: {e}", exc_info=True)
+            return None
 
 
 class SemanticMemoryBackend:
@@ -224,17 +274,80 @@ class SemanticMemoryBackend:
         Store a new relationship in semantic graph.
 
         Args:
-            source_entity: Source entity ID
-            target_entity: Target entity ID
-            relationship_type: Type of relationship
-            properties: Relationship properties
+            source_entity: Source entity ID (format: "type:id" or just "id")
+            target_entity: Target entity ID (format: "type:id" or just "id")
+            relationship_type: Type of relationship (e.g., "CAUSES", "IMPACTS", "RELATED_TO")
+            properties: Relationship properties including:
+                - confidence: Confidence score (0.0-1.0)
+                - weight: Relationship weight
+                - discovered_by: Agent that discovered this relationship
+                - evidence: Supporting evidence
 
         Returns:
             True if successful, False otherwise
         """
-        # TODO: Implement relationship storage via FalkorDB
-        logger.warning("Relationship storage not yet implemented")
-        return False
+        try:
+            semantic_memory = get_semantic_memory()
+
+            # Parse entity IDs to extract type and ID
+            source_type, source_id = self._parse_entity_id(source_entity)
+            target_type, target_id = self._parse_entity_id(target_entity)
+
+            # Add relationship using semantic memory
+            success = semantic_memory.add_e2i_relationship(
+                source_type=source_type,
+                source_id=source_id,
+                target_type=target_type,
+                target_id=target_id,
+                rel_type=relationship_type.upper(),
+                properties=properties,
+            )
+
+            if success:
+                logger.info(
+                    f"Stored relationship: {source_entity} -[{relationship_type}]-> {target_entity}"
+                )
+            return success
+
+        except Exception as e:
+            logger.error(f"Relationship storage failed: {e}", exc_info=True)
+            return False
+
+    def _parse_entity_id(self, entity_str: str) -> tuple:
+        """
+        Parse entity string into type and ID.
+
+        Args:
+            entity_str: Entity string in format "type:id" or just "id"
+
+        Returns:
+            Tuple of (E2IEntityType, entity_id)
+        """
+        if ":" in entity_str:
+            type_str, entity_id = entity_str.split(":", 1)
+            type_str = type_str.lower()
+
+            # Map common type strings to E2IEntityType
+            type_mapping = {
+                "brand": E2IEntityType.AGENT_ACTIVITY,  # Brands tracked via activities
+                "region": E2IEntityType.AGENT_ACTIVITY,
+                "patient": E2IEntityType.PATIENT,
+                "hcp": E2IEntityType.HCP,
+                "trigger": E2IEntityType.TRIGGER,
+                "causal_path": E2IEntityType.CAUSAL_PATH,
+                "causal": E2IEntityType.CAUSAL_PATH,
+                "prediction": E2IEntityType.PREDICTION,
+                "treatment": E2IEntityType.TREATMENT,
+                "experiment": E2IEntityType.EXPERIMENT,
+                "agent": E2IEntityType.AGENT_ACTIVITY,
+                "entity": E2IEntityType.AGENT_ACTIVITY,  # Generic fallback
+            }
+
+            entity_type = type_mapping.get(type_str, E2IEntityType.AGENT_ACTIVITY)
+            return entity_type, entity_id
+        else:
+            # No type prefix, default to AgentActivity
+            return E2IEntityType.AGENT_ACTIVITY, entity_str
 
 
 class ProceduralMemoryBackend:

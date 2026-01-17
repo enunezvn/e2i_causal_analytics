@@ -26,6 +26,7 @@ Usage:
     result = compose_query_sync("Compare X and predict Y", llm_client)
 """
 
+from .agent import ToolComposerAgent, ToolComposerOutput
 from .composer import (
     ToolComposer,
     ToolComposerIntegration,
@@ -77,6 +78,9 @@ from .synthesizer import (
 )
 
 __all__ = [
+    # Agent class (for factory registration)
+    "ToolComposerAgent",
+    "ToolComposerOutput",
     # Main classes
     "ToolComposer",
     "ToolComposerIntegration",
