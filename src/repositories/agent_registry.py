@@ -63,15 +63,56 @@ class AgentRegistryRepository(BaseRepository):
         """
         Find agents that handle a specific intent.
 
+        Uses PostgreSQL JSONB containment (@>) to filter by routes_from_intents array.
+        The routes_from_intents column is JSONB, e.g., '["CAUSAL", "IMPACT", "WHY"]'.
+
         Args:
             intent: Intent type (e.g., 'CAUSAL', 'WHAT_IF')
 
         Returns:
             List of AgentRegistry records that handle this intent
         """
-        # TODO: Implement array contains query
-        # intents column is TEXT[]
-        return await self.get_many(filters={"is_active": True})
+        if not self.client:
+            return []
+
+        # Use Supabase contains() for JSONB array column filtering
+        # This translates to PostgreSQL: routes_from_intents @> '["CAUSAL"]'::jsonb
+        result = (
+            await self.client.table(self.table_name)
+            .select("*")
+            .eq("is_active", True)
+            .contains("routes_from_intents", [intent.upper()])
+            .execute()
+        )
+
+        return [self._to_model(row) for row in result.data] if result.data else []
+
+    async def get_by_capability(self, capability: str) -> List:
+        """
+        Find agents that have a specific capability.
+
+        Uses PostgreSQL JSONB containment (@>) to filter by capabilities array.
+        The capabilities column is JSONB, e.g., '["ate_estimation", "cate_calculation"]'.
+
+        Args:
+            capability: Capability name (e.g., 'ate_estimation', 'gap_identification')
+
+        Returns:
+            List of AgentRegistry records that have this capability
+        """
+        if not self.client:
+            return []
+
+        # Use Supabase contains() for JSONB array column filtering
+        result = (
+            await self.client.table(self.table_name)
+            .select("*")
+            .eq("is_active", True)
+            .contains("capabilities", [capability.lower()])
+            .execute()
+        )
+
+        return [self._to_model(row) for row in result.data] if result.data else []
 
     async def route_intent_to_agent(self, intent: str) -> Optional[dict]:
         """
