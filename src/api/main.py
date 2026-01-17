@@ -53,6 +53,11 @@ from src.api.middleware.auth_middleware import JWTAuthMiddleware
 from src.api.middleware.rate_limit_middleware import RateLimitMiddleware
 from src.api.middleware.security_middleware import SecurityHeadersMiddleware
 
+# Import MLOps connectors
+from src.feature_store.feast_client import FeastClient, get_feast_client
+from src.mlops.mlflow_connector import get_mlflow_connector
+from src.mlops.opik_connector import get_opik_connector, OpikConfig
+
 # Import routers
 from src.api.routes.agents import router as agents_router
 from src.api.routes.audit import router as audit_router
@@ -139,10 +144,48 @@ async def lifespan(app: FastAPI):
         app.state.supabase_available = False
         logger.warning(f"Supabase initialization failed (degraded mode): {e}")
 
-    # TODO: Initialize optional MLOps services
-    # - MLflow client (experiment tracking)
-    # - Feast client (feature store)
-    # - Opik client (LLM observability)
+    # Initialize MLflow client (experiment tracking)
+    try:
+        mlflow_connector = get_mlflow_connector()
+        app.state.mlflow_available = mlflow_connector.enabled
+        if mlflow_connector.enabled:
+            logger.info(
+                f"MLflow client initialized (tracking URI: {mlflow_connector.tracking_uri})"
+            )
+        else:
+            logger.info("MLflow client initialized in disabled mode")
+    except Exception as e:
+        app.state.mlflow_available = False
+        logger.warning(f"MLflow initialization failed (non-critical): {e}")
+
+    # Initialize Feast client (feature store)
+    try:
+        feast_client = FeastClient()
+        await feast_client.initialize()
+        app.state.feast_client = feast_client
+        app.state.feast_available = feast_client._initialized
+        if feast_client._initialized:
+            logger.info("Feast feature store client initialized")
+        else:
+            logger.info("Feast client initialized with fallback mode")
+    except Exception as e:
+        app.state.feast_available = False
+        app.state.feast_client = None
+        logger.warning(f"Feast initialization failed (non-critical): {e}")
+
+    # Initialize Opik client (LLM observability)
+    try:
+        opik_connector = get_opik_connector()
+        app.state.opik_available = opik_connector.is_enabled
+        if opik_connector.is_enabled:
+            logger.info(
+                f"Opik observability client initialized (project: {opik_connector.config.project_name})"
+            )
+        else:
+            logger.info("Opik client initialized in disabled mode")
+    except Exception as e:
+        app.state.opik_available = False
+        logger.warning(f"Opik initialization failed (non-critical): {e}")
 
     logger.info("API server ready to accept connections")
 
@@ -178,6 +221,22 @@ async def lifespan(app: FastAPI):
         logger.info("Supabase client closed")
     except Exception as e:
         logger.warning(f"Supabase cleanup failed: {e}")
+
+    # Cleanup Feast client
+    try:
+        if hasattr(app.state, "feast_client") and app.state.feast_client:
+            await app.state.feast_client.close()
+            logger.info("Feast client closed")
+    except Exception as e:
+        logger.warning(f"Feast client cleanup failed: {e}")
+
+    # Flush Opik traces before shutdown
+    try:
+        opik_connector = get_opik_connector()
+        opik_connector.flush()
+        logger.info("Opik traces flushed")
+    except Exception as e:
+        logger.warning(f"Opik flush failed: {e}")
 
     logger.info("Shutdown complete")
 
