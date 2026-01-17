@@ -82,7 +82,7 @@ All 18 documented agents plus 1 additional (experiment_monitor) are implemented:
 | Opik | 0.2.0+ | ✅ | Agent observability complete |
 | Feast | 0.40.0+ | ✅ | Client initialized, env var expansion fixed (2026-01-17) |
 | Great Expectations | 1.0.0+ | ✅ | Data validation active |
-| Optuna | 3.6.0+ | ⚠️ | HPO working, DB linkage missing |
+| Optuna | 3.6.0+ | ✅ | HPO complete with DB linkage and procedural memory |
 | BentoML | 1.3.0+ | ⚠️ | Templates exist, E2E untested |
 | SHAP | 0.46.0+ | ✅ | Real-time explanations active |
 
@@ -216,20 +216,20 @@ All 18 documented agents plus 1 additional (experiment_monitor) are implemented:
 
 ---
 
-### 3.3 Optuna HPO → Database Linkage
+### 3.3 Optuna HPO → Database Linkage ✅ COMPLETED (2025-12-25)
 
-**Current State**: HPO runs complete but not persisted
+**Status**: All HPO audit phases complete per `OPTUNA_AUDIT_PLAN.md`
 
-**Missing**:
-- HPO trials not linked to training runs in database
-- Best patterns not saved to procedural memory
-- Output contract validation missing
+**Implemented**:
+- `MLTrainingRunRepository.create_run_with_hpo()` - Links training runs to HPO studies
+- HPO columns in `ml_training_runs`: `optuna_study_name`, `optuna_trial_number`, `is_best_trial`
+- `_persist_training_run()` in `mlflow_logger.py` calls `create_run_with_hpo`
+- `hpo_pattern_memory.py` (504 lines) - Procedural memory for warm-starting
+- Contract validation in `hyperparameter_tuner.py`: `validate_hpo_output()`, `validate_hyperparameter_types()`
+- Opik tracing for HPO optimization runs
+- Database migrations: `016_hpo_studies.sql`, `017_hpo_pattern_memory.sql`
 
-**Location**: `src/agents/ml_foundation/model_trainer/`
-
-**Action**: Complete audit items from `OPTUNA_AUDIT_PLAN.md`
-
-**Effort**: 4-6 hours
+**Audit Reference**: `.claude/plans/OPTUNA_AUDIT_PLAN.md` (all 6 phases complete)
 
 ---
 
@@ -585,7 +585,7 @@ All 18 documented agents plus 1 additional (experiment_monitor) are implemented:
 |------|----------|--------|--------------|--------|
 | Experiment Monitor integration | HIGH | 3 hrs | None | ✅ Done |
 | MLOps service initialization | HIGH | 3 hrs | None | ✅ Done |
-| Optuna HPO → DB linkage | HIGH | 6 hrs | None | Pending |
+| Optuna HPO → DB linkage | HIGH | 6 hrs | None | ✅ Done |
 | Entity extraction enhancement | MEDIUM | 4 hrs | None | Pending |
 | Agent registry array query | MEDIUM | 1 hr | None | Pending |
 | Feature store statistics | MEDIUM | 3 hrs | None | Pending |
