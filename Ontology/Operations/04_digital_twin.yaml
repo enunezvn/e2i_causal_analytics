@@ -1,0 +1,39 @@
+# =============================================================================
+# DIGITAL TWIN & SIMULATION MODULE
+# =============================================================================
+
+twin_algorithms:
+  values:
+    - random_forest
+    - gradient_boosting
+    - xgboost
+    - lightgbm
+
+simulation_interventions:
+  values:
+    - email_campaign
+    - call_frequency_increase
+    - sample_provision
+    - rep_visit_frequency
+    - digital_engagement
+    - peer_influence
+
+simulation_recommendations:
+  deploy:
+    threshold: 0.05
+    label: "DEPLOY"
+    description: "ATE >= 5% → Deploy immediately"
+  refine:
+    threshold: 0.02
+    label: "REFINE"
+    description: "2% <= ATE < 5% → Refine and test"
+  skip:
+    threshold: 0.0
+    label: "SKIP"
+    description: "ATE < 2% → Skip intervention"
+
+twin_fidelity_grades:
+  excellent: 0.10
+  good: 0.20
+  fair: 0.35
+  poor: 1.00

@@ -1,0 +1,160 @@
+# =============================================================================
+# FALKORDB CONFIGURATION MODULE
+# =============================================================================
+# File: ontology/05_falkordb_config.yaml
+# Lines: ~100
+# Maintainer: Infrastructure Team
+# Purpose: FalkorDB compilation configuration
+# Integration: schema_compiler.py
+# =============================================================================
+
+falkordb_config:
+  
+  graph_name: "e2i_semantic"
+  
+  # Unique constraints ensure no duplicate nodes
+  constraints:
+    unique_properties:
+      - node: Patient
+        property: patient_id
+        
+      - node: HCP
+        property: hcp_id
+        
+      - node: HCP
+        property: npi
+        
+      - node: Brand
+        property: brand_name
+        
+      - node: Region
+        property: region_name
+        
+      - node: KPI
+        property: kpi_id
+        
+      - node: CausalPath
+        property: path_id
+        
+      - node: Trigger
+        property: trigger_id
+        
+      - node: Agent
+        property: agent_name
+  
+  # Indexes for fast lookups
+  indexes:
+    Patient:
+      - patient_id
+      - journey_stage
+      - region
+      - age_group
+      - insurance_type
+      - created_at
+      
+    HCP:
+      - hcp_id
+      - npi
+      - specialty
+      - region
+      - priority_tier
+      - adoption_category
+      - created_at
+      
+    Brand:
+      - brand_name
+      - therapeutic_area
+      - created_at
+      
+    Region:
+      - region_name
+      
+    KPI:
+      - kpi_id
+      - category
+      - created_at
+      
+    CausalPath:
+      - path_id
+      - confidence
+      - validation_status
+      - gate_decision
+      - method_used
+      - created_at
+      
+    Trigger:
+      - trigger_id
+      - trigger_type
+      - priority
+      - status
+      - expiration_date
+      - created_at
+      
+    Agent:
+      - agent_name
+      - tier
+  
+  # Query optimization
+  query_optimization:
+    enable_query_cache: true
+    query_cache_size_mb: 512
+    enable_materialized_views: true
+    parallel_query_execution: true
+    max_query_threads: 4
+    
+  # Connection pool settings
+  connection_pool:
+    min_size: 2
+    max_size: 10
+    timeout_seconds: 30
+    
+  # Performance tuning
+  performance:
+    max_graph_size_gb: 10
+    enable_compression: true
+    compression_level: 6
+    write_buffer_size_mb: 256
+
+# Schema compilation templates
+
+compilation_templates:
+  
+  create_constraint:
+    template: "GRAPH.CONSTRAINT CREATE FOR (n:{node_type}) REQUIRE n.{property} IS UNIQUE"
+    example: "GRAPH.CONSTRAINT CREATE FOR (n:Patient) REQUIRE n.patient_id IS UNIQUE"
+    
+  create_index:
+    template: "GRAPH.IDX CREATE FOR (n:{node_type}) ON (n.{property})"
+    example: "GRAPH.IDX CREATE FOR (n:Patient) ON (n.journey_stage)"
+    
+  drop_constraint:
+    template: "GRAPH.CONSTRAINT DROP FOR (n:{node_type}) REQUIRE n.{property} IS UNIQUE"
+    
+  drop_index:
+    template: "GRAPH.IDX DROP FOR (n:{node_type}) ON (n.{property})"
+
+# Schema migration
+
+migration:
+  versioning:
+    current_version: "6.0.0"
+    schema_version_node: "SchemaVersion"
+    version_property: "version"
+    
+  migration_strategy:
+    description: "How to handle schema changes"
+    
+    additive_changes:
+      - "New node types: Add constraints and indexes"
+      - "New properties: No migration needed (nullable by default)"
+      - "New edge types: No constraints, only indexes if needed"
+      
+    breaking_changes:
+      - "Rename property: Create new, copy data, drop old"
+      - "Change type: Create new property, migrate data, validate, drop old"
+      - "Remove property: Drop indexes first, then delete property"
+    
+  rollback:
+    enabled: true
+    backup_before_migration: true
+    backup_retention_days: 30

@@ -1,0 +1,134 @@
+# =============================================================================
+# VALIDATION RULES ONTOLOGY MODULE
+# =============================================================================
+# File: ontology/04_validation_rules.yaml
+# Lines: ~80
+# Maintainer: Data Quality Team
+# Purpose: 6 validation rules (strict/warning)
+# Integration: validator.py
+# =============================================================================
+
+validation_rules:
+  
+  journey_stage_progression:
+    description: "Ensure logical patient journey stage transitions"
+    enforcement: "warning"  # Log but don't block
+    node_type: "Patient"
+    
+    valid_transitions:
+      aware: [considering]
+      considering: [prescribed, discontinued]
+      prescribed: [first_fill, discontinued]
+      first_fill: [adherent, discontinued]
+      adherent: [maintained, discontinued]
+      discontinued: [considering]  # May re-enter
+      maintained: [discontinued]
+    
+    error_message: "Invalid journey stage transition: {from_stage} → {to_stage}"
+    
+  specialty_brand_alignment:
+    description: "HCPs should prescribe brands aligned with their specialty"
+    enforcement: "warning"
+    
+    rules:
+      - specialty: dermatology
+        expected_brands: [remibrutinib]
+        
+      - specialty: allergist
+        expected_brands: [remibrutinib]
+        
+      - specialty: immunology
+        expected_brands: [remibrutinib]
+        
+      - specialty: hematology
+        expected_brands: [fabhalta]
+        
+      - specialty: oncology
+        expected_brands: [kisqali]
+        
+      - specialty: medical_oncology
+        expected_brands: [kisqali]
+    
+    violation_action: "log_warning"  # Don't block, just warn
+    
+  confidence_threshold:
+    description: "Causal paths require minimum confidence"
+    enforcement: "strict"
+    
+    rules:
+      - condition: "confidence >= 0.75"
+        decision: "proceed"
+        action: "Set gate_decision = 'proceed'"
+        
+      - condition: "confidence >= 0.50 AND confidence < 0.75"
+        decision: "review"
+        action: "Set gate_decision = 'review', require human approval"
+        
+      - condition: "confidence < 0.50"
+        decision: "block"
+        action: "Do not create trigger or take action"
+  
+  no_causal_cycles:
+    description: "Causal graph must be acyclic (DAG)"
+    enforcement: "strict"
+    check_type: "graph_topology"
+    algorithm: "topological_sort"
+    
+    validation_query: |
+      MATCH path = (a)-[:CAUSES*]->(a)
+      RETURN COUNT(*) AS cycle_count
+    
+    expected_result: 0
+    on_failure: "block"
+    
+  trigger_expiration:
+    description: "Expired triggers cannot be acted upon"
+    enforcement: "strict"
+    
+    check: |
+      expiration_date IS NULL OR expiration_date > NOW()
+    
+    applies_to:
+      nodes: ["Trigger"]
+      edges: []
+      
+    violation_action: "block"
+    
+  one_primary_hcp:
+    description: "Patient can have only one primary HCP"
+    enforcement: "strict"
+    
+    check: |
+      MATCH (p:Patient)-[r:TREATED_BY {is_primary_hcp: true}]->(h:HCP)
+      WITH p, COUNT(h) AS primary_count
+      WHERE primary_count > 1
+      RETURN p.patient_id, primary_count
+    
+    expected_result: "Empty result set (no violations)"
+
+# Validation rule configuration
+
+validation_config:
+  
+  enforcement_levels:
+    strict:
+      description: "Block operation if validation fails"
+      action: "raise_exception"
+      
+    warning:
+      description: "Log warning but allow operation"
+      action: "log_warning"
+      
+    disabled:
+      description: "Skip validation check"
+      action: "none"
+  
+  execution_timing:
+    on_node_create: ["journey_stage_progression", "specialty_brand_alignment", "one_primary_hcp"]
+    on_edge_create: ["confidence_threshold", "trigger_expiration"]
+    on_graph_modify: ["no_causal_cycles"]
+    
+  performance:
+    cache_validation_results: true
+    cache_ttl_seconds: 300
+    parallel_validation: true

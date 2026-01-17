@@ -1,0 +1,44 @@
+# =============================================================================
+# VISUALIZATION & KPIs MODULE
+# =============================================================================
+
+chart_types:
+  values:
+    - line_chart
+    - bar_chart
+    - stacked_bar
+    - horizontal_bar
+    - scatter_plot
+    - heatmap
+    - funnel_chart
+    - sankey_diagram
+    - dag_visualization
+    - force_directed_graph
+    - forest_plot
+    - waterfall_chart
+    - doughnut
+    - radar
+    - box_plot
+    - treemap
+    - sparkline
+    - timeline
+
+visualization_libraries:
+  chart_js:
+    use_for: [simple_bar, simple_line, doughnut, sparkline]
+    max_data_points: 1000
+  plotly:
+    use_for: [heatmap, sankey, radar, box_plot, scatter_3d, treemap]
+    max_data_points: 10000
+  d3_js:
+    use_for: [causal_dag, force_directed, custom_interactions]
+    max_data_points: 500
+
+kpi_categories:
+  values:
+    - ws1_data_quality
+    - ws1_model_performance
+    - ws2_triggers
+    - ws3_business
+    - brand_specific
+    - causal_metrics

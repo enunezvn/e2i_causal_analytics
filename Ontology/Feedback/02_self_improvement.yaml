@@ -1,0 +1,31 @@
+# =============================================================================
+# SELF-IMPROVEMENT & EVALUATION MODULE
+# =============================================================================
+
+rubric_criteria:
+  values:
+    - causal_validity
+    - actionability
+    - evidence_chain
+    - regulatory_awareness
+    - uncertainty_communication
+
+improvement_decisions:
+  log_only:
+    threshold: 4.0
+    description: "Score >= 4.0 → Log only"
+  suggestion:
+    threshold: 3.0
+    description: "Score 3.0-3.9 → Provide suggestion"
+  auto_update:
+    threshold: 2.0
+    description: "Score 2.0-2.9 → Auto-update with review"
+  escalate:
+    threshold: 0.0
+    description: "Score < 2.0 → Escalate to human"
+
+prompt_risk_levels:
+  values:
+    - low
+    - medium
+    - high

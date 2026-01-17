@@ -1,0 +1,116 @@
+# =============================================================================
+# AGENT TOOLS & WORKFLOWS MODULE
+# =============================================================================
+# File: operations/01_agent_tools.yaml
+# Lines: ~120
+# Maintainer: Agent Development Team
+# Purpose: Tools and multi-node workflows for agents
+# Integration: agent_config.yaml
+# =============================================================================
+
+agent_tools:
+  description: "Tools available to agents by tier"
+  
+  causal_impact_tools:
+    - dowhy
+    - econml
+    - networkx
+    - pandas
+    - numpy
+    
+  heterogeneous_optimizer_tools:
+    - econml
+    - sklearn
+    - numpy
+    - scipy
+    
+  experiment_designer_tools:
+    - scipy
+    - statsmodels
+    - numpy
+    
+  gap_analyzer_tools:
+    - pandas
+    - numpy
+    - scipy
+    
+  refutation_agent_tools:
+    - dowhy
+    - scipy
+    - statsmodels
+    
+  digital_twin_agent_tools:
+    - sklearn
+    - xgboost
+    - lightgbm
+    - pandas
+
+agent_workflows:
+  description: "Multi-node workflows for complex agents"
+  
+  causal_impact_workflow:
+    agent: "CausalImpactAgent"
+    nodes:
+      - graph_builder
+      - estimation
+      - refutation
+      - sensitivity
+      - interpretation
+    require_dag_approval: true
+    gate_on_refutation_failure: true
+    
+  experiment_designer_workflow:
+    agent: "ExperimentDesigner"
+    nodes:
+      - context_analysis
+      - design_generation
+      - power_analysis
+      - validity_audit
+      - template_generation
+    enable_redesign_loop: true
+    
+  digital_twin_workflow:
+    agent: "DigitalTwinAgent"
+    nodes:
+      - data_preparation
+      - twin_training
+      - validation
+      - simulation
+      - recommendation_generation
+    require_fidelity_check: true
+
+causal_methods:
+  description: "Causal inference methods"
+  values:
+    - dowhy_backdoor
+    - dowhy_frontdoor
+    - econml_dml
+    - econml_causal_forest
+    - causalml_uplift
+    - causalml_metalearner
+    - propensity_score_matching
+    - difference_in_differences
+    - instrumental_variables
+    - regression_discontinuity
+    - synthetic_control
+
+refutation_methods:
+  description: "Methods for refuting causal claims"
+  values:
+    - placebo_treatment
+    - random_common_cause
+    - data_subset_validation
+    - bootstrap_refutation
+    - add_unobserved_common_cause
+    - replace_treatment_with_placebo
+    
+validation_tests:
+  description: "Statistical validation tests"
+  values:
+    - t_test
+    - mann_whitney_u
+    - kolmogorov_smirnov
+    - chi_square
+    - fisher_exact
+    - shapiro_wilk
+    - levene_test

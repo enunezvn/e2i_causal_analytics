@@ -1,0 +1,41 @@
+# =============================================================================
+# MLOPS & FEATURE STORE MODULE
+# =============================================================================
+
+mlops_stages:
+  values:
+    - development
+    - staging
+    - shadow
+    - production
+    - deprecated
+    - archived
+
+feature_store_providers:
+  values:
+    - supabase
+    - redis
+    - mlflow
+
+feature_freshness:
+  values:
+    - fresh
+    - stale
+    - expired
+
+hpo_optimizers:
+  values:
+    - tpe
+    - random
+    - grid
+    - cmaes
+    - successive_halving
+    - hyperband
+
+hpo_pruners:
+  values:
+    - median
+    - successive_halving
+    - hyperband
+    - threshold
+    - none

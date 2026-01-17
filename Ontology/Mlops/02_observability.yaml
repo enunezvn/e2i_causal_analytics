@@ -1,0 +1,33 @@
+# =============================================================================
+# OBSERVABILITY & TRACING MODULE
+# =============================================================================
+
+trace_span_types:
+  values:
+    - agent_execution
+    - tool_call
+    - llm_call
+    - retrieval
+    - validation
+    - inference_rule
+    - cache_operation
+
+circuit_breaker_states:
+  values:
+    - closed
+    - open
+    - half_open
+
+observability_metrics:
+  values:
+    - counter
+    - gauge
+    - histogram
+
+sampling_modes:
+  values:
+    - always_sample
+    - never_sample
+    - probabilistic
+    - error_only
+    - agent_specific
