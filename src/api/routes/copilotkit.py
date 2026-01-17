@@ -448,10 +448,10 @@ class LangGraphAgent(_LangGraphAGUIAgent):
         start_time = time.time()
 
         def dbg(msg):
-            """Flushed debug log with wall-clock and elapsed time."""
+            """Debug log with wall-clock and elapsed time."""
             wall = datetime.now().strftime("%H:%M:%S.%f")[:-3]
             elapsed = time.time() - start_time
-            print(f"[{wall}] DEBUG execute [{elapsed:.3f}s]: {msg}", flush=True)
+            logger.debug(f"[{wall}] execute [{elapsed:.3f}s]: {msg}")
 
         # CRITICAL FIX (v1.9.4): Generate a fresh thread_id to prevent regenerate mode.
         # The SDK's prepare_stream() triggers regenerate mode when:
@@ -1523,9 +1523,9 @@ def create_e2i_chat_agent():
         from datetime import datetime
         node_start = time.time()
 
-        # DEBUG: Verify chat_node is being called (use print + ERROR log which we know work)
-        print(f"[DEBUG] chat_node CALLED at {datetime.now()}", flush=True)
-        logger.error(f"[DEBUG] chat_node CALLED - state keys: {list(state.keys()) if state else 'None'}")
+        # Log chat_node invocation
+        logger.debug(f"chat_node CALLED at {datetime.now()}")
+        logger.debug(f"chat_node state keys: {list(state.keys()) if state else 'None'}")
 
         # CoAgent State Sync: Emit initial state for real-time UI progress
         state["current_node"] = "chat"
@@ -2118,7 +2118,7 @@ async def copilotkit_custom_handler(request: Request, sdk: CopilotKitRemoteEndpo
     # Handle GET info request with our custom transformation
     if method == "GET" and path in ("", "info"):
         response = transform_info_response(sdk)
-        print(f"DEBUG: GET info response with agents: {list(response['agents'].keys())}")
+        logger.debug(f"GET info response with agents: {list(response['agents'].keys())}")
         return JSONResponse(content=response)
 
     # Handle POST to root or /info - need to check body to determine request type
@@ -2128,7 +2128,7 @@ async def copilotkit_custom_handler(request: Request, sdk: CopilotKitRemoteEndpo
             # Read body bytes FIRST (only do this once!)
             body_bytes = await request.body()
             body_str = body_bytes.decode("utf-8") if body_bytes else ""
-            print(f"DEBUG: POST body_str={body_str[:200] if body_str else '(empty)'}")
+            logger.debug(f"POST body preview: {body_str[:100] if body_str else '(empty)'}...")
 
             # Parse body as JSON if present
             body_json = None
@@ -2150,16 +2150,16 @@ async def copilotkit_custom_handler(request: Request, sdk: CopilotKitRemoteEndpo
                 or (body_json and body_json.get("method") == "info")
             )
 
-            print(f"DEBUG: is_info_request={is_info_request}")
+            logger.debug(f"is_info_request={is_info_request}")
 
             if is_info_request:
                 response = transform_info_response(sdk)
-                print(f"DEBUG: Returning info response with agents: {list(response['agents'].keys())}")
+                logger.debug(f"Returning info response with agents: {list(response['agents'].keys())}")
                 return JSONResponse(content=response)
 
             # Non-info POST request - check AG-UI protocol method
             agui_method = body_json.get("method", "") if body_json else ""
-            print(f"DEBUG: AG-UI method={agui_method}")
+            logger.debug(f"AG-UI method={agui_method}")
 
             # Handle AG-UI protocol: agent/run
             if agui_method == "agent/run":
@@ -2167,7 +2167,7 @@ async def copilotkit_custom_handler(request: Request, sdk: CopilotKitRemoteEndpo
                 body_data = body_json.get("body", {})
                 agent_name = params.get("agentId", "default") or body_json.get("agentName", "default")
 
-                print(f"DEBUG: Executing agent '{agent_name}' with AG-UI protocol")
+                logger.debug(f"Executing agent '{agent_name}' with AG-UI protocol")
 
                 # Extract parameters - check both nested body and top level (AG-UI protocol varies)
                 # Some SDK versions send {"method": "agent/run", "body": {"threadId": ..., "messages": [...]}}
@@ -2178,14 +2178,7 @@ async def copilotkit_custom_handler(request: Request, sdk: CopilotKitRemoteEndpo
                 actions = body_data.get("tools") or body_json.get("tools") or []  # AG-UI uses "tools"
                 node_name = body_data.get("nodeName") or body_json.get("nodeName")
 
-                print(f"DEBUG agent/run: thread_id={thread_id}")
-                print(f"DEBUG agent/run: state keys={list(state.keys()) if state else 'empty'}")
-                print(f"DEBUG agent/run: messages count={len(messages)}")
-                for i, m in enumerate(messages):
-                    print(f"DEBUG agent/run: messages[{i}]={m}")
-                print(f"DEBUG agent/run: actions count={len(actions)}")
-                print(f"DEBUG agent/run: node_name={node_name}")
-                print(f"DEBUG agent/run: Full body_data keys={list(body_data.keys())}")
+                logger.debug(f"agent/run: thread_id={thread_id[:8]}..., messages={len(messages)}, actions={len(actions)}, node={node_name}")
 
                 # CUSTOM STREAMING HANDLER: Bypass SDK's handle_execute_agent to fix
                 # the streaming lifecycle bug where HTTP response completes before all
@@ -2226,10 +2219,10 @@ async def copilotkit_custom_handler(request: Request, sdk: CopilotKitRemoteEndpo
                     stream_start = time.time()
 
                     def sdbg(msg):
-                        """Flushed debug log with wall-clock and elapsed time."""
+                        """Debug log with wall-clock and elapsed time."""
                         wall = datetime.now().strftime("%H:%M:%S.%f")[:-3]
                         elapsed = time.time() - stream_start
-                        print(f"[{wall}] DEBUG stream [{elapsed:.3f}s]: {msg}", flush=True)
+                        logger.debug(f"[{wall}] stream [{elapsed:.3f}s]: {msg}")
 
                     sdbg("Starting stream")
 
@@ -2277,11 +2270,11 @@ async def copilotkit_custom_handler(request: Request, sdk: CopilotKitRemoteEndpo
 
             # Handle AG-UI protocol: agent/connect (just acknowledge)
             if agui_method == "agent/connect":
-                print(f"DEBUG: agent/connect - acknowledging")
+                logger.debug("agent/connect - acknowledging")
                 return JSONResponse(content={"status": "connected"})
 
             # Fall through to SDK handler for other methods
-            print(f"DEBUG: Non-info POST, delegating to SDK handler")
+            logger.debug("Non-info POST, delegating to SDK handler")
 
             async def receive():
                 return {"type": "http.request", "body": body_bytes}
@@ -2294,7 +2287,6 @@ async def copilotkit_custom_handler(request: Request, sdk: CopilotKitRemoteEndpo
             return await sdk_handler(new_request, sdk)
 
         except Exception as e:
-            print(f"DEBUG: Error in POST handler: {e}")
             logger.warning(f"[CopilotKit] Error parsing POST body: {e}")
             # Fall through to SDK handler on error
 
