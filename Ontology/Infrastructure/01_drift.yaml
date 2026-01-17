@@ -1,0 +1,26 @@
+# =============================================================================
+# DRIFT MONITORING MODULE
+# =============================================================================
+
+drift_types:
+  values:
+    - data_drift
+    - model_drift
+    - concept_drift
+
+drift_detection_methods:
+  values:
+    - psi
+    - ks_test
+    - chi_square
+    - jensen_shannon
+
+psi_thresholds:
+  no_shift: 0.1
+  moderate_shift: 0.25
+  significant_shift: 1.0
+
+drift_alert_severity:
+  critical: 0.8
+  warning: 0.4
+  info: 0.0

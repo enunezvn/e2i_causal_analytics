@@ -1,0 +1,47 @@
+# =============================================================================
+# CONFIDENCE SCORING MODULE
+# =============================================================================
+
+confidence_components:
+  values:
+    - sample_size_factor
+    - temporal_stability
+    - effect_consistency
+    - validation_strength
+
+confidence_tiers:
+  high_confidence:
+    threshold: 0.75
+    label: "High Confidence"
+    recommendation: "Actionable - proceed with implementation"
+  moderate_confidence:
+    threshold: 0.50
+    label: "Moderate Confidence"
+    recommendation: "Consider carefully - validate assumptions"
+  low_confidence:
+    threshold: 0.30
+    label: "Low Confidence"
+    recommendation: "Exploratory only - collect more data"
+
+confidence_reduction_rules:
+  values:
+    - high_heterogeneity
+    - missing_covariates
+    - failed_sensitivity
+    - small_sample
+    - imbalanced_groups
+    - unstable_over_time
+    - low_data_quality
+    - excessive_missing
+    - short_duration
+    - no_multiple_testing_correction
+
+confidence_boost_rules:
+  values:
+    - randomized_design
+    - perfect_validation
+    - large_sample
+    - perfect_consistency
+    - perfect_stability
+    - external_validation
+    - theory_supported

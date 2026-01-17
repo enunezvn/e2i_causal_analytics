@@ -1,0 +1,360 @@
+# =============================================================================
+# EDGE TYPES ONTOLOGY MODULE
+# =============================================================================
+# File: ontology/02_edge_types.yaml
+# Lines: ~200
+# Maintainer: Data Architecture Team
+# Purpose: 15 edge types with cardinality and properties
+# Integration: schema_compiler.py, validator.py
+# =============================================================================
+
+edge_types:
+  
+  TREATED_BY:
+    description: "Patient treated by HCP"
+    source: Patient
+    target: HCP
+    cardinality: "N:M"  # Many patients to many HCPs
+    
+    properties:
+      is_primary_hcp:
+        type: boolean
+        required: true
+        default: false
+        description: "Is this the primary provider?"
+        
+      visit_count:
+        type: integer
+        required: false
+        min: 0
+        description: "Number of visits"
+        
+      relationship_status:
+        type: enum
+        required: false
+        values: [active, inactive, transferred]
+        description: "Current relationship status"
+        
+      first_visit_date:
+        type: datetime
+        required: false
+        description: "Date of first visit"
+        
+      last_visit_date:
+        type: datetime
+        required: false
+        description: "Date of most recent visit"
+  
+  PRESCRIBED:
+    description: "Patient prescribed brand"
+    source: Patient
+    target: Brand
+    cardinality: "N:M"
+    
+    properties:
+      prescription_date:
+        type: datetime
+        required: true
+        description: "Date of prescription"
+        
+      is_first_line:
+        type: boolean
+        required: false
+        default: false
+        description: "Is this first-line therapy?"
+        
+      line_of_therapy:
+        type: integer
+        required: false
+        min: 1
+        description: "Line of therapy (1, 2, 3, ...)"
+        
+      status:
+        type: enum
+        required: true
+        values: [active, discontinued, completed]
+        default: "active"
+        description: "Prescription status"
+  
+  PRESCRIBES:
+    description: "HCP prescribes brand"
+    source: HCP
+    target: Brand
+    cardinality: "N:M"
+    
+    properties:
+      volume_monthly:
+        type: integer
+        required: false
+        min: 0
+        description: "Average monthly prescription volume"
+        
+      market_share:
+        type: float
+        required: false
+        min: 0.0
+        max: 1.0
+        description: "Market share for this HCP [0, 1]"
+        
+      prescribing_status:
+        type: enum
+        required: false
+        values: [active, lapsed, never]
+        description: "Prescribing behavior"
+        
+      first_prescription_date:
+        type: datetime
+        required: false
+        description: "Date of first prescription"
+  
+  PRACTICES_IN:
+    description: "HCP practices in region"
+    source: HCP
+    target: Region
+    cardinality: "N:1"  # Many HCPs to one region
+    
+    properties:
+      primary_location:
+        type: boolean
+        required: true
+        default: true
+        description: "Is this the primary practice location?"
+  
+  LOCATED_IN:
+    description: "Patient located in region"
+    source: Patient
+    target: Region
+    cardinality: "N:1"
+    
+    properties:
+      residence_status:
+        type: enum
+        required: false
+        values: [permanent, temporary]
+        default: "permanent"
+        description: "Residence status"
+  
+  INFLUENCES:
+    description: "HCP influences another HCP (network effects)"
+    source: HCP
+    target: HCP
+    cardinality: "N:M"
+    
+    properties:
+      influence_strength:
+        type: float
+        required: true
+        min: 0.0
+        max: 1.0
+        description: "Strength of influence [0, 1]"
+        
+      network_type:
+        type: enum
+        required: false
+        values: [peer, mentor, colleague, referral]
+        description: "Type of influence relationship"
+  
+  RECEIVED:
+    description: "HCP received trigger"
+    source: HCP
+    target: Trigger
+    cardinality: "N:M"
+    
+    properties:
+      delivery_date:
+        type: datetime
+        required: true
+        description: "Date trigger was delivered"
+        
+      accepted:
+        type: boolean
+        required: false
+        description: "Did HCP accept the trigger?"
+        
+      action_taken:
+        type: string
+        required: false
+        description: "Description of action taken (if any)"
+  
+  CAUSES:
+    description: "Causal relationship between any entities"
+    source: any
+    target: any
+    cardinality: "N:M"
+    
+    properties:
+      effect_size:
+        type: float
+        required: true
+        description: "Quantified effect (can be negative)"
+        
+      confidence:
+        type: float
+        required: true
+        min: 0.0
+        max: 1.0
+        description: "Confidence in causal relationship [0, 1]"
+        
+      method_used:
+        type: enum
+        required: true
+        values: [dowhy_backdoor, dowhy_frontdoor, econml_dml, econml_causal_forest, causalml_uplift, causalml_metalearner, propensity_score_matching, difference_in_differences]
+        description: "Causal inference method"
+  
+  IMPACTS:
+    description: "Causal path impacts KPI"
+    source: CausalPath
+    target: KPI
+    cardinality: "N:M"
+    
+    properties:
+      impact_magnitude:
+        type: float
+        required: true
+        description: "Magnitude of impact on KPI"
+        
+      direction:
+        type: enum
+        required: true
+        values: [positive, negative, neutral]
+        description: "Direction of impact"
+  
+  ANALYZES:
+    description: "Agent analyzed entity"
+    source: Agent
+    target: any
+    cardinality: "N:M"
+    
+    properties:
+      analysis_date:
+        type: datetime
+        required: true
+        description: "Date of analysis"
+        
+      analysis_type:
+        type: string
+        required: false
+        description: "Type of analysis performed"
+  
+  DISCOVERED:
+    description: "Agent discovered causal path"
+    source: Agent
+    target: CausalPath
+    cardinality: "N:M"
+    
+    properties:
+      discovery_date:
+        type: datetime
+        required: true
+        description: "Date of discovery"
+        
+      discovery_method:
+        type: string
+        required: false
+        description: "Method used for discovery"
+  
+  GENERATED:
+    description: "Agent generated trigger"
+    source: Agent
+    target: Trigger
+    cardinality: "N:M"
+    
+    properties:
+      generation_date:
+        type: datetime
+        required: true
+        description: "Date trigger was generated"
+        
+      reasoning:
+        type: string
+        required: false
+        description: "Reasoning behind trigger generation"
+  
+  TRANSITIONED_TO:
+    description: "Patient transitioned from one stage to another"
+    source: Patient
+    target: Patient
+    cardinality: "N:N"  # Self-edge
+    
+    properties:
+      from_stage:
+        type: enum
+        required: true
+        values: [aware, considering, prescribed, first_fill, adherent, discontinued, maintained]
+        description: "Source journey stage"
+        
+      to_stage:
+        type: enum
+        required: true
+        values: [aware, considering, prescribed, first_fill, adherent, discontinued, maintained]
+        description: "Target journey stage"
+        
+      transition_date:
+        type: datetime
+        required: true
+        description: "Date of transition"
+  
+  # Inferred edges (computed by inference rules, not directly created)
+  
+  INDIRECTLY_INFLUENCES:
+    description: "Indirect influence through transitive closure (INFERRED)"
+    source: any
+    target: any
+    cardinality: "N:M"
+    inferred: true
+    inference_rule: "causal_chain"
+    
+    properties:
+      combined_effect:
+        type: float
+        required: true
+        description: "Combined effect through path"
+        
+      combined_confidence:
+        type: float
+        required: true
+        min: 0.0
+        max: 1.0
+        description: "Combined confidence (product of path confidences)"
+        
+      path_count:
+        type: integer
+        required: true
+        min: 1
+        description: "Number of paths contributing to this inference"
+  
+  HIGH_POTENTIAL_PRESCRIBER:
+    description: "HCP identified as high potential for brand (INFERRED)"
+    source: HCP
+    target: Brand
+    cardinality: "N:M"
+    inferred: true
+    inference_rule: "hcp_influence_propagation"
+    
+    properties:
+      potential_score:
+        type: float
+        required: true
+        min: 0.0
+        max: 1.0
+        description: "Potential score [0, 1]"
+        
+      evidence:
+        type: string
+        required: false
+        description: "Evidence for high potential classification"
+
+# Cardinality definitions
+
+cardinality_definitions:
+  "N:1":
+    description: "Many-to-one relationship"
+    example: "Many patients in one region"
+    
+  "N:M":
+    description: "Many-to-many relationship"
+    example: "Many patients treated by many HCPs"
+    
+  "N:N":
+    description: "Self-referential many-to-many"
+    example: "Patient stage transitions"

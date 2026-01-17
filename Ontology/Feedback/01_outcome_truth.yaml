@@ -1,0 +1,30 @@
+# =============================================================================
+# OUTCOME TRUTH & FEEDBACK LOOP MODULE
+# =============================================================================
+
+outcome_labels:
+  values:
+    - POSITIVE
+    - NEGATIVE
+    - INDETERMINATE
+    - EXCLUDED
+    - PENDING
+
+truth_sources:
+  values:
+    - treatment_events
+    - business_metrics
+    - triggers
+    - hcp_intent_surveys
+
+edge_case_types:
+  values:
+    - new_hcp
+    - seasonal_effects
+    - data_lag
+    - trigger_not_delivered
+    - multi_trigger
+    - therapy_switch
+    - clinical_discontinuation
+    - market_disruption
+    - regional_variance

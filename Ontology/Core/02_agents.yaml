@@ -1,0 +1,270 @@
+# =============================================================================
+# AGENT ARCHITECTURE MODULE
+# =============================================================================
+# File: core/02_agents.yaml
+# Lines: ~150
+# Maintainer: Agent Development Team
+# Purpose: 18-agent architecture across 6 tiers
+# =============================================================================
+
+agent_tiers:
+  description: "6-tier architecture for E2I multi-agent system"
+  
+  tier_1_causal_discovery:
+    description: "Core causal inference and discovery"
+    count: 5
+    agents:
+      - CausalImpactAgent
+      - HeterogeneousOptimizerAgent
+      - ExperimentDesigner
+      - GapAnalyzer
+      - StakeQualAgent
+    
+  tier_2_validation:
+    description: "Validation and refutation of causal claims"
+    count: 4
+    agents:
+      - RefutationAgent
+      - RegulatoryComplianceAgent
+      - UnintendedConsequenceAgent
+      - DataQualityAgent
+    
+  tier_3_business_translation:
+    description: "Translation to business value and actions"
+    count: 4
+    agents:
+      - ROICalculatorAgent
+      - InsightTranslatorAgent
+      - ActionGeneratorAgent
+      - StakeholderCommunicatorAgent
+    
+  tier_4_digital_twin:
+    description: "Digital twin simulation and prediction"
+    count: 2
+    agents:
+      - DigitalTwinAgent
+      - OutcomePredictorAgent
+    
+  tier_5_feedback_loop:
+    description: "Outcome tracking and drift detection"
+    count: 2
+    agents:
+      - OutcomeTruthLabelerAgent
+      - ModelDriftDetectorAgent
+    
+  tier_6_self_improvement:
+    description: "Self-evaluation and prompt optimization"
+    count: 1
+    agents:
+      - SelfCriticAgent
+
+# Detailed agent specifications
+
+agents:
+  
+  # TIER 1: Causal Discovery
+  
+  CausalImpactAgent:
+    tier: 1
+    purpose: "Discover and quantify causal relationships using DoWhy/EconML"
+    output: "CausalPath nodes with effect_size and confidence"
+    key_methods:
+      - backdoor_adjustment
+      - frontdoor_adjustment
+      - instrumental_variables
+      - doubly_robust_estimation
+    
+  HeterogeneousOptimizerAgent:
+    tier: 1
+    purpose: "Identify heterogeneous treatment effects (HTE) across subgroups"
+    output: "Subgroup-specific effect estimates"
+    key_methods:
+      - causal_forest
+      - double_machine_learning
+      - metalearners
+    
+  ExperimentDesigner:
+    tier: 1
+    purpose: "Design randomized controlled trials (RCTs) for validation"
+    output: "Experiment protocol with power analysis"
+    key_methods:
+      - power_calculation
+      - sample_size_determination
+      - randomization_strategy
+    
+  GapAnalyzer:
+    tier: 1
+    purpose: "Identify missing data, confounders, and knowledge gaps"
+    output: "Gap report with data quality scores"
+    key_methods:
+      - missing_data_analysis
+      - confounder_detection
+      - sensitivity_analysis
+    
+  StakeQualAgent:
+    tier: 1
+    purpose: "Assess stakeholder engagement quality and communication effectiveness"
+    output: "Stakeholder quality scores"
+    key_methods:
+      - engagement_scoring
+      - communication_analysis
+  
+  # TIER 2: Validation & Refutation
+  
+  RefutationAgent:
+    tier: 2
+    purpose: "Refute causal claims using sensitivity tests"
+    output: "Refutation test results (passed/failed)"
+    key_methods:
+      - placebo_treatment
+      - random_common_cause
+      - data_subset_validation
+      - bootstrap_refutation
+    
+  RegulatoryComplianceAgent:
+    tier: 2
+    purpose: "Ensure PDMA/FCPA compliance for marketing activities"
+    output: "Compliance report with risk flags"
+    key_methods:
+      - pdma_rule_checking
+      - fcpa_violation_detection
+    
+  UnintendedConsequenceAgent:
+    tier: 2
+    purpose: "Detect potential negative side effects or unintended consequences"
+    output: "Risk assessment report"
+    key_methods:
+      - side_effect_analysis
+      - cascade_effect_detection
+    
+  DataQualityAgent:
+    tier: 2
+    purpose: "Validate data quality across all sources"
+    output: "Data quality scorecard"
+    key_methods:
+      - completeness_check
+      - accuracy_validation
+      - consistency_analysis
+      - timeliness_assessment
+  
+  # TIER 3: Business Translation
+  
+  ROICalculatorAgent:
+    tier: 3
+    purpose: "Calculate financial ROI of interventions"
+    output: "ROI estimates with confidence intervals"
+    key_methods:
+      - cost_benefit_analysis
+      - incremental_revenue_calculation
+      - payback_period_estimation
+    
+  InsightTranslatorAgent:
+    tier: 3
+    purpose: "Translate technical findings to plain language"
+    output: "Executive-friendly insight summaries"
+    key_methods:
+      - jargon_simplification
+      - metaphor_generation
+      - stakeholder_specific_framing
+    
+  ActionGeneratorAgent:
+    tier: 3
+    purpose: "Generate actionable next best actions (NBAs) from insights"
+    output: "Trigger nodes with specific recommendations"
+    key_methods:
+      - trigger_prioritization
+      - personalization
+      - timing_optimization
+    
+  StakeholderCommunicatorAgent:
+    tier: 3
+    purpose: "Create stakeholder-specific reports and visualizations"
+    output: "Customized reports (PDF, PPT, HTML)"
+    key_methods:
+      - audience_segmentation
+      - visualization_selection
+      - narrative_generation
+  
+  # TIER 4: Digital Twin & Simulation
+  
+  DigitalTwinAgent:
+    tier: 4
+    purpose: "Build patient/HCP digital twins for counterfactual simulation"
+    output: "Twin models with fidelity scores"
+    key_methods:
+      - random_forest
+      - gradient_boosting
+      - xgboost
+      - lightgbm
+    
+  OutcomePredictorAgent:
+    tier: 4
+    purpose: "Predict outcomes using propensity models"
+    output: "Propensity scores and predictions"
+    key_methods:
+      - propensity_score_matching
+      - uplift_modeling
+      - survival_analysis
+  
+  # TIER 5: Feedback Loop
+  
+  OutcomeTruthLabelerAgent:
+    tier: 5
+    purpose: "Label ground truth outcomes for model validation"
+    output: "Outcome labels (POSITIVE/NEGATIVE/INDETERMINATE)"
+    key_methods:
+      - event_detection
+      - edge_case_handling
+      - multi_source_reconciliation
+    
+  ModelDriftDetectorAgent:
+    tier: 5
+    purpose: "Detect data drift, model drift, and concept drift"
+    output: "Drift alerts with severity levels"
+    key_methods:
+      - psi_calculation
+      - ks_test
+      - chi_square_test
+      - jensen_shannon_divergence
+  
+  # TIER 6: Self-Improvement
+  
+  SelfCriticAgent:
+    tier: 6
+    purpose: "Evaluate agent performance and optimize prompts"
+    output: "Improvement suggestions and auto-updates"
+    key_methods:
+      - llm_as_judge
+      - rubric_based_evaluation
+      - prompt_optimization
+      - ablation_testing
+
+agent_dependencies:
+  description: "Dependencies between agents (A → B means A must run before B)"
+  
+  tier_1_to_tier_2:
+    - CausalImpactAgent → RefutationAgent
+    - CausalImpactAgent → RegulatoryComplianceAgent
+    - HeterogeneousOptimizerAgent → RefutationAgent
+    
+  tier_2_to_tier_3:
+    - RefutationAgent → ROICalculatorAgent
+    - RefutationAgent → ActionGeneratorAgent
+    
+  tier_3_to_tier_4:
+    - ActionGeneratorAgent → DigitalTwinAgent
+    
+  tier_4_to_tier_5:
+    - DigitalTwinAgent → OutcomeTruthLabelerAgent
+    - OutcomePredictorAgent → OutcomeTruthLabelerAgent
+    
+  tier_5_to_tier_6:
+    - ModelDriftDetectorAgent → SelfCriticAgent
+
+agent_communication:
+  description: "How agents communicate via semantic graph"
+  
+  methods:
+    - graph_edges: "Agents create edges (ANALYZES, DISCOVERED, GENERATED)"
+    - node_properties: "Agents update node properties (e.g., confidence, validation_status)"
+    - message_passing: "Agents query graph for upstream/downstream results"
