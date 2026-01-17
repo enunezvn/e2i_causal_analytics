@@ -735,10 +735,10 @@ VALID_AGENTS = {
 
 # Agent capability keywords for fallback routing
 AGENT_CAPABILITIES = {
-    "cohort_constructor": ["cohort", "eligib", "inclusion", "exclusion", "patient set", "patient population", "criteria", "filter patient"],
+    "cohort_constructor": ["cohort", "eligib", "inclusion", "exclusion", "patient set", "patient population", "criteria", "filter patient", "hcp cohort", "build cohort", "create cohort", "define cohort"],
     "causal_impact": ["why", "cause", "caused", "effect", "impact", "driver", "factor", "causal"],
     "gap_analyzer": ["gap", "opportunity", "roi", "underperforming", "potential", "growth"],
-    "heterogeneous_optimizer": ["segment", "cate", "heterogeneous", "subgroup", "cohort"],
+    "heterogeneous_optimizer": ["segment", "cate", "heterogeneous", "subgroup", "treatment effect"],
     "drift_monitor": ["drift", "change", "shift", "anomaly", "deviation", "distribution"],
     "experiment_designer": ["test", "experiment", "a/b", "trial", "hypothesis", "design"],
     "health_score": ["health", "status", "score", "performance", "metric", "check"],
