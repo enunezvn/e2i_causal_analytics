@@ -787,11 +787,15 @@ class TestResetChatbotTracer:
 
     def test_reset_chatbot_tracer_allows_new_config(self):
         """reset_chatbot_tracer allows new configuration."""
+        # Explicitly reset at start to handle parallel test execution
+        reset_chatbot_tracer()
         tracer1 = get_chatbot_tracer(project_name="project-1")
+        assert tracer1.project_name == "project-1"
         reset_chatbot_tracer()
         tracer2 = get_chatbot_tracer(project_name="project-2")
-        assert tracer1.project_name == "project-1"
         assert tracer2.project_name == "project-2"
+        # Verify they are different instances
+        assert tracer1 is not tracer2
 
 
 class TestTraceChatbotWorkflowDecorator:
