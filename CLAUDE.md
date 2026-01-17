@@ -335,6 +335,38 @@ doctl compute droplet-action snapshot 544907207 --snapshot-name "backup-$(date +
 
 **Full documentation**: See `INFRASTRUCTURE.md` for complete reference including firewall setup, SSH key management, and cost information.
 
+### Droplet Service Discovery (IMPORTANT)
+
+**ALWAYS check for running services before rebuilding or installing dependencies locally.** The production droplet typically has all services running via Docker.
+
+```bash
+# Check running containers and services
+ssh -i ~/.ssh/replit enunez@138.197.4.36 "docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'"
+
+# Check API health (primary backend on port 8000)
+ssh -i ~/.ssh/replit enunez@138.197.4.36 "curl -s localhost:8000/health | python3 -m json.tool"
+
+# Test agent endpoints via API (not direct imports)
+ssh -i ~/.ssh/replit enunez@138.197.4.36 "curl -s -X POST localhost:8000/api/experiments/monitor -H 'Content-Type: application/json' -d '{\"check_all_active\": true}'"
+```
+
+**Key Services**:
+| Service | Port | Purpose |
+|---------|------|---------|
+| E2I API | 8000 | Main FastAPI backend (uvicorn) |
+| Opik Backend | 8001 | Agent observability API |
+| MLflow | 5000 | Experiment tracking |
+| Opik | 5173/8080 | Agent observability |
+| Redis | 6382 | Working memory cache |
+| FalkorDB | 6381 | Graph database |
+
+**Do NOT**:
+- Install dependencies (pip install) when testing - the venv is already configured
+- Import agents directly in Python when testing - use the API endpoints
+- Rebuild Docker containers unless specifically requested
+
+**Project Location on Droplet**: `~/Projects/e2i_causal_analytics/`
+
 ---
 
 ## GEPA Prompt Optimization (V4.3)
