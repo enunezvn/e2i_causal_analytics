@@ -8,14 +8,17 @@ Algorithm: .claude/specialists/Agent_Specialists_Tiers 1-5/experiment-designer.m
 Contract: .claude/contracts/tier3-contracts.md lines 82-142
 
 V4.4: Added DAG-aware validity validation.
+V4.5: Added LangChain ChatAnthropic integration with graceful fallback.
 """
 
 import asyncio
 import json
+import logging
+import os
 import re
 import time
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Optional, Protocol, runtime_checkable
 
 from src.agents.experiment_designer.state import (
     ErrorDetails,
@@ -24,15 +27,68 @@ from src.agents.experiment_designer.state import (
     ValidityThreat,
 )
 
+logger = logging.getLogger(__name__)
 
-# ===== MOCK LLM =====
-# TODO: Replace with actual LangChain ChatAnthropic when API is configured
+
+# ===== LLM INTERFACE =====
+@runtime_checkable
+class LLMInterface(Protocol):
+    """Protocol for LLM implementations."""
+
+    async def ainvoke(self, prompt: str) -> Any:
+        """Async invocation of LLM."""
+        ...
+
+
+def _get_validity_llm() -> tuple[Any, str, bool]:
+    """Get LLM for validity audit.
+
+    Attempts to use ChatAnthropic if available and configured,
+    otherwise falls back to MockValidityLLM.
+
+    Returns:
+        Tuple of (llm_instance, model_name, is_real_llm)
+    """
+    # Check if API key is configured
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        logger.info("ANTHROPIC_API_KEY not set, using mock LLM for validity audit")
+        return MockValidityLLM(), "mock-validity-llm", False
+
+    try:
+        from langchain_anthropic import ChatAnthropic
+
+        # Use Claude Sonnet 4 for validity assessment
+        model_name = os.environ.get(
+            "VALIDITY_AUDIT_MODEL", "claude-sonnet-4-20250514"
+        )
+        llm = ChatAnthropic(
+            model=model_name,
+            max_tokens=4096,
+            temperature=0.3,  # Lower temperature for structured analysis
+            api_key=api_key,
+        )
+        logger.info(f"Using ChatAnthropic ({model_name}) for validity audit")
+        return llm, model_name, True
+
+    except ImportError:
+        logger.warning(
+            "langchain_anthropic not installed, using mock LLM. "
+            "Install with: pip install langchain-anthropic"
+        )
+        return MockValidityLLM(), "mock-validity-llm", False
+
+    except Exception as e:
+        logger.warning(f"Failed to initialize ChatAnthropic: {e}, using mock LLM")
+        return MockValidityLLM(), "mock-validity-llm", False
+
+
 class MockValidityLLM:
     """Mock LLM for testing validity audit.
 
-    CRITICAL: This is a temporary mock. Replace with:
-        from langchain_anthropic import ChatAnthropic
-        self.llm = ChatAnthropic(model="claude-sonnet-4-20250514", max_tokens=4096)
+    Used as fallback when ChatAnthropic is not available (missing API key or
+    langchain-anthropic not installed). Returns realistic mock responses for
+    testing and development.
     """
 
     async def ainvoke(self, prompt: str) -> "MockValidityResponse":
@@ -107,14 +163,13 @@ class ValidityAuditNode:
     4. Recommend mitigations
     5. Determine if redesign is needed
 
-    Model: Claude Sonnet 4 (primary)
+    Model: Claude Sonnet 4 (primary), with graceful fallback to mock
     Performance Target: <30s for validity audit
     """
 
     def __init__(self):
         """Initialize validity audit node."""
-        self.llm = MockValidityLLM()
-        self.model_name = "claude-sonnet-4-20250514"
+        self.llm, self.model_name, self._using_real_llm = _get_validity_llm()
 
     async def execute(self, state: ExperimentDesignState) -> ExperimentDesignState:
         """Execute validity audit.
