@@ -101,6 +101,14 @@ class RefutationNode:
                 f"(ATE={original_ate:.4f}, CI=[{ate_ci_lower:.4f}, {ate_ci_upper:.4f}])"
             )
 
+            # Get data passthrough from estimation node
+            # This enables proper refutation tests on actual data
+            estimation_data = state.get("estimation_data")
+            if estimation_data is not None:
+                logger.debug(
+                    f"Using estimation data for refutation (shape: {estimation_data.shape})"
+                )
+
             # Run all refutation tests
             suite: RefutationSuite = self.runner.run_all_tests(
                 original_effect=original_ate,
@@ -109,9 +117,9 @@ class RefutationNode:
                 outcome=outcome,
                 brand=brand,
                 estimate_id=query_id,
-                # DoWhy objects would be passed here if available
-                data=None,  # TODO: Add data passthrough from estimation node
-                causal_model=None,  # TODO: Add model passthrough
+                # Data passthrough from estimation node (enables DoWhy-based refutation)
+                data=estimation_data,
+                causal_model=None,  # Model not persisted in state (would require serialization)
                 identified_estimand=None,
                 estimate=None,
             )

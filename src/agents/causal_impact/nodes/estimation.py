@@ -302,6 +302,8 @@ class EstimationNode:
                         "energy_score_quality_tier": result.get("energy_score_data", {}).get(
                             "quality_tier", "unreliable"
                         ),
+                        # Passthrough data for refutation node
+                        "estimation_data": data,
                     }
                 except Exception as e:
                     # Fall back to legacy if energy score fails
@@ -335,6 +337,8 @@ class EstimationNode:
                     "current_phase": "refuting",
                     "status": "computing",
                     "energy_score_enabled": False,
+                    # Passthrough data for refutation node
+                    "estimation_data": data,
                 }
 
         except Exception as e:
