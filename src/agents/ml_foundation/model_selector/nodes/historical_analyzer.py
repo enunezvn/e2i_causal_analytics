@@ -4,7 +4,11 @@ This module analyzes historical experiment data to inform
 algorithm selection based on past performance.
 """
 
+import logging
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 async def analyze_historical_performance(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -214,22 +218,138 @@ async def get_algorithm_trends(state: Dict[str, Any]) -> Dict[str, Any]:
     candidates = state.get("candidate_algorithms", [])
     candidate_names = [c["name"] for c in candidates]
 
+    # Query database for time-based trends
+    trend_data = await _query_algorithm_trends(candidate_names)
+
     trends = {}
     for algo_name in candidate_names:
-        # Default trend: stable
-        trends[algo_name] = {
-            "trend": "stable",
-            "recent_avg": 0.5,
-            "older_avg": 0.5,
-            "change": 0.0,
-        }
-
-    # TODO: Query database for time-based trends
-    # For now, return default stable trends
+        if algo_name in trend_data:
+            trends[algo_name] = trend_data[algo_name]
+        else:
+            # Default trend: stable (no historical data)
+            trends[algo_name] = {
+                "trend": "stable",
+                "recent_avg": 0.5,
+                "older_avg": 0.5,
+                "change": 0.0,
+                "sample_count": 0,
+            }
 
     return {
         "algorithm_trends": trends,
     }
+
+
+async def _query_algorithm_trends(
+    algorithm_names: List[str],
+    recent_days: int = 30,
+    older_days: int = 90,
+) -> Dict[str, Dict[str, Any]]:
+    """Query database for time-based performance trends.
+
+    Compares recent performance (last 30 days) vs older performance (30-90 days ago)
+    to identify improving, declining, or stable trends.
+
+    Args:
+        algorithm_names: List of algorithm names to analyze
+        recent_days: Days to consider as "recent"
+        older_days: Days to consider as "older" comparison period
+
+    Returns:
+        Dictionary mapping algorithm name to trend data
+    """
+    try:
+        from src.repositories.ml_data_loader import MLDataLoader
+
+        loader = MLDataLoader()
+
+        now = datetime.now(timezone.utc)
+        recent_cutoff = now - timedelta(days=recent_days)
+        older_cutoff = now - timedelta(days=older_days)
+
+        # Query for trend data by time period
+        query = """
+            SELECT
+                algorithm,
+                CASE
+                    WHEN started_at >= :recent_cutoff THEN 'recent'
+                    WHEN started_at >= :older_cutoff THEN 'older'
+                    ELSE 'historical'
+                END as time_period,
+                AVG(
+                    COALESCE(
+                        (test_metrics->>'auc_roc')::float,
+                        (test_metrics->>'r2')::float,
+                        (validation_metrics->>'auc_roc')::float,
+                        0.5
+                    )
+                ) as avg_metric,
+                COUNT(*) as run_count
+            FROM ml_training_runs
+            WHERE algorithm = ANY(:algorithms)
+            AND status = 'completed'
+            AND started_at >= :older_cutoff
+            GROUP BY algorithm, time_period
+            ORDER BY algorithm, time_period
+        """
+
+        params = {
+            "algorithms": algorithm_names,
+            "recent_cutoff": recent_cutoff.isoformat(),
+            "older_cutoff": older_cutoff.isoformat(),
+        }
+
+        result = await loader.execute_query(query, params)
+
+        # Process results into trend data
+        trends = {}
+        for row in result or []:
+            algo = row.get("algorithm")
+            period = row.get("time_period")
+            avg_metric = row.get("avg_metric", 0.5)
+            run_count = row.get("run_count", 0)
+
+            if algo not in trends:
+                trends[algo] = {
+                    "recent_avg": 0.5,
+                    "older_avg": 0.5,
+                    "recent_count": 0,
+                    "older_count": 0,
+                }
+
+            if period == "recent":
+                trends[algo]["recent_avg"] = avg_metric
+                trends[algo]["recent_count"] = run_count
+            elif period == "older":
+                trends[algo]["older_avg"] = avg_metric
+                trends[algo]["older_count"] = run_count
+
+        # Compute trend direction and change
+        for algo, data in trends.items():
+            change = data["recent_avg"] - data["older_avg"]
+            data["change"] = round(change, 4)
+            data["sample_count"] = data["recent_count"] + data["older_count"]
+
+            # Determine trend based on change magnitude
+            if data["sample_count"] < 3:
+                data["trend"] = "insufficient_data"
+            elif change > 0.05:
+                data["trend"] = "improving"
+            elif change < -0.05:
+                data["trend"] = "declining"
+            else:
+                data["trend"] = "stable"
+
+            # Clean up intermediate fields
+            del data["recent_count"]
+            del data["older_count"]
+
+        logger.debug(f"Computed trends for {len(trends)} algorithms")
+        return trends
+
+    except Exception as e:
+        logger.warning(f"Failed to query algorithm trends: {e}")
+        return {}
 
 
 async def get_recommendations_from_history(state: Dict[str, Any]) -> Dict[str, Any]:
