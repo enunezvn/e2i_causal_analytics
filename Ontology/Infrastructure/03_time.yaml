@@ -1,0 +1,32 @@
+# =============================================================================
+# TIME REFERENCES MODULE
+# =============================================================================
+
+time_periods:
+  values:
+    - Q1
+    - Q2
+    - Q3
+    - Q4
+    - YTD
+    - MTD
+    - WTD
+    - last_week
+    - last_month
+    - last_quarter
+    - last_year
+
+time_granularities:
+  values:
+    - daily
+    - weekly
+    - monthly
+    - quarterly
+    - yearly
+
+observation_windows:
+  script_conversion: 21
+  hcp_churn: 90
+  treatment_response: 180
+  market_share_impact: 90
+  next_best_action: 30

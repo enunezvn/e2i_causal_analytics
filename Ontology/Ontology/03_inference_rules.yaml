@@ -1,0 +1,249 @@
+# =============================================================================
+# INFERENCE RULES ONTOLOGY MODULE
+# =============================================================================
+# File: ontology/03_inference_rules.yaml
+# Lines: ~150
+# Maintainer: Data Science Team
+# Purpose: 5 inference rules for automated discovery
+# Integration: inference_engine.py
+# =============================================================================
+
+inference_rules:
+  
+  indirect_treatment:
+    description: "Infer HCP→Brand prescribing from Patient→HCP + Patient→Brand patterns"
+    enabled: true
+    frequency: "daily"
+    priority: 1
+    
+    cypher_query: |
+      MATCH (p:Patient)-[:TREATED_BY]->(h:HCP),
+            (p)-[:PRESCRIBED]->(b:Brand)
+      WHERE NOT EXISTS((h)-[:PRESCRIBES]->(b))
+      WITH h, b, COUNT(DISTINCT p) AS patient_count
+      WHERE patient_count >= 3
+      MERGE (h)-[r:PRESCRIBES]->(b)
+      SET r.volume_monthly = patient_count,
+          r.prescribing_status = 'active',
+          r.inferred = true,
+          r.inference_date = datetime()
+      RETURN h.hcp_id, b.brand_name, patient_count
+    
+    parameters:
+      min_patient_count: 3
+      
+    output:
+      creates_edge: "PRESCRIBES"
+      updates_properties: ["volume_monthly", "prescribing_status"]
+    
+    validation:
+      check: "Ensure no duplicate PRESCRIBES edges"
+      
+  causal_chain:
+    description: "Transitive closure: A→B + B→C ⇒ A⇢C (indirect influence)"
+    enabled: true
+    frequency: "weekly"
+    priority: 2
+    
+    cypher_query: |
+      MATCH (a)-[r1:CAUSES]->(b)-[r2:CAUSES]->(c)
+      WHERE NOT EXISTS((a)-[:INDIRECTLY_INFLUENCES]->(c))
+        AND r1.confidence >= 0.50
+        AND r2.confidence >= 0.50
+      WITH a, c, 
+           r1.effect_size * r2.effect_size AS combined_effect,
+           r1.confidence * r2.confidence AS combined_confidence,
+           COUNT(*) AS path_count
+      WHERE combined_confidence >= 0.25
+      MERGE (a)-[r:INDIRECTLY_INFLUENCES]->(c)
+      SET r.combined_effect = combined_effect,
+          r.combined_confidence = combined_confidence,
+          r.path_count = path_count,
+          r.inferred = true,
+          r.inference_date = datetime()
+      RETURN a, c, combined_effect, combined_confidence, path_count
+    
+    parameters:
+      min_direct_confidence: 0.50
+      min_combined_confidence: 0.25
+      
+    output:
+      creates_edge: "INDIRECTLY_INFLUENCES"
+      updates_properties: ["combined_effect", "combined_confidence", "path_count"]
+    
+    validation:
+      check: "Ensure DAG property (no cycles)"
+      
+  hcp_influence_propagation:
+    description: "Identify high-potential HCPs through influence networks"
+    enabled: true
+    frequency: "weekly"
+    priority: 3
+    
+    cypher_query: |
+      MATCH (h1:HCP)-[i:INFLUENCES]->(h2:HCP)-[:PRESCRIBES]->(b:Brand)
+      WHERE i.influence_strength >= 0.70
+        AND NOT EXISTS((h1)-[:PRESCRIBES]->(b))
+        AND NOT EXISTS((h1)-[:HIGH_POTENTIAL_PRESCRIBER]->(b))
+      WITH h1, b, 
+           AVG(i.influence_strength) AS avg_influence,
+           COUNT(DISTINCT h2) AS influencer_count
+      WHERE avg_influence >= 0.70
+        AND influencer_count >= 2
+      MERGE (h1)-[r:HIGH_POTENTIAL_PRESCRIBER]->(b)
+      SET r.potential_score = avg_influence,
+          r.evidence = 'Influenced by ' + influencer_count + ' active prescribers',
+          r.inferred = true,
+          r.inference_date = datetime()
+      RETURN h1.hcp_id, b.brand_name, avg_influence, influencer_count
+    
+    parameters:
+      min_influence_strength: 0.70
+      min_influencer_count: 2
+      
+    output:
+      creates_edge: "HIGH_POTENTIAL_PRESCRIBER"
+      updates_properties: ["potential_score", "evidence"]
+    
+    validation:
+      check: "Ensure HCP doesn't already prescribe brand"
+      
+  patient_journey_progression:
+    description: "Calculate stage transition probabilities from historical data"
+    enabled: true
+    frequency: "monthly"
+    priority: 4
+    
+    cypher_query: |
+      MATCH (p1:Patient)-[t:TRANSITIONED_TO]->(p2:Patient)
+      WITH t.from_stage AS from_stage,
+           t.to_stage AS to_stage,
+           COUNT(*) AS transition_count
+      MATCH (p:Patient)
+      WHERE p.journey_stage = from_stage
+      WITH from_stage, to_stage, transition_count, COUNT(p) AS total_in_stage
+      WITH from_stage, to_stage, 
+           toFloat(transition_count) / total_in_stage AS probability
+      MERGE (s1:JourneyStage {stage_name: from_stage})
+      MERGE (s2:JourneyStage {stage_name: to_stage})
+      MERGE (s1)-[r:TRANSITION_PROBABILITY]->(s2)
+      SET r.probability = probability,
+          r.sample_size = transition_count,
+          r.calculated_date = datetime()
+      RETURN from_stage, to_stage, probability, transition_count
+    
+    parameters:
+      min_sample_size: 10
+      
+    output:
+      creates_node: "JourneyStage"
+      creates_edge: "TRANSITION_PROBABILITY"
+      updates_properties: ["probability", "sample_size"]
+    
+    validation:
+      check: "Probabilities sum to ≤ 1.0 for each from_stage"
+      
+  roi_opportunity_flagging:
+    description: "Flag high-confidence causal paths with KPI gaps as ROI opportunities"
+    enabled: true
+    frequency: "weekly"
+    priority: 5
+    
+    cypher_query: |
+      MATCH (cp:CausalPath)-[:IMPACTS]->(kpi:KPI)
+      WHERE cp.confidence >= 0.75
+        AND cp.validation_status = 'validated'
+        AND kpi.current_value < kpi.target_value
+      WITH cp, kpi,
+           (kpi.target_value - kpi.current_value) / kpi.target_value AS gap_pct
+      WHERE gap_pct >= 0.10  // 10% gap
+      MERGE (o:Opportunity {opportunity_id: 'OPP_' + cp.path_id + '_' + kpi.kpi_id})
+      SET o.confidence = cp.confidence,
+          o.effect_size = cp.effect_size,
+          o.kpi_gap = gap_pct,
+          o.priority = CASE
+            WHEN gap_pct >= 0.30 THEN 'critical'
+            WHEN gap_pct >= 0.20 THEN 'high'
+            ELSE 'medium'
+          END,
+          o.flagged_date = datetime()
+      MERGE (cp)-[:CREATES]->(o)
+      MERGE (o)-[:ADDRESSES]->(kpi)
+      RETURN cp.path_id, kpi.kpi_id, gap_pct, o.priority
+    
+    parameters:
+      min_confidence: 0.75
+      min_gap_pct: 0.10
+      
+    output:
+      creates_node: "Opportunity"
+      creates_edge: ["CREATES", "ADDRESSES"]
+      updates_properties: ["confidence", "effect_size", "kpi_gap", "priority"]
+    
+    validation:
+      check: "Opportunity nodes are unique per CausalPath-KPI pair"
+
+# Inference rule execution settings
+
+execution:
+  
+  scheduling:
+    description: "Cron-based scheduling for inference rules"
+    
+    daily:
+      cron: "0 2 * * *"  # 2 AM daily
+      rules: ["indirect_treatment"]
+      
+    weekly:
+      cron: "0 3 * * 0"  # 3 AM Sunday
+      rules: ["causal_chain", "hcp_influence_propagation", "roi_opportunity_flagging"]
+      
+    monthly:
+      cron: "0 4 1 * *"  # 4 AM on 1st of month
+      rules: ["patient_journey_progression"]
+  
+  error_handling:
+    on_failure: "log_and_continue"  # Don't stop all rules if one fails
+    retry_attempts: 3
+    retry_delay_seconds: 60
+    
+  monitoring:
+    log_execution_time: true
+    log_rows_affected: true
+    alert_on_failure: true
+    alert_on_long_runtime: true
+    max_runtime_minutes: 30
+
+# Inference rule dependencies
+
+dependencies:
+  description: "Rules that depend on other rules completing first"
+  
+  causal_chain:
+    depends_on: []  # No dependencies
+    
+  hcp_influence_propagation:
+    depends_on: ["indirect_treatment"]  # Need PRESCRIBES edges first
+    
+  roi_opportunity_flagging:
+    depends_on: ["causal_chain"]  # Need causal paths validated
+
+# Performance optimization
+
+optimization:
+  
+  indexing:
+    description: "Critical indexes for inference rule performance"
+    required_indexes:
+      - CausalPath.confidence
+      - CausalPath.validation_status
+      - HCP.hcp_id
+      - Patient.journey_stage
+      - KPI.current_value
+      - KPI.target_value
+      
+  batching:
+    description: "Batch processing for large graphs"
+    batch_size: 1000
+    parallel_execution: true
+    max_workers: 4

@@ -1,0 +1,421 @@
+# =============================================================================
+# NODE TYPES ONTOLOGY MODULE
+# =============================================================================
+# File: ontology/01_node_types.yaml
+# Lines: ~300
+# Maintainer: Data Architecture Team
+# Purpose: 8 node types with complete property schemas
+# Integration: schema_compiler.py, validator.py
+# =============================================================================
+
+node_types:
+  
+  Patient:
+    description: "Patient entity with journey tracking"
+    
+    properties:
+      patient_id:
+        type: string
+        required: true
+        unique: true
+        pattern: "^PAT[0-9]{8}$"
+        description: "Unique patient identifier (e.g., PAT12345678)"
+        
+      journey_stage:
+        type: enum
+        required: true
+        values: [aware, considering, prescribed, first_fill, adherent, discontinued, maintained]
+        default: "aware"
+        index: true
+        description: "Current stage in patient journey"
+        
+      risk_score:
+        type: float
+        required: false
+        min: 0.0
+        max: 1.0
+        description: "Patient risk score for churn/non-adherence"
+        
+      region:
+        type: enum
+        required: true
+        values: [northeast, south, midwest, west]
+        index: true
+        description: "Geographic region"
+        
+      age_group:
+        type: enum
+        required: false
+        values: [pediatric, young_adult, adult, senior]
+        index: true
+        description: "Age group classification"
+        
+      insurance_type:
+        type: enum
+        required: false
+        values: [commercial, medicare, medicaid, uninsured, other]
+        index: true
+        description: "Insurance coverage type"
+        
+      created_at:
+        type: datetime
+        required: true
+        auto_now_add: true
+        index: true
+        description: "Timestamp of node creation"
+        
+      updated_at:
+        type: datetime
+        required: true
+        auto_now: true
+        description: "Timestamp of last update"
+  
+  HCP:
+    description: "Healthcare provider entity"
+    
+    properties:
+      hcp_id:
+        type: string
+        required: true
+        unique: true
+        pattern: "^HCP[0-9]{8}$"
+        description: "Unique HCP identifier (e.g., HCP87654321)"
+        
+      npi:
+        type: string
+        required: true
+        unique: true
+        pattern: "^[0-9]{10}$"
+        description: "National Provider Identifier (10 digits)"
+        
+      specialty:
+        type: enum
+        required: true
+        values: [dermatology, allergist, immunology, hematology, oncology, medical_oncology, surgical_oncology, gynecologic_oncology, internal_medicine, family_medicine, physician_assistant, nurse_practitioner, other]
+        index: true
+        description: "Medical specialty"
+        
+      priority_tier:
+        type: enum
+        required: false
+        values: [tier_1, tier_2, tier_3]
+        index: true
+        description: "Targeting priority tier"
+        
+      adoption_category:
+        type: enum
+        required: false
+        values: [innovator, early_adopter, early_majority, late_majority, laggard]
+        index: true
+        description: "Adoption behavior classification"
+        
+      region:
+        type: enum
+        required: true
+        values: [northeast, south, midwest, west]
+        index: true
+        description: "Practice region"
+        
+      created_at:
+        type: datetime
+        required: true
+        auto_now_add: true
+        index: true
+        
+      updated_at:
+        type: datetime
+        required: true
+        auto_now: true
+  
+  Brand:
+    description: "Pharmaceutical brand entity"
+    
+    properties:
+      brand_name:
+        type: enum
+        required: true
+        unique: true
+        values: [remibrutinib, fabhalta, kisqali]
+        description: "Brand name"
+        
+      therapeutic_area:
+        type: enum
+        required: true
+        values: [immunology, hematology, oncology]
+        index: true
+        description: "Therapeutic area"
+        
+      indication:
+        type: string
+        required: true
+        description: "Primary indication"
+        
+      created_at:
+        type: datetime
+        required: true
+        auto_now_add: true
+        index: true
+        
+      updated_at:
+        type: datetime
+        required: true
+        auto_now: true
+  
+  Region:
+    description: "Geographic region entity"
+    
+    properties:
+      region_name:
+        type: enum
+        required: true
+        unique: true
+        values: [northeast, south, midwest, west]
+        description: "Region name"
+        
+      state_count:
+        type: integer
+        required: false
+        min: 1
+        description: "Number of states in region"
+        
+      created_at:
+        type: datetime
+        required: true
+        auto_now_add: true
+        
+      updated_at:
+        type: datetime
+        required: true
+        auto_now: true
+  
+  KPI:
+    description: "Key Performance Indicator entity"
+    
+    properties:
+      kpi_id:
+        type: string
+        required: true
+        unique: true
+        pattern: "^KPI[0-9]{6}$"
+        description: "Unique KPI identifier (e.g., KPI000001)"
+        
+      category:
+        type: enum
+        required: true
+        values: [ws1_data_quality, ws1_model_performance, ws2_triggers, ws3_business, brand_specific, causal_metrics]
+        index: true
+        description: "KPI category"
+        
+      name:
+        type: string
+        required: true
+        description: "KPI name"
+        
+      target_value:
+        type: float
+        required: false
+        description: "Target value for KPI"
+        
+      current_value:
+        type: float
+        required: false
+        description: "Current measured value"
+        
+      unit:
+        type: string
+        required: false
+        description: "Unit of measurement"
+        
+      created_at:
+        type: datetime
+        required: true
+        auto_now_add: true
+        index: true
+        
+      updated_at:
+        type: datetime
+        required: true
+        auto_now: true
+  
+  CausalPath:
+    description: "Causal relationship with evidence"
+    
+    properties:
+      path_id:
+        type: string
+        required: true
+        unique: true
+        pattern: "^CP[0-9]{8}$"
+        description: "Unique causal path identifier (e.g., CP12345678)"
+        
+      source_variable:
+        type: string
+        required: true
+        description: "Source variable name"
+        
+      target_variable:
+        type: string
+        required: true
+        description: "Target variable name"
+        
+      effect_size:
+        type: float
+        required: true
+        description: "Quantified effect size (can be negative)"
+        
+      confidence:
+        type: float
+        required: true
+        min: 0.0
+        max: 1.0
+        index: true
+        description: "Confidence score [0, 1]"
+        
+      method_used:
+        type: enum
+        required: true
+        values: [dowhy_backdoor, dowhy_frontdoor, econml_dml, econml_causal_forest, causalml_uplift, causalml_metalearner, propensity_score_matching, difference_in_differences]
+        index: true
+        description: "Causal inference method"
+        
+      validation_status:
+        type: enum
+        required: true
+        values: [validated, pending, failed, skipped]
+        index: true
+        description: "Validation/refutation status"
+        
+      gate_decision:
+        type: enum
+        required: false
+        values: [proceed, review, block]
+        index: true
+        description: "Gate decision based on confidence threshold"
+        
+      created_at:
+        type: datetime
+        required: true
+        auto_now_add: true
+        index: true
+        
+      updated_at:
+        type: datetime
+        required: true
+        auto_now: true
+  
+  Trigger:
+    description: "Next best action (NBA) trigger"
+    
+    properties:
+      trigger_id:
+        type: string
+        required: true
+        unique: true
+        pattern: "^TRG[0-9]{8}$"
+        description: "Unique trigger identifier (e.g., TRG87654321)"
+        
+      trigger_type:
+        type: enum
+        required: true
+        values: [alert, recommendation, insight, nba]
+        index: true
+        description: "Type of trigger"
+        
+      priority:
+        type: enum
+        required: true
+        values: [critical, high, medium, low]
+        index: true
+        description: "Priority level"
+        
+      status:
+        type: enum
+        required: true
+        values: [pending, delivered, accepted, rejected, completed, expired]
+        index: true
+        default: "pending"
+        description: "Current status"
+        
+      message:
+        type: string
+        required: true
+        description: "Trigger message content"
+        
+      expiration_date:
+        type: datetime
+        required: false
+        index: true
+        description: "Expiration date (null = no expiration)"
+        
+      created_at:
+        type: datetime
+        required: true
+        auto_now_add: true
+        index: true
+        
+      updated_at:
+        type: datetime
+        required: true
+        auto_now: true
+  
+  Agent:
+    description: "Agent entity for provenance tracking"
+    
+    properties:
+      agent_name:
+        type: enum
+        required: true
+        unique: true
+        values: [CausalImpactAgent, HeterogeneousOptimizerAgent, ExperimentDesigner, GapAnalyzer, StakeQualAgent, RefutationAgent, RegulatoryComplianceAgent, UnintendedConsequenceAgent, DataQualityAgent, ROICalculatorAgent, InsightTranslatorAgent, ActionGeneratorAgent, StakeholderCommunicatorAgent, DigitalTwinAgent, OutcomePredictorAgent, OutcomeTruthLabelerAgent, ModelDriftDetectorAgent, SelfCriticAgent]
+        description: "Agent name"
+        
+      tier:
+        type: integer
+        required: true
+        min: 1
+        max: 6
+        index: true
+        description: "Agent tier (1-6)"
+        
+      version:
+        type: string
+        required: false
+        description: "Agent version string"
+        
+      created_at:
+        type: datetime
+        required: true
+        auto_now_add: true
+        
+      updated_at:
+        type: datetime
+        required: true
+        auto_now: true
+
+# Property type definitions
+
+property_types:
+  string:
+    python_type: "str"
+    falkordb_type: "STRING"
+    
+  integer:
+    python_type: "int"
+    falkordb_type: "INTEGER"
+    
+  float:
+    python_type: "float"
+    falkordb_type: "DOUBLE"
+    
+  boolean:
+    python_type: "bool"
+    falkordb_type: "BOOLEAN"
+    
+  datetime:
+    python_type: "datetime"
+    falkordb_type: "STRING"  # ISO 8601 format
+    
+  enum:
+    python_type: "str"
+    falkordb_type: "STRING"
+    validation: "Must be one of allowed values"

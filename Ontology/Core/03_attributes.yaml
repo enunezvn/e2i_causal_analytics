@@ -1,0 +1,166 @@
+# =============================================================================
+# PATIENT & HCP ATTRIBUTES MODULE
+# =============================================================================
+# File: core/03_attributes.yaml
+# Lines: ~100
+# Maintainer: Clinical Operations Team
+# Purpose: Patient journey stages, HCP attributes, trigger types
+# =============================================================================
+
+patient_journey_stages:
+  description: "7-stage patient journey model"
+  values:
+    - aware
+    - considering
+    - prescribed
+    - first_fill
+    - adherent
+    - discontinued
+    - maintained
+  
+  transitions:
+    aware: [considering]
+    considering: [prescribed, discontinued]
+    prescribed: [first_fill, discontinued]
+    first_fill: [adherent, discontinued]
+    adherent: [maintained, discontinued]
+    discontinued: [considering]  # May re-enter
+    maintained: [discontinued]
+
+hcp_specialties:
+  description: "13 HCP specialty types"
+  values:
+    - dermatology          # Remibrutinib (CSU)
+    - allergist            # Remibrutinib (CSU)
+    - immunology           # Remibrutinib (CSU)
+    - hematology           # Fabhalta (PNH)
+    - oncology             # Kisqali (breast cancer)
+    - medical_oncology     # Kisqali subspecialty
+    - surgical_oncology    # Kisqali subspecialty
+    - gynecologic_oncology # Kisqali subspecialty
+    - internal_medicine    # General
+    - family_medicine      # General
+    - physician_assistant  # Advanced practice
+    - nurse_practitioner   # Advanced practice
+    - other                # Catch-all
+
+hcp_priority_tiers:
+  description: "HCP prioritization for targeting"
+  
+  tier_1:
+    label: "High Priority"
+    criteria:
+      - "High prescribing volume (top 20%)"
+      - "Strong brand affinity"
+      - "Accessible to reps"
+    
+  tier_2:
+    label: "Medium Priority"
+    criteria:
+      - "Moderate prescribing volume (20-60%)"
+      - "Some brand experience"
+      - "Periodic rep access"
+    
+  tier_3:
+    label: "Low Priority"
+    criteria:
+      - "Low prescribing volume (bottom 40%)"
+      - "Minimal brand exposure"
+      - "Limited rep access"
+
+hcp_adoption_categories:
+  description: "HCP adoption behavior classification"
+  values:
+    - innovator          # First 2.5% to adopt
+    - early_adopter      # Next 13.5%
+    - early_majority     # Next 34%
+    - late_majority      # Next 34%
+    - laggard            # Last 16%
+
+trigger_types:
+  description: "Types of next best actions (NBAs) generated"
+  
+  alert:
+    description: "Time-sensitive notifications requiring immediate action"
+    priority: "high"
+    expiration: "7 days"
+    examples:
+      - "HCP at risk of churn"
+      - "Patient non-adherence detected"
+    
+  recommendation:
+    description: "Suggested actions for rep consideration"
+    priority: "medium"
+    expiration: "30 days"
+    examples:
+      - "Schedule follow-up call"
+      - "Provide clinical study reprints"
+    
+  insight:
+    description: "Informational insights for awareness"
+    priority: "low"
+    expiration: "90 days"
+    examples:
+      - "HCP shows increased interest in therapeutic area"
+      - "Patient journey stage progression observed"
+    
+  nba:
+    description: "Next best action with specific guidance"
+    priority: "high"
+    expiration: "14 days"
+    examples:
+      - "Deliver samples to HCP"
+      - "Offer patient support program enrollment"
+
+trigger_priorities:
+  description: "Trigger priority levels"
+  values:
+    - critical    # Must act within 24 hours
+    - high        # Act within 1 week
+    - medium      # Act within 1 month
+    - low         # Act within 1 quarter
+
+trigger_statuses:
+  description: "Lifecycle status of triggers"
+  values:
+    - pending     # Generated but not delivered
+    - delivered   # Sent to recipient
+    - accepted    # Recipient acknowledged
+    - rejected    # Recipient declined
+    - completed   # Action taken
+    - expired     # Past expiration date
+
+patient_risk_scores:
+  description: "Patient risk score interpretation"
+  
+  high_risk:
+    range: [0.70, 1.00]
+    label: "High Risk"
+    action: "Immediate intervention required"
+    
+  moderate_risk:
+    range: [0.40, 0.69]
+    label: "Moderate Risk"
+    action: "Monitor closely and consider intervention"
+    
+  low_risk:
+    range: [0.00, 0.39]
+    label: "Low Risk"
+    action: "Standard monitoring"
+
+patient_age_groups:
+  description: "Patient age segmentation"
+  values:
+    - pediatric      # 0-17
+    - young_adult    # 18-35
+    - adult          # 36-64
+    - senior         # 65+
+
+insurance_types:
+  description: "Patient insurance coverage types"
+  values:
+    - commercial
+    - medicare
+    - medicaid
+    - uninsured
+    - other

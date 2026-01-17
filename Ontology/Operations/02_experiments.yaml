@@ -1,0 +1,52 @@
+# =============================================================================
+# EXPERIMENT LIFECYCLE MODULE
+# =============================================================================
+# File: operations/02_experiments.yaml
+# Maintainer: Experiment Design Team
+# =============================================================================
+
+experiment_states:
+  values:
+    - draft
+    - in_review
+    - approved
+    - scheduled
+    - running
+    - paused
+    - stopped_success
+    - stopped_futility
+    - stopped_harm
+    - stopped_other
+    - completed
+    - analyzed
+    - decided
+    - rejected
+    - cancelled
+    - archived
+
+experiment_transitions:
+  draft: [in_review, cancelled]
+  in_review: [approved, draft, rejected]
+  approved: [scheduled, cancelled]
+  scheduled: [running, cancelled]
+  running: [paused, stopped_success, stopped_futility, stopped_harm, completed]
+  paused: [running, stopped_other]
+  completed: [analyzed]
+  analyzed: [decided]
+  decided: [archived]
+
+stopping_reasons:
+  values:
+    - early_success
+    - futility
+    - safety_concern
+    - business_decision
+    - technical_issue
+    - other
+
+experiment_decisions:
+  values:
+    - implement_treatment
+    - implement_control
+    - no_change
+    - run_followup_experiment
