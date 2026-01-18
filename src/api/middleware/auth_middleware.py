@@ -51,8 +51,11 @@ PUBLIC_PATHS: List[Tuple[str, str]] = [
     # Read-only Causal endpoints - public
     ("GET", "/causal/estimators"),
     ("GET", "/causal/health"),
-    # Graph health - public
-    ("GET", "/graph/health"),
+    # Graph endpoints - public for demo visualization
+    ("GET", "/api/graph/health"),
+    ("GET", "/api/graph/nodes"),
+    ("GET", "/api/graph/relationships"),
+    ("GET", "/api/graph/stats"),
     # CopilotKit endpoints - public for frontend integration
     ("GET", "/api/copilotkit/status"),
     ("GET", "/api/copilotkit"),  # Runtime info endpoint (GET)

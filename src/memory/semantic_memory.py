@@ -630,7 +630,8 @@ class FalkorDBSemanticMemory:
             node_type = record[1]
             node_dict = dict(node.properties)
             node_dict["type"] = node_type
-            node_dict["id"] = node_dict.get("id", str(node.id))
+            # Use 'id' property if exists, otherwise use 'name' as identifier
+            node_dict["id"] = node_dict.get("id") or node_dict.get("name") or str(node.id)
             nodes.append(node_dict)
 
         return nodes
@@ -711,7 +712,7 @@ class FalkorDBSemanticMemory:
         query = f"""
         MATCH (s){rel_match}(t)
         {where_clause}
-        RETURN r, s.id as source_id, t.id as target_id, type(r) as rel_type
+        RETURN r, s.name as source_name, t.name as target_name, type(r) as rel_type
         SKIP {offset}
         LIMIT {limit}
         """
@@ -723,8 +724,9 @@ class FalkorDBSemanticMemory:
             rel = record[0]
             rel_dict = dict(rel.properties) if rel.properties else {}
             rel_dict["id"] = str(rel.id)
-            rel_dict["source_id"] = record[1]
-            rel_dict["target_id"] = record[2]
+            # Use node's name property as the identifier
+            rel_dict["source_id"] = record[1] if record[1] is not None else None
+            rel_dict["target_id"] = record[2] if record[2] is not None else None
             rel_dict["type"] = record[3]
             relationships.append(rel_dict)
 
@@ -766,10 +768,13 @@ class FalkorDBSemanticMemory:
         return result.result_set[0][0] if result.result_set else 0
 
     def get_node(self, node_id: str) -> Optional[Dict[str, Any]]:
-        """Get a single node by ID."""
+        """Get a single node by ID or name."""
+        # Try matching by 'id' property first, then by 'name'
         query = """
-        MATCH (n {id: $node_id})
+        MATCH (n)
+        WHERE n.id = $node_id OR n.name = $node_id
         RETURN n, labels(n)[0] as type
+        LIMIT 1
         """
         result = self.graph.query(query, {"node_id": node_id})
 
@@ -778,7 +783,8 @@ class FalkorDBSemanticMemory:
             node_type = result.result_set[0][1]
             node_dict = dict(node.properties)
             node_dict["type"] = node_type
-            node_dict["id"] = node_dict.get("id", str(node.id))
+            # Use 'id' property if exists, otherwise use 'name' as identifier
+            node_dict["id"] = node_dict.get("id") or node_dict.get("name") or str(node.id)
             return node_dict
 
         return None

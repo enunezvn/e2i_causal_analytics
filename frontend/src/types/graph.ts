@@ -38,6 +38,8 @@ export enum EntityType {
   PREDICTION = 'Prediction',
   EXPERIMENT = 'Experiment',
   AGENT_ACTIVITY = 'AgentActivity',
+  HCP_SPECIALTY = 'HCPSpecialty',
+  JOURNEY_STAGE = 'JourneyStage',
 }
 
 /**
@@ -59,6 +61,7 @@ export enum RelationshipType {
   LOCATED_IN = 'LOCATED_IN',
   PRACTICES_IN = 'PRACTICES_IN',
   MEASURED_IN = 'MEASURED_IN',
+  LEADS_TO = 'LEADS_TO',
 }
 
 /**

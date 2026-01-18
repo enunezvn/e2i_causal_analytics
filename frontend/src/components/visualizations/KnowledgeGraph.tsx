@@ -86,6 +86,8 @@ const ENTITY_TYPE_COLORS: Record<string, string> = {
   Prediction: '#a855f7', // purple-500
   Experiment: '#22c55e', // green-500
   AgentActivity: '#64748b', // slate-500
+  HCPSpecialty: '#0ea5e9', // sky-500
+  JourneyStage: '#d946ef', // fuchsia-500
 };
 
 /**
@@ -107,6 +109,7 @@ const RELATIONSHIP_TYPE_COLORS: Record<string, string> = {
   LOCATED_IN: '#8b5cf6', // violet-500
   PRACTICES_IN: '#06b6d4', // cyan-500
   MEASURED_IN: '#a855f7', // purple-500
+  LEADS_TO: '#d946ef', // fuchsia-500
 };
 
 /**
