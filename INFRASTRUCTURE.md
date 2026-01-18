@@ -460,13 +460,53 @@ df -h
 htop
 ```
 
+### Maintenance Scripts
+
+The droplet includes automated maintenance scripts to prevent terminal freezing and memory issues.
+
+**Scripts Location:** `~/Projects/e2i_causal_analytics/scripts/maintenance/`
+
+| Script | Purpose | Schedule |
+|--------|---------|----------|
+| `cleanup_orphans.sh` | Kill orphan processes (exec(eval), zombie nodes) | Every 15 min |
+| `memory_monitor.sh` | Monitor memory, alert on high usage, auto-cleanup | Every 5 min |
+| `setup_cron.sh` | Install cron jobs and aliases | Run once |
+
+**Quick Commands (after setup):**
+```bash
+# Check for orphan processes
+e2i-orphans
+
+# Run cleanup (dry-run first)
+e2i-cleanup-dry
+e2i-cleanup
+
+# Check memory status
+e2i-memcheck
+
+# View maintenance logs
+e2i-logs
+```
+
+**Manual Orphan Check:**
+```bash
+ps aux | grep "exec(eval" | grep -v grep
+```
+
+**Log Files:**
+- `/var/log/e2i/orphan_cleanup.log` - Cleanup history
+- `/var/log/e2i/memory_monitor.log` - Memory alerts
+
+**Session Start Check:**
+On login, you'll see a warning if orphan processes are detected.
+
 ### Next Steps / TODO
 
 - [x] Clone E2I repository to droplet
 - [x] Configure E2I API systemd service
 - [x] Set up Nginx reverse proxy for API
+- [x] Set up monitoring/alerting (memory + orphan cleanup)
 - [ ] Configure SSL/TLS certificates (Let's Encrypt)
 - [ ] Install and configure MLflow
-- [ ] Set up monitoring/alerting
 - [ ] Configure automatic backups
 - [ ] Configure domain/DNS (if applicable)
