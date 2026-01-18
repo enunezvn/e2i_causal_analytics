@@ -20,6 +20,36 @@ import { env, buildApiUrl } from '@/config/env';
 import { useAuthStore } from '@/stores/auth-store';
 
 /**
+ * Generate a UUID v4 with fallback for non-secure contexts (HTTP)
+ * crypto.randomUUID() is only available in secure contexts (HTTPS/localhost)
+ */
+function generateUUID(): string {
+  // Use native crypto.randomUUID if available (secure contexts only)
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+
+  // Fallback: generate UUID v4 using crypto.getRandomValues or Math.random
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    // Set version (4) and variant (RFC4122)
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+
+    const hex = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  }
+
+  // Last resort fallback using Math.random (less secure but functional)
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
+/**
  * Standard API error response structure
  */
 export interface ApiErrorResponse {
@@ -119,7 +149,7 @@ function requestInterceptor(
   config.headers['X-Request-Time'] = new Date().toISOString();
 
   // Add correlation ID for request tracing
-  const correlationId = crypto.randomUUID();
+  const correlationId = generateUUID();
   config.headers['X-Correlation-ID'] = correlationId;
 
   // Log request in development
