@@ -2,9 +2,8 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClient } from './lib/query-client'
-import { AuthProvider, CopilotKitWrapper } from './providers'
+import { AuthProvider } from './providers'
 import { AppRouter } from './router'
-import { env } from './config/env'
 import './index.css'
 
 /**
@@ -24,15 +23,14 @@ async function initApp() {
   // Provider order (outer to inner):
   // 1. QueryClientProvider - React Query for data fetching
   // 2. AuthProvider - Authentication state (needs QueryClient for cache invalidation)
-  // 3. CopilotKitWrapper - AI assistant (disabled by default in dev)
-  // 4. AppRouter - React Router
+  // 3. AppRouter - React Router (CopilotKitWrapper is inside the router tree)
+  // Note: CopilotKitWrapper is now in router/index.tsx RootLayout because
+  // RouterProvider creates a separate React context boundary
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
       <QueryClientProvider client={queryClient}>
         <AuthProvider>
-          <CopilotKitWrapper runtimeUrl={`${env.apiUrl.replace(/\/$/, '')}/copilotkit/`} enabled={env.copilotEnabled}>
-            <AppRouter />
-          </CopilotKitWrapper>
+          <AppRouter />
         </AuthProvider>
       </QueryClientProvider>
     </StrictMode>,

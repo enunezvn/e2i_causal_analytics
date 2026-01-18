@@ -1,18 +1,25 @@
 import { createBrowserRouter, RouterProvider, Outlet } from 'react-router-dom';
 import { routes } from './routes';
 import { Layout } from '@/components/layout/Layout';
-import { E2ICopilotProvider } from '@/providers';
+import { E2ICopilotProvider, CopilotKitWrapper } from '@/providers';
+import { env } from '@/config/env';
 
 // Root layout component that wraps all routes
 // Uses the Layout component with Header, Sidebar, and Footer
-// Wrapped with E2ICopilotProvider for AI readables/actions (requires router context)
+// CopilotKitWrapper MUST be inside the router tree for CopilotChat to access the context
+// (RouterProvider creates a separate React context boundary)
 function RootLayout() {
   return (
-    <E2ICopilotProvider>
-      <Layout>
-        <Outlet />
-      </Layout>
-    </E2ICopilotProvider>
+    <CopilotKitWrapper
+      runtimeUrl={`${env.apiUrl.replace(/\/$/, '')}/copilotkit/`}
+      enabled={env.copilotEnabled}
+    >
+      <E2ICopilotProvider>
+        <Layout>
+          <Outlet />
+        </Layout>
+      </E2ICopilotProvider>
+    </CopilotKitWrapper>
   );
 }
 
