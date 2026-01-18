@@ -45,6 +45,9 @@ class EntityType(str, Enum):
     PREDICTION = "Prediction"
     EXPERIMENT = "Experiment"
     AGENT_ACTIVITY = "AgentActivity"
+    # Domain-specific types from seed data
+    HCP_SPECIALTY = "HCPSpecialty"
+    JOURNEY_STAGE = "JourneyStage"
 
 
 class RelationshipType(str, Enum):
@@ -66,6 +69,7 @@ class RelationshipType(str, Enum):
     LOCATED_IN = "LOCATED_IN"
     PRACTICES_IN = "PRACTICES_IN"
     MEASURED_IN = "MEASURED_IN"
+    LEADS_TO = "LEADS_TO"
 
 
 class SortOrder(str, Enum):

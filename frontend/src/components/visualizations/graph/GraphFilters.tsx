@@ -72,6 +72,8 @@ const ENTITY_TYPE_COLORS: Record<string, string> = {
   Prediction: '#a855f7', // purple-500
   Experiment: '#22c55e', // green-500
   AgentActivity: '#64748b', // slate-500
+  HCPSpecialty: '#0ea5e9', // sky-500
+  JourneyStage: '#d946ef', // fuchsia-500
 };
 
 /** Entity type display labels */
@@ -90,6 +92,8 @@ const ENTITY_TYPE_LABELS: Record<string, string> = {
   Prediction: 'Prediction',
   Experiment: 'Experiment',
   AgentActivity: 'Agent Activity',
+  HCPSpecialty: 'HCP Specialty',
+  JourneyStage: 'Journey Stage',
 };
 
 /** Relationship type display labels */
@@ -109,6 +113,7 @@ const RELATIONSHIP_TYPE_LABELS: Record<string, string> = {
   LOCATED_IN: 'Located In',
   PRACTICES_IN: 'Practices In',
   MEASURED_IN: 'Measured In',
+  LEADS_TO: 'Leads To',
 };
 
 // =============================================================================
