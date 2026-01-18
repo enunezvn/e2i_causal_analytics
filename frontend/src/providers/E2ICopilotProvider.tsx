@@ -446,7 +446,7 @@ export const CopilotKitWrapper: React.FC<CopilotKitWrapperProps> = ({
       <CopilotKit
         runtimeUrl={runtimeUrl}
         publicApiKey={apiKey}
-        agent="e2i-orchestrator"
+        agent="default"
         showDevConsole={process.env.NODE_ENV === 'development'}
       >
         {children}
