@@ -1709,7 +1709,7 @@ def create_e2i_chat_agent():
 
                 response = AIMessage(
                     content=full_content,
-                    tool_calls=parsed_tool_calls if parsed_tool_calls else None,
+                    tool_calls=parsed_tool_calls if parsed_tool_calls else [],
                 )
 
             # If response has tool calls, return without additional emit (tools node will handle)
