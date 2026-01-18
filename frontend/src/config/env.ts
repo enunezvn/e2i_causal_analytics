@@ -14,7 +14,7 @@
  * Environment configuration interface
  */
 export interface EnvConfig {
-  /** Base URL for the backend API (e.g., http://localhost:8000) */
+  /** Base URL for the backend API (defaults to /api for relative URLs) */
   apiUrl: string;
   /** Supabase project URL */
   supabaseUrl: string;
@@ -75,14 +75,9 @@ function getMode(): 'development' | 'production' | 'test' {
  */
 export const env: EnvConfig = {
   // API Configuration
-  // In development, use /api to go through Vite proxy (which forwards to VITE_API_URL)
-  // This avoids CORS issues with direct browser requests
-  // If VITE_API_URL is explicitly set, use it directly (needed for testing and some dev scenarios)
-  apiUrl: import.meta.env.VITE_API_URL
-    ? (import.meta.env.VITE_API_URL as string)
-    : import.meta.env.DEV
-      ? '/api'
-      : getEnvVar('API_URL', '/api'),
+  // Uses /api relative URL by default - works in both dev (Vite proxy) and prod (nginx proxy)
+  // Set VITE_API_URL only when you need to override (e.g., pointing to a different backend)
+  apiUrl: import.meta.env.VITE_API_URL || '/api',
 
   // Supabase Configuration
   supabaseUrl: getEnvVar('SUPABASE_URL', ''),
