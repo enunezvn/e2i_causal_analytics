@@ -26,7 +26,7 @@
  */
 
 import * as React from 'react';
-import { supabase } from '@/lib/supabase';
+import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/auth-store';
 import { queryClient } from '@/lib/query-client';
 import type { AuthError as SupabaseAuthError } from '@supabase/supabase-js';
@@ -121,11 +121,25 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const { setAuth, setSession, setLoading, setInitialized, setError, clearAuth } =
     useAuthStore();
 
+  // Check if Supabase is configured
+  const supabaseConfigured = isSupabaseConfigured();
+
   // -------------------------------------------------------------------------
   // Initialize auth state from Supabase on mount
   // -------------------------------------------------------------------------
   React.useEffect(() => {
     let mounted = true;
+
+    // If Supabase is not configured, skip auth initialization
+    if (!supabaseConfigured) {
+      console.warn(
+        '[Auth] Supabase is not configured. Authentication is disabled. ' +
+          'Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to enable auth.'
+      );
+      clearAuth();
+      setInitialized(true);
+      return;
+    }
 
     async function initializeAuth() {
       try {
@@ -208,7 +222,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       mounted = false;
       subscription.unsubscribe();
     };
-  }, [setAuth, setSession, setLoading, setInitialized, setError, clearAuth]);
+  }, [supabaseConfigured, setAuth, setSession, setLoading, setInitialized, setError, clearAuth]);
 
   // -------------------------------------------------------------------------
   // Auth Actions
@@ -219,6 +233,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
    */
   const login = React.useCallback(
     async ({ email, password }: LoginCredentials): Promise<void> => {
+      if (!supabaseConfigured) {
+        throw new Error('Authentication is not configured');
+      }
       setLoading(true);
       setError(null);
 
@@ -240,13 +257,18 @@ export function AuthProvider({ children }: AuthProviderProps) {
         throw err;
       }
     },
-    [setLoading, setError]
+    [supabaseConfigured, setLoading, setError]
   );
 
   /**
    * Sign out the current user
    */
   const logout = React.useCallback(async (): Promise<void> => {
+    if (!supabaseConfigured) {
+      // If Supabase is not configured, just clear local auth state
+      clearAuth();
+      return;
+    }
     setLoading(true);
 
     try {
@@ -264,13 +286,16 @@ export function AuthProvider({ children }: AuthProviderProps) {
       setLoading(false);
       throw err;
     }
-  }, [setLoading, setError]);
+  }, [supabaseConfigured, setLoading, setError, clearAuth]);
 
   /**
    * Sign up a new user
    */
   const signup = React.useCallback(
     async ({ email, password, name }: SignupCredentials): Promise<void> => {
+      if (!supabaseConfigured) {
+        throw new Error('Authentication is not configured');
+      }
       setLoading(true);
       setError(null);
 
@@ -302,7 +327,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         throw err;
       }
     },
-    [setLoading, setError]
+    [supabaseConfigured, setLoading, setError]
   );
 
   /**
@@ -310,6 +335,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
    */
   const resetPassword = React.useCallback(
     async (email: string): Promise<void> => {
+      if (!supabaseConfigured) {
+        throw new Error('Authentication is not configured');
+      }
       setLoading(true);
       setError(null);
 
@@ -328,7 +356,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         setLoading(false);
       }
     },
-    [setLoading, setError]
+    [supabaseConfigured, setLoading, setError]
   );
 
   /**
@@ -336,6 +364,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
    */
   const updatePassword = React.useCallback(
     async (newPassword: string): Promise<void> => {
+      if (!supabaseConfigured) {
+        throw new Error('Authentication is not configured');
+      }
       setLoading(true);
       setError(null);
 
@@ -354,7 +385,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         setLoading(false);
       }
     },
-    [setLoading, setError]
+    [supabaseConfigured, setLoading, setError]
   );
 
   // -------------------------------------------------------------------------
