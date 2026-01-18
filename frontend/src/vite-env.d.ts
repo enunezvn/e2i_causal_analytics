@@ -8,16 +8,17 @@
  * All variables must be prefixed with VITE_ to be accessible client-side.
  *
  * Usage:
- *   - Set in .env file: VITE_API_URL=http://localhost:8000
+ *   - Default: Empty VITE_API_URL uses /api relative URLs (recommended)
+ *   - Override: Set VITE_API_URL=http://other-server:8000 for different backend
  *   - Access in code: import.meta.env.VITE_API_URL
  */
 
 interface ImportMetaEnv {
   /**
-   * Base URL for the backend API
-   * @example "http://localhost:8000"
+   * Base URL for the backend API (optional - defaults to /api for relative URLs)
+   * @example "" (empty for relative /api), "http://other-server:8000" (for override)
    */
-  readonly VITE_API_URL: string;
+  readonly VITE_API_URL?: string;
 
   /**
    * Supabase project URL
