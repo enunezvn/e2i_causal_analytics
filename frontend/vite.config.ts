@@ -15,7 +15,17 @@ export default defineConfig(({ mode }) => {
     resolve: {
       alias: {
         '@': path.resolve(__dirname, './src'),
+        // Polyfill Node.js util module for CopilotKit's power-assert dependency
+        util: 'util/',
       },
+    },
+    define: {
+      // Provide global for Node.js modules
+      global: 'globalThis',
+    },
+    optimizeDeps: {
+      // Force re-optimization when dependencies change
+      force: true,
     },
     server: {
       port: 5174,
