@@ -32,6 +32,7 @@
 
 import { useAuthStore } from '@/stores/auth-store';
 import { useAuthContext } from '@/providers/AuthProvider';
+import { isSupabaseConfigured } from '@/lib/supabase';
 import type { User, Session } from '@supabase/supabase-js';
 
 // =============================================================================
@@ -113,7 +114,11 @@ export function useAuth(): UseAuthReturn {
   const setRedirectTo = useAuthStore((state) => state.setRedirectTo);
 
   // Derived state
-  const isAuthenticated = Boolean(session?.access_token && user);
+  // When Supabase is not configured, bypass authentication (allow access)
+  const supabaseConfigured = isSupabaseConfigured();
+  const isAuthenticated = supabaseConfigured
+    ? Boolean(session?.access_token && user)
+    : true; // Bypass auth when Supabase is not configured
 
   const isAdmin = (() => {
     if (!user) return false;
