@@ -7,9 +7,16 @@ Exposes backend actions for querying KPIs, running analyses,
 and interacting with the E2I agent system.
 
 Author: E2I Causal Analytics Team
-Version: 1.21.5
+Version: 1.22.0
 
 Changelog:
+    1.22.0 - Implemented true token-by-token streaming for chat responses.
+             Changed chat_node from ainvoke() to astream() for LLM calls.
+             Each content chunk is now emitted via copilotkit_emit_message() immediately,
+             enabling real-time text streaming in the CopilotKit frontend.
+             Tool calls are still accumulated and handled after streaming completes.
+             This enables users to see responses build up word-by-word instead of
+             waiting for the complete response before display.
     1.21.5 - Fixed tool message ID being string "None" in MESSAGES_SNAPSHOT.
              Root cause: ToolMessage with id=None in Python serializes as "None" string.
              CopilotKit React SDK may fail validation on invalid ID format.
@@ -1640,11 +1647,73 @@ def create_e2i_chat_agent():
 
             logger.info(f"[CopilotKit] Invoking {provider} LLM with {len(llm_messages)} messages and {len(E2I_CHATBOT_TOOLS)} tools bound")
 
-            # Invoke LLM
-            response = await llm_with_tools.ainvoke(llm_messages)
+            # STREAMING IMPLEMENTATION (v1.22.0)
+            # Use astream() for token-by-token streaming to CopilotKit frontend
+            # Each content chunk is emitted immediately for real-time text display
+            full_content = ""
+            accumulated_tool_calls = []
+            response = None
 
-            # If response has tool calls, return without emitting (tools node will handle)
-            if getattr(response, "tool_calls", None):
+            logger.debug(f"[CopilotKit] Starting streaming LLM response")
+            async for chunk in llm_with_tools.astream(llm_messages):
+                # Accumulate content chunks and emit each one for streaming
+                if hasattr(chunk, 'content') and chunk.content:
+                    full_content += chunk.content
+                    # Emit each chunk immediately for real-time streaming
+                    await copilotkit_emit_message(config, chunk.content)
+                    logger.debug(f"[CopilotKit] Streamed chunk: {len(chunk.content)} chars")
+
+                # Accumulate tool calls (they may come in chunks)
+                if hasattr(chunk, 'tool_calls') and chunk.tool_calls:
+                    accumulated_tool_calls.extend(chunk.tool_calls)
+                elif hasattr(chunk, 'tool_call_chunks') and chunk.tool_call_chunks:
+                    # LangChain may use tool_call_chunks for partial tool calls
+                    for tc_chunk in chunk.tool_call_chunks:
+                        # Find or create the tool call in accumulated list
+                        tc_id = tc_chunk.get('id') or tc_chunk.get('index', 0)
+                        existing = next((tc for tc in accumulated_tool_calls if tc.get('id') == tc_id), None)
+                        if existing:
+                            # Append to existing tool call args
+                            if tc_chunk.get('args'):
+                                existing['args'] = existing.get('args', '') + tc_chunk['args']
+                        else:
+                            accumulated_tool_calls.append({
+                                'id': tc_id,
+                                'name': tc_chunk.get('name', ''),
+                                'args': tc_chunk.get('args', ''),
+                            })
+
+                # Keep last chunk as final response
+                response = chunk
+
+            logger.debug(f"[CopilotKit] Streaming complete: {len(full_content)} chars, {len(accumulated_tool_calls)} tool calls")
+
+            # Build final AIMessage with accumulated content and tool calls
+            if accumulated_tool_calls or full_content:
+                # Parse tool call args from JSON strings if needed
+                parsed_tool_calls = []
+                for tc in accumulated_tool_calls:
+                    if tc.get('name'):  # Only include valid tool calls with names
+                        args = tc.get('args', {})
+                        if isinstance(args, str):
+                            try:
+                                import json as json_mod
+                                args = json_mod.loads(args) if args else {}
+                            except json_mod.JSONDecodeError:
+                                args = {}
+                        parsed_tool_calls.append({
+                            'id': tc.get('id', str(uuid.uuid4())),
+                            'name': tc['name'],
+                            'args': args,
+                        })
+
+                response = AIMessage(
+                    content=full_content,
+                    tool_calls=parsed_tool_calls if parsed_tool_calls else None,
+                )
+
+            # If response has tool calls, return without additional emit (tools node will handle)
+            if getattr(response, "tool_calls", None) and response.tool_calls:
                 tool_names = [tc['name'] for tc in response.tool_calls]
                 logger.info(f"[CopilotKit] Claude invoked tools: {tool_names}")
 
@@ -1677,9 +1746,9 @@ def create_e2i_chat_agent():
                         logger.warning(f"[CopilotKit] Failed to persist tool call: {e}")
                 return {"messages": [response]}
 
-            # Emit text response to CopilotKit frontend
-            if response.content:
-                await copilotkit_emit_message(config, response.content)
+            # Text response was already streamed above via copilotkit_emit_message
+            # No need to emit again - content was sent chunk-by-chunk during streaming
+            if full_content:
                 # Persist assistant response to database
                 if session_id:
                     try:
@@ -1813,12 +1882,20 @@ Tool Results:
 
 Synthesize these results into a natural, conversational response. Include specific data values and metrics. Be concise."""
 
-            response = await llm.ainvoke([
+            # STREAMING (v1.22.0): Stream synthesis response token-by-token
+            full_content = ""
+            logger.debug(f"[CopilotKit] Starting streaming synthesis response")
+            async for chunk in llm.astream([
                 SystemMessage(content=E2I_COPILOT_SYSTEM_PROMPT),
                 HumanMessage(content=synthesis_prompt)
-            ])
+            ]):
+                if hasattr(chunk, 'content') and chunk.content:
+                    full_content += chunk.content
+                    await copilotkit_emit_message(config, chunk.content)
+                    logger.debug(f"[CopilotKit] Streamed synthesis chunk: {len(chunk.content)} chars")
 
-            await copilotkit_emit_message(config, response.content)
+            logger.debug(f"[CopilotKit] Synthesis streaming complete: {len(full_content)} chars")
+            response = AIMessage(content=full_content)
 
             # Persist synthesized response
             if session_id:
