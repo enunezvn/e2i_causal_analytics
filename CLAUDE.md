@@ -316,6 +316,30 @@ ssh -i ~/.ssh/replit enunez@138.197.4.36
 ssh e2i-prod
 ```
 
+### Public Access Points
+
+| Service | URL | Description |
+|---------|-----|-------------|
+| **Frontend** | http://138.197.4.36/ | React dashboard (nginx proxy to port 5174) |
+| **Backend API** | http://138.197.4.36:8000 | FastAPI backend |
+| **API Docs** | http://138.197.4.36:8000/docs | Swagger/OpenAPI documentation |
+
+### Virtual Environment (REQUIRED)
+
+The production environment uses a Python virtual environment. **Always activate or reference the venv when running commands on the droplet.**
+
+```bash
+# Venv location
+/opt/e2i_causal_analytics/venv/
+
+# Activate venv on droplet
+source /opt/e2i_causal_analytics/venv/bin/activate
+
+# Or run commands directly with venv Python
+/opt/e2i_causal_analytics/venv/bin/python <script.py>
+/opt/e2i_causal_analytics/venv/bin/pytest <tests/>
+```
+
 ### Common doctl Commands
 ```bash
 # Authenticate (token in .env as DIGITALOCEAN_TOKEN)
@@ -335,19 +359,19 @@ doctl compute droplet-action snapshot 544907207 --snapshot-name "backup-$(date +
 
 **Full documentation**: See `INFRASTRUCTURE.md` for complete reference including firewall setup, SSH key management, and cost information.
 
-### Production Python Environment (IMPORTANT)
+### Remote Command Execution (via SSH)
 
-The API runs from `/opt/e2i_causal_analytics/` with the venv at `/opt/e2i_causal_analytics/venv/`. This is the proper production environment for running tests and commands.
+Run commands on the droplet from your local machine using the production venv:
 
 ```bash
-# Run tests on droplet using production venv
+# Run tests on droplet
 ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/venv/bin/pytest tests/unit/test_utils/ -v -n 4"
 
-# Run Python commands with production venv
+# Run Python commands
 ssh -i ~/.ssh/replit enunez@138.197.4.36 "/opt/e2i_causal_analytics/venv/bin/python -c 'import src; print(src)'"
 ```
 
-**Note**: The `~/Projects/e2i_causal_analytics/` directory is for code syncing only. Always use `/opt/e2i_causal_analytics/` for execution.
+**Note**: `~/Projects/e2i_causal_analytics/` is for code syncing only. Always use `/opt/e2i_causal_analytics/` for execution.
 
 ### Droplet Service Discovery (IMPORTANT)
 
