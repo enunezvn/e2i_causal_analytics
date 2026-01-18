@@ -143,7 +143,9 @@
     </div>
 
     <script>
-        const API_BASE = 'http://localhost:8000';
+        // Use relative URL for API - works with nginx proxy in production
+        // For local development, serve this file via the Vite dev server or configure a local proxy
+        const API_BASE = '/api';
         let cy;
 
         const typeColors = {
@@ -164,7 +166,7 @@
                 const [nodesRes, relsRes] = await Promise.all([
                     fetch(`${API_BASE}/graph/nodes?limit=500`),
                     fetch(`${API_BASE}/graph/relationships?limit=500`)
-                ]);
+                ].map(p => p.catch(e => { throw e; })));
 
                 const nodesData = await nodesRes.json();
                 const relsData = await relsRes.json();
@@ -208,7 +210,7 @@
                 if (loadingEl) loadingEl.style.display = 'none';
             } catch (err) {
                 console.error('Failed to load graph:', err);
-                document.querySelector('.loading').textContent = 'Failed to load. Is the API running on localhost:8000?';
+                document.querySelector('.loading').textContent = 'Failed to load. Is the API running?';
             }
         }
 

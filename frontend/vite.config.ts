@@ -7,7 +7,8 @@ export default defineConfig(({ mode }) => {
   // Load env file based on `mode` in the current working directory.
   const env = loadEnv(mode, process.cwd(), '')
 
-  // Use API_URL from env or default to localhost:8000
+  // Development proxy target - forwards /api/* to the backend server
+  // Default localhost:8000 for local development; override with VITE_API_URL if needed
   const apiTarget = env.VITE_API_URL || 'http://localhost:8000'
 
   return {
