@@ -15,6 +15,18 @@
 
 ---
 
+## 🚨 CRITICAL DROPLET RULES (READ FIRST)
+
+**NEVER install or update Python dependencies on the droplet.** The production venv uses **forked repositories** (feast, tenacity) that resolve version conflicts. Running `pip install -r requirements.txt` will fail and potentially corrupt the environment.
+
+- ❌ `pip install` - NEVER run this on the droplet
+- ❌ `pip install -r requirements.txt` - Will fail with dependency conflicts
+- ❌ Updating individual packages - May break forked dependency resolution
+- ✅ The venv at `/opt/e2i_causal_analytics/venv/` is pre-configured and working
+- ✅ Just restart services: `sudo systemctl restart e2i-api`
+
+---
+
 ## 🚨 ORCHESTRATION PROTOCOL (READ FIRST)
 
 This project uses the **Claude Code Framework 4-Layer Orchestration Architecture** to prevent:
@@ -399,9 +411,9 @@ ssh -i ~/.ssh/replit enunez@138.197.4.36 "curl -s -X POST localhost:8000/api/exp
 | FalkorDB | 6381 | Graph database |
 
 **Do NOT**:
-- Install dependencies (pip install) when testing - the venv is already configured
-- Import agents directly in Python when testing - use the API endpoints
-- Rebuild Docker containers unless specifically requested
+- ❌ **Install dependencies** (`pip install`) - See "CRITICAL DROPLET RULES" section above. The venv uses forked repositories that resolve conflicts.
+- ❌ Import agents directly in Python when testing - use the API endpoints
+- ❌ Rebuild Docker containers unless specifically requested
 
 **Project Location on Droplet**: `~/Projects/e2i_causal_analytics/`
 
