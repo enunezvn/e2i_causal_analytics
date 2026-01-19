@@ -182,24 +182,32 @@ def db_enum_values():
     """Provide expected database ENUM values for sync verification.
 
     These values should match the ENUMs defined in database migrations.
-    Values based on actual vocabulary from domain_vocabulary.yaml.
+    Values based on actual vocabulary from domain_vocabulary.yaml v5.0.
+
+    Tier assignments per E2I MLOps Implementation Plan v1.1:
+    - Tier 0: ML Foundation (7 agents)
+    - Tier 1: Coordination (2 agents)
+    - Tier 2: Causal (4 agents)
+    - Tier 3: Monitoring (3 agents) - includes health_score
+    - Tier 4: Prediction (3 agents) - includes resource_optimizer
+    - Tier 5: Self-Improvement (2 agents)
     """
     return {
         "agent_tier": ["tier_0", "tier_1", "tier_2", "tier_3", "tier_4", "tier_5"],
         "agent_name": [
-            # Tier 0: ML Foundation
+            # Tier 0: ML Foundation (7 agents)
             "scope_definer", "data_preparer", "model_selector",
             "model_trainer", "model_evaluator", "model_deployer", "model_monitor",
-            # Tier 1: Coordination
+            # Tier 1: Coordination (2 agents)
             "orchestrator", "tool_composer",
-            # Tier 2: Causal
-            "causal_impact", "heterogeneous_optimizer", "gap_analyzer",
-            # Tier 3: Monitoring
-            "experiment_designer", "drift_monitor", "data_quality_monitor",
-            # Tier 4: Prediction
-            "prediction_synthesizer", "risk_assessor",
-            # Tier 5: Self-Improvement
-            "explainer", "feedback_learner", "health_score", "resource_optimizer"
+            # Tier 2: Causal (4 agents)
+            "causal_impact", "heterogeneous_optimizer", "gap_analyzer", "experiment_designer",
+            # Tier 3: Monitoring (3 agents) - CORRECTED: health_score belongs here
+            "drift_monitor", "data_quality_monitor", "health_score",
+            # Tier 4: Prediction (3 agents) - CORRECTED: resource_optimizer belongs here
+            "prediction_synthesizer", "risk_assessor", "resource_optimizer",
+            # Tier 5: Self-Improvement (2 agents)
+            "explainer", "feedback_learner"
         ],
         "brand_name": ["remibrutinib", "fabhalta", "kisqali"],
         "region_code": ["northeast", "south", "midwest", "west"],

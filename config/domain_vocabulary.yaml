@@ -139,25 +139,22 @@ agents:
     - gap_analyzer
     - experiment_designer
 
-  # Tier 3: Monitoring (2 agents)
+  # Tier 3: Monitoring (3 agents)
   tier_3_monitoring:
     - drift_monitor
     - data_quality_monitor
+    - health_score
 
-  # Tier 4: Prediction (2 agents)
+  # Tier 4: Prediction (3 agents)
   tier_4_prediction:
     - prediction_synthesizer
     - risk_assessor
+    - resource_optimizer
 
   # Tier 5: Self-Improvement (2 agents)
   tier_5_self_improvement:
     - explainer
     - feedback_learner
-
-  # Legacy agents (for backwards compatibility with existing DB records)
-  legacy:
-    - health_score
-    - resource_optimizer
 
 agent_types:
   description: "Agent behavioral categories"
