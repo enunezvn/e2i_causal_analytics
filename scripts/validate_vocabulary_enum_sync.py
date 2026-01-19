@@ -93,14 +93,14 @@ def validate_enum_sync() -> bool:
             "values",
         ),
         (
-            "agent_tier_type",
-            project_root / "database" / "core" / "e2i_ml_complete_v3_schema.sql",
+            "agent_tier_type_v2",
+            project_root / "database" / "core" / "029_update_agent_enums_v4.sql",
             "agent_tiers",
             "values",
         ),
         (
-            "agent_name_type_v2",
-            project_root / "database" / "core" / "e2i_ml_complete_v3_schema.sql",
+            "agent_name_type_v3",
+            project_root / "database" / "core" / "029_update_agent_enums_v4.sql",
             "agents",
             "names",
         ),

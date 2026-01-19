@@ -48,6 +48,8 @@ brands:
     - Remibrutinib   # BTK inhibitor
     - Fabhalta       # Factor B inhibitor
     - Kisqali        # CDK4/6 inhibitor
+    - competitor     # Competitor brand placeholder
+    - other          # Other/unspecified brand
 
 regions:
   description: "US geographic regions for territory analysis"
@@ -125,9 +127,10 @@ agents:
     - model_deployer
     - model_monitor
 
-  # Tier 1: Coordination (1 agent)
+  # Tier 1: Coordination (2 agents)
   tier_1_coordination:
     - orchestrator
+    - tool_composer
 
   # Tier 2: Causal Analytics (4 agents)
   tier_2_causal:
@@ -150,6 +153,11 @@ agents:
   tier_5_self_improvement:
     - explainer
     - feedback_learner
+
+  # Legacy agents (for backwards compatibility with existing DB records)
+  legacy:
+    - health_score
+    - resource_optimizer
 
 agent_types:
   description: "Agent behavioral categories"
