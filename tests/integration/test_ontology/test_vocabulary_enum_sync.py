@@ -49,7 +49,8 @@ class TestVocabularyAgentSync:
         """Test that vocabulary includes all Tier 2 causal analytics agents."""
         agent_names = [name.lower() for name in vocabulary_registry.get_agent_names()]
 
-        tier_2_agents = ["causal_impact", "gap_analyzer", "heterogeneous_optimizer"]
+        # Tier 2: Causal Analytics (4 agents) - includes experiment_designer
+        tier_2_agents = ["causal_impact", "gap_analyzer", "heterogeneous_optimizer", "experiment_designer"]
 
         for agent in tier_2_agents:
             assert any(agent in name for name in agent_names), \
@@ -59,8 +60,9 @@ class TestVocabularyAgentSync:
         """Test that vocabulary includes all Tier 3 monitoring agents."""
         agent_names = [name.lower() for name in vocabulary_registry.get_agent_names()]
 
-        # Tier 3 agents as defined in production vocabulary (Monitoring)
-        tier_3_agents = ["experiment_designer", "drift_monitor", "data_quality_monitor"]
+        # Tier 3: Monitoring (3 agents) - CORRECTED: includes health_score
+        # Per E2I MLOps Implementation Plan v1.1, health_score is Tier 3
+        tier_3_agents = ["drift_monitor", "data_quality_monitor", "health_score"]
 
         for agent in tier_3_agents:
             assert any(agent in name for name in agent_names), \
@@ -70,8 +72,9 @@ class TestVocabularyAgentSync:
         """Test that vocabulary includes all Tier 4 ML prediction agents."""
         agent_names = [name.lower() for name in vocabulary_registry.get_agent_names()]
 
-        # Tier 4 agents as defined in production vocabulary (Prediction)
-        tier_4_agents = ["prediction_synthesizer", "risk_assessor"]
+        # Tier 4: Prediction (3 agents) - CORRECTED: includes resource_optimizer
+        # Per E2I MLOps Implementation Plan v1.1, resource_optimizer is Tier 4
+        tier_4_agents = ["prediction_synthesizer", "risk_assessor", "resource_optimizer"]
 
         for agent in tier_4_agents:
             assert any(agent in name for name in agent_names), \
@@ -81,8 +84,7 @@ class TestVocabularyAgentSync:
         """Test that vocabulary includes all Tier 5 self-improvement agents."""
         agent_names = [name.lower() for name in vocabulary_registry.get_agent_names()]
 
-        # Tier 5 agents as defined in production vocabulary (Self-Improvement)
-        # Note: health_score and resource_optimizer are in 'legacy' section, not tier_5
+        # Tier 5: Self-Improvement (2 agents)
         tier_5_agents = ["explainer", "feedback_learner"]
 
         for agent in tier_5_agents:
@@ -95,6 +97,43 @@ class TestVocabularyAgentSync:
 
         assert any("explainer" in name for name in agent_names), \
             "Explainer agent not found in vocabulary"
+
+    def test_health_score_in_tier_3(self, vocabulary_registry):
+        """Test that health_score is classified in Tier 3 (Monitoring).
+
+        Per E2I MLOps Implementation Plan v1.1, health_score is a Standard agent
+        in Tier 3 (Monitoring & Quality) with <60s SLA.
+        """
+        agents = vocabulary_registry.get_agents()
+        tier_3_agents = agents.get("tier_3_monitoring", [])
+
+        assert "health_score" in tier_3_agents, \
+            f"health_score should be in tier_3_monitoring, not legacy. Found in: {[k for k, v in agents.items() if 'health_score' in v]}"
+
+    def test_resource_optimizer_in_tier_4(self, vocabulary_registry):
+        """Test that resource_optimizer is classified in Tier 4 (Prediction).
+
+        Per E2I MLOps Implementation Plan v1.1, resource_optimizer is a Standard agent
+        in Tier 4 (ML & Predictions) with <20s SLA.
+        """
+        agents = vocabulary_registry.get_agents()
+        tier_4_agents = agents.get("tier_4_prediction", [])
+
+        assert "resource_optimizer" in tier_4_agents, \
+            f"resource_optimizer should be in tier_4_prediction, not legacy. Found in: {[k for k, v in agents.items() if 'resource_optimizer' in v]}"
+
+    def test_no_agents_in_legacy(self, vocabulary_registry):
+        """Test that no agents remain in legacy section.
+
+        After the tier reclassification, health_score and resource_optimizer
+        have been moved to their correct tiers. The legacy section should be
+        empty or not exist.
+        """
+        agents = vocabulary_registry.get_agents()
+        legacy_agents = agents.get("legacy", [])
+
+        assert len(legacy_agents) == 0, \
+            f"Legacy section should be empty after reclassification. Found: {legacy_agents}"
 
     def test_vocabulary_agent_count_matches_expected(self, vocabulary_registry):
         """Test that vocabulary has expected number of agents (18-20)."""
