@@ -1881,9 +1881,23 @@ def create_e2i_chat_agent():
                     tool_calls=parsed_tool_calls if parsed_tool_calls else [],
                 )
 
+            # FIX (v1.25.1): Strengthen tool_call detection to prevent race condition
+            # Previously only checked response.tool_calls, but due to streaming this can be
+            # empty [] even when accumulated_tool_calls has entries (name comes before args).
+            # Now we also check accumulated_tool_calls directly as a fallback.
+            has_tool_calls = (
+                (getattr(response, "tool_calls", None) and response.tool_calls) or
+                any(tc.get('name') or tc.get('id') for tc in accumulated_tool_calls)
+            )
+
             # If response has tool calls, return without additional emit (tools node will handle)
-            if getattr(response, "tool_calls", None) and response.tool_calls:
-                tool_names = [tc['name'] for tc in response.tool_calls]
+            if has_tool_calls:
+                # Get tool names from response.tool_calls if available, else from accumulated
+                tool_names = (
+                    [tc['name'] for tc in response.tool_calls if tc.get('name')]
+                    if response.tool_calls
+                    else [tc.get('name', 'unknown') for tc in accumulated_tool_calls if tc.get('name') or tc.get('id')]
+                )
                 logger.info(f"[CopilotKit] Claude invoked tools: {tool_names}")
 
                 # CoAgent State Sync: Emit tools executing state
