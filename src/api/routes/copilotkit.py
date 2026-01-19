@@ -597,15 +597,35 @@ class LangGraphAgent(_LangGraphAGUIAgent):
                     getattr(event, 'name', None) == "copilotkit_manually_emit_message"
                 )
 
-                # FIX (v1.23.0): End streaming before processing non-streaming events
-                # This ensures TEXT_MESSAGE_END is emitted when streaming completes
-                if streaming_started and not is_streaming_event:
+                # FIX (v1.24.0): Detect state events that should NOT end streaming
+                # State emissions (copilotkit_emit_state) are informational and should
+                # not interrupt the text message lifecycle
+                is_state_event = (
+                    hasattr(event, 'type') and
+                    event.type == EventType.CUSTOM and
+                    getattr(event, 'name', None) == "copilotkit_emit_state"
+                )
+
+                # FIX (v1.24.0): Detect terminal events that SHOULD end streaming
+                # Only RUN_FINISHED and RUN_ERROR indicate the end of a response
+                event_type_str = ""
+                if hasattr(event, 'type'):
+                    if hasattr(event.type, 'value'):
+                        event_type_str = str(event.type.value).upper()
+                    else:
+                        event_type_str = str(event.type).upper()
+                is_terminal_event = event_type_str in ('RUN_FINISHED', 'RUN_ERROR')
+
+                # FIX (v1.24.0): End streaming only on terminal events, not state events
+                # Previously ended on ANY non-streaming event, causing multiple message lifecycles
+                # when state was emitted between content chunks
+                if streaming_started and not is_streaming_event and not is_state_event and is_terminal_event:
                     import time
                     current_ts = int(time.time() * 1000)
                     source = "e2i-copilot"
                     yield f"data: {json.dumps({'type': 'TEXT_MESSAGE_END', 'messageId': streaming_message_id, 'timestamp': current_ts, 'source': source})}\n\n"
                     event_count += 1
-                    dbg(f"Ended streaming message_id={streaming_message_id}")
+                    dbg(f"Ended streaming on terminal event {event_type_str}, message_id={streaming_message_id}")
                     streaming_started = False
                     streaming_message_id = None
 
