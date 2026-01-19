@@ -109,13 +109,13 @@ def validate_enum_sync() -> bool:
         (
             "refutation_test_type",
             project_root / "database" / "ml" / "010_causal_validation_tables.sql",
-            "refutation_tests",
+            "refutation_test_types",
             "values",
         ),
         (
             "validation_status",
             project_root / "database" / "ml" / "010_causal_validation_tables.sql",
-            "validation_status",
+            "validation_statuses",
             "values",
         ),
         (
@@ -172,9 +172,17 @@ def validate_enum_sync() -> bool:
                 continue
 
         elif vocab_key == "names":
-            # Agent names - extract from agent definitions
+            # Agent names - extract from nested tier structure
+            # agents: { tier_0_ml_foundation: [...], tier_1_coordination: [...], ... }
             if isinstance(vocab_data, dict):
-                vocab_values = [name.lower() for name in vocab_data.keys()]
+                vocab_values = []
+                for key, value in vocab_data.items():
+                    # Skip metadata fields like 'description'
+                    if key in ('description', 'metadata'):
+                        continue
+                    # Extract agent names from tier lists
+                    if isinstance(value, list):
+                        vocab_values.extend([name.lower() for name in value])
             else:
                 errors.append(f"❌ UNEXPECTED VOCAB STRUCTURE: {vocab_section}")
                 errors.append(f"   ENUM: {enum_name}")
