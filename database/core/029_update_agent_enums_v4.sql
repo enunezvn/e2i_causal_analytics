@@ -140,14 +140,14 @@ BEGIN
             ADD COLUMN name_v3 agent_name_type_v3;
         END IF;
 
-        -- Migrate existing data (if old columns exist)
+        -- Migrate existing data (using actual column names: agent_tier, agent_name)
         UPDATE agent_registry
-        SET tier_v2 = map_tier_v1_to_v2(tier::TEXT)
-        WHERE tier IS NOT NULL AND tier_v2 IS NULL;
+        SET tier_v2 = map_tier_v1_to_v2(agent_tier::TEXT)
+        WHERE agent_tier IS NOT NULL AND tier_v2 IS NULL;
 
         UPDATE agent_registry
-        SET name_v3 = map_agent_v2_to_v3(name::TEXT)
-        WHERE name IS NOT NULL AND name_v3 IS NULL;
+        SET name_v3 = map_agent_v2_to_v3(agent_name::TEXT)
+        WHERE agent_name IS NOT NULL AND name_v3 IS NULL;
     END IF;
 END $$;
 
