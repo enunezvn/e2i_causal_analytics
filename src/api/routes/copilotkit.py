@@ -1590,8 +1590,8 @@ def create_e2i_chat_agent():
         node_start = time.time()
 
         # Log chat_node invocation
-        logger.debug(f"chat_node CALLED at {datetime.now()}")
-        logger.debug(f"chat_node state keys: {list(state.keys()) if state else 'None'}")
+        logger.debug(f"[CopilotKit] chat_node CALLED at {datetime.now()}")
+        logger.debug(f"[CopilotKit] chat_node state keys: {list(state.keys()) if state else 'None'}")
 
         # CoAgent State Sync: Emit initial state for real-time UI progress
         state["current_node"] = "chat"
@@ -1723,7 +1723,7 @@ def create_e2i_chat_agent():
             content_chunks = []  # Buffer chunks for potential later emission
             response = None
 
-            logger.debug(f"[CopilotKit] Starting streaming LLM response")
+            logger.debug(f"[CopilotKit] Starting streaming LLM response with {len(llm_messages)} messages")
             async for chunk in llm_with_tools.astream(llm_messages):
                 # Accumulate content chunks (DON'T emit yet - wait to check for tool calls)
                 if hasattr(chunk, 'content') and chunk.content:
@@ -1732,23 +1732,58 @@ def create_e2i_chat_agent():
                     logger.debug(f"[CopilotKit] Accumulated chunk: {len(chunk.content)} chars")
 
                 # Accumulate tool calls (they may come in chunks)
+                # STREAMING PATTERN: Anthropic/LangChain sends tool calls in two parts:
+                # 1. First, a "complete" tool_calls entry with name+id but EMPTY args {}
+                # 2. Then, tool_call_chunks with the args streamed character by character
+                # We need to MERGE these: use tool_calls for name/id, tool_call_chunks for args
+
                 if hasattr(chunk, 'tool_calls') and chunk.tool_calls:
-                    accumulated_tool_calls.extend(chunk.tool_calls)
-                elif hasattr(chunk, 'tool_call_chunks') and chunk.tool_call_chunks:
-                    # LangChain may use tool_call_chunks for partial tool calls
+                    logger.debug(f"[CopilotKit] Got complete tool_calls: {chunk.tool_calls}")
+                    for i, tc in enumerate(chunk.tool_calls):
+                        # Skip empty/invalid entries (these sometimes come through)
+                        if not tc.get('name') and not tc.get('id'):
+                            continue
+                        # Add index for later matching with tool_call_chunks
+                        # Also initialize args_str for streaming accumulation
+                        tc_entry = dict(tc)  # Copy to avoid mutating original
+                        tc_entry['index'] = tc_entry.get('index', len(accumulated_tool_calls))
+                        tc_entry['args_str'] = ''  # For accumulating streamed args
+                        accumulated_tool_calls.append(tc_entry)
+
+                if hasattr(chunk, 'tool_call_chunks') and chunk.tool_call_chunks:
+                    # LangChain/Anthropic streams tool call args as chunks
                     for tc_chunk in chunk.tool_call_chunks:
-                        # Find or create the tool call in accumulated list
-                        tc_id = tc_chunk.get('id') or tc_chunk.get('index', 0)
-                        existing = next((tc for tc in accumulated_tool_calls if tc.get('id') == tc_id), None)
+                        tc_index = tc_chunk.get('index', 0)
+                        tc_id = tc_chunk.get('id')
+                        tc_name = tc_chunk.get('name')
+                        tc_args = tc_chunk.get('args', '')
+
+                        logger.debug(f"[CopilotKit] Tool chunk: index={tc_index}, id={tc_id}, name={tc_name}, args_len={len(tc_args) if tc_args else 0}")
+
+                        # Find existing tool call by index (matches order from tool_calls)
+                        existing = None
+                        for tc in accumulated_tool_calls:
+                            if tc.get('index') == tc_index:
+                                existing = tc
+                                break
+
                         if existing:
-                            # Append to existing tool call args
-                            if tc_chunk.get('args'):
-                                existing['args'] = existing.get('args', '') + tc_chunk['args']
+                            # Update with any new info from chunk
+                            if tc_id and not existing.get('id'):
+                                existing['id'] = tc_id
+                            if tc_name and not existing.get('name'):
+                                existing['name'] = tc_name
+                            # CRITICAL: Accumulate args as string for later JSON parsing
+                            if tc_args:
+                                existing['args_str'] = existing.get('args_str', '') + tc_args
                         else:
+                            # No existing entry - create one (shouldn't happen normally)
                             accumulated_tool_calls.append({
-                                'id': tc_id,
-                                'name': tc_chunk.get('name', ''),
-                                'args': tc_chunk.get('args', ''),
+                                'index': tc_index,
+                                'id': tc_id or str(uuid.uuid4()),
+                                'name': tc_name or '',
+                                'args': {},
+                                'args_str': tc_args or '',
                             })
 
                 # Keep last chunk as final response
@@ -1758,17 +1793,51 @@ def create_e2i_chat_agent():
 
             # Build final AIMessage with accumulated content and tool calls
             if accumulated_tool_calls or full_content:
-                # Parse tool call args from JSON strings if needed
+                logger.debug(f"[CopilotKit] Accumulated tool calls before parsing: {accumulated_tool_calls}")
+
+                # Parse tool call args from JSON strings
+                # STREAMING FIX: Use args_str (accumulated from chunks) preferentially over args
+                # The original args from tool_calls is often empty {}, while args_str has the real data
                 parsed_tool_calls = []
                 for tc in accumulated_tool_calls:
                     if tc.get('name'):  # Only include valid tool calls with names
+                        # Prefer args_str (from streaming chunks) over args (often empty)
+                        args_str = tc.get('args_str', '')
                         args = tc.get('args', {})
-                        if isinstance(args, str):
+
+                        logger.debug(f"[CopilotKit] Tool {tc.get('name')} args={args}, args_str_len={len(args_str) if args_str else 0}")
+
+                        # If we have streamed args, parse them
+                        if args_str:
+                            # The args_str might be missing outer braces if it started mid-JSON
+                            # Check if it looks like it needs wrapping
+                            args_str_stripped = args_str.strip()
+                            if args_str_stripped and not args_str_stripped.startswith('{'):
+                                args_str_stripped = '{' + args_str_stripped
+                            if args_str_stripped and not args_str_stripped.endswith('}'):
+                                args_str_stripped = args_str_stripped + '}'
+
+                            try:
+                                import json as json_mod
+                                args = json_mod.loads(args_str_stripped) if args_str_stripped else {}
+                                logger.debug(f"[CopilotKit] Parsed args_str for {tc.get('name')}: {args}")
+                            except json_mod.JSONDecodeError as e:
+                                logger.error(f"[CopilotKit] Failed to parse args_str for {tc.get('name')}: {e}")
+                                logger.error(f"[CopilotKit] Raw args_str: {args_str[:500] if args_str else 'empty'}")
+                                # Fall back to original args if parsing fails
+                                if isinstance(args, str):
+                                    try:
+                                        args = json_mod.loads(args) if args else {}
+                                    except:
+                                        args = {}
+                        elif isinstance(args, str):
+                            # No streamed args, try to parse args if it's a string
                             try:
                                 import json as json_mod
                                 args = json_mod.loads(args) if args else {}
                             except json_mod.JSONDecodeError:
                                 args = {}
+
                         parsed_tool_calls.append({
                             'id': tc.get('id', str(uuid.uuid4())),
                             'name': tc['name'],
