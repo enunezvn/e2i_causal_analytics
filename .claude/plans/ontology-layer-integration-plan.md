@@ -21,22 +21,23 @@
 ### ✅ Phase 3: Code Integration (COMPLETE)
 - `src/rag/entity_extractor.py` uses `VocabularyRegistry` (lines 56-70)
 
-### ✅ Phase 4: ENUM Verification (COMPLETE with known issues)
+### ✅ Phase 4: ENUM Verification (COMPLETE - ALL ISSUES RESOLVED)
 - Fixed validation script (section name bugs)
-- **5/8 checks pass**: region_type, refutation_test_type, validation_status, gate_decision, expert_review_type
-- **3 known schema evolution issues** (documented below)
+- **8/8 checks pass**: All ENUMs now synchronized
+- Created migration 029 for new ENUM types
 
 ### ✅ Phase 5: Cleanup (COMPLETE)
 - `Ontology/` directory deleted
 - Documentation moved to `docs/ontology/`
 
-### Known ENUM Mismatches (Require Database Migration)
+### ✅ ENUM Issues Resolved (2026-01-19)
 
 | ENUM | Issue | Resolution |
 |------|-------|------------|
-| `brand_type` | DB has 'competitor', 'other' not in vocab | Add to vocab OR create migration |
-| `agent_tier_type` | DB uses old naming (coordination, causal_analytics) | Migration needed to new tier_X_* format |
-| `agent_name_type_v2` | DB has 11 agents, vocab has 18 | Migration needed for Tier 0 agents |
+| `brand_type` | DB had 'competitor', 'other' not in vocab | ✅ Added to vocabulary |
+| `agent_tier_type` → `agent_tier_type_v2` | DB used old naming | ✅ Migration 029 with new tier_X_* format |
+| `agent_name_type_v2` → `agent_name_type_v3` | 11 agents vs 21 needed | ✅ Migration 029 with all 21 agents |
+| Vocabulary gaps | Missing tool_composer, legacy agents | ✅ Added to domain_vocabulary.yaml |
 
 ---
 
@@ -351,7 +352,7 @@ ssh -i ~/.ssh/replit enunez@138.197.4.36 "
 - [x] All Python modules migrated to `src/ontology/`
 - [x] All YAML configs in `config/ontology/`
 - [x] Zero vocabulary duplication across files
-- [~] `scripts/validate_vocabulary_enum_sync.py` passes (5/8 - known schema issues)
+- [x] `scripts/validate_vocabulary_enum_sync.py` passes (**8/8 - ALL RESOLVED**)
 - [x] Ontology module imports work on droplet
 - [x] VocabularyRegistry loads 81 sections
 - [x] E2IQueryExtractor extracts entities correctly
@@ -376,14 +377,19 @@ ssh -i ~/.ssh/replit enunez@138.197.4.36 "
 ✅ API Health: {"status":"healthy","version":"4.1.0"}
 ```
 
-### ENUM Validation Results (5/8 passed)
+### ENUM Validation Results (8/8 passed - FINAL)
 ```
+✅ brand_type                (5 values)
 ✅ region_type               (4 values)
+✅ agent_tier_type_v2        (6 values)
+✅ agent_name_type_v3        (21 values)
 ✅ refutation_test_type      (5 values)
 ✅ validation_status         (4 values)
 ✅ gate_decision             (3 values)
 ✅ expert_review_type        (4 values)
-❌ brand_type                (known: 'competitor', 'other' in DB only)
-❌ agent_tier_type           (schema evolution needed)
-❌ agent_name_type_v2        (18-agent migration needed)
 ```
+
+### Resolution Summary (2026-01-19 @ 14:00 EST)
+- Migration 029 created: `database/core/029_update_agent_enums_v4.sql`
+- Vocabulary updated: added tool_composer, legacy agents, competitor/other
+- Validation script updated: checks new ENUM types (v2/v3)
