@@ -7,9 +7,27 @@ Exposes backend actions for querying KPIs, running analyses,
 and interacting with the E2I agent system.
 
 Author: E2I Causal Analytics Team
-Version: 1.24.0
+Version: 1.27.0
 
 Changelog:
+    1.27.0 - FIXED ROOT CAUSE of duplicate messages in tool-using queries.
+             Problem: ag_ui_langgraph automatically emits TEXT_MESSAGE_* events when
+             it detects LLM streaming from synthesize_node. Our code ALSO converted
+             CUSTOM copilotkit_manually_emit_message events to TEXT_MESSAGE_* events.
+             This created two TEXT_MESSAGE lifecycles for the same response.
+             Fix: Detect when ag_ui_langgraph emits TEXT_MESSAGE_START (has rawEvent),
+             set ag_ui_handling_stream=True, and skip CUSTOM event conversion when set.
+             This ensures only ONE message lifecycle per user query.
+    1.26.1 - Upgraded diagnostic logs to ERROR level for visibility in journalctl.
+             INFO level logs were not appearing in systemd journal output.
+    1.26.0 - Added comprehensive logging for duplicate message lifecycle detection.
+             When TEXT_MESSAGE_START is emitted multiple times for the same user query,
+             logs a WARNING with previous message IDs. This helps diagnose root cause
+             of duplicate messages appearing in chat. Also logs all terminal events
+             (RUN_FINISHED, RUN_ERROR) with streaming state context.
+    1.25.1 - Strengthened tool_call detection to prevent race condition when
+             streaming tool calls (name arrives before args in separate chunks).
+             Now checks both response.tool_calls and accumulated_tool_calls.
     1.24.0 - Fixed multiple action bars appearing during chat response loading.
              Root cause: When LLM decides to use tools, chat_node was emitting
              content chunks immediately during streaming (e.g., "Let me look that up..."),
@@ -583,10 +601,28 @@ class LangGraphAgent(_LangGraphAGUIAgent):
         streaming_message_id = None
         streaming_started = False
 
+        # FIX (v1.26.0): Track message lifecycle to prevent duplicates
+        # The duplicate messages bug occurs when multiple TEXT_MESSAGE lifecycles
+        # are created for a single user query (e.g., one empty message + one with content).
+        # This happens when a terminal event resets streaming_started prematurely.
+        # We track completed message IDs to detect this condition and log debug info.
+        completed_message_ids = []
+        message_lifecycle_count = 0
+
+        # FIX (v1.27.0): Track if ag_ui_langgraph is handling the LLM stream
+        # When ag_ui_langgraph detects LLM streaming (e.g., from synthesize node),
+        # it emits TEXT_MESSAGE_* events directly. In this case, we should NOT also
+        # convert CUSTOM copilotkit_manually_emit_message events to TEXT_MESSAGE,
+        # as this creates duplicate message lifecycles (the root cause of the duplicate
+        # messages bug in tool-using queries).
+        ag_ui_handling_stream = False
+
         try:
             async for event in self.run(run_input):
                 event_count += 1
                 event_type = getattr(event, 'type', 'unknown') if hasattr(event, 'type') else type(event).__name__
+                # FIX (v1.26.0): Log every event for comprehensive debugging (ERROR level to ensure visibility)
+                logger.error(f"[CopilotKit] Event #{event_count}: type={event_type}, streaming_started={streaming_started}")
                 dbg(f"Yielding event #{event_count} type={event_type}")
 
                 # Check if this is a CUSTOM event with copilotkit_manually_emit_message
@@ -616,6 +652,10 @@ class LangGraphAgent(_LangGraphAGUIAgent):
                         event_type_str = str(event.type).upper()
                 is_terminal_event = event_type_str in ('RUN_FINISHED', 'RUN_ERROR')
 
+                # FIX (v1.26.0): Log all terminal events for debugging duplicates (ERROR level to ensure visibility)
+                if is_terminal_event:
+                    logger.error(f"[CopilotKit] Terminal event received: {event_type_str}, streaming_started={streaming_started}, event_count={event_count}")
+
                 # FIX (v1.25.0): Filter out TOOL_CALL_RESULT events
                 # These contain raw JSON tool results that should NOT be rendered as messages
                 # The synthesize_node will emit the formatted human-readable response via TEXT_MESSAGE
@@ -628,6 +668,20 @@ class LangGraphAgent(_LangGraphAGUIAgent):
                     dbg(f"Skipping TOOL_CALL_RESULT event (raw tool results should not be rendered)")
                     continue
 
+                # FIX (v1.27.0): Detect when ag_ui_langgraph emits TEXT_MESSAGE_START
+                # ag_ui_langgraph automatically converts LLM streaming to TEXT_MESSAGE events
+                # These have rawEvent containing "on_chat_model_stream" from LangGraph callback
+                # When we detect this, set flag to skip our CUSTOM event conversion (prevents duplicates)
+                if hasattr(event, 'type') and event.type == EventType.TEXT_MESSAGE_START:
+                    ag_ui_handling_stream = True
+                    logger.error(f"[CopilotKit] ag_ui_langgraph TEXT_MESSAGE_START detected - will skip CUSTOM event conversion")
+
+                # FIX (v1.27.0): Reset flag when ag_ui_langgraph's stream ends
+                if hasattr(event, 'type') and event.type == EventType.TEXT_MESSAGE_END:
+                    if ag_ui_handling_stream:
+                        logger.error(f"[CopilotKit] ag_ui_langgraph TEXT_MESSAGE_END detected - stream complete")
+                        # Don't reset here - keep flag set for rest of this run to prevent any late CUSTOM events
+
                 # FIX (v1.24.0): End streaming only on terminal events, not state events
                 # Previously ended on ANY non-streaming event, causing multiple message lifecycles
                 # when state was emitted between content chunks
@@ -637,11 +691,21 @@ class LangGraphAgent(_LangGraphAGUIAgent):
                     source = "e2i-copilot"
                     yield f"data: {json.dumps({'type': 'TEXT_MESSAGE_END', 'messageId': streaming_message_id, 'timestamp': current_ts, 'source': source})}\n\n"
                     event_count += 1
+                    # FIX (v1.26.0): Track completed messages for duplicate detection (ERROR level to ensure visibility)
+                    completed_message_ids.append(streaming_message_id)
+                    logger.error(f"[CopilotKit] TEXT_MESSAGE_END: message_id={streaming_message_id}, lifecycle_count={message_lifecycle_count}, event_type={event_type_str}")
                     dbg(f"Ended streaming on terminal event {event_type_str}, message_id={streaming_message_id}")
                     streaming_started = False
                     streaming_message_id = None
 
                 if is_streaming_event:
+                    # FIX (v1.27.0): Skip CUSTOM event conversion if ag_ui_langgraph is handling stream
+                    # ag_ui_langgraph already converts LLM streaming to TEXT_MESSAGE events, so our
+                    # CUSTOM -> TEXT_MESSAGE conversion would create duplicate message lifecycles
+                    if ag_ui_handling_stream:
+                        dbg(f"Skipping CUSTOM copilotkit_manually_emit_message - ag_ui_langgraph handling stream")
+                        continue
+
                     event_value = getattr(event, 'value', {}) or {}
                     raw_message = event_value.get('message', '')
 
@@ -669,8 +733,13 @@ class LangGraphAgent(_LangGraphAGUIAgent):
                     # FIX (v1.23.0): Track streaming state for proper message lifecycle
                     if not streaming_started:
                         # First chunk - generate message_id and emit START
+                        message_lifecycle_count += 1
                         streaming_message_id = str(uuid.uuid4())
                         streaming_started = True
+                        # FIX (v1.26.0): Log message lifecycle for duplicate detection (ERROR level to ensure visibility)
+                        logger.error(f"[CopilotKit] TEXT_MESSAGE_START: message_id={streaming_message_id}, lifecycle_count={message_lifecycle_count}, completed_count={len(completed_message_ids)}")
+                        if message_lifecycle_count > 1:
+                            logger.warning(f"[CopilotKit] DUPLICATE LIFECYCLE DETECTED: This is lifecycle #{message_lifecycle_count}, previous completed: {completed_message_ids}")
                         yield f"data: {json.dumps({'type': 'TEXT_MESSAGE_START', 'messageId': streaming_message_id, 'role': 'assistant', 'timestamp': current_ts, 'source': source})}\n\n"
                         event_count += 1
                         dbg(f"Started streaming message_id={streaming_message_id}")
