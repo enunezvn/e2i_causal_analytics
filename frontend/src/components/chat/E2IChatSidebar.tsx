@@ -267,8 +267,8 @@ export function E2IChatSidebar({
               )}
             </AnimatePresence>
 
-            {/* Chat Area */}
-            <div className="flex-1 overflow-y-auto">
+            {/* Chat Area - min-h-0 is critical for flexbox scroll containers */}
+            <div className="flex-1 overflow-y-auto min-h-0">
               {/* CoAgent progress renderer - displays real-time progress from LangGraph */}
               <AgentProgressRenderer className="px-3 pt-2" />
 
