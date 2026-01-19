@@ -344,3 +344,56 @@ input::placeholder, textarea::placeholder {
 .copilotKitChat .copilotKitAssistantMessage:not(:last-of-type) [class*="ActionToolbar"] {
   display: none !important;
 }
+
+/* ============================================
+   CopilotKit Scroll Container Fixes
+   ============================================ */
+
+/* FIX: Enable proper scrolling within CopilotChat component
+   The CopilotChat component uses flexbox internally, so we need to ensure
+   the messages container can scroll independently. min-height: 0 is critical
+   for flex children that need to scroll. */
+.copilotKitChat {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* Target the messages container inside CopilotKit */
+.copilotKitChat > div {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+/* Ensure message list scrolls properly */
+.copilotKitChat [class*="Messages"],
+.copilotKitChat [class*="messages"] {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+/* Ensure visible scrollbar in the chat area */
+.copilotKitChat::-webkit-scrollbar,
+.copilotKitChat > div::-webkit-scrollbar {
+  width: 8px;
+}
+
+.copilotKitChat::-webkit-scrollbar-track,
+.copilotKitChat > div::-webkit-scrollbar-track {
+  background: var(--color-secondary);
+  border-radius: var(--radius-full);
+}
+
+.copilotKitChat::-webkit-scrollbar-thumb,
+.copilotKitChat > div::-webkit-scrollbar-thumb {
+  background: var(--color-muted);
+  border-radius: var(--radius-full);
+}
+
+.copilotKitChat::-webkit-scrollbar-thumb:hover,
+.copilotKitChat > div::-webkit-scrollbar-thumb:hover {
+  background: var(--color-muted-foreground);
+}
