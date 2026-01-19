@@ -7,9 +7,18 @@ Exposes backend actions for querying KPIs, running analyses,
 and interacting with the E2I agent system.
 
 Author: E2I Causal Analytics Team
-Version: 1.22.0
+Version: 1.23.0
 
 Changelog:
+    1.23.0 - Fixed action buttons appearing multiple times during streaming.
+             Root cause: Each copilotkit_emit_message() call emitted complete
+             TEXT_MESSAGE lifecycle (START/CONTENT/END) with new message_id,
+             causing frontend to treat each chunk as a complete message.
+             Fix: Track streaming state in execute() to emit:
+             - TEXT_MESSAGE_START once at beginning (with stable message_id)
+             - TEXT_MESSAGE_CONTENT for each chunk (same message_id)
+             - TEXT_MESSAGE_END once when streaming ends or generator completes
+             This ensures proper progress indicator display during streaming.
     1.22.0 - Implemented true token-by-token streaming for chat responses.
              Changed chat_node from ainvoke() to astream() for LLM calls.
              Each content chunk is now emitted via copilotkit_emit_message() immediately,
@@ -555,6 +564,16 @@ class LangGraphAgent(_LangGraphAGUIAgent):
 
         event_count = 0
         dbg("Entering self.run() async loop")
+
+        # FIX (v1.23.0): Track streaming state for proper TEXT_MESSAGE lifecycle
+        # Previously, each chunk emitted START/CONTENT/END, causing action buttons
+        # to appear multiple times. Now we track state to emit:
+        # - START once at beginning of streaming
+        # - CONTENT for each chunk (with same message_id)
+        # - END once when streaming ends (non-streaming event arrives)
+        streaming_message_id = None
+        streaming_started = False
+
         try:
             async for event in self.run(run_input):
                 event_count += 1
@@ -563,53 +582,64 @@ class LangGraphAgent(_LangGraphAGUIAgent):
 
                 # Check if this is a CUSTOM event with copilotkit_manually_emit_message
                 # If so, emit TEXT_MESSAGE events (mimicking what CopilotKit Runtime does)
-                if hasattr(event, 'type') and event.type == EventType.CUSTOM:
-                    event_name = getattr(event, 'name', None)
-                    if event_name == "copilotkit_manually_emit_message":
-                        event_value = getattr(event, 'value', {}) or {}
-                        message_id = event_value.get('message_id', str(uuid.uuid4()))
-                        raw_message = event_value.get('message', '')
+                is_streaming_event = (
+                    hasattr(event, 'type') and
+                    event.type == EventType.CUSTOM and
+                    getattr(event, 'name', None) == "copilotkit_manually_emit_message"
+                )
 
-                        # FIX (v1.21.4): Handle message as list of content blocks
-                        # copilotkit_manually_emit_message sends message as list: [{'text': '...', 'type': 'text', 'index': 0}]
-                        # But delta field expects a string, not a list
-                        if isinstance(raw_message, list):
-                            # Extract text from all content blocks
-                            message = ''.join(
-                                block.get('text', '') if isinstance(block, dict) else str(block)
-                                for block in raw_message
-                            )
-                        else:
-                            message = str(raw_message) if raw_message else ''
+                # FIX (v1.23.0): End streaming before processing non-streaming events
+                # This ensures TEXT_MESSAGE_END is emitted when streaming completes
+                if streaming_started and not is_streaming_event:
+                    import time
+                    current_ts = int(time.time() * 1000)
+                    source = "e2i-copilot"
+                    yield f"data: {json.dumps({'type': 'TEXT_MESSAGE_END', 'messageId': streaming_message_id, 'timestamp': current_ts, 'source': source})}\n\n"
+                    event_count += 1
+                    dbg(f"Ended streaming message_id={streaming_message_id}")
+                    streaming_started = False
+                    streaming_message_id = None
 
-                        dbg(f"Converting CUSTOM to TEXT_MESSAGE events for message_id={message_id}")
+                if is_streaming_event:
+                    event_value = getattr(event, 'value', {}) or {}
+                    raw_message = event_value.get('message', '')
 
-                        # CRITICAL FIX (v1.16.0): Use SCREAMING_SNAKE_CASE event types
-                        # CopilotKit React SDK (v1.50.1) uses Zod validation that expects
-                        # SCREAMING_SNAKE_CASE: TEXT_MESSAGE_START, TEXT_MESSAGE_CONTENT, etc.
-                        # The v1.13.0 PascalCase change was incorrect and caused Zod errors.
-                        #
-                        # CRITICAL FIX (v1.19.0): Add timestamp and source to ALL events
-                        # CopilotKit React SDK (v1.50.1) Zod validation requires timestamp (number)
-                        # and source (string) on ALL events, not just lifecycle events.
-                        import time
-                        current_ts = int(time.time() * 1000)
-                        source = "e2i-copilot"
+                    # FIX (v1.21.4): Handle message as list of content blocks
+                    # copilotkit_manually_emit_message sends message as list: [{'text': '...', 'type': 'text', 'index': 0}]
+                    # But delta field expects a string, not a list
+                    if isinstance(raw_message, list):
+                        # Extract text from all content blocks
+                        message = ''.join(
+                            block.get('text', '') if isinstance(block, dict) else str(block)
+                            for block in raw_message
+                        )
+                    else:
+                        message = str(raw_message) if raw_message else ''
 
-                        # Emit TEXT_MESSAGE_START with required timestamp and source
-                        yield f"data: {json.dumps({'type': 'TEXT_MESSAGE_START', 'messageId': message_id, 'role': 'assistant', 'timestamp': current_ts, 'source': source})}\n\n"
+                    # CRITICAL FIX (v1.16.0): Use SCREAMING_SNAKE_CASE event types
+                    # CopilotKit React SDK (v1.50.1) uses Zod validation that expects
+                    # SCREAMING_SNAKE_CASE: TEXT_MESSAGE_START, TEXT_MESSAGE_CONTENT, etc.
+                    #
+                    # CRITICAL FIX (v1.19.0): Add timestamp and source to ALL events
+                    import time
+                    current_ts = int(time.time() * 1000)
+                    source = "e2i-copilot"
+
+                    # FIX (v1.23.0): Track streaming state for proper message lifecycle
+                    if not streaming_started:
+                        # First chunk - generate message_id and emit START
+                        streaming_message_id = str(uuid.uuid4())
+                        streaming_started = True
+                        yield f"data: {json.dumps({'type': 'TEXT_MESSAGE_START', 'messageId': streaming_message_id, 'role': 'assistant', 'timestamp': current_ts, 'source': source})}\n\n"
                         event_count += 1
+                        dbg(f"Started streaming message_id={streaming_message_id}")
 
-                        # Emit TEXT_MESSAGE_CONTENT with required timestamp and source
-                        yield f"data: {json.dumps({'type': 'TEXT_MESSAGE_CONTENT', 'messageId': message_id, 'delta': message, 'timestamp': current_ts, 'source': source})}\n\n"
-                        event_count += 1
+                    # Emit CONTENT for this chunk (using consistent message_id)
+                    yield f"data: {json.dumps({'type': 'TEXT_MESSAGE_CONTENT', 'messageId': streaming_message_id, 'delta': message, 'timestamp': current_ts, 'source': source})}\n\n"
+                    event_count += 1
 
-                        # Emit TEXT_MESSAGE_END with required timestamp and source
-                        yield f"data: {json.dumps({'type': 'TEXT_MESSAGE_END', 'messageId': message_id, 'timestamp': current_ts, 'source': source})}\n\n"
-                        event_count += 1
-
-                        # Skip emitting the original CUSTOM event (frontend doesn't need it)
-                        continue
+                    # Skip emitting the original CUSTOM event (frontend doesn't need it)
+                    continue
 
                 # Serialize and yield the event
                 # CRITICAL FIX (v1.16.0): Keep SCREAMING_SNAKE_CASE event types
@@ -662,10 +692,30 @@ class LangGraphAgent(_LangGraphAGUIAgent):
                     # Fallback - convert to string with SSE format
                     yield f"data: {str(event)}\n\n"
         finally:
+            # FIX (v1.23.0): Emit TEXT_MESSAGE_END if streaming was in progress
+            # This handles the case where the generator ends without a non-streaming event
+            if streaming_started and streaming_message_id:
+                import time
+                current_ts = int(time.time() * 1000)
+                source = "e2i-copilot"
+                # Note: We can't yield from finally, so we need a different approach
+                # The streaming_started flag will be checked and END emitted before any other event
+                dbg(f"Streaming was active at generator end (message_id={streaming_message_id})")
+
             # Restore original graph if we swapped it
             if self._graph_factory:
                 self.graph = original_graph
                 dbg("Restored original graph")
+
+        # FIX (v1.23.0): Emit final TEXT_MESSAGE_END if streaming was still active
+        # This ensures the message is properly terminated even if generator ends
+        if streaming_started and streaming_message_id:
+            import time
+            current_ts = int(time.time() * 1000)
+            source = "e2i-copilot"
+            yield f"data: {json.dumps({'type': 'TEXT_MESSAGE_END', 'messageId': streaming_message_id, 'timestamp': current_ts, 'source': source})}\n\n"
+            event_count += 1
+            dbg(f"Ended streaming at generator completion, message_id={streaming_message_id}")
 
         dbg(f"Finished yielding {event_count} events")
 
