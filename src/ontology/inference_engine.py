@@ -16,9 +16,9 @@ logger = logging.getLogger(__name__)
 
 class InferenceType(Enum):
     """Types of inference operations"""
-    TRANSITIVE = "transitive"          # A→B, B→C implies A→C
-    SYMMETRIC = "symmetric"            # A→B implies B→A
-    INVERSE = "inverse"                # A→B implies B→A⁻¹
+    TRANSITIVE = "transitive"          # A->B, B->C implies A->C
+    SYMMETRIC = "symmetric"            # A->B implies B->A
+    INVERSE = "inverse"                # A->B implies B->A^-1
     PROPERTY = "property_inheritance"  # Inherit properties along paths
     CAUSAL_CHAIN = "causal_chain"      # Infer causal chains
     SIMILARITY = "similarity"          # Infer similar entities
@@ -43,7 +43,7 @@ class InferredRelationship:
     reasoning_path: List[Tuple[str, str, str]]  # [(from, rel, to)]
     supporting_evidence: Dict[str, Any]
     timestamp: datetime = field(default_factory=datetime.now)
-    
+
     @property
     def confidence_level(self) -> ConfidenceLevel:
         if self.confidence > 0.8:
@@ -86,7 +86,7 @@ class InferenceEngine:
     Graph-based reasoning engine for the E2I semantic memory.
     Discovers causal paths, infers relationships, and identifies patterns.
     """
-    
+
     # Default inference rules for E2I causal graphs
     DEFAULT_RULES = [
         {
@@ -94,7 +94,7 @@ class InferenceEngine:
             'type': InferenceType.TRANSITIVE,
             'pattern': '(a)-[:CAUSES]->(b)-[:CAUSES]->(c)',
             'infers': '(a)-[:INDIRECTLY_CAUSES]->(c)',
-            'confidence_fn': lambda d: min(d.get('confidence_ab', 1.0), 
+            'confidence_fn': lambda d: min(d.get('confidence_ab', 1.0),
                                           d.get('confidence_bc', 1.0))
         },
         {
@@ -112,25 +112,25 @@ class InferenceEngine:
             'confidence_fn': lambda d: 0.8
         }
     ]
-    
+
     def __init__(self, graph_client: Any):
         """
         Initialize inference engine
-        
+
         Args:
             graph_client: FalkorDB client instance
         """
         self.graph = graph_client
         self.rules: List[InferenceRule] = []
         self._load_default_rules()
-    
+
     def _load_default_rules(self) -> None:
         """Load default E2I inference rules"""
         # Convert default rule dicts to InferenceRule objects
         for rule_def in self.DEFAULT_RULES:
             # Create a simple confidence calculator
             confidence_fn = rule_def['confidence_fn']
-            
+
             rule = InferenceRule(
                 name=rule_def['name'],
                 inference_type=rule_def['type'],
@@ -139,17 +139,17 @@ class InferenceEngine:
                 confidence_calculator=confidence_fn
             )
             self.rules.append(rule)
-    
+
     def add_rule(self, rule: InferenceRule) -> None:
         """
         Add custom inference rule
-        
+
         Args:
             rule: InferenceRule to add
         """
         self.rules.append(rule)
         logger.info(f"Added inference rule: {rule.name}")
-    
+
     def discover_causal_paths(
         self,
         source_id: str,
@@ -159,29 +159,29 @@ class InferenceEngine:
     ) -> List[CausalPath]:
         """
         Discover causal paths between source and target entities
-        
+
         Args:
             source_id: Source entity ID
             target_id: Target entity ID
             max_depth: Maximum path length
             relationship_types: Optional filter for relationship types
-            
+
         Returns:
             List of discovered CausalPath objects
         """
         logger.info(f"Discovering causal paths: {source_id} -> {target_id}")
-        
+
         # Build Cypher query for path discovery
         if relationship_types:
             rel_filter = "|".join(relationship_types)
             rel_pattern = f"[:{rel_filter}*1..{max_depth}]"
         else:
             rel_pattern = f"[*1..{max_depth}]"
-        
+
         query = f"""
         MATCH path = (source {{id: $source_id}})-{rel_pattern}->(target {{id: $target_id}})
         WHERE ALL(r IN relationships(path) WHERE r.causal = true OR NOT exists(r.causal))
-        RETURN path, 
+        RETURN path,
                length(path) as path_length,
                [n IN nodes(path) | n.id] as node_ids,
                [r IN relationships(path) | type(r)] as rel_types,
@@ -189,36 +189,36 @@ class InferenceEngine:
         ORDER BY path_length ASC
         LIMIT 100
         """
-        
+
         result = self.graph.query(query, {
             'source_id': source_id,
             'target_id': target_id
         })
-        
+
         causal_paths = []
         for record in result.result_set:
             path_length = record[1]
             node_ids = record[2]
             rel_types = record[3]
             weights = record[4] or [1.0] * len(rel_types)
-            
+
             # Build path tuples
             path = []
             for i in range(len(rel_types)):
                 path.append((node_ids[i], rel_types[i], node_ids[i + 1]))
-            
+
             # Calculate path strength
             path_strength = 1.0
             for weight in weights:
                 if weight is not None:
                     path_strength *= weight
-            
+
             # Identify mediators (nodes in middle of path)
             mediators = node_ids[1:-1] if len(node_ids) > 2 else []
-            
+
             # Identify potential confounders (would need separate query)
             confounders = []  # TODO: Implement confounder detection
-            
+
             causal_path = CausalPath(
                 source_id=source_id,
                 target_id=target_id,
@@ -229,10 +229,10 @@ class InferenceEngine:
                 confounders=confounders
             )
             causal_paths.append(causal_path)
-        
+
         logger.info(f"Found {len(causal_paths)} causal paths")
         return causal_paths
-    
+
     def infer_relationships(
         self,
         max_depth: int = 3,
@@ -240,33 +240,33 @@ class InferenceEngine:
     ) -> List[InferredRelationship]:
         """
         Apply inference rules to discover new relationships
-        
+
         Args:
             max_depth: Maximum depth for transitive inference
             min_confidence: Minimum confidence threshold
-            
+
         Returns:
             List of inferred relationships
         """
         logger.info("Starting relationship inference")
-        
+
         inferred_relationships = []
-        
+
         for rule in self.rules:
             logger.debug(f"Applying rule: {rule.name}")
-            
+
             # Apply rule based on type
             if rule.inference_type == InferenceType.TRANSITIVE:
                 inferred = self._apply_transitive_rule(rule, max_depth, min_confidence)
                 inferred_relationships.extend(inferred)
-            
+
             elif rule.inference_type == InferenceType.CAUSAL_CHAIN:
                 inferred = self._apply_causal_chain_rule(rule, min_confidence)
                 inferred_relationships.extend(inferred)
-        
+
         logger.info(f"Inferred {len(inferred_relationships)} new relationships")
         return inferred_relationships
-    
+
     def _apply_transitive_rule(
         self,
         rule: InferenceRule,
@@ -275,35 +275,35 @@ class InferenceEngine:
     ) -> List[InferredRelationship]:
         """Apply transitive closure rule"""
         inferred = []
-        
+
         # Extract relationship type from rule pattern
         # Simplified: assumes pattern like (a)-[:REL]->(b)-[:REL]->(c)
         # TODO: Proper pattern parsing
-        
+
         query = f"""
         MATCH path = (a)-[r1:CAUSES]->(b)-[r2:CAUSES]->(c)
         WHERE NOT (a)-[:INDIRECTLY_CAUSES]->(c)
-        RETURN a.id as from_id, 
+        RETURN a.id as from_id,
                c.id as to_id,
                b.id as mediator,
                r1.confidence as conf1,
                r2.confidence as conf2
         LIMIT 1000
         """
-        
+
         result = self.graph.query(query)
-        
+
         for record in result.result_set:
             from_id = record[0]
             to_id = record[1]
             mediator = record[2]
             conf1 = record[3] or 1.0
             conf2 = record[4] or 1.0
-            
+
             # Calculate confidence
             evidence = {'confidence_ab': conf1, 'confidence_bc': conf2}
             confidence = rule.confidence_calculator(evidence)
-            
+
             if confidence >= min_confidence:
                 inferred_rel = InferredRelationship(
                     from_id=from_id,
@@ -318,9 +318,9 @@ class InferenceEngine:
                     supporting_evidence=evidence
                 )
                 inferred.append(inferred_rel)
-        
+
         return inferred
-    
+
     def _apply_causal_chain_rule(
         self,
         rule: InferenceRule,
@@ -328,36 +328,36 @@ class InferenceEngine:
     ) -> List[InferredRelationship]:
         """Apply causal chain inference rule"""
         inferred = []
-        
+
         # Build query from rule pattern
         query = f"""
         MATCH {rule.source_pattern}
         WHERE NOT exists((i)-[:LED_TO]->(o))
-        RETURN i.id as from_id, 
+        RETURN i.id as from_id,
                o.id as to_id,
                p.id as through_id,
                i.timestamp as i_time,
                o.timestamp as o_time
         LIMIT 1000
         """
-        
+
         result = self.graph.query(query)
-        
+
         for record in result.result_set:
             from_id = record[0]
             to_id = record[1]
             through_id = record[2]
             i_time = record[3]
             o_time = record[4]
-            
+
             # Check temporal ordering
             temporal_order = False
             if i_time and o_time:
                 temporal_order = i_time < o_time
-            
+
             evidence = {'temporal_order': temporal_order}
             confidence = rule.confidence_calculator(evidence)
-            
+
             if confidence >= min_confidence:
                 inferred_rel = InferredRelationship(
                     from_id=from_id,
@@ -372,9 +372,9 @@ class InferenceEngine:
                     supporting_evidence=evidence
                 )
                 inferred.append(inferred_rel)
-        
+
         return inferred
-    
+
     def find_confounders(
         self,
         treatment_id: str,
@@ -383,17 +383,17 @@ class InferenceEngine:
     ) -> List[Dict[str, Any]]:
         """
         Identify potential confounders between treatment and outcome
-        
+
         Args:
             treatment_id: Treatment entity ID
             outcome_id: Outcome entity ID
             max_depth: Maximum search depth
-            
+
         Returns:
             List of potential confounder entities with evidence
         """
         logger.info(f"Finding confounders: {treatment_id} -> {outcome_id}")
-        
+
         # A confounder affects both treatment and outcome
         query = f"""
         MATCH (t {{id: $treatment_id}}), (o {{id: $outcome_id}})
@@ -407,12 +407,12 @@ class InferenceEngine:
                r1.confidence as conf_treatment,
                r2.confidence as conf_outcome
         """
-        
+
         result = self.graph.query(query, {
             'treatment_id': treatment_id,
             'outcome_id': outcome_id
         })
-        
+
         confounders = []
         for record in result.result_set:
             confounder = {
@@ -425,13 +425,13 @@ class InferenceEngine:
                 'confounder_strength': (record[4] or 0.5) * (record[5] or 0.5)
             }
             confounders.append(confounder)
-        
+
         # Sort by confounder strength
         confounders.sort(key=lambda x: x['confounder_strength'], reverse=True)
-        
+
         logger.info(f"Found {len(confounders)} potential confounders")
         return confounders
-    
+
     def find_mediators(
         self,
         source_id: str,
@@ -439,16 +439,16 @@ class InferenceEngine:
     ) -> List[Dict[str, Any]]:
         """
         Identify mediators in causal path from source to target
-        
+
         Args:
             source_id: Source entity ID
             target_id: Target entity ID
-            
+
         Returns:
             List of mediator entities with evidence
         """
         logger.info(f"Finding mediators: {source_id} -> {target_id}")
-        
+
         # Mediator is on the path between source and target
         query = """
         MATCH path = (s {id: $source_id})-[*1..3]->(m)-[*1..3]->(t {id: $target_id})
@@ -460,12 +460,12 @@ class InferenceEngine:
         ORDER BY path_count DESC
         LIMIT 20
         """
-        
+
         result = self.graph.query(query, {
             'source_id': source_id,
             'target_id': target_id
         })
-        
+
         mediators = []
         for record in result.result_set:
             mediator = {
@@ -476,10 +476,10 @@ class InferenceEngine:
                 'mediation_strength': record[3] / (record[2] or 1)
             }
             mediators.append(mediator)
-        
+
         logger.info(f"Found {len(mediators)} potential mediators")
         return mediators
-    
+
     def compute_path_importance(
         self,
         causal_path: CausalPath,
@@ -487,39 +487,39 @@ class InferenceEngine:
     ) -> float:
         """
         Compute importance score for a causal path
-        
+
         Args:
             causal_path: CausalPath to score
             method: Scoring method ('edge_weight', 'length', 'mediator_count')
-            
+
         Returns:
             Importance score (0-1)
         """
         if method == 'edge_weight':
             return causal_path.path_strength
-        
+
         elif method == 'length':
             # Shorter paths are more important
             return 1.0 / (causal_path.path_length + 1)
-        
+
         elif method == 'mediator_count':
             # Fewer mediators = more direct = more important
             mediator_penalty = len(causal_path.mediated_by) * 0.1
             return max(0.0, 1.0 - mediator_penalty)
-        
+
         elif method == 'combined':
             # Combine multiple factors
             weight_score = causal_path.path_strength
             length_score = 1.0 / (causal_path.path_length + 1)
             mediator_penalty = len(causal_path.mediated_by) * 0.1
-            
-            return (weight_score * 0.5 + 
-                   length_score * 0.3 + 
+
+            return (weight_score * 0.5 +
+                   length_score * 0.3 +
                    max(0.0, 1.0 - mediator_penalty) * 0.2)
-        
+
         else:
             return 0.5  # Default
-    
+
     def rank_causal_paths(
         self,
         causal_paths: List[CausalPath],
@@ -527,11 +527,11 @@ class InferenceEngine:
     ) -> List[Tuple[CausalPath, float]]:
         """
         Rank causal paths by importance
-        
+
         Args:
             causal_paths: List of CausalPath objects
             method: Ranking method
-            
+
         Returns:
             List of (CausalPath, score) tuples sorted by score
         """
@@ -539,12 +539,12 @@ class InferenceEngine:
         for path in causal_paths:
             score = self.compute_path_importance(path, method)
             scored_paths.append((path, score))
-        
+
         # Sort by score descending
         scored_paths.sort(key=lambda x: x[1], reverse=True)
-        
+
         return scored_paths
-    
+
     def materialize_inferred_relationships(
         self,
         inferred_relationships: List[InferredRelationship],
@@ -552,18 +552,18 @@ class InferenceEngine:
     ) -> int:
         """
         Materialize high-confidence inferred relationships into the graph
-        
+
         Args:
             inferred_relationships: List of inferred relationships
             min_confidence: Minimum confidence to materialize
-            
+
         Returns:
             Number of relationships materialized
         """
         logger.info(f"Materializing relationships with confidence >= {min_confidence}")
-        
+
         materialized = 0
-        
+
         for rel in inferred_relationships:
             if rel.confidence >= min_confidence:
                 query = f"""
@@ -575,7 +575,7 @@ class InferenceEngine:
                     r.timestamp = $timestamp
                 RETURN r
                 """
-                
+
                 self.graph.query(query, {
                     'from_id': rel.from_id,
                     'to_id': rel.to_id,
@@ -583,9 +583,9 @@ class InferenceEngine:
                     'inference_type': rel.inference_type.value,
                     'timestamp': rel.timestamp.isoformat()
                 })
-                
+
                 materialized += 1
-        
+
         logger.info(f"Materialized {materialized} relationships")
         return materialized
 
@@ -594,7 +594,7 @@ class PathFinder:
     """
     Specialized path-finding algorithms for causal graphs
     """
-    
+
     @staticmethod
     def shortest_path(
         graph: Any,
@@ -604,13 +604,13 @@ class PathFinder:
     ) -> Optional[List[Tuple[str, str, str]]]:
         """
         Find shortest path using BFS
-        
+
         Args:
             graph: Graph client
             source_id: Source entity ID
             target_id: Target entity ID
             relationship_types: Optional relationship type filter
-            
+
         Returns:
             Path as list of (from, rel, to) tuples, or None
         """
@@ -619,31 +619,31 @@ class PathFinder:
             rel_pattern = f"[:{rel_filter}]"
         else:
             rel_pattern = "[]"
-        
+
         query = f"""
         MATCH path = shortestPath((source {{id: $source_id}})-{rel_pattern}*->(target {{id: $target_id}}))
         RETURN [n IN nodes(path) | n.id] as node_ids,
                [r IN relationships(path) | type(r)] as rel_types
         """
-        
+
         result = graph.query(query, {
             'source_id': source_id,
             'target_id': target_id
         })
-        
+
         if not result.result_set:
             return None
-        
+
         record = result.result_set[0]
         node_ids = record[0]
         rel_types = record[1]
-        
+
         path = []
         for i in range(len(rel_types)):
             path.append((node_ids[i], rel_types[i], node_ids[i + 1]))
-        
+
         return path
-    
+
     @staticmethod
     def all_simple_paths(
         graph: Any,
@@ -653,13 +653,13 @@ class PathFinder:
     ) -> List[List[Tuple[str, str, str]]]:
         """
         Find all simple paths (no repeated nodes)
-        
+
         Args:
             graph: Graph client
             source_id: Source entity ID
             target_id: Target entity ID
             max_depth: Maximum path depth
-            
+
         Returns:
             List of paths
         """
@@ -670,30 +670,30 @@ class PathFinder:
                [r IN relationships(path) | type(r)] as rel_types
         LIMIT 100
         """
-        
+
         result = graph.query(query, {
             'source_id': source_id,
             'target_id': target_id
         })
-        
+
         paths = []
         for record in result.result_set:
             node_ids = record[0]
             rel_types = record[1]
-            
+
             path = []
             for i in range(len(rel_types)):
                 path.append((node_ids[i], rel_types[i], node_ids[i + 1]))
-            
+
             paths.append(path)
-        
+
         return paths
 
 
 # CLI interface
 if __name__ == "__main__":
     import sys
-    
+
     print("E2I Ontology Inference Engine")
     print("=" * 70)
     print()
@@ -706,12 +706,12 @@ if __name__ == "__main__":
     print()
     print("Usage: Import and use with FalkorDB client")
     print()
-    
+
     # Example usage
     print("Example:")
     print("-" * 70)
     print("""
-from inference_engine import InferenceEngine
+from src.ontology.inference_engine import InferenceEngine
 from falkordb import FalkorDB
 
 # Initialize
