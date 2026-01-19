@@ -616,6 +616,18 @@ class LangGraphAgent(_LangGraphAGUIAgent):
                         event_type_str = str(event.type).upper()
                 is_terminal_event = event_type_str in ('RUN_FINISHED', 'RUN_ERROR')
 
+                # FIX (v1.25.0): Filter out TOOL_CALL_RESULT events
+                # These contain raw JSON tool results that should NOT be rendered as messages
+                # The synthesize_node will emit the formatted human-readable response via TEXT_MESSAGE
+                # Without this filter, users see duplicate messages:
+                # 1. Raw JSON: {"success": true, "query_type": "kpi", ...}
+                # 2. Synthesized response: "Here is a summary of the recent TRx performance..."
+                is_tool_result_event = event_type_str == 'TOOL_CALL_RESULT'
+
+                if is_tool_result_event:
+                    dbg(f"Skipping TOOL_CALL_RESULT event (raw tool results should not be rendered)")
+                    continue
+
                 # FIX (v1.24.0): End streaming only on terminal events, not state events
                 # Previously ended on ANY non-streaming event, causing multiple message lifecycles
                 # when state was emitted between content chunks
