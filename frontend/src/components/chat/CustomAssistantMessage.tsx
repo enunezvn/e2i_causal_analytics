@@ -15,7 +15,7 @@
  * @module components/chat/CustomAssistantMessage
  */
 
-import { useState } from 'react';
+import React, { useState } from 'react';
 import {
   AssistantMessageProps,
   Markdown,
@@ -51,9 +51,49 @@ export function CustomAssistantMessage(props: AssistantMessageProps) {
   const content = message?.content || '';
   const subComponent = message?.generativeUI?.();
 
-  // KEY FIX: Only show toolbar when NOT loading AND NOT generating (streaming complete)
-  // The default CopilotKit AssistantMessage only checks `!isLoading`, missing `!isGenerating`
-  const showToolbar = content && !isLoading && !isGenerating;
+  /**
+   * Detect if content is a raw JSON tool result that shouldn't be shown to users.
+   * The backend emits multiple message types:
+   * 1. Raw JSON tool results: {"success": true, "query_type": "agent_analysis", ...}
+   * 2. Human-readable formatted responses
+   *
+   * Raw JSON tool results should be completely hidden (not just toolbar-less).
+   */
+  const isRawJsonToolResult = React.useMemo(() => {
+    if (!content) return false;
+    const trimmed = content.trim();
+    // Check if it starts with { and looks like a JSON object
+    if (!trimmed.startsWith('{')) return false;
+    try {
+      const parsed = JSON.parse(trimmed);
+      // Tool results typically have these fields - expanded detection
+      return (
+        typeof parsed === 'object' &&
+        parsed !== null &&
+        (
+          'success' in parsed ||
+          'fallback' in parsed ||
+          'confidence' in parsed ||
+          'query_type' in parsed ||
+          'agent_filter' in parsed ||
+          ('data' in parsed && 'count' in parsed)
+        )
+      );
+    } catch {
+      return false;
+    }
+  }, [content]);
+
+  // KEY FIX: Only show toolbar when:
+  // 1. NOT loading (thinking)
+  // 2. NOT generating (streaming)
+  // 3. NOT a raw JSON tool result (intermediate message)
+  const showToolbar = content && !isLoading && !isGenerating && !isRawJsonToolResult;
+
+  // Don't render raw JSON tool results at all - they're internal implementation details
+  if (isRawJsonToolResult) {
+    return null;
+  }
 
   const handleCopy = () => {
     if (content) {
