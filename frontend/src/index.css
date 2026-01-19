@@ -327,3 +327,20 @@ input::placeholder, textarea::placeholder {
   display: flex;
   flex-direction: column;
 }
+
+/* ============================================
+   CopilotKit Streaming Fixes
+   ============================================ */
+
+/* FIX: Hide action bars on all but the last message during streaming
+   This prevents multiple action button bars from appearing during streaming.
+   The root cause is in backend streaming state management, but this CSS
+   provides immediate visual relief while streaming is in progress. */
+.copilotKitChat .copilotKitAssistantMessage:not(:last-of-type) .copilotKitMessageControls {
+  display: none !important;
+}
+
+/* Also hide any duplicate toolbar containers that may appear */
+.copilotKitChat .copilotKitAssistantMessage:not(:last-of-type) [class*="ActionToolbar"] {
+  display: none !important;
+}
