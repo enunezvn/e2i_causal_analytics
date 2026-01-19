@@ -47,19 +47,54 @@ class EntityVocabulary:
 
     @classmethod
     def from_default(cls) -> "EntityVocabulary":
-        """Create vocabulary with E2I default entities."""
+        """
+        Create vocabulary from central VocabularyRegistry with entity extraction aliases.
+
+        Canonical values sourced from config/domain_vocabulary.yaml via VocabularyRegistry.
+        Extended aliases for NLP matching defined here to support entity extraction.
+        """
+        try:
+            from src.ontology import VocabularyRegistry
+            vocab = VocabularyRegistry.load()
+            canonical_brands = vocab.get_brands()
+            canonical_regions = vocab.get_regions()
+            canonical_agents = vocab.get_agent_names()
+            canonical_journey = vocab.get_journey_stages()
+            canonical_hcp = vocab.get_hcp_segments()
+        except Exception:
+            # Fallback if VocabularyRegistry unavailable
+            canonical_brands = ["Remibrutinib", "Fabhalta", "Kisqali"]
+            canonical_regions = ["northeast", "south", "midwest", "west"]
+            canonical_agents = []
+            canonical_journey = []
+            canonical_hcp = []
+
+        # Build brands with extraction-friendly aliases
+        # Canonical names from VocabularyRegistry, aliases for NLP matching
+        brand_aliases = {
+            "Remibrutinib": ["remibrutinib", "remi", "btk inhibitor"],
+            "Fabhalta": ["fabhalta", "factor b", "factor b inhibitor"],
+            "Kisqali": ["kisqali", "ribociclib", "cdk4/6", "cdk4", "cdk6"],
+        }
+        # Ensure all canonical brands are included
+        brands = {}
+        for brand in canonical_brands:
+            brands[brand] = brand_aliases.get(brand, [brand.lower()])
+
+        # Region aliases for NLP matching
+        region_aliases = {
+            "northeast": ["northeast", "ne", "north east", "new england"],
+            "south": ["south", "southeast", "se", "southwest", "sw", "southern"],
+            "midwest": ["midwest", "mw", "mid west", "central"],
+            "west": ["west", "pacific", "northwest", "nw", "western"],
+        }
+        regions = {}
+        for region in canonical_regions:
+            regions[region] = region_aliases.get(region, [region.lower()])
+
         return cls(
-            brands={
-                "Remibrutinib": ["remibrutinib", "remi", "btk inhibitor"],
-                "Fabhalta": ["fabhalta", "factor b", "factor b inhibitor"],
-                "Kisqali": ["kisqali", "ribociclib", "cdk4/6", "cdk4", "cdk6"],
-            },
-            regions={
-                "northeast": ["northeast", "ne", "north east", "new england"],
-                "south": ["south", "southeast", "se", "southwest", "sw", "southern"],
-                "midwest": ["midwest", "mw", "mid west", "central"],
-                "west": ["west", "pacific", "northwest", "nw", "western"],
-            },
+            brands=brands,
+            regions=regions,
             kpis={
                 "trx": ["trx", "total rx", "total prescriptions", "prescriptions"],
                 "nrx": ["nrx", "new rx", "new prescriptions"],
