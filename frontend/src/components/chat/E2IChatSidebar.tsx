@@ -29,6 +29,7 @@ import { useE2ICopilot, useCopilotEnabled } from '@/providers/E2ICopilotProvider
 import { AgentStatusPanel } from './AgentStatusPanel';
 import { AgentProgressRenderer } from './AgentProgressRenderer';
 import { useChatFeedback, FeedbackRating } from '@/hooks/use-chat-feedback';
+import { CustomAssistantMessage } from './CustomAssistantMessage';
 
 // =============================================================================
 // TYPES
@@ -272,6 +273,7 @@ export function E2IChatSidebar({
               <AgentProgressRenderer className="px-3 pt-2" />
 
               <CopilotChat
+                AssistantMessage={CustomAssistantMessage}
                 onThumbsUp={handleThumbsUp}
                 onThumbsDown={handleThumbsDown}
                 instructions={`You are helping an analyst work with the E2I Causal Analytics platform.
