@@ -7,9 +7,18 @@ Exposes backend actions for querying KPIs, running analyses,
 and interacting with the E2I agent system.
 
 Author: E2I Causal Analytics Team
-Version: 1.23.0
+Version: 1.24.0
 
 Changelog:
+    1.24.0 - Fixed multiple action bars appearing during chat response loading.
+             Root cause: When LLM decides to use tools, chat_node was emitting
+             content chunks immediately during streaming (e.g., "Let me look that up..."),
+             creating TEXT_MESSAGE #1. Then synthesize_node emitted the actual response,
+             creating TEXT_MESSAGE #2. Each message got its own action bar.
+             Fix: Buffer content chunks during streaming instead of emitting immediately.
+             After streaming completes, only emit buffered content if NO tool calls.
+             If tool calls are present, don't emit - synthesize_node handles final response.
+             This ensures only ONE action bar appears per user query.
     1.23.0 - Fixed action buttons appearing multiple times during streaming.
              Root cause: Each copilotkit_emit_message() call emitted complete
              TEXT_MESSAGE lifecycle (START/CONTENT/END) with new message_id,
@@ -1697,21 +1706,30 @@ def create_e2i_chat_agent():
 
             logger.info(f"[CopilotKit] Invoking {provider} LLM with {len(llm_messages)} messages and {len(E2I_CHATBOT_TOOLS)} tools bound")
 
-            # STREAMING IMPLEMENTATION (v1.22.0)
-            # Use astream() for token-by-token streaming to CopilotKit frontend
-            # Each content chunk is emitted immediately for real-time text display
+            # STREAMING IMPLEMENTATION (v1.24.0)
+            # FIX: Don't emit content during streaming if tool calls may follow.
+            # Previously (v1.22.0), we emitted each chunk immediately, but if the LLM
+            # decides to call tools, this creates a partial message that gets its own
+            # action bar, and then synthesize_node creates another message with ANOTHER
+            # action bar. Root cause of "multiple action bars" bug.
+            #
+            # New approach:
+            # 1. Accumulate ALL content and tool_calls during streaming
+            # 2. After streaming completes, check if tool_calls exist
+            # 3. Only emit content if NO tool calls (direct response)
+            # 4. If tool calls exist, don't emit - synthesize_node will handle final response
             full_content = ""
             accumulated_tool_calls = []
+            content_chunks = []  # Buffer chunks for potential later emission
             response = None
 
             logger.debug(f"[CopilotKit] Starting streaming LLM response")
             async for chunk in llm_with_tools.astream(llm_messages):
-                # Accumulate content chunks and emit each one for streaming
+                # Accumulate content chunks (DON'T emit yet - wait to check for tool calls)
                 if hasattr(chunk, 'content') and chunk.content:
                     full_content += chunk.content
-                    # Emit each chunk immediately for real-time streaming
-                    await copilotkit_emit_message(config, chunk.content)
-                    logger.debug(f"[CopilotKit] Streamed chunk: {len(chunk.content)} chars")
+                    content_chunks.append(chunk.content)
+                    logger.debug(f"[CopilotKit] Accumulated chunk: {len(chunk.content)} chars")
 
                 # Accumulate tool calls (they may come in chunks)
                 if hasattr(chunk, 'tool_calls') and chunk.tool_calls:
@@ -1796,8 +1814,14 @@ def create_e2i_chat_agent():
                         logger.warning(f"[CopilotKit] Failed to persist tool call: {e}")
                 return {"messages": [response]}
 
-            # Text response was already streamed above via copilotkit_emit_message
-            # No need to emit again - content was sent chunk-by-chunk during streaming
+            # FIX (v1.24.0): NOW emit buffered content since we confirmed no tool calls
+            # This is a direct text response, so stream the accumulated chunks
+            if full_content and content_chunks:
+                logger.debug(f"[CopilotKit] Emitting {len(content_chunks)} buffered chunks (no tool calls)")
+                for chunk_content in content_chunks:
+                    await copilotkit_emit_message(config, chunk_content)
+                logger.debug(f"[CopilotKit] Finished emitting buffered content")
+
             if full_content:
                 # Persist assistant response to database
                 if session_id:
