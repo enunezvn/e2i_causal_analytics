@@ -21,15 +21,7 @@ export enum ResponderType {
   AVERAGE = 'average',
 }
 
-/**
- * Methods for creating segments
- */
-export enum SegmentationMethod {
-  QUANTILE = 'quantile',
-  KMEANS = 'kmeans',
-  THRESHOLD = 'threshold',
-  TREE = 'tree',
-}
+// SegmentationMethod is exported from causal.ts to avoid duplicate export conflict
 
 /**
  * Status of segment analysis

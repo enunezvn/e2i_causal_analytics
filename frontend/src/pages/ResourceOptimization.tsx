@@ -453,24 +453,22 @@ export default function ResourceOptimization() {
         <KPICard
           title="Projected ROI"
           value={`${optimizationResult.projected_roi?.toFixed(2)}x`}
-          trend={{ value: 12.5, direction: 'up' }}
-          subtitle="vs current allocation"
+          description="vs current allocation"
         />
         <KPICard
           title="Projected Outcome"
           value={`$${((optimizationResult.projected_total_outcome || 0) / 1000).toFixed(0)}K`}
-          trend={{ value: 28, direction: 'up' }}
-          subtitle="total projected value"
+          description="total projected value"
         />
         <KPICard
           title="Solve Time"
           value={`${optimizationResult.solve_time_ms}ms`}
-          subtitle={optimizationResult.solver_status || 'optimal'}
+          description={optimizationResult.solver_status || 'optimal'}
         />
         <KPICard
           title="Allocations"
           value={optimizationResult.optimal_allocations.length.toString()}
-          subtitle="entities optimized"
+          description="entities optimized"
         />
       </div>
 
