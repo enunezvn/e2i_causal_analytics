@@ -592,29 +592,27 @@ export default function SegmentAnalysis() {
         <KPICard
           title="Overall ATE"
           value={analysisResult.overall_ate?.toFixed(3) || 'N/A'}
-          subtitle="Average Treatment Effect"
+          description="Average Treatment Effect"
         />
         <KPICard
           title="Heterogeneity"
           value={`${((analysisResult.heterogeneity_score || 0) * 100).toFixed(0)}%`}
-          trend={{ value: 15, direction: 'up' }}
-          subtitle="Effect variation across segments"
+          description="Effect variation across segments"
         />
         <KPICard
           title="High Responders"
           value={analysisResult.high_responders.length.toString()}
-          subtitle="segments identified"
+          description="segments identified"
         />
         <KPICard
           title="Expected Lift"
           value={`+${analysisResult.expected_total_lift}`}
-          trend={{ value: 8, direction: 'up' }}
-          subtitle="from optimal targeting"
+          description="from optimal targeting"
         />
         <KPICard
           title="Confidence"
           value={`${(analysisResult.confidence * 100).toFixed(0)}%`}
-          subtitle="analysis reliability"
+          description="analysis reliability"
         />
       </div>
 
