@@ -19,8 +19,6 @@
 
 import { get, post, del } from '@/lib/api-client';
 import type {
-  AnalysisMethod,
-  AnalysisType,
   AlertSeverity,
   AssignmentsListResponse,
   EnrollmentResult,
@@ -118,7 +116,7 @@ export async function getAssignments(
 ): Promise<AssignmentsListResponse> {
   return get<AssignmentsListResponse>(
     `${EXPERIMENTS_BASE}/${encodeURIComponent(experimentId)}/assignments`,
-    params
+    params as Record<string, unknown> | undefined
   );
 }
 
@@ -296,7 +294,7 @@ export async function getExperimentResults(
 ): Promise<ExperimentResults> {
   return get<ExperimentResults>(
     `${EXPERIMENTS_BASE}/${encodeURIComponent(experimentId)}/results`,
-    params
+    params as Record<string, unknown> | undefined
   );
 }
 
