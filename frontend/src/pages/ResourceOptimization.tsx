@@ -199,8 +199,8 @@ function AllocationComparisonChart({ allocations }: AllocationChartProps) {
         <XAxis dataKey="name" />
         <YAxis label={{ value: 'Allocation ($K)', angle: -90, position: 'insideLeft' }} />
         <Tooltip
-          formatter={(value: number, name: string) => [
-            `$${value.toFixed(0)}K`,
+          formatter={(value, name) => [
+            `$${(value as number)?.toFixed(0) ?? 0}K`,
             name === 'current' ? 'Current' : 'Optimized',
           ]}
         />
@@ -244,9 +244,9 @@ function ScenarioComparisonChart({ scenarios }: ScenarioChartProps) {
           label={{ value: 'Projected Outcome ($K)', angle: -90, position: 'insideLeft' }}
         />
         <Tooltip
-          formatter={(value: number, name: string) => [
-            name === 'ROI' ? `${value.toFixed(2)}x` : `$${value.toFixed(0)}K`,
-            name,
+          formatter={(value, name) => [
+            name === 'ROI' ? `${(value as number)?.toFixed(2) ?? 0}x` : `$${(value as number)?.toFixed(0) ?? 0}K`,
+            name as string,
           ]}
           content={({ payload }) => {
             if (!payload || payload.length === 0) return null;
@@ -271,7 +271,7 @@ function ScenarioComparisonChart({ scenarios }: ScenarioChartProps) {
         <Scatter
           data={chartData}
           fill={COLORS.primary}
-          shape={(props) => {
+          shape={(props: unknown) => {
             const { cx, cy, payload } = props as { cx: number; cy: number; payload: { hasViolations: boolean } };
             return (
               <circle

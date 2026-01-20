@@ -14,13 +14,8 @@ import {
   RefreshCw,
   Download,
   Search,
-  TrendingUp,
-  TrendingDown,
   DollarSign,
-  AlertTriangle,
-  CheckCircle2,
   Clock,
-  Zap,
   Filter,
   BarChart3,
   ArrowUpRight,
@@ -95,16 +90,6 @@ function formatCurrency(value: number): string {
   if (value >= 1000000) return `$${(value / 1000000).toFixed(1)}M`;
   if (value >= 1000) return `$${(value / 1000).toFixed(1)}K`;
   return `$${value.toFixed(0)}`;
-}
-
-function formatNumber(num: number): string {
-  if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
-  if (num >= 1000) return `${(num / 1000).toFixed(1)}K`;
-  return num.toFixed(0);
-}
-
-function formatPercent(value: number): string {
-  return `${(value * 100).toFixed(1)}%`;
 }
 
 function getDifficultyBadge(difficulty: string) {
@@ -287,7 +272,7 @@ function GapAnalysis() {
     brand: selectedBrand,
     limit: 50,
   });
-  const { data: healthData, isLoading: healthLoading } = useGapHealth();
+  const { data: healthData, isLoading: _healthLoading } = useGapHealth();
   const runGapAnalysisMutation = useRunGapAnalysis();
 
   // Use sample data as fallback
@@ -465,9 +450,7 @@ function GapAnalysis() {
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-8">
         <KPICard
           title="Total Addressable"
-          value={totalAddressableValue}
-          unit="$"
-          formatFn={formatCurrency}
+          value={formatCurrency(totalAddressableValue)}
           status="healthy"
           description="Total revenue opportunity"
           size="sm"
@@ -655,7 +638,7 @@ function GapAnalysis() {
                           border: '1px solid var(--border)',
                           borderRadius: '8px',
                         }}
-                        formatter={(value: number) => [`${value.toFixed(1)}x`, 'Avg ROI']}
+                        formatter={(value) => [`${(value as number)?.toFixed(1) ?? 0}x`, 'Avg ROI']}
                       />
                       <Bar dataKey="avgROI" radius={[0, 4, 4, 0]}>
                         {roiByDifficultyData.map((entry, index) => (
@@ -688,7 +671,7 @@ function GapAnalysis() {
                         cx="50%"
                         cy="50%"
                         outerRadius={80}
-                        label={({ metric, value }) => `${metric}: ${formatCurrency(value)}`}
+                        label={({ name, value }) => `${name}: ${formatCurrency(value as number)}`}
                       >
                         {gapsByMetricData.map((_, index) => (
                           <Cell
@@ -703,7 +686,7 @@ function GapAnalysis() {
                           border: '1px solid var(--border)',
                           borderRadius: '8px',
                         }}
-                        formatter={(value: number) => [formatCurrency(value), 'Value']}
+                        formatter={(value) => [formatCurrency(value as number), 'Value']}
                       />
                       <Legend />
                     </PieChart>

@@ -281,8 +281,6 @@ const COLORS = {
   muted: '#6b7280',
 };
 
-const _PIE_COLORS = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#ec4899'];
-
 // =============================================================================
 // CATE CHART WITH ERROR BARS
 // =============================================================================
@@ -472,7 +470,7 @@ function PolicyScatterChart({ policies }: PolicyChartProps) {
         <Scatter
           data={chartData}
           fill={COLORS.primary}
-          shape={(props) => {
+          shape={(props: unknown) => {
             const { cx, cy, payload } = props as { cx: number; cy: number; payload: { impact: number } };
             return (
               <circle

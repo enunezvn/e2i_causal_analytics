@@ -254,8 +254,8 @@ function SystemHealth() {
   // Fetch monitoring runs
   const {
     data: _runsData,
-    isLoading: _isLoadingRuns,
-    refetch: _refetchRuns,
+    isLoading: isLoadingRuns,
+    refetch: refetchRuns,
   } = useMonitoringRuns({ days: 7, limit: 5 });
 
   // Health Score API hooks
