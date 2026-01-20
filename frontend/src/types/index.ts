@@ -31,3 +31,27 @@ export * from './rag';
 
 // Digital Twin types
 export * from './digital-twin';
+
+// Gap Analysis types
+export * from './gaps';
+
+// Segment Analysis types
+export * from './segments';
+
+// Resource Optimization types
+export * from './resources';
+
+// Causal Inference types
+export * from './causal';
+
+// A/B Testing & Experiments types
+export * from './experiments';
+
+// Feedback Learning types
+export * from './feedback';
+
+// Health Score types
+export * from './health-score';
+
+// Audit Chain types
+export * from './audit';
