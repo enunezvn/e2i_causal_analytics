@@ -68,12 +68,17 @@ from src.api.routes.copilotkit import router as copilotkit_router
 from src.api.routes.digital_twin import router as digital_twin_router
 from src.api.routes.experiments import router as experiments_router
 from src.api.routes.explain import router as explain_router
+from src.api.routes.gaps import router as gaps_router
 from src.api.routes.graph import router as graph_router
 from src.api.routes.kpi import router as kpi_router
 from src.api.routes.memory import router as memory_router
 from src.api.routes.monitoring import router as monitoring_router
 from src.api.routes.predictions import router as predictions_router
 from src.api.routes.rag import router as rag_router
+from src.api.routes.segments import router as segments_router
+from src.api.routes.resource_optimizer import router as resource_optimizer_router
+from src.api.routes.feedback import router as feedback_router
+from src.api.routes.health_score import router as health_score_router
 
 # Configure logging
 logging.basicConfig(
@@ -565,6 +570,21 @@ app.include_router(monitoring_router, prefix="/api")
 
 # A/B testing & experiment execution endpoints (/api/experiments/*)
 app.include_router(experiments_router, prefix="/api")
+
+# Gap analysis & ROI opportunities endpoints (/api/gaps/*)
+app.include_router(gaps_router, prefix="/api")
+
+# Segment analysis & heterogeneous optimization endpoints (/api/segments/*)
+app.include_router(segments_router, prefix="/api")
+
+# Resource optimization endpoints (/api/resources/*)
+app.include_router(resource_optimizer_router, prefix="/api")
+
+# Feedback learning endpoints (/api/feedback/*)
+app.include_router(feedback_router, prefix="/api")
+
+# Health score monitoring endpoints (/api/health-score/*)
+app.include_router(health_score_router, prefix="/api")
 
 # Digital Twin pre-screening endpoints (/api/digital-twin/*)
 app.include_router(digital_twin_router, prefix="/api")
