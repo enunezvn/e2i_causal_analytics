@@ -3,7 +3,14 @@
  * ======================
  *
  * TypeScript types for the E2I Digital Twin simulation endpoints.
- * Used for intervention pre-screening and scenario analysis.
+ * Based on src/api/routes/digital_twin.py backend schemas.
+ *
+ * Supports:
+ * - Twin simulation for interventions
+ * - Simulation history and detail retrieval
+ * - Fidelity validation against actual experiments
+ * - Twin model management
+ * - Fidelity tracking and reporting
  *
  * @module types/digital-twin
  */
@@ -13,34 +20,77 @@
 // =============================================================================
 
 /**
+ * Types of digital twins
+ */
+export enum TwinType {
+  HCP = 'hcp',
+  PATIENT = 'patient',
+  TERRITORY = 'territory',
+}
+
+/**
+ * Pharmaceutical brands
+ */
+export enum Brand {
+  REMIBRUTINIB = 'Remibrutinib',
+  FABHALTA = 'Fabhalta',
+  KISQALI = 'Kisqali',
+}
+
+/**
+ * Simulation status values
+ */
+export enum SimulationStatus {
+  PENDING = 'pending',
+  RUNNING = 'running',
+  COMPLETED = 'completed',
+  FAILED = 'failed',
+}
+
+/**
+ * Simulation recommendations
+ */
+export enum Recommendation {
+  DEPLOY = 'deploy',
+  SKIP = 'skip',
+  REFINE = 'refine',
+}
+
+/**
+ * Fidelity grade values
+ */
+export enum FidelityGrade {
+  EXCELLENT = 'excellent',
+  GOOD = 'good',
+  FAIR = 'fair',
+  POOR = 'poor',
+  UNVALIDATED = 'unvalidated',
+}
+
+// =============================================================================
+// LEGACY ENUMS (Kept for backward compatibility)
+// =============================================================================
+
+/**
  * Types of interventions that can be simulated
+ * @deprecated Use intervention_type string field instead
  */
 export enum InterventionType {
-  /** HCP engagement campaigns */
   HCP_ENGAGEMENT = 'hcp_engagement',
-  /** Patient support programs */
   PATIENT_SUPPORT = 'patient_support',
-  /** Pricing changes */
   PRICING = 'pricing',
-  /** Rep training programs */
   REP_TRAINING = 'rep_training',
-  /** Digital marketing campaigns */
   DIGITAL_MARKETING = 'digital_marketing',
-  /** Formulary access initiatives */
   FORMULARY_ACCESS = 'formulary_access',
 }
 
 /**
- * Simulation recommendation outcomes
+ * @deprecated Use Recommendation enum instead
  */
 export enum RecommendationType {
-  /** Deploy intervention as designed */
   DEPLOY = 'deploy',
-  /** Skip this intervention */
   SKIP = 'skip',
-  /** Refine intervention parameters */
   REFINE = 'refine',
-  /** Run additional analysis */
   ANALYZE = 'analyze',
 }
 
@@ -58,7 +108,399 @@ export enum ConfidenceLevel {
 // =============================================================================
 
 /**
- * Request to run a digital twin simulation
+ * Configuration for an intervention to simulate
+ */
+export interface InterventionConfigRequest {
+  /** Type of intervention (email_campaign, call_frequency_increase, etc.) */
+  intervention_type: string;
+  /** Channel: email, call, in_person, digital */
+  channel?: string;
+  /** Frequency: daily, weekly, monthly */
+  frequency?: string;
+  /** Duration in weeks (1-52) */
+  duration_weeks?: number;
+  /** Content type: clinical_data, patient_stories, etc. */
+  content_type?: string;
+  /** Personalization level: none, standard, high */
+  personalization_level?: string;
+  /** Target segment identifier */
+  target_segment?: string;
+  /** Target deciles (1-10) */
+  target_deciles?: number[];
+  /** Target specialty list */
+  target_specialties?: string[];
+  /** Target region list */
+  target_regions?: string[];
+  /** Treatment intensity multiplier (0.1-10.0) */
+  intensity_multiplier?: number;
+  /** Additional parameters */
+  extra_params?: Record<string, unknown>;
+}
+
+/**
+ * Filters for selecting twin population
+ */
+export interface PopulationFilterRequest {
+  /** Filter by specialties */
+  specialties?: string[];
+  /** Filter by deciles (1-10) */
+  deciles?: number[];
+  /** Filter by regions */
+  regions?: string[];
+  /** Filter by adoption stages */
+  adoption_stages?: string[];
+  /** Minimum baseline outcome */
+  min_baseline_outcome?: number;
+  /** Maximum baseline outcome */
+  max_baseline_outcome?: number;
+}
+
+/**
+ * Request to run a twin simulation
+ */
+export interface SimulateRequest {
+  /** Intervention configuration */
+  intervention: InterventionConfigRequest;
+  /** Target brand */
+  brand: Brand | string;
+  /** Twin type (default: hcp) */
+  twin_type?: TwinType | string;
+  /** Population filters */
+  population_filters?: PopulationFilterRequest;
+  /** Number of twins to simulate (100-100000) */
+  twin_count?: number;
+  /** Confidence level for CI (0.8-0.99) */
+  confidence_level?: number;
+  /** Calculate heterogeneous effects */
+  calculate_heterogeneity?: boolean;
+  /** Specific model ID to use */
+  model_id?: string;
+  /** Link to experiment design */
+  experiment_design_id?: string;
+}
+
+/**
+ * Request to validate simulation against actual results
+ */
+export interface ValidateFidelityRequest {
+  /** Simulation ID to validate */
+  simulation_id: string;
+  /** Actual experiment ID */
+  experiment_id: string;
+  /** Actual Average Treatment Effect */
+  actual_ate: number;
+  /** Actual CI lower bound */
+  actual_ci_lower?: number;
+  /** Actual CI upper bound */
+  actual_ci_upper?: number;
+  /** Actual sample size */
+  actual_sample_size?: number;
+  /** Notes on validation */
+  validation_notes?: string;
+  /** Known confounding factors */
+  confounding_factors?: string[];
+  /** Validator identifier */
+  validated_by?: string;
+}
+
+// =============================================================================
+// RESPONSE TYPES
+// =============================================================================
+
+/**
+ * Heterogeneous effects across subgroups
+ */
+export interface EffectHeterogeneityResponse {
+  /** Effects by specialty */
+  by_specialty: Record<string, Record<string, number>>;
+  /** Effects by decile */
+  by_decile: Record<string, Record<string, number>>;
+  /** Effects by region */
+  by_region: Record<string, Record<string, number>>;
+  /** Effects by adoption stage */
+  by_adoption_stage: Record<string, Record<string, number>>;
+  /** Top performing segments */
+  top_segments: Array<Record<string, unknown>>;
+}
+
+/**
+ * Response from a simulation run
+ */
+export interface SimulationResponse {
+  /** Unique simulation ID */
+  simulation_id: string;
+  /** Model ID used */
+  model_id: string;
+  /** Type of intervention */
+  intervention_type: string;
+  /** Brand */
+  brand: string;
+  /** Twin type */
+  twin_type: string;
+  /** Number of twins simulated */
+  twin_count: number;
+  /** Simulated Average Treatment Effect */
+  simulated_ate: number;
+  /** CI lower bound */
+  simulated_ci_lower: number;
+  /** CI upper bound */
+  simulated_ci_upper: number;
+  /** Standard error */
+  simulated_std_error: number;
+  /** Cohen's d effect size */
+  effect_size_cohens_d?: number;
+  /** Statistical power */
+  statistical_power?: number;
+  /** Recommendation (deploy/skip/refine) */
+  recommendation: Recommendation;
+  /** Recommendation rationale */
+  recommendation_rationale: string;
+  /** Recommended sample size */
+  recommended_sample_size?: number;
+  /** Recommended duration in weeks */
+  recommended_duration_weeks?: number;
+  /** Simulation confidence score */
+  simulation_confidence: number;
+  /** Whether fidelity warning is present */
+  fidelity_warning: boolean;
+  /** Fidelity warning reason */
+  fidelity_warning_reason?: string;
+  /** Model fidelity score */
+  model_fidelity_score?: number;
+  /** Simulation status */
+  status: SimulationStatus;
+  /** Error message if failed */
+  error_message?: string;
+  /** Execution time in ms */
+  execution_time_ms: number;
+  /** Whether effect is statistically significant */
+  is_significant: boolean;
+  /** Effect direction (positive/negative/neutral) */
+  effect_direction: string;
+  /** Creation timestamp */
+  created_at: string;
+}
+
+/**
+ * Detailed simulation response including heterogeneity
+ */
+export interface SimulationDetailResponse extends SimulationResponse {
+  /** Population filters used */
+  population_filters: Record<string, unknown>;
+  /** Effect heterogeneity by subgroup */
+  effect_heterogeneity: EffectHeterogeneityResponse;
+  /** Full intervention config */
+  intervention_config: Record<string, unknown>;
+  /** Completion timestamp */
+  completed_at?: string;
+}
+
+/**
+ * Summary item for simulation list
+ */
+export interface SimulationListItem {
+  /** Simulation ID */
+  simulation_id: string;
+  /** Intervention type */
+  intervention_type: string;
+  /** Brand */
+  brand: string;
+  /** Twin type */
+  twin_type: string;
+  /** Number of twins */
+  twin_count: number;
+  /** Simulated ATE */
+  simulated_ate: number;
+  /** Recommendation */
+  recommendation: Recommendation;
+  /** Status */
+  status: SimulationStatus;
+  /** Creation timestamp */
+  created_at: string;
+}
+
+/**
+ * Response for listing simulations
+ */
+export interface SimulationListResponse {
+  /** Total count of simulations */
+  total_count: number;
+  /** Simulation list */
+  simulations: SimulationListItem[];
+  /** Current page */
+  page: number;
+  /** Page size */
+  page_size: number;
+}
+
+/**
+ * Fidelity validation record
+ */
+export interface FidelityRecordResponse {
+  /** Tracking record ID */
+  tracking_id: string;
+  /** Simulation ID */
+  simulation_id: string;
+  /** Linked experiment ID */
+  experiment_id?: string;
+  /** Simulated ATE */
+  simulated_ate: number;
+  /** Simulated CI lower */
+  simulated_ci_lower?: number;
+  /** Simulated CI upper */
+  simulated_ci_upper?: number;
+  /** Actual ATE from experiment */
+  actual_ate?: number;
+  /** Actual CI lower */
+  actual_ci_lower?: number;
+  /** Actual CI upper */
+  actual_ci_upper?: number;
+  /** Actual sample size */
+  actual_sample_size?: number;
+  /** Prediction error (actual - simulated) */
+  prediction_error?: number;
+  /** Absolute prediction error */
+  absolute_error?: number;
+  /** Whether simulated CI covered actual */
+  ci_coverage?: boolean;
+  /** Fidelity grade */
+  fidelity_grade: FidelityGrade;
+  /** Validation notes */
+  validation_notes?: string;
+  /** Known confounding factors */
+  confounding_factors: string[];
+  /** Record creation timestamp */
+  created_at: string;
+  /** Validation timestamp */
+  validated_at?: string;
+  /** Validator identifier */
+  validated_by?: string;
+}
+
+/**
+ * Summary of a twin generator model
+ */
+export interface TwinModelSummary {
+  /** Model ID */
+  model_id: string;
+  /** Model name */
+  model_name: string;
+  /** Twin type */
+  twin_type: string;
+  /** Brand */
+  brand: string;
+  /** Algorithm used */
+  algorithm: string;
+  /** R² score */
+  r2_score?: number;
+  /** RMSE */
+  rmse?: number;
+  /** Number of training samples */
+  training_samples: number;
+  /** Whether model is active */
+  is_active: boolean;
+  /** Creation timestamp */
+  created_at: string;
+}
+
+/**
+ * Detailed twin model information
+ */
+export interface TwinModelDetailResponse extends TwinModelSummary {
+  /** Model description */
+  model_description?: string;
+  /** Feature columns used */
+  feature_columns: string[];
+  /** Target column */
+  target_column: string;
+  /** Cross-validation mean score */
+  cv_mean?: number;
+  /** Cross-validation std deviation */
+  cv_std?: number;
+  /** Feature importances */
+  feature_importances: Record<string, number>;
+  /** Top features list */
+  top_features: string[];
+  /** Training duration in seconds */
+  training_duration_seconds: number;
+  /** Model configuration */
+  config: Record<string, unknown>;
+}
+
+/**
+ * Response for listing models
+ */
+export interface ModelListResponse {
+  /** Total count */
+  total_count: number;
+  /** List of models */
+  models: TwinModelSummary[];
+}
+
+/**
+ * Fidelity history for a model
+ */
+export interface FidelityHistoryResponse {
+  /** Model ID */
+  model_id: string;
+  /** Total validation records */
+  total_validations: number;
+  /** Average fidelity score */
+  average_fidelity_score?: number;
+  /** Distribution by grade */
+  grade_distribution: Record<string, number>;
+  /** Fidelity records */
+  records: FidelityRecordResponse[];
+}
+
+/**
+ * Aggregated fidelity report for a model
+ */
+export interface FidelityReportResponse {
+  /** Model ID */
+  model_id: string;
+  /** Total validations */
+  total_validations: number;
+  /** Average fidelity score */
+  average_fidelity_score: number;
+  /** CI coverage rate */
+  coverage_rate: number;
+  /** Grade distribution */
+  grade_distribution: Record<string, number>;
+  /** Trend direction */
+  trend: string;
+  /** Whether model is degrading */
+  is_degrading: boolean;
+  /** Degradation rate if applicable */
+  degradation_rate?: number;
+  /** Recommendation for the model */
+  recommendation: string;
+  /** Report generation timestamp */
+  generated_at: string;
+}
+
+/**
+ * Health status for Digital Twin service
+ */
+export interface DigitalTwinHealthResponse {
+  /** Service health status */
+  status: string;
+  /** Service name */
+  service: string;
+  /** Number of models available */
+  models_available: number;
+  /** Number of pending simulations */
+  simulations_pending: number;
+  /** Timestamp of last simulation */
+  last_simulation_at?: string;
+}
+
+// =============================================================================
+// LEGACY TYPES (Kept for backward compatibility)
+// =============================================================================
+
+/**
+ * @deprecated Use SimulateRequest instead
  */
 export interface SimulationRequest {
   /** Type of intervention to simulate */
@@ -80,7 +522,7 @@ export interface SimulationRequest {
 }
 
 /**
- * Request to compare multiple scenarios
+ * @deprecated Use separate scenario simulations
  */
 export interface ScenarioComparisonRequest {
   /** Base scenario (control) */
@@ -90,10 +532,6 @@ export interface ScenarioComparisonRequest {
   /** Metrics to compare */
   comparison_metrics?: string[];
 }
-
-// =============================================================================
-// RESPONSE TYPES
-// =============================================================================
 
 /**
  * Confidence interval for estimated values
@@ -109,6 +547,7 @@ export interface ConfidenceInterval {
 
 /**
  * Primary outcome metrics from simulation
+ * @deprecated Use SimulationResponse fields directly
  */
 export interface SimulationOutcomes {
   /** Average Treatment Effect */
@@ -129,6 +568,7 @@ export interface SimulationOutcomes {
 
 /**
  * Fidelity metrics for the simulation model
+ * @deprecated Use model fidelity endpoints
  */
 export interface FidelityMetrics {
   /** Overall fidelity score (0-1) */
@@ -149,6 +589,7 @@ export interface FidelityMetrics {
 
 /**
  * Sensitivity analysis results
+ * @deprecated Part of detailed simulation response
  */
 export interface SensitivityResult {
   /** Parameter name */
@@ -168,7 +609,7 @@ export interface SensitivityResult {
 }
 
 /**
- * Recommendation from the digital twin
+ * @deprecated Use SimulationResponse.recommendation fields
  */
 export interface SimulationRecommendation {
   /** Recommendation type */
@@ -189,6 +630,7 @@ export interface SimulationRecommendation {
 
 /**
  * Time series projection data point
+ * @deprecated Part of detailed simulation
  */
 export interface ProjectionDataPoint {
   /** Date of projection */
@@ -204,50 +646,7 @@ export interface ProjectionDataPoint {
 }
 
 /**
- * Complete simulation response
- */
-export interface SimulationResponse {
-  /** Unique simulation ID */
-  simulation_id: string;
-  /** Timestamp of simulation */
-  created_at: string;
-  /** Input request */
-  request: SimulationRequest;
-  /** Primary outcomes */
-  outcomes: SimulationOutcomes;
-  /** Model fidelity metrics */
-  fidelity: FidelityMetrics;
-  /** Sensitivity analysis */
-  sensitivity: SensitivityResult[];
-  /** Recommendation */
-  recommendation: SimulationRecommendation;
-  /** Time series projections */
-  projections: ProjectionDataPoint[];
-  /** Execution time in ms */
-  execution_time_ms: number;
-}
-
-/**
- * Scenario comparison result
- */
-export interface ScenarioComparisonResult {
-  /** Base scenario simulation */
-  base_result: SimulationResponse;
-  /** Alternative scenario simulations */
-  alternative_results: SimulationResponse[];
-  /** Comparison summary */
-  comparison: {
-    /** Best performing scenario index (0 = base) */
-    best_scenario_index: number;
-    /** Metric-by-metric comparison */
-    metric_comparison: Record<string, number[]>;
-    /** Summary recommendation */
-    summary: string;
-  };
-}
-
-/**
- * List of historical simulations
+ * @deprecated Use SimulationListResponse instead
  */
 export interface SimulationHistoryResponse {
   /** List of simulations */
@@ -267,6 +666,25 @@ export interface SimulationHistoryResponse {
   limit: number;
 }
 
+/**
+ * @deprecated Use comparison via separate simulation calls
+ */
+export interface ScenarioComparisonResult {
+  /** Base scenario simulation */
+  base_result: SimulationResponse;
+  /** Alternative scenario simulations */
+  alternative_results: SimulationResponse[];
+  /** Comparison summary */
+  comparison: {
+    /** Best performing scenario index (0 = base) */
+    best_scenario_index: number;
+    /** Metric-by-metric comparison */
+    metric_comparison: Record<string, number[]>;
+    /** Summary recommendation */
+    summary: string;
+  };
+}
+
 // =============================================================================
 // UI COMPONENT TYPES
 // =============================================================================
@@ -275,13 +693,16 @@ export interface SimulationHistoryResponse {
  * Simulation panel form values
  */
 export interface SimulationFormValues {
-  interventionType: InterventionType;
-  brand: string;
-  sampleSize: number;
-  durationDays: number;
+  interventionType: string;
+  brand: Brand | string;
+  twinType: TwinType | string;
+  twinCount: number;
+  durationWeeks: number;
+  targetDeciles: number[];
+  targetSpecialties: string[];
   targetRegions: string[];
-  targetSegments: string[];
-  budget: number | undefined;
+  personalizationLevel: string;
+  channel?: string;
 }
 
 /**
@@ -290,10 +711,25 @@ export interface SimulationFormValues {
 export interface ScenarioCardData {
   id: string;
   title: string;
-  interventionType: InterventionType;
-  ate: ConfidenceInterval;
-  roi: ConfidenceInterval;
-  recommendation: RecommendationType;
-  confidence: ConfidenceLevel;
+  interventionType: string;
+  ate: number;
+  ciLower: number;
+  ciUpper: number;
+  recommendation: Recommendation;
+  confidence: number;
   isSelected?: boolean;
+}
+
+/**
+ * Model card display data
+ */
+export interface ModelCardData {
+  id: string;
+  name: string;
+  twinType: TwinType | string;
+  brand: Brand | string;
+  r2Score?: number;
+  fidelityGrade?: FidelityGrade;
+  isActive: boolean;
+  lastUsed?: string;
 }
