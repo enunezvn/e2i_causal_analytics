@@ -61,7 +61,7 @@ export async function getWorkflowEntries(
 ): Promise<AuditEntryResponse[]> {
   return get<AuditEntryResponse[]>(
     `${AUDIT_BASE}/workflow/${encodeURIComponent(workflowId)}`,
-    params
+    params as Record<string, unknown> | undefined
   );
 }
 
@@ -151,7 +151,7 @@ export async function getWorkflowSummary(
 export async function getRecentWorkflows(
   params?: ListRecentWorkflowsParams
 ): Promise<RecentWorkflowResponse[]> {
-  return get<RecentWorkflowResponse[]>(`${AUDIT_BASE}/recent`, params);
+  return get<RecentWorkflowResponse[]>(`${AUDIT_BASE}/recent`, params as Record<string, unknown> | undefined);
 }
 
 // =============================================================================
