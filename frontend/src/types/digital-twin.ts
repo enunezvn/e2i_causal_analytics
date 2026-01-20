@@ -534,9 +534,9 @@ export interface ScenarioComparisonRequest {
 }
 
 /**
- * Confidence interval for estimated values
+ * Confidence interval for simulation estimated values
  */
-export interface ConfidenceInterval {
+export interface SimulationConfidenceInterval {
   /** Lower bound (2.5th percentile) */
   lower: number;
   /** Point estimate (median) */
@@ -551,17 +551,17 @@ export interface ConfidenceInterval {
  */
 export interface SimulationOutcomes {
   /** Average Treatment Effect */
-  ate: ConfidenceInterval;
+  ate: SimulationConfidenceInterval;
   /** Conditional Average Treatment Effect by segment */
-  cate_by_segment?: Record<string, ConfidenceInterval>;
+  cate_by_segment?: Record<string, SimulationConfidenceInterval>;
   /** Expected TRx lift */
-  trx_lift: ConfidenceInterval;
+  trx_lift: SimulationConfidenceInterval;
   /** Expected NRx lift */
-  nrx_lift: ConfidenceInterval;
+  nrx_lift: SimulationConfidenceInterval;
   /** Expected market share change */
-  market_share_change: ConfidenceInterval;
+  market_share_change: SimulationConfidenceInterval;
   /** ROI projection */
-  roi: ConfidenceInterval;
+  roi: SimulationConfidenceInterval;
   /** Number needed to treat for one additional TRx */
   nnt?: number;
 }
