@@ -22,6 +22,11 @@ const KPIDictionary = lazy(() => import('@/pages/KPIDictionary'));
 const MemoryArchitecture = lazy(() => import('@/pages/MemoryArchitecture'));
 const DigitalTwin = lazy(() => import('@/pages/DigitalTwin'));
 const AIAgentInsights = lazy(() => import('@/pages/AIAgentInsights'));
+const GapAnalysis = lazy(() => import('@/pages/GapAnalysis'));
+const Experiments = lazy(() => import('@/pages/Experiments'));
+const CausalAnalysis = lazy(() => import('@/pages/CausalAnalysis'));
+const ResourceOptimization = lazy(() => import('@/pages/ResourceOptimization'));
+const SegmentAnalysis = lazy(() => import('@/pages/SegmentAnalysis'));
 
 // Loading fallback component for lazy-loaded routes
 function PageLoadingFallback() {
@@ -157,6 +162,41 @@ export const routeConfigs: RouteConfig[] = [
     title: 'AI Insights',
     description: 'GPT-powered briefs, recommendations & alerts',
     icon: 'brain',
+    showInNav: true,
+  },
+  {
+    path: '/gap-analysis',
+    title: 'Gap Analysis',
+    description: 'ROI opportunity detection and performance gap prioritization',
+    icon: 'target',
+    showInNav: true,
+  },
+  {
+    path: '/experiments',
+    title: 'Experiments',
+    description: 'A/B testing, randomization, and experiment monitoring',
+    icon: 'flask',
+    showInNav: true,
+  },
+  {
+    path: '/causal-analysis',
+    title: 'Causal Analysis',
+    description: 'Multi-library causal inference with hierarchical CATE estimation',
+    icon: 'git-branch',
+    showInNav: true,
+  },
+  {
+    path: '/resource-optimization',
+    title: 'Resource Optimization',
+    description: 'Mathematical optimization for budget and resource allocation',
+    icon: 'calculator',
+    showInNav: true,
+  },
+  {
+    path: '/segment-analysis',
+    title: 'Segment Analysis',
+    description: 'Heterogeneous treatment effects and targeting optimization',
+    icon: 'users',
     showInNav: true,
   },
 ];
@@ -337,6 +377,56 @@ export const routes: RouteObject[] = [
       <ProtectedRoute>
         <LazyPage>
           <AIAgentInsights />
+        </LazyPage>
+      </ProtectedRoute>
+    ),
+  },
+  {
+    path: '/gap-analysis',
+    element: (
+      <ProtectedRoute>
+        <LazyPage>
+          <GapAnalysis />
+        </LazyPage>
+      </ProtectedRoute>
+    ),
+  },
+  {
+    path: '/experiments',
+    element: (
+      <ProtectedRoute>
+        <LazyPage>
+          <Experiments />
+        </LazyPage>
+      </ProtectedRoute>
+    ),
+  },
+  {
+    path: '/causal-analysis',
+    element: (
+      <ProtectedRoute>
+        <LazyPage>
+          <CausalAnalysis />
+        </LazyPage>
+      </ProtectedRoute>
+    ),
+  },
+  {
+    path: '/resource-optimization',
+    element: (
+      <ProtectedRoute>
+        <LazyPage>
+          <ResourceOptimization />
+        </LazyPage>
+      </ProtectedRoute>
+    ),
+  },
+  {
+    path: '/segment-analysis',
+    element: (
+      <ProtectedRoute>
+        <LazyPage>
+          <SegmentAnalysis />
         </LazyPage>
       </ProtectedRoute>
     ),

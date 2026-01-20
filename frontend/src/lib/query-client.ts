@@ -285,6 +285,93 @@ export const queryKeys = {
       [...queryKeys.digitalTwin.all(), 'history', brand ?? 'all'] as const,
     health: () => [...queryKeys.digitalTwin.all(), 'health'] as const,
   },
+
+  /**
+   * Gap Analysis queries
+   */
+  gaps: {
+    all: () => [...queryKeys.all, 'gaps'] as const,
+    analysis: (analysisId: string) =>
+      [...queryKeys.gaps.all(), 'analysis', analysisId] as const,
+    opportunities: () => [...queryKeys.gaps.all(), 'opportunities'] as const,
+    health: () => [...queryKeys.gaps.all(), 'health'] as const,
+  },
+
+  /**
+   * A/B Testing / Experiments queries
+   */
+  experiments: {
+    all: () => [...queryKeys.all, 'experiments'] as const,
+    assignments: (experimentId: string) =>
+      [...queryKeys.experiments.all(), 'assignments', experimentId] as const,
+    enrollmentStats: (experimentId: string) =>
+      [...queryKeys.experiments.all(), 'enrollment', experimentId] as const,
+    interimAnalyses: (experimentId: string) =>
+      [...queryKeys.experiments.all(), 'interim', experimentId] as const,
+    results: (experimentId: string) =>
+      [...queryKeys.experiments.all(), 'results', experimentId] as const,
+    segmentResults: (experimentId: string, segmentVar: string) =>
+      [...queryKeys.experiments.all(), 'results', experimentId, 'segment', segmentVar] as const,
+    srmChecks: (experimentId: string) =>
+      [...queryKeys.experiments.all(), 'srm', experimentId] as const,
+    fidelityComparisons: (experimentId: string) =>
+      [...queryKeys.experiments.all(), 'fidelity', experimentId] as const,
+    health: () => [...queryKeys.experiments.all(), 'health'] as const,
+    alerts: (experimentId: string) =>
+      [...queryKeys.experiments.all(), 'alerts', experimentId] as const,
+  },
+
+  /**
+   * Causal Inference queries
+   */
+  causal: {
+    all: () => [...queryKeys.all, 'causal'] as const,
+    hierarchicalAnalysis: (analysisId: string) =>
+      [...queryKeys.causal.all(), 'hierarchical', analysisId] as const,
+    estimators: (library?: string) =>
+      [...queryKeys.causal.all(), 'estimators', library ?? 'all'] as const,
+    health: () => [...queryKeys.causal.all(), 'health'] as const,
+  },
+
+  /**
+   * Resource Optimization queries
+   */
+  resources: {
+    all: () => [...queryKeys.all, 'resources'] as const,
+    optimization: (optimizationId: string) =>
+      [...queryKeys.resources.all(), 'optimization', optimizationId] as const,
+    scenarios: () => [...queryKeys.resources.all(), 'scenarios'] as const,
+    health: () => [...queryKeys.resources.all(), 'health'] as const,
+  },
+
+  /**
+   * Segment Analysis queries
+   */
+  segments: {
+    all: () => [...queryKeys.all, 'segments'] as const,
+    analysis: (analysisId: string) =>
+      [...queryKeys.segments.all(), 'analysis', analysisId] as const,
+    policies: () => [...queryKeys.segments.all(), 'policies'] as const,
+    health: () => [...queryKeys.segments.all(), 'health'] as const,
+  },
+
+  /**
+   * Health Score queries (Tier 3 Fast Path)
+   */
+  healthScore: {
+    all: () => [...queryKeys.all, 'health-score'] as const,
+    check: (scope: string) =>
+      [...queryKeys.healthScore.all(), 'check', scope] as const,
+    quick: () => [...queryKeys.healthScore.all(), 'quick'] as const,
+    full: () => [...queryKeys.healthScore.all(), 'full'] as const,
+    components: () => [...queryKeys.healthScore.all(), 'components'] as const,
+    models: () => [...queryKeys.healthScore.all(), 'models'] as const,
+    pipelines: () => [...queryKeys.healthScore.all(), 'pipelines'] as const,
+    agents: () => [...queryKeys.healthScore.all(), 'agents'] as const,
+    history: (limit?: number) =>
+      [...queryKeys.healthScore.all(), 'history', limit ?? 20] as const,
+    status: () => [...queryKeys.healthScore.all(), 'status'] as const,
+  },
 } as const;
 
 export default queryClient;
