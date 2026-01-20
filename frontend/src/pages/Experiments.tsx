@@ -42,6 +42,7 @@ import {
   AlertSeverity,
   ExperimentHealthStatus,
   StoppingDecision,
+  MonitorAlert,
 } from '@/types/experiments';
 import { KPICard } from '@/components/visualizations';
 import {
@@ -51,8 +52,6 @@ import {
   CheckCircle,
   XCircle,
   Activity,
-  Users,
-  TrendingUp,
   Target,
   Beaker,
   Shield,
@@ -60,10 +59,29 @@ import {
 } from 'lucide-react';
 
 // =============================================================================
+// LOCAL TYPES
+// =============================================================================
+
+interface LocalExperiment {
+  experiment_id: string;
+  experiment_name: string;
+  health_status: ExperimentHealthStatus;
+  total_enrolled: number;
+  enrollment_rate_per_day: number;
+  current_information_fraction: number;
+  has_srm: boolean;
+  active_alerts: number;
+  last_checked: string;
+  variant_breakdown: Record<string, number>;
+  start_date: string;
+  primary_metric: string;
+}
+
+// =============================================================================
 // SAMPLE DATA (when API is unavailable)
 // =============================================================================
 
-const SAMPLE_EXPERIMENTS = [
+const SAMPLE_EXPERIMENTS: LocalExperiment[] = [
   {
     experiment_id: 'exp_kisqali_hcp_outreach_001',
     experiment_name: 'Kisqali HCP Outreach Campaign',
@@ -122,7 +140,7 @@ const SAMPLE_EXPERIMENTS = [
   },
 ];
 
-const SAMPLE_ALERTS = [
+const SAMPLE_ALERTS: MonitorAlert[] = [
   {
     alert_id: 'alert_001',
     alert_type: 'enrollment_slow',
@@ -402,35 +420,35 @@ export default function Experiments() {
         <KPICard
           title="Active Experiments"
           value={overviewMetrics.total}
-          icon={<Beaker className="h-5 w-5" />}
+          description="Currently running"
         />
         <KPICard
           title="Healthy"
           value={overviewMetrics.healthy}
-          icon={<CheckCircle className="h-5 w-5 text-green-500" />}
-          valueColor="text-green-600"
+          status="healthy"
+          description="Passing all checks"
         />
         <KPICard
           title="Total Enrolled"
           value={overviewMetrics.totalEnrolled.toLocaleString()}
-          icon={<Users className="h-5 w-5" />}
+          description="Participants enrolled"
         />
         <KPICard
           title="Avg Enrollment/Day"
           value={overviewMetrics.avgEnrollmentRate}
-          icon={<TrendingUp className="h-5 w-5" />}
+          description="Daily enrollment rate"
         />
         <KPICard
           title="SRM Detected"
           value={overviewMetrics.srmCount}
-          icon={<Shield className="h-5 w-5" />}
-          valueColor={overviewMetrics.srmCount > 0 ? 'text-red-600' : 'text-green-600'}
+          status={overviewMetrics.srmCount > 0 ? 'critical' : 'healthy'}
+          description="Sample ratio mismatch"
         />
         <KPICard
           title="Active Alerts"
           value={overviewMetrics.totalAlerts}
-          icon={<AlertTriangle className="h-5 w-5" />}
-          valueColor={overviewMetrics.criticalAlerts > 0 ? 'text-red-600' : 'text-yellow-600'}
+          status={overviewMetrics.criticalAlerts > 0 ? 'critical' : 'warning'}
+          description="Requiring attention"
         />
       </div>
 
@@ -524,8 +542,9 @@ export default function Experiments() {
                       </span>
                     </div>
                     <div className="flex h-2 rounded-full overflow-hidden">
-                      {Object.entries(experiment.variant_breakdown).map(([variant, count], idx) => {
-                        const total = Object.values(experiment.variant_breakdown).reduce((a, b) => a + b, 0);
+                      {Object.entries(experiment.variant_breakdown).map(([variant, countValue], idx) => {
+                        const count = countValue as number;
+                        const total = (Object.values(experiment.variant_breakdown) as number[]).reduce((a, b) => a + b, 0);
                         const percent = (count / total) * 100;
                         return (
                           <div
@@ -556,7 +575,7 @@ export default function Experiments() {
               </CardContent>
             </Card>
           ) : (
-            alerts.map((alert) => (
+            alerts.map((alert: MonitorAlert) => (
               <Card
                 key={alert.alert_id}
                 className={`border-l-4 ${
@@ -733,7 +752,7 @@ export default function Experiments() {
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="date" />
                   <YAxis domain={[0.5, 1]} tickFormatter={(v) => `${(v * 100).toFixed(0)}%`} />
-                  <Tooltip formatter={(value: number) => `${(value * 100).toFixed(1)}%`} />
+                  <Tooltip formatter={(value) => `${((value as number) * 100).toFixed(1)}%`} />
                   <Legend />
                   <Line
                     type="monotone"
