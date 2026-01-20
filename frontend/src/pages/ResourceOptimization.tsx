@@ -271,8 +271,8 @@ function ScenarioComparisonChart({ scenarios }: ScenarioChartProps) {
         <Scatter
           data={chartData}
           fill={COLORS.primary}
-          shape={(props: { cx: number; cy: number; payload: { hasViolations: boolean } }) => {
-            const { cx, cy, payload } = props;
+          shape={(props) => {
+            const { cx, cy, payload } = props as { cx: number; cy: number; payload: { hasViolations: boolean } };
             return (
               <circle
                 cx={cx}
@@ -310,7 +310,7 @@ function SensitivityAnalysisChart({ sensitivity }: SensitivityChartProps) {
         <CartesianGrid strokeDasharray="3 3" />
         <XAxis type="number" label={{ value: 'Sensitivity (%)', position: 'bottom' }} />
         <YAxis type="category" dataKey="name" />
-        <Tooltip formatter={(value: number) => [`${value.toFixed(1)}%`, 'Sensitivity']} />
+        <Tooltip formatter={(value) => [`${(value as number)?.toFixed(1) ?? 0}%`, 'Sensitivity']} />
         <Bar dataKey="sensitivity" fill={COLORS.secondary} />
       </BarChart>
     </ResponsiveContainer>
@@ -347,7 +347,7 @@ function ImpactBySegmentChart({ impactBySegment }: ImpactChartProps) {
             <Cell key={`cell-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
           ))}
         </Pie>
-        <Tooltip formatter={(value: number) => [`${value}%`, 'Impact Share']} />
+        <Tooltip formatter={(value) => [`${value ?? 0}%`, 'Impact Share']} />
       </PieChart>
     </ResponsiveContainer>
   );
@@ -363,7 +363,7 @@ interface AllocationTrendProps {
 
 function AllocationTrendChart({ allocations }: AllocationTrendProps) {
   // Simulate trend data
-  const trendData = allocations.map((a, idx) => ({
+  const trendData = allocations.map((a) => ({
     territory: a.entity_id.replace('territory_', ''),
     q1: a.current_allocation * 0.9 / 1000,
     q2: a.current_allocation * 0.95 / 1000,
@@ -377,7 +377,7 @@ function AllocationTrendChart({ allocations }: AllocationTrendProps) {
         <CartesianGrid strokeDasharray="3 3" />
         <XAxis dataKey="territory" />
         <YAxis label={{ value: 'Allocation ($K)', angle: -90, position: 'insideLeft' }} />
-        <Tooltip formatter={(value: number) => [`$${value.toFixed(0)}K`, '']} />
+        <Tooltip formatter={(value) => [`$${(value as number)?.toFixed(0) ?? 0}K`, '']} />
         <Legend />
         <Line type="monotone" dataKey="q1" stroke={COLORS.muted} name="Q1" />
         <Line type="monotone" dataKey="q2" stroke={COLORS.muted} name="Q2" strokeDasharray="5 5" />
@@ -399,7 +399,7 @@ export default function ResourceOptimization() {
 
   // API hooks
   const { data: healthData, isLoading: healthLoading } = useResourceHealth();
-  const { data: scenariosData } = useScenarios({ limit: 10 });
+  const { data: _scenariosData } = useScenarios({ limit: 10 });
   const runOptimization = useRunOptimization();
 
   // Use sample data for now (API may not be available)
@@ -412,19 +412,21 @@ export default function ResourceOptimization() {
   // Handle optimization run
   const handleRunOptimization = () => {
     runOptimization.mutate({
-      query: `Optimize ${selectedResourceType} allocation to ${selectedObjective.replace('_', ' ')}`,
-      resource_type: selectedResourceType as never,
-      allocation_targets: optimizationResult.optimal_allocations.map((a) => ({
-        entity_id: a.entity_id,
-        entity_type: a.entity_type,
-        current_allocation: a.current_allocation,
-        min_allocation: a.current_allocation * 0.5,
-        max_allocation: a.current_allocation * 1.5,
-        expected_response: a.expected_impact,
-      })),
-      objective: selectedObjective as never,
-      run_scenarios: true,
-      scenario_count: 3,
+      request: {
+        query: `Optimize ${selectedResourceType} allocation to ${selectedObjective.replace('_', ' ')}`,
+        resource_type: selectedResourceType as never,
+        allocation_targets: optimizationResult.optimal_allocations.map((a) => ({
+          entity_id: a.entity_id,
+          entity_type: a.entity_type,
+          current_allocation: a.current_allocation,
+          min_allocation: a.current_allocation * 0.5,
+          max_allocation: a.current_allocation * 1.5,
+          expected_response: a.expected_impact,
+        })),
+        objective: selectedObjective as never,
+        run_scenarios: true,
+        scenario_count: 3,
+      },
     });
   };
 

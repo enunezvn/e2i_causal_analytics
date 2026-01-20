@@ -21,7 +21,6 @@ import {
   RefreshCw,
   AlertCircle,
   CheckCircle2,
-  Clock,
   Brain,
   TrendingUp,
   TrendingDown,
@@ -49,8 +48,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useAlerts, useMonitoringRuns } from '@/hooks/api/use-monitoring';
 import {
   useQuickHealthCheck,
-  useComponentHealth,
-  useModelHealth,
   usePipelineHealth,
   useAgentHealth,
   useHealthHistory,
@@ -59,6 +56,7 @@ import { AlertStatus } from '@/types/monitoring';
 import type { AlertItem } from '@/types/monitoring';
 import { HealthGrade } from '@/types/health-score';
 import type { AgentHealth, PipelineHealth as PipelineHealthType } from '@/types/health-score';
+import { PipelineStatus } from '@/types/health-score';
 import { AlertList } from '@/components/visualizations/dashboard/AlertCard';
 import { StatusBadge, StatusDot } from '@/components/visualizations/dashboard/StatusBadge';
 import { ProgressRing } from '@/components/visualizations/dashboard/ProgressRing';
@@ -180,10 +178,10 @@ const SAMPLE_AGENT_HEALTH: AgentHealth[] = [
 
 // Sample pipeline health data
 const SAMPLE_PIPELINE_HEALTH: PipelineHealthType[] = [
-  { pipeline_name: 'TRx Data Ingestion', last_run: new Date().toISOString(), last_success: new Date().toISOString(), rows_processed: 125000, freshness_hours: 2.5, status: 'healthy' as const },
-  { pipeline_name: 'Feature Store Sync', last_run: new Date().toISOString(), last_success: new Date().toISOString(), rows_processed: 45000, freshness_hours: 1.2, status: 'healthy' as const },
-  { pipeline_name: 'Model Retraining', last_run: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(), last_success: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(), rows_processed: 8500, freshness_hours: 24, status: 'stale' as const },
-  { pipeline_name: 'Causal Graph Update', last_run: new Date().toISOString(), last_success: new Date().toISOString(), rows_processed: 12000, freshness_hours: 4.5, status: 'healthy' as const },
+  { pipeline_name: 'TRx Data Ingestion', last_run: new Date().toISOString(), last_success: new Date().toISOString(), rows_processed: 125000, freshness_hours: 2.5, status: PipelineStatus.HEALTHY },
+  { pipeline_name: 'Feature Store Sync', last_run: new Date().toISOString(), last_success: new Date().toISOString(), rows_processed: 45000, freshness_hours: 1.2, status: PipelineStatus.HEALTHY },
+  { pipeline_name: 'Model Retraining', last_run: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(), last_success: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(), rows_processed: 8500, freshness_hours: 24, status: PipelineStatus.STALE },
+  { pipeline_name: 'Causal Graph Update', last_run: new Date().toISOString(), last_success: new Date().toISOString(), rows_processed: 12000, freshness_hours: 4.5, status: PipelineStatus.HEALTHY },
 ];
 
 // =============================================================================
@@ -255,9 +253,9 @@ function SystemHealth() {
 
   // Fetch monitoring runs
   const {
-    data: runsData,
-    isLoading: isLoadingRuns,
-    refetch: refetchRuns,
+    data: _runsData,
+    isLoading: _isLoadingRuns,
+    refetch: _refetchRuns,
   } = useMonitoringRuns({ days: 7, limit: 5 });
 
   // Health Score API hooks
@@ -516,7 +514,7 @@ function SystemHealth() {
                     <CartesianGrid strokeDasharray="3 3" horizontal={false} />
                     <XAxis type="number" domain={[0, 100]} />
                     <YAxis type="category" dataKey="name" width={80} />
-                    <Tooltip formatter={(value: number) => [`${value}%`, 'Score']} />
+                    <Tooltip formatter={(value) => [`${value ?? 0}%`, 'Score']} />
                     <Bar dataKey="score" radius={[0, 4, 4, 0]}>
                       {componentScoreData.map((entry, index) => (
                         <Cell key={`cell-${index}`} fill={entry.fill} />
@@ -541,7 +539,7 @@ function SystemHealth() {
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis dataKey="date" />
                     <YAxis domain={[60, 100]} />
-                    <Tooltip formatter={(value: number) => [`${value}`, 'Health Score']} />
+                    <Tooltip formatter={(value) => [`${value ?? 0}`, 'Health Score']} />
                     <Line
                       type="monotone"
                       dataKey="score"
@@ -775,7 +773,7 @@ function SystemHealth() {
                   <XAxis dataKey="date" />
                   <YAxis domain={[60, 100]} />
                   <Tooltip
-                    formatter={(value: number, name: string) => [value, name === 'score' ? 'Health Score' : name]}
+                    formatter={(value, name) => [value ?? 0, name === 'score' ? 'Health Score' : name]}
                     labelFormatter={(label) => `Date: ${label}`}
                   />
                   <Line
@@ -889,7 +887,7 @@ function SystemHealth() {
             </div>
           )}
 
-          {quickHealthData?.recommendations?.length > 0 && (
+          {(quickHealthData?.recommendations?.length ?? 0) > 0 && (
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
@@ -899,7 +897,7 @@ function SystemHealth() {
               </CardHeader>
               <CardContent>
                 <ul className="space-y-2">
-                  {quickHealthData.recommendations.map((rec, i) => (
+                  {quickHealthData?.recommendations?.map((rec, i) => (
                     <li key={i} className="flex items-start gap-2 text-sm">
                       <CheckCircle2 className="h-4 w-4 text-emerald-500 mt-0.5 flex-shrink-0" />
                       {rec}

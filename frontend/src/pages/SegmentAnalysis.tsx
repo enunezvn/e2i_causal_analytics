@@ -281,7 +281,7 @@ const COLORS = {
   muted: '#6b7280',
 };
 
-const PIE_COLORS = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#ec4899'];
+const _PIE_COLORS = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#ec4899'];
 
 // =============================================================================
 // CATE CHART WITH ERROR BARS
@@ -292,7 +292,7 @@ interface CATEChartProps {
   segmentName: string;
 }
 
-function CATEBarChart({ cateResults, segmentName }: CATEChartProps) {
+function CATEBarChart({ cateResults, segmentName: _segmentName }: CATEChartProps) {
   const chartData = cateResults.map((r) => ({
     name: r.segment_value,
     cate: r.cate_estimate,
@@ -472,8 +472,8 @@ function PolicyScatterChart({ policies }: PolicyChartProps) {
         <Scatter
           data={chartData}
           fill={COLORS.primary}
-          shape={(props: { cx: number; cy: number; payload: { impact: number } }) => {
-            const { cx, cy, payload } = props;
+          shape={(props) => {
+            const { cx, cy, payload } = props as { cx: number; cy: number; payload: { impact: number } };
             return (
               <circle
                 cx={cx}
