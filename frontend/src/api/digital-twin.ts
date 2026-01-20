@@ -27,8 +27,11 @@ import type {
   FidelityRecordResponse,
   FidelityReportResponse,
   ModelListResponse,
+  ScenarioComparisonRequest,
+  ScenarioComparisonResult,
   SimulateRequest,
   SimulationDetailResponse,
+  SimulationHistoryResponse,
   SimulationListResponse,
   SimulationResponse,
   SimulationStatus,
@@ -606,4 +609,45 @@ export function interpretEffectSize(
   if (absD < 0.5) return 'small';
   if (absD < 0.8) return 'medium';
   return 'large';
+}
+
+// =============================================================================
+// SIMULATION HISTORY & COMPARISON
+// =============================================================================
+
+/**
+ * Get simulation history for the current user/project.
+ *
+ * @param params - Optional pagination parameters
+ * @returns Simulation history response
+ */
+export async function getSimulationHistory(params?: {
+  limit?: number;
+  offset?: number;
+}): Promise<SimulationHistoryResponse> {
+  const searchParams = new URLSearchParams();
+  if (params?.limit) searchParams.append('limit', params.limit.toString());
+  if (params?.offset) searchParams.append('offset', params.offset.toString());
+
+  const queryString = searchParams.toString();
+  const url = queryString
+    ? `${DIGITAL_TWIN_BASE}/simulations/history?${queryString}`
+    : `${DIGITAL_TWIN_BASE}/simulations/history`;
+
+  return get<SimulationHistoryResponse>(url);
+}
+
+/**
+ * Compare multiple simulation scenarios.
+ *
+ * @param request - Scenario comparison request
+ * @returns Comparison result with all scenarios
+ */
+export async function compareScenarios(
+  request: ScenarioComparisonRequest
+): Promise<ScenarioComparisonResult> {
+  return post<ScenarioComparisonResult, ScenarioComparisonRequest>(
+    `${DIGITAL_TWIN_BASE}/simulations/compare`,
+    request
+  );
 }

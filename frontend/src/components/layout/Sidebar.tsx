@@ -108,6 +108,24 @@ function NavIcon({ icon, className = 'h-5 w-5' }: { icon?: string; className?: s
         <path strokeLinecap="round" strokeLinejoin="round" d="M6 15h12" />
       </svg>
     ),
+    flask: (
+      <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M9 3h6M10 3v6l-6 8v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2l-6-8V3" />
+      </svg>
+    ),
+    calculator: (
+      <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <rect x="4" y="2" width="16" height="20" rx="2" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M8 6h8M8 10h2M14 10h2M8 14h2M14 14h2M8 18h2M14 18h2" />
+      </svg>
+    ),
+    users: (
+      <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+        <circle cx="9" cy="7" r="4" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
+      </svg>
+    ),
   };
 
   return iconMap[icon ?? 'home'] ?? iconMap.home;
