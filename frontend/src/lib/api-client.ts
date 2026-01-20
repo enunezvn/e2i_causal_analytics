@@ -290,8 +290,11 @@ export async function patch<T, D = unknown>(
 /**
  * Type-safe DELETE request helper
  */
-export async function del<T>(endpoint: string): Promise<T> {
-  const response = await apiClient.delete<T>(endpoint);
+export async function del<T>(
+  endpoint: string,
+  config?: { data?: unknown }
+): Promise<T> {
+  const response = await apiClient.delete<T>(endpoint, config);
   return response.data;
 }
 

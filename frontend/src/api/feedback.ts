@@ -167,7 +167,7 @@ export async function processFeedback(
 export async function listPatterns(
   params?: ListPatternsParams
 ): Promise<PatternListResponse> {
-  return get<PatternListResponse>(`${FEEDBACK_BASE}/patterns`, params);
+  return get<PatternListResponse>(`${FEEDBACK_BASE}/patterns`, params as Record<string, unknown> | undefined);
 }
 
 // =============================================================================
@@ -195,7 +195,7 @@ export async function listPatterns(
 export async function listUpdates(
   params?: ListUpdatesParams
 ): Promise<UpdateListResponse> {
-  return get<UpdateListResponse>(`${FEEDBACK_BASE}/updates`, params);
+  return get<UpdateListResponse>(`${FEEDBACK_BASE}/updates`, params as Record<string, unknown> | undefined);
 }
 
 /**
