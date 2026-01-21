@@ -1057,7 +1057,7 @@ VITE_API_URL=http://138.197.4.36/api
 | High/low responder lists filterable | ✅ | Responders tab: 3 High (CATE 0.47-0.58), 2 Low (CATE 0.05-0.08) |
 | Targeting policy displayed | ✅ | Policies tab: Current vs Recommended rates, Expected Impact |
 | Uplift curve visualization | ✅ | Uplift Metrics tab: AUUC (68%), Qini (42%), Targeting Efficiency (75%) |
-| Export to CSV for CRM integration | ⚠️ Partial | No visible export button on page (may need implementation) |
+| Export to CSV for CRM integration | ✅ | Export button added - downloads JSON with high/low responders, CATE data, policy recommendations |
 
 **KPI Cards Verified:** Overall ATE (0.280), Heterogeneity (72%), High Responders (3), Expected Lift (+163), Confidence (87%)
 
