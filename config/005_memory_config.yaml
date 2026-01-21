@@ -95,7 +95,7 @@ memory_backends:
     local_pilot:
       backend: "falkordb"
       connection: "${FALKORDB_URL}"  # Default: redis://localhost:6381 (FalkorDB uses Redis protocol)
-      graph_name: "e2i_semantic"
+      graph_name: "e2i_causal"  # Must match FALKORDB_GRAPH_NAME env var and seed script
       # Graphity integration for automatic graph building
       graphity:
         enabled: true
