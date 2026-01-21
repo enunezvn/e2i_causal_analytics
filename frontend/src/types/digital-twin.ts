@@ -545,6 +545,9 @@ export interface SimulationConfidenceInterval {
   upper: number;
 }
 
+// NOTE: ConfidenceInterval alias removed to avoid conflict with gaps.ts export
+// Use SimulationConfidenceInterval directly for digital twin types
+
 /**
  * Primary outcome metrics from simulation
  * @deprecated Use SimulationResponse fields directly
@@ -690,19 +693,40 @@ export interface ScenarioComparisonResult {
 // =============================================================================
 
 /**
+ * UI-specific simulation response for legacy page components
+ * Combines deprecated types for backward-compatible rendering
+ */
+export interface LegacySimulationResponse {
+  simulation_id: string;
+  created_at: string;
+  request: SimulationRequest;
+  outcomes: SimulationOutcomes;
+  fidelity: FidelityMetrics;
+  sensitivity: SensitivityResult[];
+  recommendation: SimulationRecommendation;
+  projections: ProjectionDataPoint[];
+  execution_time_ms: number;
+}
+
+/**
  * Simulation panel form values
+ * Maps to SimulationRequest API fields
  */
 export interface SimulationFormValues {
-  interventionType: string;
-  brand: Brand | string;
-  twinType: TwinType | string;
-  twinCount: number;
-  durationWeeks: number;
-  targetDeciles: number[];
-  targetSpecialties: string[];
+  /** Type of intervention to simulate */
+  interventionType: InterventionType;
+  /** Target brand for the intervention */
+  brand: string;
+  /** Sample size for treatment group */
+  sampleSize: number;
+  /** Duration in days */
+  durationDays: number;
+  /** Target regions (optional) */
   targetRegions: string[];
-  personalizationLevel: string;
-  channel?: string;
+  /** Target HCP segments (optional) */
+  targetSegments: string[];
+  /** Budget allocation in dollars (optional) */
+  budget?: number;
 }
 
 /**

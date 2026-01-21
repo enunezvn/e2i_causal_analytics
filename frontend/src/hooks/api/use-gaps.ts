@@ -115,23 +115,26 @@ export function useGapHealth(
 /**
  * Hook to fetch quick win opportunities.
  *
+ * @param brand - Brand to filter opportunities by
  * @param count - Number of quick wins to return (default: 5)
  * @param options - Additional query options
  * @returns Query result with quick win opportunities
  *
  * @example
  * ```tsx
- * const { data } = useQuickWins(10);
+ * const { data } = useQuickWins('kisqali', 10);
  * data?.opportunities.forEach(opp => console.log(opp));
  * ```
  */
 export function useQuickWins(
+  brand: string,
   count: number = 5,
   options?: Omit<UseQueryOptions<OpportunityListResponse, ApiError>, 'queryKey' | 'queryFn'>
 ) {
   return useQuery<OpportunityListResponse, ApiError>({
-    queryKey: [...queryKeys.gaps.opportunities(), 'quick-wins', count],
-    queryFn: () => getQuickWins(count),
+    queryKey: [...queryKeys.gaps.opportunities(), 'quick-wins', brand, count],
+    queryFn: () => getQuickWins(brand, count),
+    enabled: !!brand,
     staleTime: 2 * 60 * 1000, // 2 minutes
     ...options,
   });
@@ -140,23 +143,26 @@ export function useQuickWins(
 /**
  * Hook to fetch strategic bet opportunities.
  *
+ * @param brand - Brand to filter opportunities by
  * @param count - Number of strategic bets to return (default: 5)
  * @param options - Additional query options
  * @returns Query result with strategic bet opportunities
  *
  * @example
  * ```tsx
- * const { data } = useStrategicBets(5);
+ * const { data } = useStrategicBets('kisqali', 5);
  * data?.opportunities.forEach(opp => console.log(opp));
  * ```
  */
 export function useStrategicBets(
+  brand: string,
   count: number = 5,
   options?: Omit<UseQueryOptions<OpportunityListResponse, ApiError>, 'queryKey' | 'queryFn'>
 ) {
   return useQuery<OpportunityListResponse, ApiError>({
-    queryKey: [...queryKeys.gaps.opportunities(), 'strategic-bets', count],
-    queryFn: () => getStrategicBets(count),
+    queryKey: [...queryKeys.gaps.opportunities(), 'strategic-bets', brand, count],
+    queryFn: () => getStrategicBets(brand, count),
+    enabled: !!brand,
     staleTime: 2 * 60 * 1000, // 2 minutes
     ...options,
   });
