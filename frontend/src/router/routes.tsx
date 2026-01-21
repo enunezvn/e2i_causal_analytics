@@ -27,6 +27,8 @@ const Experiments = lazy(() => import('@/pages/Experiments'));
 const CausalAnalysis = lazy(() => import('@/pages/CausalAnalysis'));
 const ResourceOptimization = lazy(() => import('@/pages/ResourceOptimization'));
 const SegmentAnalysis = lazy(() => import('@/pages/SegmentAnalysis'));
+const AuditChain = lazy(() => import('@/pages/AuditChain'));
+const FeedbackLearning = lazy(() => import('@/pages/FeedbackLearning'));
 
 // Loading fallback component for lazy-loaded routes
 function PageLoadingFallback() {
@@ -197,6 +199,20 @@ export const routeConfigs: RouteConfig[] = [
     title: 'Segment Analysis',
     description: 'Heterogeneous treatment effects and targeting optimization',
     icon: 'users',
+    showInNav: true,
+  },
+  {
+    path: '/audit-chain',
+    title: 'Audit Chain',
+    description: 'Workflow audit trails with cryptographic verification',
+    icon: 'shield-check',
+    showInNav: true,
+  },
+  {
+    path: '/feedback-learning',
+    title: 'Feedback Learning',
+    description: 'Tier 5 self-improvement with pattern detection and knowledge updates',
+    icon: 'sparkles',
     showInNav: true,
   },
 ];
@@ -427,6 +443,26 @@ export const routes: RouteObject[] = [
       <ProtectedRoute>
         <LazyPage>
           <SegmentAnalysis />
+        </LazyPage>
+      </ProtectedRoute>
+    ),
+  },
+  {
+    path: '/audit-chain',
+    element: (
+      <ProtectedRoute>
+        <LazyPage>
+          <AuditChain />
+        </LazyPage>
+      </ProtectedRoute>
+    ),
+  },
+  {
+    path: '/feedback-learning',
+    element: (
+      <ProtectedRoute>
+        <LazyPage>
+          <FeedbackLearning />
         </LazyPage>
       </ProtectedRoute>
     ),

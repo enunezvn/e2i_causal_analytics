@@ -115,5 +115,52 @@ export {
   useHealthMonitor,
 } from './use-health-score';
 
+// =============================================================================
+// AUDIT CHAIN HOOKS
+// =============================================================================
+
+export {
+  useWorkflowEntries,
+  useWorkflowVerification,
+  useWorkflowSummary,
+  useRecentWorkflows,
+  useWorkflowDetails,
+  useAgentExecutionPath,
+  useTierDistribution,
+  useFailedValidationEntries,
+  useLowConfidenceEntries,
+  useAuditDashboard,
+} from './use-audit';
+
+// Re-export composite types
+export type { WorkflowDetailsData, AuditDashboardData } from './use-audit';
+
+// =============================================================================
+// FEEDBACK LEARNING HOOKS
+// =============================================================================
+
+export {
+  useLearningResults,
+  usePatterns,
+  useKnowledgeUpdates,
+  useFeedbackHealth,
+  useFeedbackStatus,
+  useFeedbackDashboard,
+  useRunLearningCycle,
+  useRunLearningCycleAndWait,
+  useQuickLearningCycle,
+  useProcessFeedback,
+  useApplyUpdate,
+  useRollbackUpdate,
+  usePollLearningResults,
+} from './use-feedback';
+
+// Re-export composite types
+export type { FeedbackStatusData, FeedbackDashboardData } from './use-feedback';
+
+// =============================================================================
+// HEALTH SCORE COMPOSITE TYPES
+// =============================================================================
+
 // Re-export composite types
 export type { ComprehensiveHealthData, DashboardHealthData } from './use-health-score';
