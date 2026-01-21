@@ -373,6 +373,32 @@ export const queryKeys = {
       [...queryKeys.healthScore.all(), 'history', limit ?? 20] as const,
     status: () => [...queryKeys.healthScore.all(), 'status'] as const,
   },
+
+  /**
+   * Audit Chain queries (compliance and traceability)
+   */
+  audit: {
+    all: () => [...queryKeys.all, 'audit'] as const,
+    workflow: (workflowId: string) =>
+      [...queryKeys.audit.all(), 'workflow', workflowId] as const,
+    workflowSummary: (workflowId: string) =>
+      [...queryKeys.audit.all(), 'workflow', workflowId, 'summary'] as const,
+    workflowVerification: (workflowId: string) =>
+      [...queryKeys.audit.all(), 'workflow', workflowId, 'verify'] as const,
+    recent: () => [...queryKeys.audit.all(), 'recent'] as const,
+  },
+
+  /**
+   * Feedback Learning queries (Tier 5 self-improvement)
+   */
+  feedback: {
+    all: () => [...queryKeys.all, 'feedback'] as const,
+    learning: (batchId: string) =>
+      [...queryKeys.feedback.all(), 'learning', batchId] as const,
+    patterns: () => [...queryKeys.feedback.all(), 'patterns'] as const,
+    updates: () => [...queryKeys.feedback.all(), 'updates'] as const,
+    health: () => [...queryKeys.feedback.all(), 'health'] as const,
+  },
 } as const;
 
 export default queryClient;

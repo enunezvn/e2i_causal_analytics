@@ -342,11 +342,44 @@ All endpoints implemented including:
 - [x] System health monitoring operational
 - [x] Self-improvement insights visible via API
 
-**Remaining UI work (out of scope for this audit):**
-- [ ] Create React hooks (`useGaps()`, `useSegments()`, etc.)
-- [ ] Create UI pages for new features
-- [ ] Expose unused response fields in UI
-- [ ] All response fields consumed or intentionally excluded
+**Remaining UI work (completed in follow-up session 2026-01-21):**
+- [x] Create React hooks (`useGaps()`, `useSegments()`, etc.) - **COMPLETE**
+- [x] Create UI pages for new features - **COMPLETE**
+- [ ] Expose unused response fields in UI (deferred)
+- [ ] All response fields consumed or intentionally excluded (deferred)
+
+### 6.1 React Hooks Implementation - COMPLETE (2026-01-21)
+
+**Created React Query hooks for all new API endpoints:**
+
+| Hook File | API Client | Hooks Implemented |
+|-----------|-----------|-------------------|
+| `use-gaps.ts` | `gaps.ts` | `useGapAnalysis`, `useOpportunities`, `useGapHealth`, `useRunGapAnalysis`, `useRunGapAnalysisAndWait`, `useQuickWins`, `useStrategicBets`, `usePollGapAnalysis` |
+| `use-experiments.ts` | `experiments.ts` | `useAssignments`, `useEnrollmentStats`, `useInterimAnalyses`, `useExperimentResults`, `useSegmentResults`, `useSRMChecks`, `useFidelityComparisons`, `useExperimentHealth`, `useExperimentAlerts`, `useRandomizeUnits`, `useEnrollUnit`, `useWithdrawUnit`, `useTriggerInterimAnalysis`, `useRunSRMCheck`, `useUpdateFidelityComparison`, `useTriggerMonitoring` |
+| `use-causal.ts` | `causal.ts` | `useHierarchicalAnalysis`, `useEstimators`, `useCausalHealth`, `useRunHierarchicalAnalysis`, `useRunHierarchicalAnalysisAndWait`, `useRouteQuery`, `useRunSequentialPipeline`, `useRunParallelPipeline`, `useRunCrossValidation`, `useRouteAndRunAnalysis`, `useQuickEffectEstimate`, `useFullCausalAnalysis`, `usePollHierarchicalAnalysis` |
+| `use-resources.ts` | `resources.ts` | `useOptimization`, `useScenarios`, `useResourceHealth`, `useRunOptimization`, `useRunOptimizationAndWait`, `useOptimizeBudget`, `useOptimizeWithScenarios`, `usePollOptimization` |
+| `use-segments.ts` | `segments.ts` | `useSegmentAnalysis`, `usePolicies`, `useSegmentHealth`, `useRunSegmentAnalysis`, `useRunSegmentAnalysisAndWait`, `useGetHighResponders`, `useGetOptimalPolicy`, `usePollSegmentAnalysis` |
+| `use-health-score.ts` | `health-score.ts` | `useQuickHealthCheck`, `useFullHealthCheck`, `useScopedHealthCheck`, `useComponentHealth`, `useModelHealth`, `usePipelineHealth`, `useAgentHealth`, `useHealthHistory`, `useHealthServiceStatus`, `useComprehensiveHealth`, `useHealthDashboard`, `useRunHealthCheck`, `useHealthMonitor` |
+| `use-audit.ts` | `audit.ts` | `useWorkflowEntries`, `useWorkflowVerification`, `useWorkflowSummary`, `useRecentWorkflows`, `useWorkflowDetails`, `useAgentExecutionPath`, `useTierDistribution`, `useFailedValidationEntries`, `useLowConfidenceEntries`, `useAuditDashboard` |
+| `use-feedback.ts` | `feedback.ts` | `useLearningResults`, `usePatterns`, `useKnowledgeUpdates`, `useFeedbackHealth`, `useFeedbackStatus`, `useFeedbackDashboard`, `useRunLearningCycle`, `useRunLearningCycleAndWait`, `useQuickLearningCycle`, `useProcessFeedback`, `useApplyUpdate`, `useRollbackUpdate`, `usePollLearningResults` |
+
+**All hooks exported via `frontend/src/hooks/api/index.ts`**
+
+### 6.2 UI Pages Implementation - COMPLETE (2026-01-21)
+
+**Created UI pages for new features:**
+
+| Page | Route | Description |
+|------|-------|-------------|
+| `GapAnalysis.tsx` | `/gap-analysis` | ROI opportunity detection with quick wins and strategic bets visualization |
+| `Experiments.tsx` | `/experiments` | A/B testing management with experiment lifecycle, randomization, and monitoring |
+| `CausalAnalysis.tsx` | `/causal-analysis` | Multi-library causal inference with hierarchical CATE estimation |
+| `ResourceOptimization.tsx` | `/resource-optimization` | Budget allocation and scenario analysis with constraint visualization |
+| `SegmentAnalysis.tsx` | `/segment-analysis` | Heterogeneous treatment effects with policy recommendations |
+| `AuditChain.tsx` | `/audit-chain` | Workflow audit trails with cryptographic chain verification |
+| `FeedbackLearning.tsx` | `/feedback-learning` | Tier 5 self-improvement with pattern detection and knowledge updates |
+
+**All routes registered in `frontend/src/router/routes.tsx`**
 
 ---
 
@@ -537,6 +570,6 @@ All endpoints implemented including:
 
 ---
 
-**Document Version:** 2.0
-**Last Updated:** 2026-01-20
-**Status:** COMPLETED
+**Document Version:** 2.1
+**Last Updated:** 2026-01-21
+**Status:** COMPLETED (UI Integration Phase Added)
