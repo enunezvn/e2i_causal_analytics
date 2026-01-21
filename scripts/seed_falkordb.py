@@ -637,8 +637,8 @@ def main():
     )
     parser.add_argument(
         "--graph-name",
-        default=os.getenv("FALKORDB_GRAPH", "e2i_knowledge"),
-        help="Graph name (default: e2i_knowledge)"
+        default=os.getenv("FALKORDB_GRAPH_NAME", "e2i_causal"),
+        help="Graph name (default: e2i_causal)"
     )
 
     args = parser.parse_args()
