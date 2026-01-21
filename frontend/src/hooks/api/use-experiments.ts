@@ -334,13 +334,66 @@ export function useRandomizeUnits(
  * @returns Mutation object for enrollment
  */
 export function useEnrollUnit(
-  options?: Omit<UseMutationOptions<EnrollmentResult, ApiError, { experimentId: string; request: EnrollUnitRequest }>, 'mutationFn'>
+  options?: Omit<
+    UseMutationOptions<
+      EnrollmentResult,
+      ApiError,
+      { experimentId: string; request: EnrollUnitRequest },
+      { previousStats: EnrollmentStatsResponse | undefined }
+    >,
+    'mutationFn'
+  >
 ) {
   const queryClient = useQueryClient();
 
-  return useMutation<EnrollmentResult, ApiError, { experimentId: string; request: EnrollUnitRequest }>({
+  return useMutation<
+    EnrollmentResult,
+    ApiError,
+    { experimentId: string; request: EnrollUnitRequest },
+    { previousStats: EnrollmentStatsResponse | undefined }
+  >({
     mutationFn: ({ experimentId, request }) => enrollUnit(experimentId, request),
-    onSuccess: (_, variables) => {
+
+    // Optimistic update: Increment enrollment counts before server responds
+    onMutate: async (variables) => {
+      // Cancel outgoing refetches
+      await queryClient.cancelQueries({
+        queryKey: queryKeys.experiments.enrollmentStats(variables.experimentId),
+      });
+
+      // Snapshot previous state for rollback
+      const previousStats = queryClient.getQueryData<EnrollmentStatsResponse>(
+        queryKeys.experiments.enrollmentStats(variables.experimentId)
+      );
+
+      // Optimistically update enrollment stats
+      if (previousStats) {
+        const optimisticStats: EnrollmentStatsResponse = {
+          ...previousStats,
+          total_enrolled: previousStats.total_enrolled + 1,
+          active_count: previousStats.active_count + 1,
+        };
+        queryClient.setQueryData(
+          queryKeys.experiments.enrollmentStats(variables.experimentId),
+          optimisticStats
+        );
+      }
+
+      return { previousStats };
+    },
+
+    // Rollback on error
+    onError: (_error, variables, context) => {
+      if (context?.previousStats) {
+        queryClient.setQueryData(
+          queryKeys.experiments.enrollmentStats(variables.experimentId),
+          context.previousStats
+        );
+      }
+    },
+
+    // Always refetch to ensure consistency
+    onSettled: (_, __, variables) => {
       queryClient.invalidateQueries({
         queryKey: queryKeys.experiments.assignments(variables.experimentId),
       });
@@ -359,13 +412,67 @@ export function useEnrollUnit(
  * @returns Mutation object for withdrawal
  */
 export function useWithdrawUnit(
-  options?: Omit<UseMutationOptions<WithdrawResponse, ApiError, { experimentId: string; enrollmentId: string; request: WithdrawRequest }>, 'mutationFn'>
+  options?: Omit<
+    UseMutationOptions<
+      WithdrawResponse,
+      ApiError,
+      { experimentId: string; enrollmentId: string; request: WithdrawRequest },
+      { previousStats: EnrollmentStatsResponse | undefined }
+    >,
+    'mutationFn'
+  >
 ) {
   const queryClient = useQueryClient();
 
-  return useMutation<WithdrawResponse, ApiError, { experimentId: string; enrollmentId: string; request: WithdrawRequest }>({
-    mutationFn: ({ experimentId, enrollmentId, request }) => withdrawUnit(experimentId, enrollmentId, request),
-    onSuccess: (_, variables) => {
+  return useMutation<
+    WithdrawResponse,
+    ApiError,
+    { experimentId: string; enrollmentId: string; request: WithdrawRequest },
+    { previousStats: EnrollmentStatsResponse | undefined }
+  >({
+    mutationFn: ({ experimentId, enrollmentId, request }) =>
+      withdrawUnit(experimentId, enrollmentId, request),
+
+    // Optimistic update: Update counts before server responds
+    onMutate: async (variables) => {
+      // Cancel outgoing refetches
+      await queryClient.cancelQueries({
+        queryKey: queryKeys.experiments.enrollmentStats(variables.experimentId),
+      });
+
+      // Snapshot previous state for rollback
+      const previousStats = queryClient.getQueryData<EnrollmentStatsResponse>(
+        queryKeys.experiments.enrollmentStats(variables.experimentId)
+      );
+
+      // Optimistically update enrollment stats
+      if (previousStats) {
+        const optimisticStats: EnrollmentStatsResponse = {
+          ...previousStats,
+          active_count: Math.max(0, previousStats.active_count - 1),
+          withdrawn_count: previousStats.withdrawn_count + 1,
+        };
+        queryClient.setQueryData(
+          queryKeys.experiments.enrollmentStats(variables.experimentId),
+          optimisticStats
+        );
+      }
+
+      return { previousStats };
+    },
+
+    // Rollback on error
+    onError: (_error, variables, context) => {
+      if (context?.previousStats) {
+        queryClient.setQueryData(
+          queryKeys.experiments.enrollmentStats(variables.experimentId),
+          context.previousStats
+        );
+      }
+    },
+
+    // Always refetch to ensure consistency
+    onSettled: (_, __, variables) => {
       queryClient.invalidateQueries({
         queryKey: queryKeys.experiments.assignments(variables.experimentId),
       });

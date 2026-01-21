@@ -44,3 +44,22 @@ export type {
   FeedbackState,
   UseChatFeedbackReturn,
 } from './use-chat-feedback';
+
+// WebSocket hook with auto-reconnect
+export { useWebSocket, useGraphWebSocket } from './use-websocket';
+export type {
+  WebSocketState,
+  UseWebSocketOptions,
+  UseWebSocketReturn,
+} from './use-websocket';
+
+// Query error handling hooks
+export {
+  useQueryError,
+  useQueryErrorToast,
+  useMutationError,
+} from './use-query-error';
+export type {
+  UseQueryErrorOptions,
+  UseQueryErrorReturn,
+} from './use-query-error';

@@ -24,6 +24,8 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.api.dependencies.auth import require_auth
+
 # Real implementations
 from src.api.dependencies.bentoml_client import BentoMLClient, get_bentoml_client
 from src.feature_store.feast_client import FeastClient, get_feast_client
@@ -549,6 +551,7 @@ async def get_shap_service() -> RealTimeSHAPService:
 async def explain_prediction(
     request: ExplainRequest,
     background_tasks: BackgroundTasks,
+    user: Dict[str, Any] = Depends(require_auth),
 ) -> ExplainResponse:
     """
     Real-time prediction with SHAP explanation.
@@ -639,6 +642,7 @@ async def explain_prediction(
 async def explain_batch(
     request: BatchExplainRequest,
     background_tasks: BackgroundTasks,
+    user: Dict[str, Any] = Depends(require_auth),
 ) -> BatchExplainResponse:
     """
     Batch explanation endpoint for multiple patients.

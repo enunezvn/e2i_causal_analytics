@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
+from src.api.dependencies.auth import require_auth
 from src.api.dependencies.bentoml_client import BentoMLClient, get_bentoml_client
 
 logger = logging.getLogger(__name__)
@@ -155,6 +156,7 @@ async def predict(
     model_name: str,
     request: PredictionRequest,
     client: BentoMLClient = Depends(get_bentoml_client),
+    user: Dict[str, Any] = Depends(require_auth),
 ) -> PredictionResponse:
     """Make a prediction using the specified model.
 
@@ -223,6 +225,7 @@ async def predict_batch(
     model_name: str,
     request: BatchPredictionRequest,
     client: BentoMLClient = Depends(get_bentoml_client),
+    user: Dict[str, Any] = Depends(require_auth),
 ) -> BatchPredictionResponse:
     """Make batch predictions using the specified model.
 

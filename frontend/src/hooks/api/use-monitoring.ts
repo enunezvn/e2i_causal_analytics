@@ -66,6 +66,7 @@ import type {
   TriggerDriftDetectionRequest,
   TriggerRetrainingRequest,
 } from '@/types/monitoring';
+import { AlertStatus } from '@/types/monitoring';
 import type { ApiError } from '@/lib/api-client';
 
 // =============================================================================
@@ -306,7 +307,8 @@ export function useUpdateAlert(
     UseMutationOptions<
       AlertItem,
       ApiError,
-      { alertId: string; request: AlertActionRequest }
+      { alertId: string; request: AlertActionRequest },
+      { previousAlert: AlertItem | undefined; previousAlerts: AlertListResponse | undefined }
     >,
     'mutationFn'
   >
@@ -316,16 +318,116 @@ export function useUpdateAlert(
   return useMutation<
     AlertItem,
     ApiError,
-    { alertId: string; request: AlertActionRequest }
+    { alertId: string; request: AlertActionRequest },
+    { previousAlert: AlertItem | undefined; previousAlerts: AlertListResponse | undefined }
   >({
     mutationFn: ({ alertId, request }) => updateAlert(alertId, request),
+
+    // Optimistic update: Immediately update the alert before the server responds
+    onMutate: async (variables) => {
+      // Cancel any outgoing refetches to prevent overwriting our optimistic update
+      await queryClient.cancelQueries({
+        queryKey: queryKeys.monitoring.alert(variables.alertId),
+      });
+      await queryClient.cancelQueries({
+        queryKey: queryKeys.monitoring.alerts(),
+      });
+
+      // Snapshot the previous value for rollback
+      const previousAlert = queryClient.getQueryData<AlertItem>(
+        queryKeys.monitoring.alert(variables.alertId)
+      );
+      const previousAlerts = queryClient.getQueryData<AlertListResponse>(
+        queryKeys.monitoring.alerts()
+      );
+
+      // Determine new status based on action
+      const statusMap: Record<string, AlertStatus> = {
+        acknowledge: AlertStatus.ACKNOWLEDGED,
+        resolve: AlertStatus.RESOLVED,
+        snooze: AlertStatus.SNOOZED,
+      };
+      const newStatus = statusMap[variables.request.action];
+      const now = new Date().toISOString();
+
+      // Optimistically update individual alert
+      if (previousAlert) {
+        const optimisticAlert: AlertItem = {
+          ...previousAlert,
+          status: newStatus,
+          ...(variables.request.action === 'acknowledge' && {
+            acknowledged_at: now,
+            acknowledged_by: variables.request.user_id,
+          }),
+          ...(variables.request.action === 'resolve' && {
+            resolved_at: now,
+            resolved_by: variables.request.user_id,
+          }),
+        };
+        queryClient.setQueryData(
+          queryKeys.monitoring.alert(variables.alertId),
+          optimisticAlert
+        );
+      }
+
+      // Optimistically update alerts list
+      if (previousAlerts) {
+        const optimisticAlerts: AlertListResponse = {
+          ...previousAlerts,
+          alerts: previousAlerts.alerts.map((alert) =>
+            alert.id === variables.alertId
+              ? {
+                  ...alert,
+                  status: newStatus,
+                  ...(variables.request.action === 'acknowledge' && {
+                    acknowledged_at: now,
+                    acknowledged_by: variables.request.user_id,
+                  }),
+                  ...(variables.request.action === 'resolve' && {
+                    resolved_at: now,
+                    resolved_by: variables.request.user_id,
+                  }),
+                }
+              : alert
+          ),
+          active_count:
+            newStatus !== AlertStatus.ACTIVE
+              ? previousAlerts.active_count - 1
+              : previousAlerts.active_count,
+        };
+        queryClient.setQueryData(queryKeys.monitoring.alerts(), optimisticAlerts);
+      }
+
+      // Return context with the snapshotted values
+      return { previousAlert, previousAlerts };
+    },
+
+    // Rollback on error
+    onError: (_error, variables, context) => {
+      if (context?.previousAlert) {
+        queryClient.setQueryData(
+          queryKeys.monitoring.alert(variables.alertId),
+          context.previousAlert
+        );
+      }
+      if (context?.previousAlerts) {
+        queryClient.setQueryData(
+          queryKeys.monitoring.alerts(),
+          context.previousAlerts
+        );
+      }
+    },
+
+    // Update cache with server response on success
     onSuccess: (data, variables) => {
-      // Update cache for this alert
       queryClient.setQueryData(
         queryKeys.monitoring.alert(variables.alertId),
         data
       );
-      // Invalidate alerts list
+    },
+
+    // Always refetch after error or success to ensure consistency
+    onSettled: () => {
       queryClient.invalidateQueries({
         queryKey: queryKeys.monitoring.alerts(),
       });

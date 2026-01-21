@@ -31,8 +31,10 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel
+
+from src.api.dependencies.auth import require_auth
 
 from src.api.schemas.causal import (
     AggregationMethod,
@@ -83,6 +85,7 @@ async def run_hierarchical_analysis(
     request: HierarchicalAnalysisRequest,
     background_tasks: BackgroundTasks,
     async_mode: bool = Query(default=False, description="Run asynchronously"),
+    user: Dict[str, Any] = Depends(require_auth),
 ) -> HierarchicalAnalysisResponse:
     """
     Run hierarchical CATE analysis (EconML within CausalML segments).
@@ -381,6 +384,7 @@ async def _execute_hierarchical_analysis(
 @router.post("/route", response_model=RouteQueryResponse)
 async def route_causal_query(
     request: RouteQueryRequest,
+    user: Dict[str, Any] = Depends(require_auth),
 ) -> RouteQueryResponse:
     """
     Route a causal query to the appropriate library.
@@ -500,6 +504,7 @@ async def run_sequential_pipeline(
     request: SequentialPipelineRequest,
     background_tasks: BackgroundTasks,
     async_mode: bool = Query(default=False, description="Run asynchronously"),
+    user: Dict[str, Any] = Depends(require_auth),
 ) -> SequentialPipelineResponse:
     """
     Run sequential multi-library pipeline.
@@ -694,6 +699,7 @@ async def _execute_sequential_pipeline(
 @router.post("/pipeline/parallel", response_model=ParallelPipelineResponse)
 async def run_parallel_pipeline(
     request: ParallelPipelineRequest,
+    user: Dict[str, Any] = Depends(require_auth),
 ) -> ParallelPipelineResponse:
     """
     Run parallel multi-library analysis.
@@ -849,6 +855,7 @@ async def get_pipeline_status(
 @router.post("/validate", response_model=CrossValidationResponse)
 async def run_cross_validation(
     request: CrossValidationRequest,
+    user: Dict[str, Any] = Depends(require_auth),
 ) -> CrossValidationResponse:
     """
     Run cross-library validation (DoWhy ↔ CausalML).

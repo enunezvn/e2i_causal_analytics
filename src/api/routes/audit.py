@@ -24,9 +24,10 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.api.dependencies.auth import require_auth
 from src.utils.audit_chain import (
     AuditChainEntry,
     AuditChainService,
@@ -147,6 +148,7 @@ async def get_workflow_entries(
     workflow_id: UUID,
     limit: int = Query(default=100, ge=1, le=1000, description="Maximum entries to return"),
     offset: int = Query(default=0, ge=0, description="Number of entries to skip"),
+    user: Dict[str, Any] = Depends(require_auth),
 ) -> List[AuditEntryResponse]:
     """Get all audit entries for a workflow."""
     service = get_audit_service()
@@ -188,7 +190,10 @@ async def get_workflow_entries(
     summary="Verify chain integrity",
     description="Verify the cryptographic integrity of a workflow's audit chain.",
 )
-async def verify_workflow_chain(workflow_id: UUID) -> ChainVerificationResponse:
+async def verify_workflow_chain(
+    workflow_id: UUID,
+    user: Dict[str, Any] = Depends(require_auth),
+) -> ChainVerificationResponse:
     """Verify the integrity of a workflow's audit chain."""
     service = get_audit_service()
     if service is None:
@@ -220,7 +225,10 @@ async def verify_workflow_chain(workflow_id: UUID) -> ChainVerificationResponse:
     summary="Get workflow summary",
     description="Get a summary of a workflow including agents involved and aggregated metrics.",
 )
-async def get_workflow_summary(workflow_id: UUID) -> WorkflowSummaryResponse:
+async def get_workflow_summary(
+    workflow_id: UUID,
+    user: Dict[str, Any] = Depends(require_auth),
+) -> WorkflowSummaryResponse:
     """Get a summary of a workflow's audit chain."""
     service = get_audit_service()
     if service is None:
@@ -312,6 +320,7 @@ async def get_recent_workflows(
     limit: int = Query(default=20, ge=1, le=100, description="Maximum workflows to return"),
     brand: Optional[str] = Query(default=None, description="Filter by brand"),
     agent_name: Optional[str] = Query(default=None, description="Filter by agent name"),
+    user: Dict[str, Any] = Depends(require_auth),
 ) -> List[RecentWorkflowResponse]:
     """Get recent audit workflows."""
     service = get_audit_service()

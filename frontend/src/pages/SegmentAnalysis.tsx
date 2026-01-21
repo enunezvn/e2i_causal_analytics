@@ -37,11 +37,13 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { KPICard } from '@/components/visualizations';
+import { QueryErrorState } from '@/components/ui/query-error-state';
 import {
   useSegmentHealth,
   useRunSegmentAnalysis,
   usePolicies,
 } from '@/hooks/api';
+import { useQueryErrorToast, useMutationError } from '@/hooks/use-query-error';
 import type {
   SegmentAnalysisResponse,
   CATEResult,
@@ -541,9 +543,14 @@ export default function SegmentAnalysis() {
   const [selectedOutcome, setSelectedOutcome] = useState('trx');
 
   // API hooks
-  const { data: healthData, isLoading: healthLoading } = useSegmentHealth();
-  const { data: _policiesData } = usePolicies({ limit: 10 });
-  const runAnalysis = useRunSegmentAnalysis();
+  const { data: healthData, isLoading: healthLoading, error: healthError, refetch: refetchHealth, isRefetching: isRefetchingHealth } = useSegmentHealth();
+  const { data: _policiesData, error: policiesError } = usePolicies({ limit: 10 });
+  const onMutationError = useMutationError({ context: 'running segment analysis' });
+  const runAnalysis = useRunSegmentAnalysis({ onError: onMutationError });
+
+  // Automatic error toasts for query errors
+  useQueryErrorToast(healthError, { context: 'loading segment health' });
+  useQueryErrorToast(policiesError, { context: 'loading policies' });
 
   // Use sample data for now (API may not be available)
   const analysisResult = sampleAnalysisResult;
@@ -630,6 +637,15 @@ export default function SegmentAnalysis() {
         </div>
       </div>
 
+      {/* Error States */}
+      <QueryErrorState
+        error={healthError}
+        onRetry={refetchHealth}
+        isRetrying={isRefetchingHealth}
+        title="Failed to load segment health"
+        size="sm"
+      />
+
       {/* KPI Summary */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
         <KPICard
@@ -705,6 +721,15 @@ export default function SegmentAnalysis() {
               </Button>
             </div>
           </div>
+          {/* Mutation Error Display */}
+          <QueryErrorState
+            error={runAnalysis.error}
+            onRetry={handleRunAnalysis}
+            isRetrying={runAnalysis.isPending}
+            title="Analysis failed"
+            size="sm"
+            className="mt-4"
+          />
         </CardContent>
       </Card>
 

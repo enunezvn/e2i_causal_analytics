@@ -44,6 +44,10 @@ PUBLIC_PATHS: List[Tuple[str, str]] = [
     ("*", "/api/docs/oauth2-redirect"),
     ("*", "/api/redoc"),
     ("*", "/api/openapi.json"),
+    # Authentication endpoints - must be public for login/register
+    ("POST", "/api/auth/login"),
+    ("POST", "/api/auth/register"),
+    ("POST", "/api/auth/refresh"),
     # Read-only KPI endpoints - public
     ("GET", "/api/kpis"),
     ("GET", "/api/kpis/workstreams"),
@@ -56,27 +60,17 @@ PUBLIC_PATHS: List[Tuple[str, str]] = [
     ("GET", "/api/graph/nodes"),
     ("GET", "/api/graph/relationships"),
     ("GET", "/api/graph/stats"),
-    # CopilotKit endpoints - public for frontend integration
+    # CopilotKit - Only status endpoint is public (requires auth for chat/feedback/analytics)
     ("GET", "/api/copilotkit/status"),
-    ("GET", "/api/copilotkit"),  # Runtime info endpoint (GET)
-    ("GET", "/api/copilotkit/"),  # Runtime info endpoint with trailing slash
-    ("GET", "/api/copilotkit/info"),  # Explicit info endpoint
-    ("POST", "/api/copilotkit/info"),
-    ("POST", "/api/copilotkit"),  # Main CopilotKit runtime endpoint
-    ("POST", "/api/copilotkit/"),  # With trailing slash
-    # Chatbot endpoints - public for testing
-    ("POST", "/api/copilotkit/chat"),
-    ("POST", "/api/copilotkit/chat/stream"),
 ]
 
 # Paths that match patterns (for dynamic routes)
 PUBLIC_PATH_PATTERNS: List[Tuple[str, str]] = [
     # KPI metadata by ID is public
     ("GET", r"^/api/kpis/[^/]+/metadata$"),
-    # CopilotKit - all paths public for frontend chatbot integration
-    # The SDK uses dynamic routing with various path formats (agent/, agents/, action/, actions/, info, etc.)
-    ("*", r"^/api/copilotkit/"),
-    ("*", r"^/api/copilotkit$"),  # Exact path without trailing slash
+    # CopilotKit - ONLY status endpoint is public (see PUBLIC_PATHS above)
+    # All other CopilotKit endpoints (chat, feedback, analytics) require authentication
+    # The frontend includes Authorization header via axios interceptors
 ]
 
 

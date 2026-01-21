@@ -36,8 +36,10 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
+
+from src.api.dependencies.auth import require_auth
 
 logger = logging.getLogger(__name__)
 
@@ -401,6 +403,7 @@ class MonitorResponse(BaseModel):
 async def randomize_units(
     experiment_id: str,
     request: RandomizeRequest,
+    user: Dict[str, Any] = Depends(require_auth),
 ) -> RandomizeResponse:
     """
     Randomize units to experiment variants.
@@ -541,6 +544,7 @@ async def get_assignments(
 async def enroll_unit(
     experiment_id: str,
     request: EnrollUnitRequest,
+    user: Dict[str, Any] = Depends(require_auth),
 ) -> EnrollmentResult:
     """
     Enroll a unit in an experiment.
@@ -593,6 +597,7 @@ async def withdraw_unit(
     experiment_id: str,
     enrollment_id: str,
     request: WithdrawRequest,
+    user: Dict[str, Any] = Depends(require_auth),
 ) -> Dict[str, Any]:
     """
     Withdraw a unit from an experiment.
@@ -677,6 +682,7 @@ async def trigger_interim_analysis(
     request: TriggerInterimAnalysisRequest,
     background_tasks: BackgroundTasks,
     async_mode: bool = Query(default=False, description="Run asynchronously"),
+    user: Dict[str, Any] = Depends(require_auth),
 ) -> InterimAnalysisResult:
     """
     Trigger an interim analysis for an experiment.
@@ -951,6 +957,7 @@ async def get_srm_checks(
 @router.post("/{experiment_id}/srm-check", response_model=SRMCheckResult)
 async def run_srm_check(
     experiment_id: str,
+    user: Dict[str, Any] = Depends(require_auth),
 ) -> SRMCheckResult:
     """
     Run an SRM check for an experiment.
@@ -1041,6 +1048,7 @@ async def get_fidelity_comparisons(
 async def update_fidelity_comparison(
     experiment_id: str,
     twin_simulation_id: str,
+    user: Dict[str, Any] = Depends(require_auth),
 ) -> FidelityComparison:
     """
     Update fidelity comparison with latest experiment results.
@@ -1089,6 +1097,7 @@ async def trigger_experiment_monitoring(
     request: TriggerMonitorRequest,
     background_tasks: BackgroundTasks,
     async_mode: bool = Query(default=False, description="Run asynchronously"),
+    user: Dict[str, Any] = Depends(require_auth),
 ) -> MonitorResponse:
     """
     Trigger experiment monitoring sweep.

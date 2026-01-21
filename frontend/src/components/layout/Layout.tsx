@@ -18,6 +18,7 @@ import { Header } from './Header';
 import { Sidebar } from './Sidebar';
 import { Footer } from './Footer';
 import { E2IChatSidebar } from '@/components/chat';
+import { ErrorBoundary, ChatErrorBoundary } from '@/components/ui/error-boundary';
 
 /**
  * Layout props interface
@@ -89,15 +90,19 @@ export function Layout({
           <a href="#main-content" className="sr-only focus:not-sr-only">
             Skip to main content
           </a>
-          {children}
+          <ErrorBoundary sectionName="Page content">
+            {children}
+          </ErrorBoundary>
         </main>
 
         {/* Footer - at bottom */}
         {!hideFooter && <Footer />}
       </div>
 
-      {/* E2I Chat Sidebar - AI Assistant */}
-      <E2IChatSidebar position="right" showAgentStatus />
+      {/* E2I Chat Sidebar - AI Assistant (wrapped in error boundary) */}
+      <ChatErrorBoundary>
+        <E2IChatSidebar position="right" showAgentStatus />
+      </ChatErrorBoundary>
     </div>
   );
 }
