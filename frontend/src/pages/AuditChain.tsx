@@ -18,7 +18,6 @@ import {
   RefreshCw,
   CheckCircle2,
   XCircle,
-  Clock,
   Link as LinkIcon,
   AlertTriangle,
   ChevronRight,
@@ -28,8 +27,6 @@ import {
   FileText,
 } from 'lucide-react';
 import {
-  LineChart,
-  Line,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -57,15 +54,14 @@ import type { StatusType } from '@/components/visualizations/dashboard/StatusBad
 // TYPES
 // =============================================================================
 
+// Extended workflow item for UI (includes computed fields)
 interface WorkflowListItem {
   workflow_id: string;
-  brand: string;
+  brand?: string;
   first_agent: string;
   last_agent: string;
   entry_count: number;
   started_at: string;
-  completed_at?: string;
-  is_valid: boolean;
 }
 
 // =============================================================================
@@ -102,8 +98,6 @@ const SAMPLE_WORKFLOWS: WorkflowListItem[] = [
     last_agent: 'explainer',
     entry_count: 8,
     started_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
-    completed_at: new Date(Date.now() - 1.5 * 60 * 60 * 1000).toISOString(),
-    is_valid: true,
   },
   {
     workflow_id: 'wf-002-def456',
@@ -112,8 +106,6 @@ const SAMPLE_WORKFLOWS: WorkflowListItem[] = [
     last_agent: 'prediction_synthesizer',
     entry_count: 6,
     started_at: new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString(),
-    completed_at: new Date(Date.now() - 3.8 * 60 * 60 * 1000).toISOString(),
-    is_valid: true,
   },
   {
     workflow_id: 'wf-003-ghi789',
@@ -122,8 +114,6 @@ const SAMPLE_WORKFLOWS: WorkflowListItem[] = [
     last_agent: 'gap_analyzer',
     entry_count: 5,
     started_at: new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString(),
-    completed_at: new Date(Date.now() - 5.7 * 60 * 60 * 1000).toISOString(),
-    is_valid: false,
   },
 ];
 
@@ -163,8 +153,8 @@ function formatDuration(startStr: string, endStr?: string): string {
   return `${seconds}s`;
 }
 
-function getVerificationStatus(isValid: boolean): StatusType {
-  return isValid ? 'healthy' : 'error';
+function getVerificationStatus(chainVerified?: boolean): StatusType {
+  return chainVerified === false ? 'error' : 'healthy';
 }
 
 // =============================================================================
@@ -220,14 +210,11 @@ function AuditChain() {
     }));
   }, [distribution]);
 
-  // Calculate stats
+  // Calculate stats (verification status comes from workflow details, not list)
   const stats = useMemo(() => {
-    const validCount = workflows.filter(w => w.is_valid).length;
     const totalEntries = workflows.reduce((sum, w) => sum + w.entry_count, 0);
     return {
       totalWorkflows: workflows.length,
-      validWorkflows: validCount,
-      invalidWorkflows: workflows.length - validCount,
       totalEntries,
       avgEntriesPerWorkflow: workflows.length > 0 ? Math.round(totalEntries / workflows.length) : 0,
     };
@@ -264,7 +251,7 @@ function AuditChain() {
       </div>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
         <Card>
           <CardHeader className="pb-2">
             <CardDescription>Total Workflows</CardDescription>
@@ -276,40 +263,6 @@ function AuditChain() {
           <CardContent>
             <p className="text-sm text-[var(--color-muted-foreground)]">
               Recent 24h activity
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>Verified</CardDescription>
-            <CardTitle className="text-2xl flex items-center gap-2">
-              {stats.validWorkflows}
-              <CheckCircle2 className="h-5 w-5 text-emerald-500" />
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm text-[var(--color-muted-foreground)]">
-              Chain integrity valid
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>Invalid</CardDescription>
-            <CardTitle className="text-2xl flex items-center gap-2">
-              {stats.invalidWorkflows}
-              {stats.invalidWorkflows > 0 ? (
-                <XCircle className="h-5 w-5 text-rose-500" />
-              ) : (
-                <CheckCircle2 className="h-5 w-5 text-emerald-500" />
-              )}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm text-[var(--color-muted-foreground)]">
-              {stats.invalidWorkflows > 0 ? 'Requires attention' : 'All clear'}
             </p>
           </CardContent>
         </Card>
@@ -385,11 +338,11 @@ function AuditChain() {
                       }}
                     >
                       <div className="flex items-center gap-4">
-                        <StatusDot status={getVerificationStatus(workflow.is_valid)} />
+                        <StatusDot status="healthy" />
                         <div>
                           <div className="flex items-center gap-2">
                             <span className="font-mono text-sm">{workflow.workflow_id}</span>
-                            <Badge variant="outline">{workflow.brand}</Badge>
+                            {workflow.brand && <Badge variant="outline">{workflow.brand}</Badge>}
                           </div>
                           <p className="text-sm text-[var(--color-muted-foreground)] mt-1">
                             {workflow.first_agent} <ChevronRight className="inline h-3 w-3" /> {workflow.last_agent}
@@ -400,17 +353,8 @@ function AuditChain() {
                         <div className="text-right">
                           <p className="font-medium">{workflow.entry_count} entries</p>
                           <p className="text-[var(--color-muted-foreground)]">
-                            {formatDuration(workflow.started_at, workflow.completed_at)}
-                          </p>
-                        </div>
-                        <div className="text-right">
-                          <p className="text-[var(--color-muted-foreground)]">
                             {formatDateTime(workflow.started_at)}
                           </p>
-                          <StatusBadge
-                            status={getVerificationStatus(workflow.is_valid)}
-                            size="sm"
-                          />
                         </div>
                       </div>
                     </div>
@@ -455,7 +399,7 @@ function AuditChain() {
                           </div>
                           <div className="p-3 rounded-lg bg-[var(--color-muted)]/50">
                             <p className="text-sm text-[var(--color-muted-foreground)]">Unique Agents</p>
-                            <p className="text-2xl font-bold">{workflowDetails.summary.unique_agents}</p>
+                            <p className="text-2xl font-bold">{workflowDetails.summary.agents_involved?.length ?? 0}</p>
                           </div>
                           <div className="p-3 rounded-lg bg-[var(--color-muted)]/50">
                             <p className="text-sm text-[var(--color-muted-foreground)]">Brand</p>
@@ -513,7 +457,7 @@ function AuditChain() {
                     <div className="space-y-4">
                       {workflowDetails.entries.map((entry, index) => (
                         <div
-                          key={entry.id || index}
+                          key={entry.entry_id || index}
                           className="flex items-start gap-4 p-3 rounded-lg border border-[var(--color-border)]"
                         >
                           <div className="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center bg-[var(--color-muted)] text-sm font-bold">
@@ -523,7 +467,7 @@ function AuditChain() {
                             <div className="flex items-center gap-2 mb-1">
                               <span className="font-medium">{entry.agent_name}</span>
                               <Badge variant="outline" className="text-xs">
-                                Tier {entry.tier}
+                                Tier {entry.agent_tier}
                               </Badge>
                               {entry.confidence_score !== undefined && (
                                 <Badge
@@ -535,7 +479,7 @@ function AuditChain() {
                               )}
                             </div>
                             <p className="text-sm text-[var(--color-muted-foreground)]">
-                              {formatDateTime(entry.timestamp)}
+                              {formatDateTime(entry.created_at)}
                               {entry.duration_ms && ` • ${entry.duration_ms}ms`}
                             </p>
                           </div>
@@ -601,22 +545,18 @@ function AuditChain() {
                   </div>
 
                   {/* Verification Details */}
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                     <div className="p-4 rounded-lg bg-[var(--color-muted)]/50">
-                      <p className="text-sm text-[var(--color-muted-foreground)]">Entries Verified</p>
-                      <p className="text-2xl font-bold">{workflowDetails.verification.entries_verified}</p>
+                      <p className="text-sm text-[var(--color-muted-foreground)]">Entries Checked</p>
+                      <p className="text-2xl font-bold">{workflowDetails.verification.entries_checked}</p>
                     </div>
                     <div className="p-4 rounded-lg bg-[var(--color-muted)]/50">
                       <p className="text-sm text-[var(--color-muted-foreground)]">Hash Algorithm</p>
-                      <p className="text-lg font-mono">{workflowDetails.verification.hash_algorithm || 'SHA-256'}</p>
+                      <p className="text-lg font-mono">SHA-256</p>
                     </div>
                     <div className="p-4 rounded-lg bg-[var(--color-muted)]/50">
                       <p className="text-sm text-[var(--color-muted-foreground)]">Verified At</p>
                       <p className="text-lg">{formatDateTime(workflowDetails.verification.verified_at)}</p>
-                    </div>
-                    <div className="p-4 rounded-lg bg-[var(--color-muted)]/50">
-                      <p className="text-sm text-[var(--color-muted-foreground)]">Verification Time</p>
-                      <p className="text-lg">{workflowDetails.verification.verification_time_ms || 0}ms</p>
                     </div>
                   </div>
                 </div>
@@ -643,7 +583,7 @@ function AuditChain() {
                     <div className="space-y-3">
                       {failedEntries.map((entry, index) => (
                         <div
-                          key={entry.id || index}
+                          key={entry.entry_id || index}
                           className="p-4 rounded-lg border border-rose-200 bg-rose-50/50 dark:bg-rose-950/20"
                         >
                           <div className="flex items-center justify-between mb-2">
@@ -652,11 +592,11 @@ function AuditChain() {
                               <Badge variant="outline">Seq #{entry.sequence_number}</Badge>
                             </div>
                             <span className="text-sm text-[var(--color-muted-foreground)]">
-                              {formatDateTime(entry.timestamp)}
+                              {formatDateTime(entry.created_at)}
                             </span>
                           </div>
                           <p className="text-sm text-rose-600">
-                            Validation failed: {entry.validation_error || 'Unknown error'}
+                            Validation check failed
                           </p>
                         </div>
                       ))}
@@ -684,7 +624,7 @@ function AuditChain() {
                     <div className="space-y-3">
                       {lowConfidenceEntries.map((entry, index) => (
                         <div
-                          key={entry.id || index}
+                          key={entry.entry_id || index}
                           className="p-4 rounded-lg border border-amber-200 bg-amber-50/50 dark:bg-amber-950/20"
                         >
                           <div className="flex items-center justify-between mb-2">
@@ -696,7 +636,7 @@ function AuditChain() {
                               </Badge>
                             </div>
                             <span className="text-sm text-[var(--color-muted-foreground)]">
-                              {formatDateTime(entry.timestamp)}
+                              {formatDateTime(entry.created_at)}
                             </span>
                           </div>
                         </div>
