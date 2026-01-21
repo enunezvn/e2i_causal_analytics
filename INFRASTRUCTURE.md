@@ -10,12 +10,24 @@ ssh -i ~/.ssh/replit enunez@138.197.4.36
 ssh e2i-prod
 ```
 
-**API Endpoints:**
-| Endpoint | URL |
-|----------|-----|
-| Health Check | http://138.197.4.36/health |
-| API (via nginx) | http://138.197.4.36/ |
-| API (direct) | http://138.197.4.36:8000/ |
+**All Services (via Nginx on Port 80):**
+| Service | URL | Description |
+|---------|-----|-------------|
+| Frontend | http://138.197.4.36/ | React dashboard |
+| API | http://138.197.4.36/api/ | FastAPI endpoints |
+| Health | http://138.197.4.36/health | Health check |
+| Chatbot | http://138.197.4.36/copilotkit | CopilotKit endpoint |
+| MLflow | http://138.197.4.36/mlflow/ | Experiment tracking |
+| Opik | http://138.197.4.36/opik/ | Agent observability |
+| FalkorDB | http://138.197.4.36/falkordb/ | Graph database browser |
+
+**Direct Port Access (if needed):**
+| Service | URL |
+|---------|-----|
+| API | http://138.197.4.36:8000 |
+| MLflow | http://138.197.4.36:5000 |
+| Opik | http://138.197.4.36:5173 |
+| FalkorDB Browser | http://138.197.4.36:3030 |
 
 **Common Commands (run on droplet):**
 ```bash
@@ -219,23 +231,76 @@ E2I application services managed by systemd:
 | `fail2ban` | Intrusion prevention | - | ✅ Active |
 
 **Nginx Reverse Proxy Configuration:**
-- Config file: `/etc/nginx/sites-available/e2i-api`
-- Proxies port 80 → 8000 (API)
-- WebSocket support at `/ws`
+- Config file: `/etc/nginx/sites-available/e2i-app`
 - Security headers enabled
-- Logs: `/var/log/nginx/e2i-api.access.log`, `/var/log/nginx/e2i-api.error.log`
+- WebSocket support for `/ws`, `/opik/`, `/falkordb/`
+- Logs: `/var/log/nginx/e2i-app.access.log`, `/var/log/nginx/e2i-app.error.log`
+
+**Nginx Proxy Routes:**
+| Route | Backend | Port |
+|-------|---------|------|
+| `/` | Frontend static files | - |
+| `/api/` | e2i_api | 8000 |
+| `/health` | e2i_api | 8000 |
+| `/copilotkit` | e2i_api | 8000 |
+| `/ws` | e2i_api (WebSocket) | 8000 |
+| `/mlflow/` | mlflow_ui | 5000 |
+| `/opik/` | opik_ui | 5173 |
+| `/falkordb/` | falkordb_browser | 3030 |
+
+### Docker Containers
+
+**E2I Core Services** (from `/opt/e2i_causal_analytics/docker/docker-compose.yml`):
+| Container | Image | Port | Purpose |
+|-----------|-------|------|---------|
+| e2i_redis | redis:7-alpine | 6382 | Working memory cache |
+| e2i_falkordb | falkordb/falkordb:latest | 6381 | Graph database |
+| e2i_falkordb_browser | falkordb/falkordb-browser:latest | 3030 | Graph DB explorer |
+| e2i_mlflow | mlflow | 5000 | Experiment tracking |
+
+**Opik Stack** (from `/home/enunez/opik/deployment/docker-compose/`):
+| Container | Port | Purpose |
+|-----------|------|---------|
+| opik-frontend-1 | 5173 | Opik UI |
+| opik-backend-1 | 8080, 3003 | Opik API |
+| opik-python-backend-1 | 8001 | Python backend |
+| opik-clickhouse-1 | 8123, 9000 | Analytics DB |
+| opik-mysql-1 | 3306 | Metadata DB |
+| opik-redis-1 | 6379 | Cache |
+| opik-minio-1 | 9001, 9090 | Object storage |
+| opik-zookeeper-1 | 2181 | Coordination |
+
+**Start/Stop Commands:**
+```bash
+# Start E2I containers (Redis, FalkorDB, MLflow)
+cd /opt/e2i_causal_analytics && docker compose -f docker/docker-compose.yml up -d redis falkordb falkordb-browser mlflow
+
+# Start Opik stack
+cd /home/enunez/opik/deployment/docker-compose && docker compose up -d
+
+# Check all containers
+docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+
+# Stop all E2I containers
+cd /opt/e2i_causal_analytics && docker compose -f docker/docker-compose.yml down
+
+# Stop Opik stack
+cd /home/enunez/opik/deployment/docker-compose && docker compose down
+```
 
 ### Application Paths (on droplet)
 
 | Path | Description |
 |------|-------------|
-| `/home/enunez/Projects/e2i_causal_analytics` | Application root |
-| `/home/enunez/Projects/e2i_causal_analytics/venv` | Python virtual environment |
-| `/home/enunez/Projects/e2i_causal_analytics/.env` | Environment variables |
+| `/opt/e2i_causal_analytics` | Application root |
+| `/opt/e2i_causal_analytics/venv` | Python virtual environment |
+| `/opt/e2i_causal_analytics/.env` | Environment variables |
+| `/home/enunez/opik` | Opik installation |
+| `/home/enunez/opik/deployment/docker-compose` | Opik Docker compose |
 | `/etc/systemd/system/e2i-api.service` | API systemd service file |
-| `/etc/nginx/sites-available/e2i-api` | Nginx config |
-| `/var/log/nginx/e2i-api.access.log` | Nginx access logs |
-| `/var/log/nginx/e2i-api.error.log` | Nginx error logs |
+| `/etc/nginx/sites-available/e2i-app` | Nginx config |
+| `/var/log/nginx/e2i-app.access.log` | Nginx access logs |
+| `/var/log/nginx/e2i-app.error.log` | Nginx error logs |
 
 ### Updating the Application
 
@@ -506,7 +571,10 @@ On login, you'll see a warning if orphan processes are detected.
 - [x] Configure E2I API systemd service
 - [x] Set up Nginx reverse proxy for API
 - [x] Set up monitoring/alerting (memory + orphan cleanup)
+- [x] Install and configure MLflow (Docker container + nginx proxy)
+- [x] Install and configure Opik (Agent observability)
+- [x] Install and configure FalkorDB Browser
+- [x] Configure nginx proxies for MLOps tools (/mlflow/, /opik/, /falkordb/)
 - [ ] Configure SSL/TLS certificates (Let's Encrypt)
-- [ ] Install and configure MLflow
 - [ ] Configure automatic backups
 - [ ] Configure domain/DNS (if applicable)
