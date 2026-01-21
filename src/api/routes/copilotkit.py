@@ -2750,6 +2750,15 @@ class ChatResponse(BaseModel):
     agent_name: Optional[str] = None
     error: Optional[str] = None
 
+    # Dispatch observability (Phase 1 System Evaluation)
+    orchestrator_used: bool = False
+    agents_dispatched: List[str] = []
+    routed_agent: Optional[str] = None
+    response_confidence: Optional[float] = None
+    execution_time_ms: Optional[float] = None
+    intent: Optional[str] = None
+    intent_confidence: Optional[float] = None
+
 
 async def _stream_chat_response(request: ChatRequest) -> AsyncGenerator[str, None]:
     """
@@ -2760,9 +2769,14 @@ async def _stream_chat_response(request: ChatRequest) -> AsyncGenerator[str, Non
     - {"type": "text", "data": "..."}
     - {"type": "conversation_title", "data": "..."}
     - {"type": "tool_call", "data": "..."}
+    - {"type": "dispatch_info", "data": {...}} - Dispatch observability
     - {"type": "done", "data": ""}
     - {"type": "error", "data": "..."}
     """
+    import time
+
+    start_time = time.time()
+
     try:
         from src.api.routes.chatbot_graph import stream_chatbot
 
@@ -2776,6 +2790,16 @@ async def _stream_chat_response(request: ChatRequest) -> AsyncGenerator[str, Non
 
         response_text = ""
         conversation_title = None
+
+        # Track dispatch observability (Phase 1 System Evaluation)
+        dispatch_info = {
+            "orchestrator_used": False,
+            "agents_dispatched": [],
+            "routed_agent": None,
+            "response_confidence": None,
+            "intent": None,
+            "intent_confidence": None,
+        }
 
         # Stream through chatbot workflow
         async for state_update in stream_chatbot(
@@ -2818,16 +2842,37 @@ async def _stream_chat_response(request: ChatRequest) -> AsyncGenerator[str, Non
                                             yield f"data: {json.dumps({'type': 'text', 'data': new_text})}\n\n"
                                             response_text = msg.content
 
+                        # Track dispatch observability fields
+                        if "orchestrator_used" in node_output:
+                            dispatch_info["orchestrator_used"] = node_output["orchestrator_used"]
+                        if "agents_dispatched" in node_output:
+                            dispatch_info["agents_dispatched"] = node_output["agents_dispatched"]
+                        if "routed_agent" in node_output:
+                            dispatch_info["routed_agent"] = node_output["routed_agent"]
+                        if "response_confidence" in node_output:
+                            dispatch_info["response_confidence"] = node_output["response_confidence"]
+                        if "intent" in node_output:
+                            dispatch_info["intent"] = node_output["intent"]
+                        if "intent_confidence" in node_output:
+                            dispatch_info["intent_confidence"] = node_output["intent_confidence"]
+
         # Generate title if not set
         if not conversation_title and response_text:
             # Simple title generation from query
             title = request.query[:50] + "..." if len(request.query) > 50 else request.query
             yield f"data: {json.dumps({'type': 'conversation_title', 'data': title})}\n\n"
 
+        # Add execution time to dispatch info
+        dispatch_info["execution_time_ms"] = round((time.time() - start_time) * 1000, 2)
+
+        # Yield dispatch observability before done (Phase 1 System Evaluation)
+        yield f"data: {json.dumps({'type': 'dispatch_info', 'data': dispatch_info})}\n\n"
+
         yield f"data: {json.dumps({'type': 'done', 'data': ''})}\n\n"
 
     except Exception as e:
-        logger.error(f"Streaming chat error: {e}")
+        execution_time_ms = round((time.time() - start_time) * 1000, 2)
+        logger.error(f"Streaming chat error after {execution_time_ms}ms: {e}")
         yield f"data: {json.dumps({'type': 'error', 'data': str(e)})}\n\n"
 
 
@@ -2874,7 +2919,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
     """
     Non-streaming chatbot endpoint.
 
-    Returns the complete response in a single JSON object.
+    Returns the complete response in a single JSON object with dispatch observability.
 
     Usage:
         POST /api/copilotkit/chat
@@ -2886,8 +2931,22 @@ async def chat(request: ChatRequest) -> ChatResponse:
             "request_id": "req-456",
             "session_id": ""
         }
+
+    Response includes dispatch observability fields:
+        - orchestrator_used: Whether the orchestrator processed this query
+        - agents_dispatched: List of agents that were dispatched
+        - routed_agent: Primary agent routed for this query
+        - response_confidence: Orchestrator response confidence (0.0-1.0)
+        - execution_time_ms: Total execution time in milliseconds
+        - intent: Classified intent type
+        - intent_confidence: Intent classification confidence (0.0-1.0)
     """
+    import time
+
     logger.info(f"[Chatbot] Chat request: query={request.query[:50]}..., user={request.user_id}")
+
+    # Start timing for execution_time_ms
+    start_time = time.time()
 
     try:
         from src.api.routes.chatbot_graph import run_chatbot
@@ -2901,12 +2960,30 @@ async def chat(request: ChatRequest) -> ChatResponse:
             region_context=request.region_context,
         )
 
+        # Calculate execution time
+        execution_time_ms = (time.time() - start_time) * 1000
+
+        # Extract basic response fields
         response_text = result.get("response_text", "")
         session_id = result.get("session_id", "")
         agent_name = result.get("agent_name")
 
+        # Extract dispatch observability fields (Phase 1 System Evaluation)
+        orchestrator_used = result.get("orchestrator_used", False)
+        agents_dispatched = result.get("agents_dispatched", [])
+        routed_agent = result.get("routed_agent")
+        response_confidence = result.get("response_confidence")
+        intent = result.get("intent")
+        intent_confidence = result.get("intent_confidence")
+
         # Generate title from query
         title = request.query[:50] + "..." if len(request.query) > 50 else request.query
+
+        logger.info(
+            f"[Chatbot] Response: orchestrator={orchestrator_used}, "
+            f"agents={agents_dispatched}, intent={intent}, "
+            f"time_ms={execution_time_ms:.1f}"
+        )
 
         return ChatResponse(
             success=True,
@@ -2914,15 +2991,26 @@ async def chat(request: ChatRequest) -> ChatResponse:
             response=response_text,
             conversation_title=title,
             agent_name=agent_name,
+            # Dispatch observability
+            orchestrator_used=orchestrator_used,
+            agents_dispatched=agents_dispatched,
+            routed_agent=routed_agent,
+            response_confidence=response_confidence,
+            execution_time_ms=round(execution_time_ms, 2),
+            intent=intent,
+            intent_confidence=intent_confidence,
         )
 
     except Exception as e:
-        logger.error(f"Chat error: {e}")
+        # Calculate execution time even on error
+        execution_time_ms = (time.time() - start_time) * 1000
+        logger.error(f"Chat error after {execution_time_ms:.1f}ms: {e}")
         return ChatResponse(
             success=False,
             session_id=request.session_id or "",
             response="",
             error=str(e),
+            execution_time_ms=round(execution_time_ms, 2),
         )
 
 
