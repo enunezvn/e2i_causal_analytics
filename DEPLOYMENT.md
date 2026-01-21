@@ -2,6 +2,18 @@
 
 This document provides step-by-step instructions for deploying the E2I Causal Analytics application to the production droplet.
 
+## ⚠️ Important: Access Methods
+
+| Access Type | Method | URL |
+|-------------|--------|-----|
+| **Browser (local machine)** | SSH Tunnel required | http://localhost:8080/ |
+| **Deployment verification** | SSH commands | Runs `curl` on droplet |
+| **Direct IP access** | ❌ Blocked | http://138.197.4.36/ won't work |
+
+**Direct access to the droplet IP is blocked by network/firewall.** Always use SSH tunnel for browser access.
+
+---
+
 ## Quick Reference
 
 | Component | Location on Droplet |
@@ -97,19 +109,18 @@ ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && \
 
 ---
 
-## Local Testing via SSH Tunnel
+## Accessing the Application in Browser
 
-Use this when direct access to the droplet is blocked by network/firewall.
+**SSH tunnel is required** to view the application in your browser. Direct access to the droplet IP is blocked.
 
-### Step 1: Create SSH Tunnels
+### Step 1: Create SSH Tunnel
 
 ```bash
-# Frontend (nginx on port 80)
+# Create tunnel (runs in background)
 ssh -i ~/.ssh/replit -f -N -L 8080:localhost:80 enunez@138.197.4.36
-
-# API (port 8000) - optional, nginx proxies /api already
-ssh -i ~/.ssh/replit -f -N -L 8000:localhost:8000 enunez@138.197.4.36
 ```
+
+**Note**: Nginx proxies `/api/*` requests to the backend, so only port 80 tunnel is needed.
 
 ### Step 2: Access Application
 
@@ -119,11 +130,10 @@ ssh -i ~/.ssh/replit -f -N -L 8000:localhost:8000 enunez@138.197.4.36
 | **API Health** | http://localhost:8080/health |
 | **API Docs** | http://localhost:8080/api/docs |
 
-### Step 3: Close Tunnels When Done
+### Step 3: Close Tunnel When Done
 
 ```bash
 pkill -f "ssh -i.*-L 8080:localhost:80"
-pkill -f "ssh -i.*-L 8000:localhost:8000"
 ```
 
 ---
@@ -185,10 +195,10 @@ ssh -i ~/.ssh/replit enunez@138.197.4.36 "sudo rm -rf /var/www/html/* && sudo cp
 ssh -i ~/.ssh/replit enunez@138.197.4.36 "sudo systemctl status e2i-api --no-pager"
 ```
 
-### Issue: Connection reset when accessing droplet directly
+### Issue: Connection reset when accessing droplet directly (http://138.197.4.36/)
 
-**Cause**: Network/firewall blocking traffic between local machine and droplet
-**Solution**: Use SSH tunnel (see "Local Testing via SSH Tunnel" section)
+**Cause**: Network/firewall blocks direct HTTP traffic to the droplet (this is expected)
+**Solution**: Always use SSH tunnel for browser access (see "Accessing the Application in Browser" section)
 
 ### Issue: Git pull fails with untracked files
 
@@ -247,7 +257,8 @@ ssh -i ~/.ssh/replit enunez@138.197.4.36 "sudo tail -50 /var/log/nginx/access.lo
 1. **NEVER install Python dependencies on droplet** - The venv uses forked repositories
 2. **Always use relative URLs in frontend** - Avoid hardcoding IPs
 3. **CopilotKit endpoints must be public** - For chat widget initialization
-4. **Use SSH tunnels when direct access fails** - Network issues are common
+4. **Always use SSH tunnel for browser access** - Direct IP access is blocked by network/firewall
+5. **Deployment verification uses SSH commands** - Runs `curl` on the droplet itself (no tunnel needed)
 
 ---
 
