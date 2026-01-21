@@ -18,6 +18,7 @@ import {
   useCopilotAction,
 } from '@copilotkit/react-core';
 import { useNavigate, useLocation } from 'react-router-dom';
+import { useAccessToken } from '@/stores/auth-store';
 
 // -----------------------------------------------------------------------------
 // Internal Types (not exported - used within provider)
@@ -432,6 +433,9 @@ export const CopilotKitWrapper: React.FC<CopilotKitWrapperProps> = ({
   apiKey,
   enabled = false,
 }) => {
+  // Get access token from auth store for authenticated requests
+  const accessToken = useAccessToken();
+
   // When disabled, render children directly without CopilotKit
   if (!enabled) {
     return (
@@ -441,6 +445,11 @@ export const CopilotKitWrapper: React.FC<CopilotKitWrapperProps> = ({
     );
   }
 
+  // Build headers with auth token when available
+  const headers = accessToken
+    ? { Authorization: `Bearer ${accessToken}` }
+    : undefined;
+
   return (
     <CopilotEnabledContext.Provider value={true}>
       <CopilotKit
@@ -448,6 +457,7 @@ export const CopilotKitWrapper: React.FC<CopilotKitWrapperProps> = ({
         publicApiKey={apiKey}
         agent="default"
         showDevConsole={process.env.NODE_ENV === 'development'}
+        headers={headers}
       >
         {children}
       </CopilotKit>

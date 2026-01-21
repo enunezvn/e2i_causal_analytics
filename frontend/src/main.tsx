@@ -4,6 +4,7 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClient } from './lib/query-client'
 import { AuthProvider } from './providers'
 import { AppRouter } from './router'
+import { AppErrorBoundary } from './components/ui/error-boundary'
 import './index.css'
 
 /**
@@ -28,11 +29,13 @@ async function initApp() {
   // RouterProvider creates a separate React context boundary
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
-      <QueryClientProvider client={queryClient}>
-        <AuthProvider>
-          <AppRouter />
-        </AuthProvider>
-      </QueryClientProvider>
+      <AppErrorBoundary>
+        <QueryClientProvider client={queryClient}>
+          <AuthProvider>
+            <AppRouter />
+          </AuthProvider>
+        </QueryClientProvider>
+      </AppErrorBoundary>
     </StrictMode>,
   )
 }

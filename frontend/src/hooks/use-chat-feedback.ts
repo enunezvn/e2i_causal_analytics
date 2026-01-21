@@ -8,10 +8,14 @@
  * Since CopilotKit doesn't have built-in feedback support yet (Issue #1150),
  * this hook provides a custom solution for collecting user feedback.
  *
+ * Updated: Uses apiClient instead of raw fetch() to include auth headers
+ * (Phase 1 System Evaluation - Data Flow issue fix)
+ *
  * @module hooks/use-chat-feedback
  */
 
 import { useState, useCallback } from 'react';
+import { post, ApiError } from '@/lib/api-client';
 
 // =============================================================================
 // TYPES
@@ -108,24 +112,18 @@ export function useChatFeedback(): UseChatFeedbackReturn {
       }));
 
       try {
-        const response = await fetch('/api/copilotkit/feedback', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            message_id: feedback.messageId,
-            session_id: feedback.sessionId,
-            rating: feedback.rating,
-            comment: feedback.comment,
-            query_text: feedback.queryText,
-            response_preview: feedback.responsePreview,
-            agent_name: feedback.agentName,
-            tools_used: feedback.toolsUsed,
-          }),
+        // Use apiClient post() instead of raw fetch() to include auth headers
+        // (Phase 1 System Evaluation - Data Flow fix)
+        const result = await post<FeedbackResult>('/copilotkit/feedback', {
+          message_id: feedback.messageId,
+          session_id: feedback.sessionId,
+          rating: feedback.rating,
+          comment: feedback.comment,
+          query_text: feedback.queryText,
+          response_preview: feedback.responsePreview,
+          agent_name: feedback.agentName,
+          tools_used: feedback.toolsUsed,
         });
-
-        const result: FeedbackResult = await response.json();
 
         if (result.success) {
           // Update local state with the new rating
@@ -147,8 +145,13 @@ export function useChatFeedback(): UseChatFeedbackReturn {
 
         return result;
       } catch (error) {
+        // Handle ApiError from api-client
         const errorMessage =
-          error instanceof Error ? error.message : 'Network error';
+          error instanceof ApiError
+            ? error.message
+            : error instanceof Error
+              ? error.message
+              : 'Network error';
         setState((prev) => ({
           ...prev,
           isSubmitting: false,

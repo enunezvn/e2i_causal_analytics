@@ -20,10 +20,11 @@ Version: 1.0.0
 
 import logging
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
+from src.api.dependencies.auth import require_auth, require_admin
 from src.api.schemas.kpi import (
     BatchKPICalculationRequest,
     BatchKPICalculationResponse,
@@ -459,6 +460,7 @@ async def get_kpi_value(
 async def calculate_kpi(
     request: KPICalculationRequest,
     calculator: KPICalculator = Depends(get_kpi_calculator),
+    user: Dict[str, Any] = Depends(require_auth),
 ) -> KPIResultResponse:
     """Calculate a single KPI with full context.
 
@@ -519,6 +521,7 @@ async def calculate_kpi(
 async def calculate_batch(
     request: BatchKPICalculationRequest,
     calculator: KPICalculator = Depends(get_kpi_calculator),
+    user: Dict[str, Any] = Depends(require_auth),
 ) -> BatchKPICalculationResponse:
     """Calculate multiple KPIs in batch.
 
@@ -583,6 +586,7 @@ async def calculate_batch(
 async def invalidate_cache(
     request: CacheInvalidationRequest,
     calculator: KPICalculator = Depends(get_kpi_calculator),
+    user: Dict[str, Any] = Depends(require_admin),
 ) -> CacheInvalidationResponse:
     """Invalidate cached KPI values.
 
