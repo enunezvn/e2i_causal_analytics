@@ -60,26 +60,38 @@ import { PatternSeverity, UpdateStatus, UpdateType } from '@/types/feedback';
 // TYPES
 // =============================================================================
 
+// Extended pattern type for UI (matches API DetectedPattern + extra fields for display)
 interface PatternItem {
   pattern_id: string;
   pattern_type: string;
   severity: PatternSeverity;
   description: string;
-  agent_name: string;
-  occurrences: number;
-  first_seen: string;
-  last_seen: string;
+  // API fields
+  frequency?: number;
+  affected_agents?: string[];
+  confidence?: number;
+  // UI/sample fields
+  agent_name?: string;
+  occurrences?: number;
+  first_seen?: string;
+  last_seen?: string;
 }
 
+// Extended update type for UI (matches API KnowledgeUpdate + extra fields for display)
 interface UpdateItem {
   update_id: string;
   update_type: UpdateType;
   status: UpdateStatus;
-  description: string;
-  agent_name: string;
-  confidence_score: number;
   created_at: string;
   applied_at?: string;
+  // API fields
+  target_agent?: string;
+  rationale?: string;
+  expected_improvement?: string;
+  // UI/sample fields
+  description?: string;
+  agent_name?: string;
+  confidence_score?: number;
 }
 
 // =============================================================================
@@ -100,13 +112,6 @@ const SEVERITY_ORDER: Record<PatternSeverity, number> = {
   [PatternSeverity.LOW]: 3,
 };
 
-// Unused but keeping for reference if status colors are needed
-const _STATUS_COLORS: Record<UpdateStatus, string> = {
-  [UpdateStatus.PROPOSED]: '#3b82f6', // blue
-  [UpdateStatus.APPROVED]: '#22c55e', // green
-  [UpdateStatus.APPLIED]: '#10b981', // emerald
-  [UpdateStatus.ROLLED_BACK]: '#6b7280', // gray
-};
 
 // =============================================================================
 // SAMPLE DATA
@@ -244,7 +249,6 @@ function FeedbackLearning() {
   // Fetch feedback health
   const {
     data: healthData,
-    isLoading: isLoadingHealth,
     refetch: refetchHealth,
   } = useFeedbackHealth({ refetchInterval: 30000 });
 
@@ -572,12 +576,12 @@ function FeedbackLearning() {
               <div className="space-y-4">
                 {[...patterns.slice(0, 3), ...updates.slice(0, 2)]
                   .sort((a, b) => {
-                    const aDate = 'last_seen' in a ? a.last_seen : a.created_at;
-                    const bDate = 'last_seen' in b ? b.last_seen : b.created_at;
+                    const aDate = 'last_seen' in a && a.last_seen ? a.last_seen : ('created_at' in a ? a.created_at : new Date().toISOString());
+                    const bDate = 'last_seen' in b && b.last_seen ? b.last_seen : ('created_at' in b ? b.created_at : new Date().toISOString());
                     return new Date(bDate).getTime() - new Date(aDate).getTime();
                   })
                   .slice(0, 5)
-                  .map((item, index) => {
+                  .map((item) => {
                     const isPattern = 'pattern_id' in item;
                     return (
                       <div
@@ -666,16 +670,16 @@ function FeedbackLearning() {
                             </Badge>
                           </div>
                           <div className="text-sm text-[var(--color-muted-foreground)]">
-                            {pattern.occurrences} occurrences
+                            {pattern.occurrences ?? pattern.frequency ?? 0} occurrences
                           </div>
                         </div>
                         <p className="text-sm text-[var(--color-muted-foreground)] mb-2">
                           {pattern.description}
                         </p>
                         <div className="flex items-center gap-4 text-xs text-[var(--color-muted-foreground)]">
-                          <span>Agent: <strong>{pattern.agent_name}</strong></span>
-                          <span>First seen: {formatRelativeTime(pattern.first_seen)}</span>
-                          <span>Last seen: {formatRelativeTime(pattern.last_seen)}</span>
+                          <span>Agent: <strong>{pattern.agent_name ?? pattern.affected_agents?.[0] ?? 'N/A'}</strong></span>
+                          {pattern.first_seen && <span>First seen: {formatRelativeTime(pattern.first_seen)}</span>}
+                          {pattern.last_seen && <span>Last seen: {formatRelativeTime(pattern.last_seen)}</span>}
                         </div>
                       </div>
                     ))}
@@ -718,9 +722,11 @@ function FeedbackLearning() {
                           <Badge variant={getUpdateStatusBadgeVariant(update.status)}>
                             {update.status}
                           </Badge>
-                          <Badge variant="outline">
-                            {(update.confidence_score * 100).toFixed(0)}% confidence
-                          </Badge>
+                          {update.confidence_score && (
+                            <Badge variant="outline">
+                              {(update.confidence_score * 100).toFixed(0)}% confidence
+                            </Badge>
+                          )}
                         </div>
                         <div className="flex items-center gap-2">
                           {update.status === UpdateStatus.PROPOSED && (
@@ -748,10 +754,10 @@ function FeedbackLearning() {
                         </div>
                       </div>
                       <p className="text-sm text-[var(--color-muted-foreground)] mb-2">
-                        {update.description}
+                        {update.description ?? update.rationale ?? 'No description'}
                       </p>
                       <div className="flex items-center gap-4 text-xs text-[var(--color-muted-foreground)]">
-                        <span>Agent: <strong>{update.agent_name}</strong></span>
+                        <span>Agent: <strong>{update.agent_name ?? update.target_agent ?? 'N/A'}</strong></span>
                         <span>Created: {formatRelativeTime(update.created_at)}</span>
                         {update.applied_at && (
                           <span>Applied: {formatRelativeTime(update.applied_at)}</span>
