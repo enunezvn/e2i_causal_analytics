@@ -52,7 +52,7 @@ import {
   useApplyUpdate,
   useRollbackUpdate,
 } from '@/hooks/api';
-import { StatusBadge, StatusDot } from '@/components/visualizations/dashboard/StatusBadge';
+import { StatusDot } from '@/components/visualizations/dashboard/StatusBadge';
 import type { StatusType } from '@/components/visualizations/dashboard/StatusBadge';
 import { PatternSeverity, UpdateStatus, UpdateType } from '@/types/feedback';
 
@@ -91,7 +91,6 @@ const SEVERITY_COLORS: Record<PatternSeverity, string> = {
   [PatternSeverity.HIGH]: '#f97316', // orange
   [PatternSeverity.MEDIUM]: '#f59e0b', // amber
   [PatternSeverity.LOW]: '#22c55e', // green
-  [PatternSeverity.INFO]: '#3b82f6', // blue
 };
 
 const SEVERITY_ORDER: Record<PatternSeverity, number> = {
@@ -99,14 +98,13 @@ const SEVERITY_ORDER: Record<PatternSeverity, number> = {
   [PatternSeverity.HIGH]: 1,
   [PatternSeverity.MEDIUM]: 2,
   [PatternSeverity.LOW]: 3,
-  [PatternSeverity.INFO]: 4,
 };
 
-const STATUS_COLORS: Record<UpdateStatus, string> = {
+// Unused but keeping for reference if status colors are needed
+const _STATUS_COLORS: Record<UpdateStatus, string> = {
   [UpdateStatus.PROPOSED]: '#3b82f6', // blue
   [UpdateStatus.APPROVED]: '#22c55e', // green
   [UpdateStatus.APPLIED]: '#10b981', // emerald
-  [UpdateStatus.REJECTED]: '#ef4444', // red
   [UpdateStatus.ROLLED_BACK]: '#6b7280', // gray
 };
 
@@ -138,7 +136,7 @@ const SAMPLE_PATTERNS: PatternItem[] = [
   {
     pattern_id: 'pat-003',
     pattern_type: 'positive_feedback',
-    severity: PatternSeverity.INFO,
+    severity: PatternSeverity.LOW,
     description: 'Explainer receiving consistent high ratings for clarity',
     agent_name: 'explainer',
     occurrences: 42,
@@ -159,7 +157,7 @@ const SAMPLE_UPDATES: UpdateItem[] = [
   },
   {
     update_id: 'upd-002',
-    update_type: UpdateType.TOOL_PRIORITY,
+    update_type: UpdateType.PARAMETER_TUNING,
     status: UpdateStatus.APPLIED,
     description: 'Increase priority of DoWhy estimator for propensity-based queries',
     agent_name: 'gap_analyzer',
@@ -169,7 +167,7 @@ const SAMPLE_UPDATES: UpdateItem[] = [
   },
   {
     update_id: 'upd-003',
-    update_type: UpdateType.CONFIDENCE_THRESHOLD,
+    update_type: UpdateType.RULE_MODIFICATION,
     status: UpdateStatus.APPROVED,
     description: 'Lower confidence threshold for Fabhalta brand queries based on feedback',
     agent_name: 'orchestrator',
@@ -214,7 +212,6 @@ function getSeverityStatus(severity: PatternSeverity): StatusType {
     case PatternSeverity.MEDIUM:
       return 'warning';
     case PatternSeverity.LOW:
-    case PatternSeverity.INFO:
       return 'healthy';
     default:
       return 'unknown';
@@ -229,7 +226,6 @@ function getUpdateStatusBadgeVariant(status: UpdateStatus): 'default' | 'seconda
       return 'secondary';
     case UpdateStatus.PROPOSED:
       return 'outline';
-    case UpdateStatus.REJECTED:
     case UpdateStatus.ROLLED_BACK:
       return 'destructive';
     default:
@@ -301,7 +297,6 @@ function FeedbackLearning() {
       [PatternSeverity.HIGH]: 0,
       [PatternSeverity.MEDIUM]: 0,
       [PatternSeverity.LOW]: 0,
-      [PatternSeverity.INFO]: 0,
     };
     patterns.forEach(p => {
       counts[p.severity] = (counts[p.severity] || 0) + 1;
@@ -357,8 +352,6 @@ function FeedbackLearning() {
       },
     });
   }, [rollbackUpdate, refetchUpdates]);
-
-  const isLoading = isLoadingHealth || isLoadingPatterns || isLoadingUpdates;
 
   return (
     <div className="container mx-auto px-4 py-8">
