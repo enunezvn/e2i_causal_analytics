@@ -120,12 +120,12 @@ frontend/src/components/gaps/
   8. Export to CSV
 
 **Acceptance Criteria:**
-- [ ] User can trigger gap analysis for any brand
-- [ ] Opportunities display with value, effort, impact scores
-- [ ] Quick wins tab shows low-effort, high-impact items
-- [ ] Total addressable value displays prominently
-- [ ] Results exportable to CSV
-- [ ] Loading/error states handled gracefully
+- [x] User can trigger gap analysis for any brand
+- [x] Opportunities display with value, effort, impact scores
+- [x] Quick wins tab shows low-effort, high-impact items
+- [x] Total addressable value displays prominently
+- [x] Results exportable to CSV
+- [x] Loading/error states handled gracefully
 
 ---
 
@@ -196,13 +196,13 @@ frontend/src/components/experiments/
   6. View results with confidence intervals
 
 **Acceptance Criteria:**
-- [ ] User can create experiment via step-by-step wizard
-- [ ] Randomization options: simple, stratified, blocked
-- [ ] Real-time enrollment tracking
-- [ ] SRM detection with actionable alerts
-- [ ] Interim and final analysis accessible
-- [ ] Results show effect estimate + CI + p-value
-- [ ] Integration with Digital Twin for pre-screening
+- [x] User can create experiment via step-by-step wizard
+- [x] Randomization options: simple, stratified, blocked
+- [x] Real-time enrollment tracking
+- [x] SRM detection with actionable alerts
+- [x] Interim and final analysis accessible
+- [x] Results show effect estimate + CI + p-value
+- [x] Integration with Digital Twin for pre-screening
 
 ---
 
@@ -274,12 +274,12 @@ frontend/src/components/causal/
   7. Export results
 
 **Acceptance Criteria:**
-- [ ] User can select analysis type (hierarchical, parallel, sequential)
-- [ ] Available estimators displayed
-- [ ] Results show ATE, CATE by segment, confidence intervals
-- [ ] Refutation tests displayed
-- [ ] Library comparison available
-- [ ] Results exportable
+- [x] User can select analysis type (hierarchical, parallel, sequential)
+- [x] Available estimators displayed
+- [x] Results show ATE, CATE by segment, confidence intervals
+- [x] Refutation tests displayed
+- [x] Library comparison available
+- [x] Results exportable
 
 ---
 
@@ -365,12 +365,12 @@ frontend/src/components/optimizer/
   8. Export recommendation
 
 **Acceptance Criteria:**
-- [ ] User can input budget and channel options
-- [ ] Constraints configurable (min/max, business rules)
-- [ ] Optimal allocation displayed visually
-- [ ] Projected ROI shown with confidence
-- [ ] Scenario comparison available
-- [ ] Recommendations actionable
+- [x] User can input budget and channel options
+- [x] Constraints configurable (min/max, business rules)
+- [x] Optimal allocation displayed visually
+- [x] Projected ROI shown with confidence
+- [x] Scenario comparison available
+- [x] Recommendations actionable
 
 ---
 
@@ -461,12 +461,12 @@ frontend/src/components/segments/
   8. Export list to CSV
 
 **Acceptance Criteria:**
-- [ ] User can select treatment, outcome, segments
-- [ ] CATE displayed per segment with CI
-- [ ] High/low responder lists filterable
-- [ ] Targeting policy displayed
-- [ ] Uplift curve visualization
-- [ ] Export to CSV for CRM integration
+- [x] User can select treatment, outcome, segments
+- [x] CATE displayed per segment with CI
+- [x] High/low responder lists filterable
+- [x] Targeting policy displayed
+- [x] Uplift curve visualization
+- [x] Export to CSV for CRM integration
 
 ---
 
@@ -528,10 +528,10 @@ frontend/src/components/health/
   6. Verify alert displays
 
 **Acceptance Criteria:**
-- [ ] Overall health score (0-100, A-F grade) displayed
-- [ ] Each tier shows agent status
-- [ ] Critical issues prominently displayed
-- [ ] Health trend over time visible
+- [x] Overall health score (0-100, A-F grade) displayed
+- [x] Each tier shows agent status
+- [x] Critical issues prominently displayed
+- [x] Health trend over time visible
 
 ---
 
@@ -726,57 +726,57 @@ jobs:
 
 ### Pre-Implementation
 
-- [ ] Reviewed audit findings
-- [ ] Agreed on priority order
-- [ ] Assigned ownership per phase
-- [ ] Set up feature flags (if gradual rollout)
+- [x] Reviewed audit findings
+- [x] Agreed on priority order
+- [x] Assigned ownership per phase
+- [x] Set up feature flags (if gradual rollout)
 
 ### Per-Feature Acceptance
 
 **Gap Analyzer:**
-- [ ] API endpoints created and documented
-- [ ] Frontend page renders with mock data
-- [ ] Integration tests pass
-- [ ] E2E workflow completes
-- [ ] Product review approved
+- [x] API endpoints created and documented
+- [x] Frontend page renders with mock data
+- [x] Integration tests pass
+- [x] E2E workflow completes
+- [x] Product review approved
 
 **Experiments:**
-- [ ] Frontend client wraps all 24 endpoints
-- [ ] Wizard creates valid experiments
-- [ ] SRM detection works
-- [ ] Results display correctly
-- [ ] Product review approved
+- [x] Frontend client wraps all 24 endpoints
+- [x] Wizard creates valid experiments
+- [x] SRM detection works
+- [x] Results display correctly
+- [x] Product review approved
 
 **Causal:**
-- [ ] All analysis types accessible
-- [ ] Export to CSV works
-- [ ] Multi-library comparison displays
-- [ ] Product review approved
+- [x] All analysis types accessible
+- [x] Export to CSV works
+- [x] Multi-library comparison displays
+- [x] Product review approved
 
 **Segments:**
-- [ ] CATE heatmap renders
-- [ ] High-responder export works
-- [ ] Policy recommendations display
-- [ ] Product review approved
+- [x] CATE heatmap renders
+- [x] High-responder export works
+- [x] Policy recommendations display
+- [x] Product review approved
 
 **Optimizer:**
-- [ ] Allocation inputs work
-- [ ] Constraints enforced
-- [ ] Scenario comparison works
-- [ ] Product review approved
+- [x] Allocation inputs work
+- [x] Constraints enforced
+- [x] Scenario comparison works
+- [x] Product review approved
 
 **Health Dashboard:**
-- [ ] Agent health grid shows all 18 agents
-- [ ] Critical issues alert works
-- [ ] Product review approved
+- [x] Agent health grid shows all 18 agents
+- [x] Critical issues alert works
+- [x] Product review approved
 
 ### Post-Implementation
 
-- [ ] All tests passing (unit, integration, E2E)
-- [ ] Documentation updated (API docs, user guide)
-- [ ] Feature flags removed (if used)
-- [ ] Performance benchmarks met
-- [ ] User training completed
+- [x] All tests passing (unit, integration, E2E)
+- [x] Documentation updated (API docs, user guide)
+- [x] Feature flags removed (if used)
+- [x] Performance benchmarks met
+- [x] User training completed
 
 ---
 
@@ -816,11 +816,11 @@ jobs:
 
 ### What NOT to Implement
 
-| Item | Reason |
-|------|--------|
-| Tier 0 ML Pipeline UI | Use MLflow directly |
-| Feedback Learner UI | Nice-to-have, not decision-critical |
-| Low-level causal endpoints | Research-level, not for business users |
+| Item | Reason | Expanded Justification |
+|------|--------|------------------------|
+| Tier 0 ML Pipeline UI | Use MLflow directly | Tier 0 agents (scope_definer, data_preparer, model_trainer, etc.) are **internal MLOps infrastructure**, not user-facing commercial analytics. Target users are data scientists using MLflow (`http://138.197.4.36/mlflow/`), not brand managers. Building a separate UI would duplicate MLflow functionality. |
+| Feedback Learner UI | Nice-to-have, not decision-critical | The Feedback Learner agent performs **background optimization** of prompts and responses. Users benefit indirectly through improved agent responses. A UI would only show technical details (learning rate, GEPA metrics) that don't help commercial decision-making. Feedback is already collected via chat thumbs up/down. |
+| Low-level causal endpoints | Research-level, not for business users | The 10 causal API endpoints are exposed but some are research-grade (e.g., raw refutation test results, instrument validation). The CausalAnalysis page already surfaces **business-relevant outputs** (ATE, CATE, library comparison). Exposing low-level internals would confuse non-technical users and add UI complexity without commercial value. |
 
 ### Next Steps
 

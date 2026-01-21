@@ -170,7 +170,7 @@ const SAMPLE_AGENT_HEALTH: AgentHealth[] = [
   { agent_name: 'DriftMonitor', tier: 3, available: true, avg_latency_ms: 200, success_rate: 0.99, invocations_24h: 156 },
   { agent_name: 'ExperimentDesigner', tier: 3, available: true, avg_latency_ms: 280, success_rate: 0.96, invocations_24h: 34 },
   { agent_name: 'HealthScore', tier: 3, available: true, avg_latency_ms: 150, success_rate: 0.99, invocations_24h: 312 },
-  { agent_name: 'PredictionSynthesizer', tier: 4, available: false, avg_latency_ms: 520, success_rate: 0.92, invocations_24h: 23 },
+  { agent_name: 'PredictionSynthesizer', tier: 4, available: true, avg_latency_ms: 520, success_rate: 0.97, invocations_24h: 23 },
   { agent_name: 'ResourceOptimizer', tier: 4, available: true, avg_latency_ms: 410, success_rate: 0.95, invocations_24h: 56 },
   { agent_name: 'Explainer', tier: 5, available: true, avg_latency_ms: 680, success_rate: 0.93, invocations_24h: 112 },
   { agent_name: 'FeedbackLearner', tier: 5, available: true, avg_latency_ms: 340, success_rate: 0.97, invocations_24h: 78 },
