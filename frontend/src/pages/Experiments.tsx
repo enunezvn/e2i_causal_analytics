@@ -31,13 +31,7 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import {
-  useEnrollmentStats,
-  useSRMChecks,
-  useExperimentHealth,
-  useExperimentAlerts,
-  useTriggerMonitoring,
-} from '@/hooks/api';
+import { useTriggerMonitoring } from '@/hooks/api';
 import {
   AlertSeverity,
   ExperimentHealthStatus,
@@ -55,7 +49,6 @@ import {
   Target,
   Beaker,
   Shield,
-  Clock,
 } from 'lucide-react';
 
 // =============================================================================
@@ -289,12 +282,19 @@ export default function Experiments() {
   const [selectedExperiment, setSelectedExperiment] = useState<string | null>(null);
 
   // API hooks with fallback to sample data
-  const { data: monitorData, isLoading: isLoadingMonitor, refetch: refetchMonitor } = useTriggerMonitoring();
+  const { data: monitorData, isPending: isLoadingMonitor, mutate: triggerMonitor } = useTriggerMonitoring();
 
   // Derive experiments from monitor data or use sample data
-  const experiments = useMemo(() => {
+  // LocalExperiment extends ExperimentHealthSummary with additional UI fields
+  const experiments = useMemo((): LocalExperiment[] => {
     if (monitorData?.experiments?.length) {
-      return monitorData.experiments;
+      // API data may not have all LocalExperiment fields, provide defaults
+      return monitorData.experiments.map((exp) => ({
+        ...exp,
+        variant_breakdown: {},
+        start_date: exp.last_checked.split('T')[0],
+        primary_metric: 'conversion_rate',
+      }));
     }
     return SAMPLE_EXPERIMENTS;
   }, [monitorData]);
@@ -363,12 +363,8 @@ export default function Experiments() {
     ].filter((d) => d.value > 0);
   }, [overviewMetrics]);
 
-  const handleRunMonitoring = async () => {
-    try {
-      await refetchMonitor();
-    } catch (error) {
-      console.error('Failed to run monitoring:', error);
-    }
+  const handleRunMonitoring = () => {
+    triggerMonitor({});
   };
 
   return (
@@ -389,7 +385,7 @@ export default function Experiments() {
             <Play className="mr-2 h-4 w-4" />
             Run Monitoring
           </Button>
-          <Button variant="outline" onClick={() => refetchMonitor()}>
+          <Button variant="outline" onClick={() => triggerMonitor({})}>
             <RefreshCw className={`mr-2 h-4 w-4 ${isLoadingMonitor ? 'animate-spin' : ''}`} />
             Refresh
           </Button>
@@ -532,6 +528,7 @@ export default function Experiments() {
                   </div>
 
                   {/* Variant Breakdown Progress Bar */}
+                  {Object.keys(experiment.variant_breakdown).length > 0 && (
                   <div className="mt-4">
                     <div className="flex justify-between text-xs text-muted-foreground mb-1">
                       <span>Variant Distribution</span>
@@ -545,7 +542,7 @@ export default function Experiments() {
                       {Object.entries(experiment.variant_breakdown).map(([variant, countValue], idx) => {
                         const count = countValue as number;
                         const total = (Object.values(experiment.variant_breakdown) as number[]).reduce((a, b) => a + b, 0);
-                        const percent = (count / total) * 100;
+                        const percent = total > 0 ? (count / total) * 100 : 0;
                         return (
                           <div
                             key={variant}
@@ -558,6 +555,7 @@ export default function Experiments() {
                       })}
                     </div>
                   </div>
+                  )}
                 </CardContent>
               </Card>
             ))}

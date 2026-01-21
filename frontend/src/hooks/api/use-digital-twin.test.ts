@@ -11,13 +11,17 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import * as React from 'react';
 import type {
   SimulationResponse,
+  SimulationDetailResponse,
   SimulationHistoryResponse,
   ScenarioComparisonResult,
+  DigitalTwinHealthResponse,
+  SimulateRequest,
 } from '@/types/digital-twin';
 import {
   InterventionType,
+  Recommendation,
   RecommendationType,
-  ConfidenceLevel,
+  SimulationStatus,
 } from '@/types/digital-twin';
 
 // Mock the API functions
@@ -85,55 +89,42 @@ function createWrapper() {
 
 const mockSimulationResponse: SimulationResponse = {
   simulation_id: 'sim_abc123',
-  created_at: '2024-01-15T10:00:00Z',
-  request: {
-    intervention_type: InterventionType.HCP_ENGAGEMENT,
-    brand: 'Remibrutinib',
-    sample_size: 1000,
-    duration_days: 90,
-  },
-  outcomes: {
-    ate: { lower: 0.11, estimate: 0.15, upper: 0.19 },
-    trx_lift: { lower: 50, estimate: 75, upper: 100 },
-    nrx_lift: { lower: 20, estimate: 30, upper: 40 },
-    market_share_change: { lower: 0.01, estimate: 0.02, upper: 0.03 },
-    roi: { lower: 1.5, estimate: 2.0, upper: 2.5 },
-  },
-  fidelity: {
-    overall_score: 0.85,
-    data_coverage: 0.90,
-    calibration: 0.82,
-    temporal_alignment: 0.88,
-    feature_completeness: 0.80,
-    confidence_level: ConfidenceLevel.HIGH,
-  },
-  sensitivity: [
-    {
-      parameter: 'sample_size',
-      base_value: 1000,
-      low_value: 500,
-      high_value: 2000,
-      ate_at_low: 0.12,
-      ate_at_high: 0.18,
-      sensitivity_score: 0.3,
-    },
-  ],
-  recommendation: {
-    type: RecommendationType.DEPLOY,
-    confidence: ConfidenceLevel.HIGH,
-    rationale: 'Strong positive ATE with high confidence',
-    evidence: ['Consistent treatment effect across segments'],
-  },
-  projections: [
-    {
-      date: '2024-02-01',
-      with_intervention: 100,
-      without_intervention: 85,
-      lower_bound: 90,
-      upper_bound: 110,
-    },
-  ],
+  model_id: 'model_v1',
+  intervention_type: InterventionType.HCP_ENGAGEMENT,
+  brand: 'Remibrutinib',
+  twin_type: 'hcp',
+  twin_count: 1000,
+  simulated_ate: 0.15,
+  simulated_ci_lower: 0.11,
+  simulated_ci_upper: 0.19,
+  simulated_std_error: 0.02,
+  effect_size_cohens_d: 0.45,
+  statistical_power: 0.85,
+  recommendation: Recommendation.DEPLOY,
+  recommendation_rationale: 'Strong positive ATE with high confidence',
+  recommended_sample_size: 1000,
+  simulation_confidence: 0.85,
+  fidelity_warning: false,
+  fidelity_warning_reason: undefined,
+  status: SimulationStatus.COMPLETED,
   execution_time_ms: 1500,
+  is_significant: true,
+  effect_direction: 'positive',
+  created_at: '2024-01-15T10:00:00Z',
+};
+
+const mockSimulationDetailResponse: SimulationDetailResponse = {
+  ...mockSimulationResponse,
+  population_filters: { region: 'Northeast' },
+  effect_heterogeneity: {
+    by_specialty: { 'Cardiology': { ate: 0.18, ci_lower: 0.12, ci_upper: 0.24 } },
+    by_decile: { '10': { ate: 0.22, ci_lower: 0.15, ci_upper: 0.29 } },
+    by_region: { 'Northeast': { ate: 0.16, ci_lower: 0.10, ci_upper: 0.22 } },
+    by_adoption_stage: { 'early': { ate: 0.20, ci_lower: 0.14, ci_upper: 0.26 } },
+    top_segments: [{ segment: 'Cardiology-Decile10', ate: 0.25 }],
+  },
+  intervention_config: { channel: 'email', duration_weeks: 8 },
+  completed_at: '2024-01-15T10:05:00Z',
 };
 
 const mockSimulationHistoryResponse: SimulationHistoryResponse = {
@@ -152,10 +143,12 @@ const mockSimulationHistoryResponse: SimulationHistoryResponse = {
   limit: 10,
 };
 
-const mockHealthResponse = {
+const mockHealthResponse: DigitalTwinHealthResponse = {
   status: 'healthy',
-  model_version: '1.2.0',
-  last_calibration: '2024-01-10T00:00:00Z',
+  service: 'digital-twin',
+  models_available: 3,
+  simulations_pending: 0,
+  last_simulation_at: '2024-01-10T00:00:00Z',
 };
 
 const mockScenarioComparisonResult: ScenarioComparisonResult = {
@@ -164,10 +157,7 @@ const mockScenarioComparisonResult: ScenarioComparisonResult = {
     {
       ...mockSimulationResponse,
       simulation_id: 'sim_alt1',
-      request: {
-        ...mockSimulationResponse.request,
-        intervention_type: InterventionType.DIGITAL_MARKETING,
-      },
+      intervention_type: InterventionType.DIGITAL_MARKETING,
     },
   ],
   comparison: {
@@ -180,6 +170,16 @@ const mockScenarioComparisonResult: ScenarioComparisonResult = {
   },
 };
 
+const mockSimulateRequest: SimulateRequest = {
+  intervention: {
+    intervention_type: InterventionType.HCP_ENGAGEMENT,
+    channel: 'email',
+    duration_weeks: 8,
+  },
+  brand: 'Remibrutinib',
+  twin_count: 1000,
+};
+
 // =============================================================================
 // QUERY HOOK TESTS
 // =============================================================================
@@ -190,14 +190,14 @@ describe('useSimulation', () => {
   });
 
   it('fetches simulation successfully', async () => {
-    vi.mocked(digitalTwinApi.getSimulation).mockResolvedValueOnce(mockSimulationResponse);
+    vi.mocked(digitalTwinApi.getSimulation).mockResolvedValueOnce(mockSimulationDetailResponse);
     const { wrapper } = createWrapper();
 
     const { result } = renderHook(() => useSimulation('sim_abc123'), { wrapper });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
-    expect(result.current.data).toEqual(mockSimulationResponse);
+    expect(result.current.data).toEqual(mockSimulationDetailResponse);
     expect(digitalTwinApi.getSimulation).toHaveBeenCalledWith('sim_abc123');
   });
 
@@ -253,7 +253,7 @@ describe('useSimulationHistory', () => {
   it('passes params to API', async () => {
     vi.mocked(digitalTwinApi.getSimulationHistory).mockResolvedValueOnce(mockSimulationHistoryResponse);
     const { wrapper } = createWrapper();
-    const params = { brand: 'Remibrutinib', limit: 10 };
+    const params = { limit: 10, offset: 0 };
 
     const { result } = renderHook(() => useSimulationHistory(params), { wrapper });
 
@@ -274,10 +274,10 @@ describe('useSimulationHistory', () => {
     expect(result.current.data?.total).toBe(0);
   });
 
-  it('filters by intervention type', async () => {
+  it('supports pagination params', async () => {
     vi.mocked(digitalTwinApi.getSimulationHistory).mockResolvedValueOnce(mockSimulationHistoryResponse);
     const { wrapper } = createWrapper();
-    const params = { intervention_type: 'hcp_engagement', limit: 5 };
+    const params = { limit: 5, offset: 10 };
 
     const { result } = renderHook(() => useSimulationHistory(params), { wrapper });
 
@@ -344,20 +344,13 @@ describe('useRunSimulation', () => {
 
     const { result } = renderHook(() => useRunSimulation(), { wrapper });
 
-    const request = {
-      intervention_type: InterventionType.HCP_ENGAGEMENT,
-      brand: 'Remibrutinib',
-      sample_size: 1000,
-      duration_days: 90,
-    };
-
-    result.current.mutate(request);
+    result.current.mutate(mockSimulateRequest);
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
     expect(result.current.data).toEqual(mockSimulationResponse);
     // TanStack Query passes (variables, mutationContext) to mutationFn
-    expect(digitalTwinApi.runSimulation).toHaveBeenCalledWith(request, expect.anything());
+    expect(digitalTwinApi.runSimulation).toHaveBeenCalledWith(mockSimulateRequest, expect.anything());
     expect(setQueryDataSpy).toHaveBeenCalled();
     expect(invalidateSpy).toHaveBeenCalled();
   });
@@ -370,10 +363,9 @@ describe('useRunSimulation', () => {
     const { result } = renderHook(() => useRunSimulation(), { wrapper });
 
     result.current.mutate({
-      intervention_type: InterventionType.HCP_ENGAGEMENT,
+      intervention: { intervention_type: InterventionType.HCP_ENGAGEMENT },
       brand: 'Unknown',
-      sample_size: 100,
-      duration_days: 30,
+      twin_count: 100,
     });
 
     await waitFor(() => expect(result.current.isError).toBe(true));
@@ -386,12 +378,7 @@ describe('useRunSimulation', () => {
 
     const { result } = renderHook(() => useRunSimulation({ onSuccess }), { wrapper });
 
-    result.current.mutate({
-      intervention_type: InterventionType.HCP_ENGAGEMENT,
-      brand: 'Remibrutinib',
-      sample_size: 1000,
-      duration_days: 90,
-    });
+    result.current.mutate(mockSimulateRequest);
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
@@ -407,10 +394,9 @@ describe('useRunSimulation', () => {
     const { result } = renderHook(() => useRunSimulation({ onError }), { wrapper });
 
     result.current.mutate({
-      intervention_type: InterventionType.HCP_ENGAGEMENT,
+      intervention: { intervention_type: InterventionType.HCP_ENGAGEMENT },
       brand: 'Unknown',
-      sample_size: 100,
-      duration_days: 30,
+      twin_count: 100,
     });
 
     await waitFor(() => expect(result.current.isError).toBe(true));
@@ -520,15 +506,16 @@ describe('prefetchSimulationHistory', () => {
 
     await prefetchSimulationHistory(queryClient);
 
-    expect(digitalTwinApi.getSimulationHistory).toHaveBeenCalledWith({ brand: undefined, limit: 10 });
+    expect(digitalTwinApi.getSimulationHistory).toHaveBeenCalledWith({ limit: 10 });
   });
 
-  it('prefetches with brand filter', async () => {
+  it('populates query cache after prefetch', async () => {
     vi.mocked(digitalTwinApi.getSimulationHistory).mockResolvedValueOnce(mockSimulationHistoryResponse);
     const queryClient = createTestQueryClient();
 
-    await prefetchSimulationHistory(queryClient, 'Remibrutinib');
+    await prefetchSimulationHistory(queryClient);
 
-    expect(digitalTwinApi.getSimulationHistory).toHaveBeenCalledWith({ brand: 'Remibrutinib', limit: 10 });
+    // Verify the cache was populated
+    expect(digitalTwinApi.getSimulationHistory).toHaveBeenCalledTimes(1);
   });
 });

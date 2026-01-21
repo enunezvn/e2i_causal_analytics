@@ -51,7 +51,8 @@ import { cn } from '@/lib/utils';
 import { KPICard } from '@/components/visualizations';
 import { SimulationPanel, ScenarioResults, RecommendationCards } from '@/components/digital-twin';
 import { useRunSimulation } from '@/hooks/api/use-digital-twin';
-import type { SimulationRequest, SimulationResponse } from '@/types/digital-twin';
+import type { SimulationRequest, SimulationResponse, SimulationRecommendation } from '@/types/digital-twin';
+import { RecommendationType, ConfidenceLevel, Recommendation } from '@/types/digital-twin';
 
 // =============================================================================
 // TYPES
@@ -310,9 +311,16 @@ function InterventionImpact() {
     },
   });
 
-  // Handle simulation request
+  // Handle simulation request - converts legacy SimulationRequest to SimulateRequest
   const handleSimulate = (request: SimulationRequest) => {
-    runSimulation(request);
+    runSimulation({
+      intervention: {
+        intervention_type: request.intervention_type,
+        duration_weeks: Math.ceil(request.duration_days / 7),
+      },
+      brand: request.brand,
+      twin_count: request.sample_size,
+    });
   };
 
   // Get selected intervention details
@@ -341,6 +349,49 @@ function InterventionImpact() {
       avgATE: SAMPLE_TREATMENT_EFFECTS.filter((e) => e.isSignificant).reduce((a, b) => a + b.ate, 0) / significantEffects,
     };
   }, []);
+
+  // Convert SimulationResponse recommendation to SimulationRecommendation interface
+  const simulationRecommendation = useMemo((): SimulationRecommendation | null => {
+    if (!simulationResults) return null;
+
+    // Map Recommendation enum to RecommendationType
+    const typeMap: Record<Recommendation, RecommendationType> = {
+      [Recommendation.DEPLOY]: RecommendationType.DEPLOY,
+      [Recommendation.SKIP]: RecommendationType.SKIP,
+      [Recommendation.REFINE]: RecommendationType.REFINE,
+    };
+
+    // Derive confidence level from simulation_confidence score
+    let confidence: ConfidenceLevel;
+    if (simulationResults.simulation_confidence >= 0.7) {
+      confidence = ConfidenceLevel.HIGH;
+    } else if (simulationResults.simulation_confidence >= 0.4) {
+      confidence = ConfidenceLevel.MEDIUM;
+    } else {
+      confidence = ConfidenceLevel.LOW;
+    }
+
+    // Build evidence array from simulation results
+    const evidence: string[] = [];
+    if (simulationResults.is_significant) {
+      evidence.push(`Effect is statistically significant (ATE: ${simulationResults.simulated_ate.toFixed(3)})`);
+    }
+    if (simulationResults.effect_size_cohens_d) {
+      evidence.push(`Effect size (Cohen's d): ${simulationResults.effect_size_cohens_d.toFixed(2)}`);
+    }
+    if (simulationResults.statistical_power) {
+      evidence.push(`Statistical power: ${(simulationResults.statistical_power * 100).toFixed(0)}%`);
+    }
+    evidence.push(`CI: [${simulationResults.simulated_ci_lower.toFixed(3)}, ${simulationResults.simulated_ci_upper.toFixed(3)}]`);
+
+    return {
+      type: typeMap[simulationResults.recommendation],
+      confidence,
+      rationale: simulationResults.recommendation_rationale,
+      evidence,
+      risk_factors: simulationResults.fidelity_warning ? [simulationResults.fidelity_warning_reason ?? 'Fidelity warning present'] : undefined,
+    };
+  }, [simulationResults]);
 
   const handleRefresh = () => {
     setIsRefreshing(true);
@@ -967,12 +1018,12 @@ function InterventionImpact() {
             {/* Results and Recommendations - Right Side */}
             <div className="lg:col-span-2 space-y-6">
               <ScenarioResults
-                results={simulationResults}
+                results={null}  // TODO: Convert SimulationResponse to LegacySimulationResponse
                 isLoading={isSimulating}
               />
 
               <RecommendationCards
-                recommendation={simulationResults?.recommendation ?? null}
+                recommendation={simulationRecommendation}
                 onAccept={() => {
                   // TODO: Implement deployment flow
                   console.log('Accepting recommendation');

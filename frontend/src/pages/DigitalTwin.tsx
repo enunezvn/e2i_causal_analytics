@@ -38,8 +38,8 @@ import {
   InterventionType,
   RecommendationType,
   ConfidenceLevel,
-  type SimulationResponse,
-  type ConfidenceInterval,
+  type LegacySimulationResponse,
+  type SimulationConfidenceInterval,
 } from '@/types/digital-twin';
 
 // =============================================================================
@@ -58,7 +58,7 @@ interface StatCardProps {
 // SAMPLE DATA
 // =============================================================================
 
-const SAMPLE_SIMULATION: SimulationResponse = {
+const SAMPLE_SIMULATION: LegacySimulationResponse = {
   simulation_id: 'sim-001',
   created_at: '2026-01-04T10:00:00Z',
   request: {
@@ -157,7 +157,7 @@ function RecommendationBadge({ type }: { type: RecommendationType }) {
   );
 }
 
-function ConfidenceIntervalDisplay({ ci, label, unit = '' }: { ci: ConfidenceInterval; label: string; unit?: string }) {
+function ConfidenceIntervalDisplay({ ci, label, unit = '' }: { ci: SimulationConfidenceInterval; label: string; unit?: string }) {
   return (
     <div className="flex flex-col">
       <span className="text-sm text-[var(--color-text-secondary)]">{label}</span>
@@ -313,28 +313,31 @@ function SimulationForm({
 // =============================================================================
 
 export default function DigitalTwin() {
-  const [selectedSimulation, setSelectedSimulation] = useState<SimulationResponse | null>(SAMPLE_SIMULATION);
+  const [selectedSimulation, setSelectedSimulation] = useState<LegacySimulationResponse | null>(SAMPLE_SIMULATION);
   const [activeTab, setActiveTab] = useState<'results' | 'history'>('results');
 
   const { data: healthData, isLoading: _healthLoading } = useDigitalTwinHealth();
-  const { data: historyData } = useSimulationHistory({ limit: 10 });
+  const { data: historyData, refetch: refetchHistory } = useSimulationHistory({ limit: 10 });
   const { mutate: runSim, isPending: isRunning } = useRunSimulation({
-    onSuccess: (data) => {
-      setSelectedSimulation(data);
-      setActiveTab('results');
+    onSuccess: () => {
+      // Refetch history to show new simulation, switch to history tab
+      refetchHistory();
+      setActiveTab('history');
     },
   });
 
-  const health = healthData || { status: 'unknown', model_version: '1.0.0', last_calibration: '2026-01-01' };
+  const health = healthData ?? { status: 'unknown', service: 'digital-twin', models_available: 0, simulations_pending: 0, last_simulation_at: undefined };
   const history = historyData?.simulations || SAMPLE_HISTORY;
   const simulation = selectedSimulation;
 
   const handleRunSimulation = (formData: { interventionType: InterventionType; brand: string; sampleSize: number; durationDays: number }) => {
     runSim({
-      intervention_type: formData.interventionType,
+      intervention: {
+        intervention_type: formData.interventionType,
+        duration_weeks: Math.ceil(formData.durationDays / 7),
+      },
       brand: formData.brand,
-      sample_size: formData.sampleSize,
-      duration_days: formData.durationDays,
+      twin_count: formData.sampleSize,
     });
   };
 
@@ -354,7 +357,7 @@ export default function DigitalTwin() {
         <div className="flex items-center gap-3">
           <StatusBadge status={health.status} />
           <span className="text-xs text-[var(--color-text-tertiary)]">
-            Model v{health.model_version}
+            {health.models_available} model{health.models_available !== 1 ? 's' : ''} available
           </span>
         </div>
       </div>
@@ -581,7 +584,7 @@ export default function DigitalTwin() {
           </div>
         </div>
         <p className="text-xs text-[var(--color-text-tertiary)] mt-4">
-          Last model calibration: {health.last_calibration}
+          Last simulation: {health.last_simulation_at ?? 'Never'}
         </p>
       </div>
     </div>

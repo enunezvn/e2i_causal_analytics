@@ -34,8 +34,9 @@ import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { cn } from '@/lib/utils';
 import {
-  type SimulationResponse,
-  type ConfidenceInterval,
+  type LegacySimulationResponse,
+  type SimulationConfidenceInterval,
+  type SensitivityResult,
   ConfidenceLevel,
 } from '@/types/digital-twin';
 
@@ -45,7 +46,7 @@ import {
 
 export interface ScenarioResultsProps {
   /** Simulation results to display */
-  results: SimulationResponse | null;
+  results: LegacySimulationResponse | null;
   /** Whether results are loading */
   isLoading?: boolean;
   /** Additional CSS classes */
@@ -61,7 +62,7 @@ function formatDate(dateStr: string): string {
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
-function formatConfidenceInterval(ci: ConfidenceInterval): string {
+function formatConfidenceInterval(ci: SimulationConfidenceInterval): string {
   return `[${ci.lower.toFixed(1)}, ${ci.upper.toFixed(1)}]`;
 }
 
@@ -88,7 +89,7 @@ function getFidelityScoreColor(score: number): string {
 
 interface OutcomeCardProps {
   title: string;
-  value: ConfidenceInterval;
+  value: SimulationConfidenceInterval;
   icon: React.ElementType;
   prefix?: string;
   suffix?: string;
@@ -368,7 +369,7 @@ export function ScenarioResults({
                   Limitations
                 </p>
                 <ul className="text-sm text-muted-foreground space-y-1">
-                  {fidelity.warnings.map((warning, idx) => (
+                  {fidelity.warnings.map((warning: string, idx: number) => (
                     <li key={idx}>• {warning}</li>
                   ))}
                 </ul>
@@ -387,7 +388,7 @@ export function ScenarioResults({
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
-              {sensitivity.slice(0, 5).map((param) => (
+              {sensitivity.slice(0, 5).map((param: SensitivityResult) => (
                 <div key={param.parameter} className="space-y-2">
                   <div className="flex justify-between text-sm">
                     <span className="font-medium">{param.parameter}</span>

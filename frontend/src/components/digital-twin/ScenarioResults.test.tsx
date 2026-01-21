@@ -9,7 +9,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { ScenarioResults, type ScenarioResultsProps } from './ScenarioResults';
 import {
-  type SimulationResponse,
+  type LegacySimulationResponse,
   type SimulationOutcomes,
   type FidelityMetrics,
   type SensitivityResult,
@@ -43,8 +43,8 @@ vi.mock('recharts', () => ({
 
 // Helper to create mock simulation results
 function createMockSimulationResponse(
-  overrides: Partial<SimulationResponse> = {}
-): SimulationResponse {
+  overrides: Partial<LegacySimulationResponse> = {}
+): LegacySimulationResponse {
   const outcomes: SimulationOutcomes = {
     ate: { lower: 0.08, estimate: 0.12, upper: 0.16 },
     trx_lift: { lower: 80, estimate: 120, upper: 160 },
