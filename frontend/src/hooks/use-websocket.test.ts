@@ -127,7 +127,7 @@ describe('useWebSocket', () => {
     expect(window.WebSocket).toBe(MockWebSocket);
 
     // Create a WebSocket directly
-    const ws = new WebSocket('ws://test');
+    new WebSocket('ws://test');
     expect(MockWebSocket.instances.length).toBe(1);
     expect(MockWebSocket.lastUrl).toBe('ws://test');
   });
