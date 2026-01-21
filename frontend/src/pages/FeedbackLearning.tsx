@@ -271,9 +271,9 @@ function FeedbackLearning() {
   const { mutate: applyUpdate, isPending: isApplying } = useApplyUpdate();
   const { mutate: rollbackUpdate, isPending: isRollingBack } = useRollbackUpdate();
 
-  // Use API data or fall back to samples
-  const patterns = patternsData?.patterns ?? SAMPLE_PATTERNS;
-  const updates = updatesData?.updates ?? SAMPLE_UPDATES;
+  // Use API data or fall back to samples (cast to local types for UI compatibility)
+  const patterns: PatternItem[] = (patternsData?.patterns ?? SAMPLE_PATTERNS) as PatternItem[];
+  const updates: UpdateItem[] = (updatesData?.updates ?? SAMPLE_UPDATES) as UpdateItem[];
 
   // Calculate stats
   const stats = useMemo(() => {
@@ -549,7 +549,7 @@ function FeedbackLearning() {
                       dataKey="value"
                       label={({ name, value }) => `${name}: ${value}`}
                     >
-                      {updateTypeChartData.map((entry, index) => (
+                      {updateTypeChartData.map((_, index) => (
                         <Cell
                           key={`cell-${index}`}
                           fill={['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ef4444'][index % 5]}
@@ -617,8 +617,8 @@ function FeedbackLearning() {
                           </p>
                           <p className="text-xs text-[var(--color-muted-foreground)] mt-1">
                             {isPattern
-                              ? `${(item as PatternItem).agent_name} • ${formatRelativeTime((item as PatternItem).last_seen)}`
-                              : `${(item as UpdateItem).agent_name} • ${formatRelativeTime((item as UpdateItem).created_at)}`}
+                              ? `${(item as PatternItem).agent_name ?? 'N/A'} • ${(item as PatternItem).last_seen ? formatRelativeTime((item as PatternItem).last_seen!) : 'N/A'}`
+                              : `${(item as UpdateItem).agent_name ?? 'N/A'} • ${formatRelativeTime((item as UpdateItem).created_at)}`}
                           </p>
                         </div>
                       </div>
