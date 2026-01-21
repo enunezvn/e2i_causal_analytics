@@ -31,6 +31,7 @@ import {
   ReferenceLine,
   ErrorBar,
 } from 'recharts';
+import { Download } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -565,6 +566,46 @@ export default function SegmentAnalysis() {
     });
   };
 
+  // Handle export - creates JSON/CSV with segment data for CRM integration
+  const handleExport = () => {
+    const report = {
+      generatedAt: new Date().toISOString(),
+      treatment: selectedTreatment,
+      outcome: selectedOutcome,
+      overall_ate: analysisResult.overall_ate,
+      heterogeneity_score: analysisResult.heterogeneity_score,
+      expected_total_lift: analysisResult.expected_total_lift,
+      high_responders: analysisResult.high_responders.map((r) => ({
+        segment_id: r.segment_id,
+        cate_estimate: r.cate_estimate,
+        defining_features: r.defining_features,
+        size: r.size,
+        size_percentage: r.size_percentage,
+        recommendation: r.recommendation,
+      })),
+      low_responders: analysisResult.low_responders.map((r) => ({
+        segment_id: r.segment_id,
+        cate_estimate: r.cate_estimate,
+        defining_features: r.defining_features,
+        size: r.size,
+        size_percentage: r.size_percentage,
+        recommendation: r.recommendation,
+      })),
+      cate_by_segment: analysisResult.cate_by_segment,
+      policy_recommendations: analysisResult.policy_recommendations,
+      uplift_metrics: analysisResult.uplift_metrics,
+      executive_summary: analysisResult.executive_summary,
+      key_insights: analysisResult.key_insights,
+    };
+    const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `segment-analysis-${selectedTreatment}-${selectedOutcome}-${new Date().toISOString().split('T')[0]}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="container mx-auto py-6 space-y-6">
       {/* Header */}
@@ -582,6 +623,10 @@ export default function SegmentAnalysis() {
           {healthData?.analyses_24h !== undefined && (
             <Badge variant="outline">{healthData.analyses_24h} analyses today</Badge>
           )}
+          <Button variant="outline" onClick={handleExport}>
+            <Download className="h-4 w-4 mr-2" />
+            Export
+          </Button>
         </div>
       </div>
 
