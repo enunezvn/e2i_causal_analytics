@@ -4,10 +4,12 @@ This document provides step-by-step instructions for deploying the E2I Causal An
 
 ## ⚠️ Important: Access Methods
 
-| Access Type | Method | URL |
-|-------------|--------|-----|
-| **Browser (local machine)** | SSH Tunnel required | http://localhost:8080/ |
-| **Deployment verification** | SSH commands | Runs `curl` on droplet |
+| Service | Method | Local URL |
+|---------|--------|-----------|
+| **Frontend** | SSH Tunnel | http://localhost:8080 |
+| **MLflow** | SSH Tunnel | http://localhost:5000 |
+| **Opik** | SSH Tunnel | http://localhost:5173 |
+| **FalkorDB Browser** | SSH Tunnel | http://localhost:3030 |
 | **Direct IP access** | ❌ Blocked | http://138.197.4.36/ won't work |
 
 **Direct access to the droplet IP is blocked by network/firewall.** Always use SSH tunnel for browser access.
@@ -134,6 +136,49 @@ ssh -i ~/.ssh/replit -f -N -L 8080:localhost:80 enunez@138.197.4.36
 
 ```bash
 pkill -f "ssh -i.*-L 8080:localhost:80"
+```
+
+---
+
+## Accessing MLOps & Monitoring Tools
+
+MLflow, Opik, and FalkorDB Browser require SSH tunnels for access.
+
+### Create SSH Tunnels
+
+```bash
+# All services in one tunnel (runs in background)
+ssh -i ~/.ssh/replit -f -N \
+  -L 5000:localhost:5000 \
+  -L 5173:localhost:5173 \
+  -L 3030:localhost:3030 \
+  -L 8080:localhost:80 \
+  enunez@138.197.4.36
+```
+
+### Access URLs
+
+| Service | Local URL | Description |
+|---------|-----------|-------------|
+| **Frontend** | http://localhost:8080 | Main application |
+| **MLflow** | http://localhost:5000 | Experiment tracking |
+| **Opik** | http://localhost:5173 | Agent observability |
+| **FalkorDB Browser** | http://localhost:3030 | Graph database UI |
+
+### FalkorDB Browser Configuration
+
+When first accessing FalkorDB Browser, it will prompt for a connection URL. Use:
+
+```
+redis://e2i_falkordb:6379
+```
+
+This connects to the FalkorDB container via Docker's internal network.
+
+### Close All Tunnels
+
+```bash
+pkill -f "ssh -i.*-L.*enunez@138.197.4.36"
 ```
 
 ---
