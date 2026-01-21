@@ -47,8 +47,7 @@ import {
   useFailedValidationEntries,
   useLowConfidenceEntries,
 } from '@/hooks/api';
-import { StatusBadge, StatusDot } from '@/components/visualizations/dashboard/StatusBadge';
-import type { StatusType } from '@/components/visualizations/dashboard/StatusBadge';
+import { StatusDot } from '@/components/visualizations/dashboard/StatusBadge';
 
 // =============================================================================
 // TYPES
@@ -140,22 +139,9 @@ function formatDateTime(date: string | Date): string {
   });
 }
 
-function formatDuration(startStr: string, endStr?: string): string {
-  const start = new Date(startStr);
-  const end = endStr ? new Date(endStr) : new Date();
-  const diffMs = end.getTime() - start.getTime();
-  const seconds = Math.floor(diffMs / 1000);
-  const minutes = Math.floor(seconds / 60);
-  const hours = Math.floor(minutes / 60);
-
-  if (hours > 0) return `${hours}h ${minutes % 60}m`;
-  if (minutes > 0) return `${minutes}m ${seconds % 60}s`;
-  return `${seconds}s`;
-}
-
-function getVerificationStatus(chainVerified?: boolean): StatusType {
-  return chainVerified === false ? 'error' : 'healthy';
-}
+// Unused but preserved for future use
+// function formatDuration(startStr: string, endStr?: string): string { ... }
+// function getVerificationStatus(chainVerified?: boolean): StatusType { ... }
 
 // =============================================================================
 // COMPONENT
@@ -429,7 +415,7 @@ function AuditChain() {
                         <XAxis type="number" />
                         <YAxis type="category" dataKey="tier" width={40} />
                         <Tooltip
-                          formatter={(value, name) => [value, 'Entries']}
+                          formatter={(value) => [value, 'Entries']}
                           labelFormatter={(label) => tierChartData.find(t => t.tier === label)?.name || label}
                         />
                         <Bar dataKey="count" radius={[0, 4, 4, 0]}>
