@@ -60,8 +60,10 @@ PUBLIC_PATHS: List[Tuple[str, str]] = [
     ("GET", "/api/graph/nodes"),
     ("GET", "/api/graph/relationships"),
     ("GET", "/api/graph/stats"),
-    # CopilotKit - Only status endpoint is public (requires auth for chat/feedback/analytics)
+    # CopilotKit - Status and info endpoints are public (requires auth for chat/feedback/analytics)
     ("GET", "/api/copilotkit/status"),
+    ("GET", "/api/copilotkit/info"),
+    ("OPTIONS", "/api/copilotkit/info"),
 ]
 
 # Paths that match patterns (for dynamic routes)
