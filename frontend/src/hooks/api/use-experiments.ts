@@ -31,26 +31,28 @@ import {
   getExperimentAlerts,
 } from '@/api/experiments';
 import type {
-  RandomizeUnitsRequest,
-  RandomizationResponse,
-  AssignmentListResponse,
+  RandomizeRequest,
+  RandomizeResponse,
+  AssignmentsListResponse,
   EnrollUnitRequest,
-  EnrollmentResponse,
-  WithdrawUnitRequest,
+  EnrollmentResult,
+  WithdrawRequest,
+  WithdrawResponse,
   EnrollmentStatsResponse,
-  InterimAnalysisResponse,
-  InterimAnalysisListResponse,
-  ExperimentResultsResponse,
+  InterimAnalysisResult,
+  InterimAnalysesListResponse,
+  ExperimentResults,
   SegmentResultsResponse,
-  SRMCheckListResponse,
-  SRMCheckResponse,
-  FidelityComparisonListResponse,
-  FidelityComparisonUpdateRequest,
-  FidelityComparisonResponse,
-  MonitoringResponse,
-  ExperimentHealthResponse,
-  ExperimentAlertListResponse,
+  SRMChecksListResponse,
+  SRMCheckResult,
+  FidelityComparisonsResponse,
+  FidelityComparison,
+  MonitorResponse,
+  ExperimentHealthSummary,
+  ExperimentAlertsResponse,
   GetAssignmentsParams,
+  TriggerInterimAnalysisRequest,
+  TriggerMonitorRequest,
 } from '@/types/experiments';
 
 // =============================================================================
@@ -74,9 +76,9 @@ import type {
 export function useAssignments(
   experimentId: string,
   params?: GetAssignmentsParams,
-  options?: Omit<UseQueryOptions<AssignmentListResponse, ApiError>, 'queryKey' | 'queryFn'>
+  options?: Omit<UseQueryOptions<AssignmentsListResponse, ApiError>, 'queryKey' | 'queryFn'>
 ) {
-  return useQuery<AssignmentListResponse, ApiError>({
+  return useQuery<AssignmentsListResponse, ApiError>({
     queryKey: [...queryKeys.experiments.assignments(experimentId), params],
     queryFn: () => getAssignments(experimentId, params),
     enabled: !!experimentId,
@@ -124,9 +126,9 @@ export function useEnrollmentStats(
  */
 export function useInterimAnalyses(
   experimentId: string,
-  options?: Omit<UseQueryOptions<InterimAnalysisListResponse, ApiError>, 'queryKey' | 'queryFn'>
+  options?: Omit<UseQueryOptions<InterimAnalysesListResponse, ApiError>, 'queryKey' | 'queryFn'>
 ) {
-  return useQuery<InterimAnalysisListResponse, ApiError>({
+  return useQuery<InterimAnalysesListResponse, ApiError>({
     queryKey: queryKeys.experiments.interimAnalyses(experimentId),
     queryFn: () => listInterimAnalyses(experimentId),
     enabled: !!experimentId,
@@ -152,9 +154,9 @@ export function useInterimAnalyses(
  */
 export function useExperimentResults(
   experimentId: string,
-  options?: Omit<UseQueryOptions<ExperimentResultsResponse, ApiError>, 'queryKey' | 'queryFn'>
+  options?: Omit<UseQueryOptions<ExperimentResults, ApiError>, 'queryKey' | 'queryFn'>
 ) {
-  return useQuery<ExperimentResultsResponse, ApiError>({
+  return useQuery<ExperimentResults, ApiError>({
     queryKey: queryKeys.experiments.results(experimentId),
     queryFn: () => getExperimentResults(experimentId),
     enabled: !!experimentId,
@@ -173,13 +175,13 @@ export function useExperimentResults(
  */
 export function useSegmentResults(
   experimentId: string,
-  segmentVar: string,
+  segments: string[],
   options?: Omit<UseQueryOptions<SegmentResultsResponse, ApiError>, 'queryKey' | 'queryFn'>
 ) {
   return useQuery<SegmentResultsResponse, ApiError>({
-    queryKey: queryKeys.experiments.segmentResults(experimentId, segmentVar),
-    queryFn: () => getSegmentResults(experimentId, segmentVar),
-    enabled: !!experimentId && !!segmentVar,
+    queryKey: queryKeys.experiments.segmentResults(experimentId, segments.join(',')),
+    queryFn: () => getSegmentResults(experimentId, segments),
+    enabled: !!experimentId && segments.length > 0,
     staleTime: 2 * 60 * 1000,
     ...options,
   });
@@ -206,9 +208,9 @@ export function useSegmentResults(
  */
 export function useSRMChecks(
   experimentId: string,
-  options?: Omit<UseQueryOptions<SRMCheckListResponse, ApiError>, 'queryKey' | 'queryFn'>
+  options?: Omit<UseQueryOptions<SRMChecksListResponse, ApiError>, 'queryKey' | 'queryFn'>
 ) {
-  return useQuery<SRMCheckListResponse, ApiError>({
+  return useQuery<SRMChecksListResponse, ApiError>({
     queryKey: queryKeys.experiments.srmChecks(experimentId),
     queryFn: () => getSRMChecks(experimentId),
     enabled: !!experimentId,
@@ -226,9 +228,9 @@ export function useSRMChecks(
  */
 export function useFidelityComparisons(
   experimentId: string,
-  options?: Omit<UseQueryOptions<FidelityComparisonListResponse, ApiError>, 'queryKey' | 'queryFn'>
+  options?: Omit<UseQueryOptions<FidelityComparisonsResponse, ApiError>, 'queryKey' | 'queryFn'>
 ) {
-  return useQuery<FidelityComparisonListResponse, ApiError>({
+  return useQuery<FidelityComparisonsResponse, ApiError>({
     queryKey: queryKeys.experiments.fidelityComparisons(experimentId),
     queryFn: () => getFidelityComparisons(experimentId),
     enabled: !!experimentId,
@@ -244,15 +246,18 @@ export function useFidelityComparisons(
 /**
  * Hook to get experiment service health.
  *
+ * @param experimentId - The experiment ID
  * @param options - Additional query options
  * @returns Query result with service health status
  */
 export function useExperimentHealth(
-  options?: Omit<UseQueryOptions<ExperimentHealthResponse, ApiError>, 'queryKey' | 'queryFn'>
+  experimentId: string,
+  options?: Omit<UseQueryOptions<ExperimentHealthSummary, ApiError>, 'queryKey' | 'queryFn'>
 ) {
-  return useQuery<ExperimentHealthResponse, ApiError>({
-    queryKey: queryKeys.experiments.health(),
-    queryFn: () => getExperimentHealth(),
+  return useQuery<ExperimentHealthSummary, ApiError>({
+    queryKey: queryKeys.experiments.health(experimentId),
+    queryFn: () => getExperimentHealth(experimentId),
+    enabled: !!experimentId,
     staleTime: 30 * 1000,
     ...options,
   });
@@ -267,9 +272,9 @@ export function useExperimentHealth(
  */
 export function useExperimentAlerts(
   experimentId: string,
-  options?: Omit<UseQueryOptions<ExperimentAlertListResponse, ApiError>, 'queryKey' | 'queryFn'>
+  options?: Omit<UseQueryOptions<ExperimentAlertsResponse, ApiError>, 'queryKey' | 'queryFn'>
 ) {
-  return useQuery<ExperimentAlertListResponse, ApiError>({
+  return useQuery<ExperimentAlertsResponse, ApiError>({
     queryKey: queryKeys.experiments.alerts(experimentId),
     queryFn: () => getExperimentAlerts(experimentId),
     enabled: !!experimentId,
@@ -304,18 +309,18 @@ export function useExperimentAlerts(
  * ```
  */
 export function useRandomizeUnits(
-  options?: Omit<UseMutationOptions<RandomizationResponse, ApiError, RandomizeUnitsRequest>, 'mutationFn'>
+  options?: Omit<UseMutationOptions<RandomizeResponse, ApiError, { experimentId: string; request: RandomizeRequest }>, 'mutationFn'>
 ) {
   const queryClient = useQueryClient();
 
-  return useMutation<RandomizationResponse, ApiError, RandomizeUnitsRequest>({
-    mutationFn: (request) => randomizeUnits(request),
+  return useMutation<RandomizeResponse, ApiError, { experimentId: string; request: RandomizeRequest }>({
+    mutationFn: ({ experimentId, request }) => randomizeUnits(experimentId, request),
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({
-        queryKey: queryKeys.experiments.assignments(variables.experiment_id),
+        queryKey: queryKeys.experiments.assignments(variables.experimentId),
       });
       queryClient.invalidateQueries({
-        queryKey: queryKeys.experiments.enrollmentStats(variables.experiment_id),
+        queryKey: queryKeys.experiments.enrollmentStats(variables.experimentId),
       });
     },
     ...options,
@@ -329,18 +334,18 @@ export function useRandomizeUnits(
  * @returns Mutation object for enrollment
  */
 export function useEnrollUnit(
-  options?: Omit<UseMutationOptions<EnrollmentResponse, ApiError, EnrollUnitRequest>, 'mutationFn'>
+  options?: Omit<UseMutationOptions<EnrollmentResult, ApiError, { experimentId: string; request: EnrollUnitRequest }>, 'mutationFn'>
 ) {
   const queryClient = useQueryClient();
 
-  return useMutation<EnrollmentResponse, ApiError, EnrollUnitRequest>({
-    mutationFn: (request) => enrollUnit(request),
+  return useMutation<EnrollmentResult, ApiError, { experimentId: string; request: EnrollUnitRequest }>({
+    mutationFn: ({ experimentId, request }) => enrollUnit(experimentId, request),
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({
-        queryKey: queryKeys.experiments.assignments(variables.experiment_id),
+        queryKey: queryKeys.experiments.assignments(variables.experimentId),
       });
       queryClient.invalidateQueries({
-        queryKey: queryKeys.experiments.enrollmentStats(variables.experiment_id),
+        queryKey: queryKeys.experiments.enrollmentStats(variables.experimentId),
       });
     },
     ...options,
@@ -354,18 +359,18 @@ export function useEnrollUnit(
  * @returns Mutation object for withdrawal
  */
 export function useWithdrawUnit(
-  options?: Omit<UseMutationOptions<EnrollmentResponse, ApiError, WithdrawUnitRequest>, 'mutationFn'>
+  options?: Omit<UseMutationOptions<WithdrawResponse, ApiError, { experimentId: string; enrollmentId: string; request: WithdrawRequest }>, 'mutationFn'>
 ) {
   const queryClient = useQueryClient();
 
-  return useMutation<EnrollmentResponse, ApiError, WithdrawUnitRequest>({
-    mutationFn: (request) => withdrawUnit(request),
+  return useMutation<WithdrawResponse, ApiError, { experimentId: string; enrollmentId: string; request: WithdrawRequest }>({
+    mutationFn: ({ experimentId, enrollmentId, request }) => withdrawUnit(experimentId, enrollmentId, request),
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({
-        queryKey: queryKeys.experiments.assignments(variables.experiment_id),
+        queryKey: queryKeys.experiments.assignments(variables.experimentId),
       });
       queryClient.invalidateQueries({
-        queryKey: queryKeys.experiments.enrollmentStats(variables.experiment_id),
+        queryKey: queryKeys.experiments.enrollmentStats(variables.experimentId),
       });
     },
     ...options,
@@ -386,14 +391,14 @@ export function useWithdrawUnit(
  */
 export function useTriggerInterimAnalysis(
   options?: Omit<
-    UseMutationOptions<InterimAnalysisResponse, ApiError, { experimentId: string; analysisPurpose?: string }>,
+    UseMutationOptions<InterimAnalysisResult, ApiError, { experimentId: string; request: TriggerInterimAnalysisRequest }>,
     'mutationFn'
   >
 ) {
   const queryClient = useQueryClient();
 
-  return useMutation<InterimAnalysisResponse, ApiError, { experimentId: string; analysisPurpose?: string }>({
-    mutationFn: ({ experimentId, analysisPurpose }) => triggerInterimAnalysis(experimentId, analysisPurpose),
+  return useMutation<InterimAnalysisResult, ApiError, { experimentId: string; request: TriggerInterimAnalysisRequest }>({
+    mutationFn: ({ experimentId, request }) => triggerInterimAnalysis(experimentId, request),
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({
         queryKey: queryKeys.experiments.interimAnalyses(variables.experimentId),
@@ -413,11 +418,11 @@ export function useTriggerInterimAnalysis(
  * @returns Mutation object for SRM check
  */
 export function useRunSRMCheck(
-  options?: Omit<UseMutationOptions<SRMCheckResponse, ApiError, string>, 'mutationFn'>
+  options?: Omit<UseMutationOptions<SRMCheckResult, ApiError, string>, 'mutationFn'>
 ) {
   const queryClient = useQueryClient();
 
-  return useMutation<SRMCheckResponse, ApiError, string>({
+  return useMutation<SRMCheckResult, ApiError, string>({
     mutationFn: (experimentId) => runSRMCheck(experimentId),
     onSuccess: (_, experimentId) => {
       queryClient.invalidateQueries({
@@ -437,9 +442,9 @@ export function useRunSRMCheck(
 export function useUpdateFidelityComparison(
   options?: Omit<
     UseMutationOptions<
-      FidelityComparisonResponse,
+      FidelityComparison,
       ApiError,
-      { experimentId: string; comparisonId: string; request: FidelityComparisonUpdateRequest }
+      { experimentId: string; twinSimulationId: string }
     >,
     'mutationFn'
   >
@@ -447,12 +452,12 @@ export function useUpdateFidelityComparison(
   const queryClient = useQueryClient();
 
   return useMutation<
-    FidelityComparisonResponse,
+    FidelityComparison,
     ApiError,
-    { experimentId: string; comparisonId: string; request: FidelityComparisonUpdateRequest }
+    { experimentId: string; twinSimulationId: string }
   >({
-    mutationFn: ({ experimentId, comparisonId, request }) =>
-      updateFidelityComparison(experimentId, comparisonId, request),
+    mutationFn: ({ experimentId, twinSimulationId }) =>
+      updateFidelityComparison(experimentId, twinSimulationId),
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({
         queryKey: queryKeys.experiments.fidelityComparisons(variables.experimentId),
@@ -469,12 +474,12 @@ export function useUpdateFidelityComparison(
  * @returns Mutation object for triggering monitoring
  */
 export function useTriggerMonitoring(
-  options?: Omit<UseMutationOptions<MonitoringResponse, ApiError, { checkAllActive?: boolean }>, 'mutationFn'>
+  options?: Omit<UseMutationOptions<MonitorResponse, ApiError, TriggerMonitorRequest>, 'mutationFn'>
 ) {
   const queryClient = useQueryClient();
 
-  return useMutation<MonitoringResponse, ApiError, { checkAllActive?: boolean }>({
-    mutationFn: ({ checkAllActive }) => triggerMonitoring(checkAllActive),
+  return useMutation<MonitorResponse, ApiError, TriggerMonitorRequest>({
+    mutationFn: (request) => triggerMonitoring(request),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.experiments.all() });
     },

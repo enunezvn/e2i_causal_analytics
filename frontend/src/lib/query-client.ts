@@ -316,7 +316,8 @@ export const queryKeys = {
       [...queryKeys.experiments.all(), 'srm', experimentId] as const,
     fidelityComparisons: (experimentId: string) =>
       [...queryKeys.experiments.all(), 'fidelity', experimentId] as const,
-    health: () => [...queryKeys.experiments.all(), 'health'] as const,
+    health: (experimentId: string) =>
+      [...queryKeys.experiments.all(), 'health', experimentId] as const,
     alerts: (experimentId: string) =>
       [...queryKeys.experiments.all(), 'alerts', experimentId] as const,
   },

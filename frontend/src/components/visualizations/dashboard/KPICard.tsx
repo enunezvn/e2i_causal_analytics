@@ -57,6 +57,10 @@ export interface KPICardProps {
   higherIsBetter?: boolean;
   /** Card size variant */
   size?: 'sm' | 'md' | 'lg';
+  /** Optional icon to display */
+  icon?: React.ReactNode;
+  /** Custom color class for the value */
+  valueColor?: string;
 }
 
 // =============================================================================
@@ -151,6 +155,8 @@ export const KPICard = React.forwardRef<HTMLDivElement, KPICardProps>(
       showTarget = true,
       higherIsBetter = true,
       size = 'md',
+      icon,
+      valueColor,
     },
     ref
   ) => {
@@ -249,9 +255,12 @@ export const KPICard = React.forwardRef<HTMLDivElement, KPICardProps>(
       >
         {/* Header */}
         <div className="flex items-start justify-between gap-2 mb-1">
-          <h3 className={cn('font-medium text-[var(--color-muted-foreground)]', sizeStyles.title)}>
-            {title}
-          </h3>
+          <div className="flex items-center gap-2">
+            {icon && <span className="text-[var(--color-muted-foreground)]">{icon}</span>}
+            <h3 className={cn('font-medium text-[var(--color-muted-foreground)]', sizeStyles.title)}>
+              {title}
+            </h3>
+          </div>
           <div className="flex items-center gap-1">
             {/* Status indicator */}
             <div className={cn('w-2 h-2 rounded-full', getStatusColor(status))} />
@@ -273,7 +282,7 @@ export const KPICard = React.forwardRef<HTMLDivElement, KPICardProps>(
 
         {/* Value and trend */}
         <div className="flex items-baseline gap-2 mb-2">
-          <span className={cn('font-bold text-[var(--color-foreground)]', sizeStyles.value)}>
+          <span className={cn('font-bold', valueColor || 'text-[var(--color-foreground)]', sizeStyles.value)}>
             {formatValue(value, prefix, unit)}
           </span>
           {trend && (

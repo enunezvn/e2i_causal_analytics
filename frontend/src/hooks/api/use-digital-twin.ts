@@ -26,11 +26,13 @@ import {
   getDigitalTwinHealth,
 } from '@/api/digital-twin';
 import type {
-  SimulationRequest,
+  SimulateRequest,
   SimulationResponse,
+  SimulationDetailResponse,
   ScenarioComparisonRequest,
   ScenarioComparisonResult,
   SimulationHistoryResponse,
+  DigitalTwinHealthResponse,
 } from '@/types/digital-twin';
 import type { ApiError } from '@/lib/api-client';
 
@@ -56,11 +58,11 @@ import type { ApiError } from '@/lib/api-client';
 export function useSimulation(
   simulationId: string,
   options?: Omit<
-    UseQueryOptions<SimulationResponse, ApiError>,
+    UseQueryOptions<SimulationDetailResponse, ApiError>,
     'queryKey' | 'queryFn'
   >
 ) {
-  return useQuery<SimulationResponse, ApiError>({
+  return useQuery<SimulationDetailResponse, ApiError>({
     queryKey: queryKeys.digitalTwin.simulation(simulationId),
     queryFn: () => getSimulation(simulationId),
     // Simulations are immutable once created
@@ -84,8 +86,6 @@ export function useSimulation(
  */
 export function useSimulationHistory(
   params?: {
-    brand?: string;
-    intervention_type?: string;
     limit?: number;
     offset?: number;
   },
@@ -95,7 +95,7 @@ export function useSimulationHistory(
   >
 ) {
   return useQuery<SimulationHistoryResponse, ApiError>({
-    queryKey: queryKeys.digitalTwin.history(params?.brand),
+    queryKey: queryKeys.digitalTwin.history(),
     queryFn: () => getSimulationHistory(params),
     staleTime: 5 * 60 * 1000, // 5 minutes
     ...options,
@@ -110,11 +110,11 @@ export function useSimulationHistory(
  */
 export function useDigitalTwinHealth(
   options?: Omit<
-    UseQueryOptions<{ status: string; model_version: string; last_calibration: string }, ApiError>,
+    UseQueryOptions<DigitalTwinHealthResponse, ApiError>,
     'queryKey' | 'queryFn'
   >
 ) {
-  return useQuery<{ status: string; model_version: string; last_calibration: string }, ApiError>({
+  return useQuery<DigitalTwinHealthResponse, ApiError>({
     queryKey: queryKeys.digitalTwin.health(),
     queryFn: getDigitalTwinHealth,
     staleTime: 30 * 1000, // 30 seconds
@@ -149,15 +149,15 @@ export function useDigitalTwinHealth(
  */
 export function useRunSimulation(
   options?: Omit<
-    UseMutationOptions<SimulationResponse, ApiError, SimulationRequest>,
+    UseMutationOptions<SimulationResponse, ApiError, SimulateRequest>,
     'mutationFn'
   >
 ) {
   const queryClient = useQueryClient();
 
-  return useMutation<SimulationResponse, ApiError, SimulationRequest>({
+  return useMutation<SimulationResponse, ApiError, SimulateRequest>({
     mutationFn: runSimulation,
-    onSuccess: (data, variables) => {
+    onSuccess: (data) => {
       // Add the new simulation to cache
       queryClient.setQueryData(
         queryKeys.digitalTwin.simulation(data.simulation_id),
@@ -165,7 +165,7 @@ export function useRunSimulation(
       );
       // Invalidate history to include the new simulation
       queryClient.invalidateQueries({
-        queryKey: queryKeys.digitalTwin.history(variables.brand),
+        queryKey: queryKeys.digitalTwin.history(),
       });
     },
     ...options,
@@ -225,14 +225,12 @@ export function useCompareScenarios(
  * Prefetch simulation history for faster navigation.
  *
  * @param queryClient - The query client instance
- * @param brand - Optional brand filter
  */
 export async function prefetchSimulationHistory(
-  queryClient: ReturnType<typeof useQueryClient>,
-  brand?: string
+  queryClient: ReturnType<typeof useQueryClient>
 ) {
   await queryClient.prefetchQuery({
-    queryKey: queryKeys.digitalTwin.history(brand),
-    queryFn: () => getSimulationHistory({ brand, limit: 10 }),
+    queryKey: queryKeys.digitalTwin.history(),
+    queryFn: () => getSimulationHistory({ limit: 10 }),
   });
 }

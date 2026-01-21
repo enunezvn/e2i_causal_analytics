@@ -21,8 +21,6 @@ import {
   ResponsiveContainer,
   LineChart,
   Line,
-  ScatterChart,
-  Scatter,
   ErrorBar,
   Cell,
 } from 'recharts';
@@ -40,13 +38,10 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import {
-  useHierarchicalAnalysis,
-  useEstimators,
   useCausalHealth,
   useRunHierarchicalAnalysis,
 } from '@/hooks/api';
 import {
-  CausalLibrary,
   CausalAnalysisStatus,
   EstimatorType,
   SegmentationMethod,
@@ -62,10 +57,8 @@ import {
   Layers,
   BarChart3,
   Network,
-  Target,
   TrendingUp,
   Settings,
-  FileText,
 } from 'lucide-react';
 
 // =============================================================================
@@ -137,7 +130,7 @@ const SAMPLE_HIERARCHICAL_RESULT = {
     aggregate_std: 0.032,
     confidence_level: 0.95,
     aggregation_method: 'variance_weighted',
-    segment_contributions: { '1': 0.35, '2': 0.32, '3': 0.22, '4': 0.11 },
+    segment_contributions: { '1': 0.35, '2': 0.32, '3': 0.22, '4': 0.11 } as Record<string, number>,
     i_squared: 42.5,
     tau_squared: 0.008,
     n_segments_included: 4,
@@ -288,11 +281,14 @@ export default function CausalAnalysis() {
   const handleRunAnalysis = async () => {
     try {
       await runAnalysisMutation.mutateAsync({
-        treatment_var: treatmentVar,
-        outcome_var: outcomeVar,
-        n_segments: nSegments,
-        segmentation_method: SegmentationMethod.QUANTILE,
-        estimator_type: EstimatorType.CAUSAL_FOREST,
+        request: {
+          treatment_var: treatmentVar,
+          outcome_var: outcomeVar,
+          n_segments: nSegments,
+          segmentation_method: SegmentationMethod.QUANTILE,
+          estimator_type: EstimatorType.CAUSAL_FOREST,
+        },
+        asyncMode: true,
       });
     } catch (error) {
       console.error('Analysis failed:', error);
@@ -549,7 +545,7 @@ export default function CausalAnalysis() {
                   <XAxis type="number" domain={[-0.1, 0.6]} />
                   <YAxis dataKey="name" type="category" width={120} />
                   <Tooltip
-                    formatter={(value: number) => value.toFixed(3)}
+                    formatter={(value) => typeof value === 'number' ? value.toFixed(3) : value}
                     content={({ active, payload }) => {
                       if (active && payload && payload.length) {
                         const data = payload[0].payload;
@@ -645,7 +641,7 @@ export default function CausalAnalysis() {
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis dataKey="library" />
                     <YAxis domain={[0, 0.4]} />
-                    <Tooltip formatter={(value: number) => value.toFixed(3)} />
+                    <Tooltip formatter={(value) => typeof value === 'number' ? value.toFixed(3) : value} />
                     <Legend />
                     <Bar dataKey="effect" name="Effect Estimate">
                       {libraryComparison.filter((d) => d.effect !== null).map((entry, index) => (
