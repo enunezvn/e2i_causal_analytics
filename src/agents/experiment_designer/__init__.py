@@ -59,6 +59,12 @@ from src.agents.experiment_designer.graph import (
     create_initial_state,
     experiment_designer_graph,
 )
+from src.agents.experiment_designer.mlflow_tracker import (
+    ExperimentDesignerMLflowTracker,
+    ExperimentDesignerMetrics,
+    DesignContext,
+    create_tracker as create_mlflow_tracker,
+)
 from src.agents.experiment_designer.state import (
     DesignIteration,
     DoWhySpec,
@@ -97,4 +103,9 @@ __all__ = [
     "create_experiment_designer_graph",
     "experiment_designer_graph",
     "create_initial_state",
+    # MLflow tracking
+    "ExperimentDesignerMLflowTracker",
+    "ExperimentDesignerMetrics",
+    "DesignContext",
+    "create_mlflow_tracker",
 ]

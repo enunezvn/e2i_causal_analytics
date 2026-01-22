@@ -15,7 +15,7 @@ Key Features:
 
 Integration:
 - Memory: None (stateless statistical computation)
-- Observability: Opik tracing with graceful degradation
+- Observability: Opik tracing with graceful degradation, MLflow tracking
 - Data: SupabaseDataConnector (auto-detects based on env)
 
 Algorithm: .claude/specialists/Agent_Specialists_Tiers 1-5/drift-monitor.md
@@ -25,12 +25,15 @@ Contract: .claude/contracts/tier3-contracts.md lines 349-562
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, TYPE_CHECKING
 
 from pydantic import BaseModel, Field, field_validator
 
 from src.agents.drift_monitor.graph import drift_monitor_graph
 from src.agents.drift_monitor.state import DriftMonitorState
+
+if TYPE_CHECKING:
+    from src.agents.drift_monitor.mlflow_tracker import DriftMonitorMLflowTracker
 
 logger = logging.getLogger(__name__)
 
@@ -150,9 +153,31 @@ class DriftMonitorAgent:
     sla_seconds = 10  # <10s for 50 features
     tools = ["scipy", "numpy"]  # Statistical libraries for drift detection
 
-    def __init__(self):
-        """Initialize drift monitor agent."""
+    def __init__(self, enable_mlflow: bool = True):
+        """Initialize drift monitor agent.
+
+        Args:
+            enable_mlflow: Whether to enable MLflow tracking (default: True)
+        """
         self.graph = drift_monitor_graph
+        self.enable_mlflow = enable_mlflow
+        self._mlflow_tracker: Optional["DriftMonitorMLflowTracker"] = None
+
+    def _get_mlflow_tracker(self) -> Optional["DriftMonitorMLflowTracker"]:
+        """Get or create MLflow tracker instance (lazy initialization)."""
+        if not self.enable_mlflow:
+            return None
+
+        if self._mlflow_tracker is None:
+            try:
+                from src.agents.drift_monitor.mlflow_tracker import DriftMonitorMLflowTracker
+
+                self._mlflow_tracker = DriftMonitorMLflowTracker()
+            except ImportError:
+                logger.warning("MLflow tracker not available")
+                return None
+
+        return self._mlflow_tracker
 
     async def run(self, input_data: DriftMonitorInput) -> DriftMonitorOutput:
         """Execute drift detection workflow.
@@ -179,9 +204,14 @@ class DriftMonitorAgent:
         # Create initial state from input
         initial_state = self._create_initial_state(input_data)
 
-        # Execute LangGraph workflow with optional Opik tracing
+        # Get MLflow tracker
+        mlflow_tracker = self._get_mlflow_tracker()
+
+        # Execute LangGraph workflow with optional Opik tracing and MLflow tracking
         opik = _get_opik_connector()
-        try:
+
+        async def execute_workflow():
+            """Execute the drift detection workflow."""
             if opik and opik.is_enabled:
                 async with opik.trace_agent(
                     agent_name=self.agent_name,
@@ -211,19 +241,50 @@ class DriftMonitorAgent:
                             "alert_count": len(final_state.get("alerts", [])),
                             "detection_latency_ms": final_state.get("detection_latency_ms", 0),
                         })
+                    return final_state
             else:
-                final_state = await self.graph.ainvoke(initial_state)
+                return await self.graph.ainvoke(initial_state)
+
+        try:
+            # Execute with MLflow tracking if available
+            if mlflow_tracker:
+                async with mlflow_tracker.start_monitoring_run(
+                    experiment_name=getattr(input_data, "experiment_name", "default")
+                    if hasattr(input_data, "experiment_name")
+                    else "default",
+                    brand=input_data.brand,
+                    model_id=input_data.model_id,
+                    time_window=input_data.time_window,
+                ) as ctx:
+                    final_state = await execute_workflow()
+
+                    # Convert to output model
+                    output = self._create_output(final_state)
+
+                    # Log to MLflow
+                    await mlflow_tracker.log_monitoring_result(output, final_state)
+
+                    # Check for failures
+                    if final_state["status"] == "failed":
+                        error_messages = [e["error"] for e in final_state.get("errors", [])]
+                        raise RuntimeError(f"Drift detection failed: {'; '.join(error_messages)}")
+            else:
+                # Execute without MLflow tracking
+                final_state = await execute_workflow()
+
+                # Convert to output model
+                output = self._create_output(final_state)
+
+                # Check for failures
+                if final_state["status"] == "failed":
+                    error_messages = [e["error"] for e in final_state.get("errors", [])]
+                    raise RuntimeError(f"Drift detection failed: {'; '.join(error_messages)}")
+
+        except RuntimeError:
+            raise
         except Exception as e:
             logger.exception(f"Drift detection failed: {e}")
             raise RuntimeError(f"Drift detection workflow failed: {str(e)}") from e
-
-        # Convert to output model
-        output = self._create_output(final_state)
-
-        # Check for failures
-        if final_state["status"] == "failed":
-            error_messages = [e["error"] for e in final_state.get("errors", [])]
-            raise RuntimeError(f"Drift detection failed: {'; '.join(error_messages)}")
 
         # Log execution time and SLA check
         duration = (datetime.now(timezone.utc) - start_time).total_seconds()
