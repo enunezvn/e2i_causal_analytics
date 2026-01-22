@@ -728,7 +728,7 @@ async def get_explanation_history(
         # Note: Current schema tracks by model_registry_id, not patient_id
         # For patient-level history, we'd need to extend the schema
         # For now, return recent analyses as a demonstration
-        result = await (
+        result = (
             repo.client.table(repo.table_name)
             .select("*")
             .order("computed_at", desc=True)
