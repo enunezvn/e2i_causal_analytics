@@ -41,6 +41,7 @@ Version: 4.3.0 (Phase 3 - Circuit Breaker)
 
 import logging
 import os
+import sys
 import threading
 import time
 import uuid
@@ -1129,6 +1130,93 @@ class OpikConnector:
         except Exception as e:
             self._circuit_breaker.record_failure()
             logger.warning(f"Failed to log feedback: {e}")
+
+    async def log_model_prediction(
+        self,
+        model_name: str,
+        input_data: Dict[str, Any],
+        output_data: Dict[str, Any],
+        metadata: Optional[Dict[str, Any]] = None,
+        trace_id: Optional[str] = None,
+    ) -> Optional[str]:
+        """Log a model prediction to Opik for audit trail.
+
+        Creates a trace for the prediction with input/output data logged.
+        Uses circuit breaker pattern for fault tolerance.
+
+        Args:
+            model_name: Name of the model/service making the prediction
+            input_data: Input data for the prediction
+            output_data: Output/prediction result
+            metadata: Additional metadata (latency, service_type, etc.)
+            trace_id: Optional trace ID to use (generates UUID v7 if not provided)
+
+        Returns:
+            The trace ID if successful, None otherwise
+
+        Example:
+            await connector.log_model_prediction(
+                model_name="churn_classifier",
+                input_data={"features": [...]},
+                output_data={"prediction": 0.85, "class": "high_risk"},
+                metadata={"latency_ms": 45.2, "service_type": "bentoml"},
+            )
+        """
+        if not self.is_enabled:
+            return None
+
+        # Check circuit breaker
+        if not self._circuit_breaker.allow_request():
+            logger.debug(
+                f"Circuit open, dropping prediction log for {model_name} "
+                f"(will retry in {self._circuit_breaker._time_until_reset():.1f}s)"
+            )
+            return None
+
+        trace_id = trace_id or str(uuid7_func())
+        start_time = datetime.now(timezone.utc)
+
+        try:
+            # Build comprehensive metadata
+            prediction_metadata = {
+                "model_name": model_name,
+                "prediction_type": "model_serving",
+                "logged_at": start_time.isoformat(),
+                **(metadata or {}),
+            }
+
+            # Create trace for the prediction
+            opik_trace = self._opik_client.trace(
+                id=trace_id,
+                name=f"prediction.{model_name}",
+                start_time=start_time,
+                input=input_data,
+                output=output_data,
+                metadata=prediction_metadata,
+                tags=["prediction", model_name, "model_serving"],
+            )
+
+            # End the trace immediately since prediction is complete
+            end_time = datetime.now(timezone.utc)
+            opik_trace.end(
+                end_time=end_time,
+                output=output_data,
+            )
+
+            # Record success
+            self._circuit_breaker.record_success()
+
+            logger.debug(
+                f"Logged prediction for {model_name} "
+                f"[trace_id={trace_id}]"
+            )
+            return trace_id
+
+        except Exception as e:
+            # Record failure
+            self._circuit_breaker.record_failure()
+            logger.warning(f"Failed to log prediction to Opik: {e}")
+            return None
 
     def flush(self) -> None:
         """Flush any pending data to Opik.

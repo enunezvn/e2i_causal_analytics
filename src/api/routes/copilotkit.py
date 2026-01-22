@@ -242,6 +242,7 @@ from langgraph.prebuilt import ToolNode
 from pydantic import BaseModel, Field
 
 from src.api.routes.chatbot_tools import E2I_CHATBOT_TOOLS
+from src.api.middleware.tracing import get_request_id  # Phase 1 G08
 from src.utils.llm_factory import get_chat_llm, get_llm_provider, MODEL_MAPPINGS
 
 logger = logging.getLogger(__name__)
@@ -2724,11 +2725,18 @@ async def get_copilotkit_status() -> Dict[str, Any]:
 
 
 class ChatRequest(BaseModel):
-    """Request schema for chatbot endpoints."""
+    """Request schema for chatbot endpoints.
+
+    Note: request_id is optional - if not provided, it will be extracted from
+    the X-Request-ID header via TracingMiddleware (Phase 1 G08).
+    """
 
     query: str = Field(..., description="User's query text")
     user_id: str = Field(..., description="User UUID")
-    request_id: str = Field(..., description="Unique request identifier")
+    request_id: Optional[str] = Field(
+        default=None,
+        description="Unique request identifier (auto-extracted from X-Request-ID header if not provided)",
+    )
     session_id: Optional[str] = Field(
         default=None, description="Session ID (generated if not provided)"
     )
@@ -2877,7 +2885,7 @@ async def _stream_chat_response(request: ChatRequest) -> AsyncGenerator[str, Non
 
 
 @router.post("/chat/stream")
-async def stream_chat(request: ChatRequest) -> StreamingResponse:
+async def stream_chat(chat_request: ChatRequest, request: Request) -> StreamingResponse:
     """
     Stream chatbot response as Server-Sent Events (SSE).
 
@@ -2889,33 +2897,47 @@ async def stream_chat(request: ChatRequest) -> StreamingResponse:
     - done: Stream completion signal
     - error: Error messages
 
+    Note: request_id is optional. If not provided, it's extracted from the
+    X-Request-ID header via TracingMiddleware (Phase 1 G08).
+
     Usage:
         POST /api/copilotkit/chat/stream
         Content-Type: application/json
+        X-Request-ID: optional-tracking-id  // Optional, auto-generated if not set
 
         {
             "query": "What is the TRx for Kisqali?",
             "user_id": "user-uuid",
-            "request_id": "req-123",
+            "request_id": "req-123",  // Optional, falls back to X-Request-ID header
             "session_id": "",  // Optional, generated if empty
             "brand_context": "Kisqali"  // Optional
         }
     """
-    logger.info(f"[Chatbot] Streaming request: query={request.query[:50]}..., user={request.user_id}")
+    # Phase 1 G08: Use middleware request_id if not provided in body
+    effective_request_id = chat_request.request_id or get_request_id() or "unknown"
+
+    logger.info(
+        f"[Chatbot] Streaming request: query={chat_request.query[:50]}..., "
+        f"user={chat_request.user_id}, request_id={effective_request_id}"
+    )
+
+    # Update the request with the effective request_id
+    chat_request.request_id = effective_request_id
 
     return StreamingResponse(
-        _stream_chat_response(request),
+        _stream_chat_response(chat_request),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
+            "X-Request-ID": effective_request_id,  # Include in response for correlation
         },
     )
 
 
 @router.post("/chat")
-async def chat(request: ChatRequest) -> ChatResponse:
+async def chat(chat_request: ChatRequest, request: Request) -> ChatResponse:
     """
     Non-streaming chatbot endpoint.
 
@@ -2940,10 +2962,20 @@ async def chat(request: ChatRequest) -> ChatResponse:
         - execution_time_ms: Total execution time in milliseconds
         - intent: Classified intent type
         - intent_confidence: Intent classification confidence (0.0-1.0)
+
+    Note: request_id is optional. If not provided, it's extracted from the
+    X-Request-ID header via TracingMiddleware (Phase 1 G08).
     """
     import time
 
-    logger.info(f"[Chatbot] Chat request: query={request.query[:50]}..., user={request.user_id}")
+    # Phase 1 G08: Use middleware request_id if not provided in body
+    effective_request_id = chat_request.request_id or get_request_id() or "unknown"
+    chat_request.request_id = effective_request_id
+
+    logger.info(
+        f"[Chatbot] Chat request: query={chat_request.query[:50]}..., "
+        f"user={chat_request.user_id}, request_id={effective_request_id}"
+    )
 
     # Start timing for execution_time_ms
     start_time = time.time()
@@ -2952,12 +2984,12 @@ async def chat(request: ChatRequest) -> ChatResponse:
         from src.api.routes.chatbot_graph import run_chatbot
 
         result = await run_chatbot(
-            query=request.query,
-            user_id=request.user_id,
-            request_id=request.request_id,
-            session_id=request.session_id,
-            brand_context=request.brand_context,
-            region_context=request.region_context,
+            query=chat_request.query,
+            user_id=chat_request.user_id,
+            request_id=chat_request.request_id,
+            session_id=chat_request.session_id,
+            brand_context=chat_request.brand_context,
+            region_context=chat_request.region_context,
         )
 
         # Calculate execution time
