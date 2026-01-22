@@ -6,16 +6,27 @@ This template provides a production-ready causal inference service with:
 - Confidence intervals
 - Batch processing support
 - Health checks and metrics
+- Prediction audit trail (Phase 1 G07)
 
-Version: 1.0.0
+Version: 1.1.0
 """
 
+import asyncio
 import logging
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Type
 
 import numpy as np
+
+# Prediction audit trail (Phase 1 G07)
+try:
+    from src.mlops.bentoml_prediction_audit import log_prediction_audit
+
+    AUDIT_AVAILABLE = True
+except ImportError:
+    AUDIT_AVAILABLE = False
+    log_prediction_audit = None
 
 try:
     import bentoml
@@ -350,7 +361,7 @@ class CausalInferenceServiceTemplate:
                 self._cate_sum += np.sum(cate)
                 self._cate_sq_sum += np.sum(cate ** 2)
 
-                return CATEOutput(
+                output = CATEOutput(
                     cate=cate.tolist(),
                     lower_bounds=lower_bounds.tolist() if lower_bounds is not None else None,
                     upper_bounds=upper_bounds.tolist() if upper_bounds is not None else None,
@@ -359,6 +370,36 @@ class CausalInferenceServiceTemplate:
                     model_id=self.model_tag,
                     prediction_time_ms=elapsed_ms,
                 )
+
+                # Prediction audit trail (Phase 1 G07)
+                if AUDIT_AVAILABLE and log_prediction_audit:
+                    asyncio.create_task(
+                        log_prediction_audit(
+                            model_name=service_name,
+                            model_tag=self.model_tag,
+                            service_type="causal",
+                            input_data={
+                                "n_samples": len(input_data.features),
+                                "return_intervals": input_data.return_intervals,
+                                "confidence_level": input_data.confidence_level,
+                            },
+                            output_data={
+                                "ate": output.ate,
+                                "ate_std": output.ate_std,
+                                "n_cate_estimates": len(output.cate),
+                                "has_intervals": output.lower_bounds is not None,
+                                "cate_sample": output.cate[:10] if len(output.cate) > 10 else output.cate,
+                            },
+                            latency_ms=elapsed_ms,
+                            metadata={
+                                "treatment_name": self.treatment_name,
+                                "outcome_name": self.outcome_name,
+                                "framework": self.framework,
+                            },
+                        )
+                    )
+
+                return output
 
             @bentoml.api
             async def estimate_treatment_effects(
@@ -401,12 +442,38 @@ class CausalInferenceServiceTemplate:
                     # If only effect available
                     effects = np.array(potential_outcomes.get("T=1", [0.0] * len(features)))
 
-                return TreatmentEffectOutput(
+                output = TreatmentEffectOutput(
                     potential_outcomes=potential_outcomes,
                     treatment_effects=effects.tolist(),
                     mean_effect=float(np.mean(effects)),
                     effect_std=float(np.std(effects)),
                 )
+
+                # Prediction audit trail (Phase 1 G07)
+                if AUDIT_AVAILABLE and log_prediction_audit:
+                    asyncio.create_task(
+                        log_prediction_audit(
+                            model_name=service_name,
+                            model_tag=self.model_tag,
+                            service_type="causal",
+                            input_data={
+                                "n_samples": len(input_data.features),
+                                "treatment_values": input_data.treatment_values,
+                            },
+                            output_data={
+                                "mean_effect": output.mean_effect,
+                                "effect_std": output.effect_std,
+                                "n_effects": len(output.treatment_effects),
+                            },
+                            latency_ms=0.0,  # Not timed separately
+                            metadata={
+                                "method": "estimate_treatment_effects",
+                                "treatment_name": self.treatment_name,
+                            },
+                        )
+                    )
+
+                return output
 
             @bentoml.api
             async def estimate_batch(
@@ -435,7 +502,7 @@ class CausalInferenceServiceTemplate:
                 # Calculate proportion with positive treatment effect
                 positive_effect_ratio = float(np.mean(cate > 0))
 
-                return BatchCausalOutput(
+                output = BatchCausalOutput(
                     batch_id=input_data.batch_id,
                     total_samples=len(cate),
                     cate=cate.tolist(),
@@ -444,6 +511,35 @@ class CausalInferenceServiceTemplate:
                     positive_effect_ratio=positive_effect_ratio,
                     processing_time_ms=elapsed_ms,
                 )
+
+                # Prediction audit trail (Phase 1 G07)
+                if AUDIT_AVAILABLE and log_prediction_audit:
+                    asyncio.create_task(
+                        log_prediction_audit(
+                            model_name=service_name,
+                            model_tag=self.model_tag,
+                            service_type="causal",
+                            input_data={
+                                "batch_id": input_data.batch_id,
+                                "n_samples": len(input_data.features),
+                            },
+                            output_data={
+                                "batch_id": output.batch_id,
+                                "total_samples": output.total_samples,
+                                "ate": output.ate,
+                                "ate_std": output.ate_std,
+                                "positive_effect_ratio": output.positive_effect_ratio,
+                            },
+                            latency_ms=elapsed_ms,
+                            metadata={
+                                "is_batch": True,
+                                "treatment_name": self.treatment_name,
+                                "outcome_name": self.outcome_name,
+                            },
+                        )
+                    )
+
+                return output
 
             @bentoml.api
             async def health(self) -> Dict[str, Any]:

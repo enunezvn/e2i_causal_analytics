@@ -5,16 +5,27 @@ This template provides a production-ready regression service with:
 - Prediction intervals (if supported)
 - Batch prediction support
 - Health checks and metrics
+- Prediction audit trail (Phase 1 G07)
 
-Version: 1.0.0
+Version: 1.1.0
 """
 
+import asyncio
 import logging
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple, Type
 
 import numpy as np
+
+# Prediction audit trail (Phase 1 G07)
+try:
+    from src.mlops.bentoml_prediction_audit import log_prediction_audit
+
+    AUDIT_AVAILABLE = True
+except ImportError:
+    AUDIT_AVAILABLE = False
+    log_prediction_audit = None
 
 try:
     import bentoml
@@ -296,13 +307,39 @@ class RegressionServiceTemplate:
                 self._prediction_sum += np.sum(predictions)
                 self._prediction_sq_sum += np.sum(predictions ** 2)
 
-                return RegressionOutput(
+                output = RegressionOutput(
                     predictions=predictions.tolist(),
                     lower_bounds=lower_bounds.tolist() if lower_bounds is not None else None,
                     upper_bounds=upper_bounds.tolist() if upper_bounds is not None else None,
                     model_id=self.model_tag,
                     prediction_time_ms=elapsed_ms,
                 )
+
+                # Prediction audit trail (Phase 1 G07)
+                if AUDIT_AVAILABLE and log_prediction_audit:
+                    asyncio.create_task(
+                        log_prediction_audit(
+                            model_name=service_name,
+                            model_tag=self.model_tag,
+                            service_type="regression",
+                            input_data={
+                                "n_samples": len(input_data.features),
+                                "return_intervals": input_data.return_intervals,
+                            },
+                            output_data={
+                                "predictions_sample": output.predictions[:10] if len(output.predictions) > 10 else output.predictions,
+                                "n_predictions": len(output.predictions),
+                                "mean_prediction": float(np.mean(predictions)),
+                                "has_intervals": output.lower_bounds is not None,
+                            },
+                            latency_ms=elapsed_ms,
+                            metadata={
+                                "target_name": self.target_name,
+                            },
+                        )
+                    )
+
+                return output
 
             @bentoml.api
             async def predict_batch(
@@ -326,7 +363,7 @@ class RegressionServiceTemplate:
 
                 elapsed_ms = (time.time() - start_time) * 1000
 
-                return BatchRegressionOutput(
+                output = BatchRegressionOutput(
                     batch_id=input_data.batch_id,
                     total_samples=len(predictions),
                     predictions=predictions.tolist(),
@@ -334,6 +371,33 @@ class RegressionServiceTemplate:
                     std_prediction=float(np.std(predictions)),
                     processing_time_ms=elapsed_ms,
                 )
+
+                # Prediction audit trail (Phase 1 G07)
+                if AUDIT_AVAILABLE and log_prediction_audit:
+                    asyncio.create_task(
+                        log_prediction_audit(
+                            model_name=service_name,
+                            model_tag=self.model_tag,
+                            service_type="regression",
+                            input_data={
+                                "batch_id": input_data.batch_id,
+                                "n_samples": len(input_data.features),
+                            },
+                            output_data={
+                                "batch_id": output.batch_id,
+                                "total_samples": output.total_samples,
+                                "mean_prediction": output.mean_prediction,
+                                "std_prediction": output.std_prediction,
+                            },
+                            latency_ms=elapsed_ms,
+                            metadata={
+                                "is_batch": True,
+                                "target_name": self.target_name,
+                            },
+                        )
+                    )
+
+                return output
 
             @bentoml.api
             async def health(self) -> Dict[str, Any]:
