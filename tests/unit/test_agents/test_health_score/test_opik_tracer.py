@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.agents.health_score import opik_tracer as health_score_opik_module
 from src.agents.health_score.opik_tracer import (
     GRADE_THRESHOLDS,
     HEALTH_CHECK_TYPES,
@@ -32,9 +33,11 @@ def reset_singleton():
     """Reset the tracer singleton before each test."""
     HealthScoreOpikTracer._instance = None
     HealthScoreOpikTracer._initialized = False
+    health_score_opik_module._tracer_instance = None
     yield
     HealthScoreOpikTracer._instance = None
     HealthScoreOpikTracer._initialized = False
+    health_score_opik_module._tracer_instance = None
 
 
 # ============================================================================
