@@ -31,8 +31,10 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
+
+from src.api.dependencies.auth import require_operator
 
 logger = logging.getLogger(__name__)
 
@@ -399,6 +401,7 @@ async def digital_twin_health() -> DigitalTwinHealthResponse:
 @router.post("/simulate", response_model=SimulationResponse)
 async def run_simulation(
     request: SimulateRequest,
+    user: Dict[str, Any] = Depends(require_operator),
 ) -> SimulationResponse:
     """
     Run a digital twin simulation for an intervention.
@@ -660,6 +663,7 @@ async def get_simulation(
 @router.post("/validate", response_model=FidelityRecordResponse)
 async def validate_simulation(
     request: ValidateFidelityRequest,
+    user: Dict[str, Any] = Depends(require_operator),
 ) -> FidelityRecordResponse:
     """
     Validate a simulation against actual experiment results.
