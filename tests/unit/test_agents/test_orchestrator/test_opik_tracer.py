@@ -402,7 +402,7 @@ class TestOrchestratorOpikTracer:
         assert tracer1 is tracer2
         assert tracer1.project_name == "first-project"
 
-    @patch("src.agents.orchestrator.opik_tracer.Opik")
+    @patch("opik.Opik")
     def test_get_client_lazy_init(self, mock_opik_class):
         """Test client is lazily initialized."""
         mock_client = MagicMock()
@@ -422,7 +422,7 @@ class TestOrchestratorOpikTracer:
         client = tracer._get_client()
         assert client is None
 
-    @patch("src.agents.orchestrator.opik_tracer.Opik")
+    @patch("opik.Opik")
     def test_get_client_handles_import_error(self, mock_opik_class):
         """Test _get_client handles ImportError gracefully."""
         mock_opik_class.side_effect = ImportError("opik not installed")
@@ -541,7 +541,7 @@ class TestOrchestratorOpikTracer:
         # Should not raise
         tracer.flush()
 
-    @patch("src.agents.orchestrator.opik_tracer.Opik")
+    @patch("opik.Opik")
     def test_flush_with_client(self, mock_opik_class):
         """Test flush calls client flush."""
         mock_client = MagicMock()
@@ -606,7 +606,7 @@ class TestOpikIntegration:
     """Integration tests with mocked Opik."""
 
     @pytest.mark.asyncio
-    @patch("src.agents.orchestrator.opik_tracer.Opik")
+    @patch("opik.Opik")
     async def test_full_trace_with_opik(self, mock_opik_class):
         """Test full trace with Opik client."""
         mock_client = MagicMock()
@@ -629,7 +629,7 @@ class TestOpikIntegration:
         mock_trace.end.assert_called_once()
 
     @pytest.mark.asyncio
-    @patch("src.agents.orchestrator.opik_tracer.Opik")
+    @patch("opik.Opik")
     async def test_graceful_degradation_on_trace_error(self, mock_opik_class):
         """Test graceful degradation when trace creation fails."""
         mock_client = MagicMock()
