@@ -66,6 +66,19 @@ class PredictionInput(BaseModel):
         default=False,
         description="Return class probabilities (classification only)",
     )
+    # Business context labels (Phase 4 - G24)
+    brand: Optional[str] = Field(
+        default=None,
+        description="E2I brand (Remibrutinib, Fabhalta, Kisqali, All_Brands)",
+    )
+    region: Optional[str] = Field(
+        default=None,
+        description="Geographic region (northeast, south, midwest, west)",
+    )
+    segment: Optional[str] = Field(
+        default=None,
+        description="Customer/HCP segment identifier",
+    )
 
 
 class PredictionOutput(BaseModel):
@@ -86,6 +99,11 @@ class PredictionOutput(BaseModel):
     prediction_time_ms: float = Field(
         ...,
         description="Time taken for prediction in milliseconds",
+    )
+    # Business context labels (Phase 4 - G24)
+    business_context: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Business context labels (brand, region, segment) from request",
     )
 
 
