@@ -619,31 +619,228 @@ app.include_router(agents_router, prefix="/api")
 # ERROR HANDLERS
 # =============================================================================
 
+# Import error handling module
+from src.api.errors import (
+    E2IError,
+    EndpointNotFoundError,
+    ValidationError,
+    AuthenticationError,
+    AuthorizationError,
+    AgentError,
+    DependencyError,
+    TimeoutError as E2ITimeoutError,
+    RateLimitError,
+    wrap_exception,
+    error_response,
+    ErrorSeverity,
+)
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+
+# Determine if debug mode is enabled
+DEBUG_MODE = os.environ.get("E2I_DEBUG_MODE", "").lower() in ("true", "1", "yes")
+
+
+@app.exception_handler(E2IError)
+async def e2i_error_handler(request, exc: E2IError):
+    """
+    Handle all E2IError subclasses with structured responses.
+
+    Provides detailed error context while controlling what's exposed
+    based on error severity and debug mode.
+    """
+    # Log based on severity
+    if exc.severity == ErrorSeverity.CRITICAL:
+        logger.critical(
+            f"[{exc.error_id}] {exc.category.value}: {exc.message}",
+            exc_info=exc.original_error,
+            extra={"error_id": exc.error_id, "path": request.url.path},
+        )
+    elif exc.severity == ErrorSeverity.HIGH:
+        logger.error(
+            f"[{exc.error_id}] {exc.category.value}: {exc.message}",
+            exc_info=exc.original_error,
+            extra={"error_id": exc.error_id, "path": request.url.path},
+        )
+    elif exc.severity == ErrorSeverity.MEDIUM:
+        logger.warning(
+            f"[{exc.error_id}] {exc.category.value}: {exc.message}",
+            extra={"error_id": exc.error_id, "path": request.url.path},
+        )
+    else:
+        logger.info(
+            f"[{exc.error_id}] {exc.category.value}: {exc.message}",
+            extra={"error_id": exc.error_id, "path": request.url.path},
+        )
+
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=error_response(exc, include_debug=DEBUG_MODE),
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request, exc: RequestValidationError):
+    """
+    Handle Pydantic/FastAPI validation errors with detailed field info.
+    """
+    # Extract validation errors into structured format
+    schema_errors = []
+    for error in exc.errors():
+        schema_errors.append({
+            "field": ".".join(str(loc) for loc in error["loc"]),
+            "message": error["msg"],
+            "type": error["type"],
+        })
+
+    from src.api.errors import SchemaValidationError
+    e2i_error = SchemaValidationError(
+        "Request validation failed",
+        schema_errors=schema_errors,
+    )
+
+    logger.info(
+        f"[{e2i_error.error_id}] Validation error on {request.url.path}",
+        extra={"errors": schema_errors},
+    )
+
+    return JSONResponse(
+        status_code=422,
+        content=error_response(e2i_error, include_debug=DEBUG_MODE),
+    )
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request, exc: StarletteHTTPException):
+    """
+    Handle standard HTTP exceptions with structured responses.
+    """
+    # Map status codes to appropriate E2IError types
+    if exc.status_code == 404:
+        e2i_error = EndpointNotFoundError(request.url.path)
+    elif exc.status_code == 401:
+        e2i_error = AuthenticationError(
+            str(exc.detail) if exc.detail else "Authentication required"
+        )
+    elif exc.status_code == 403:
+        e2i_error = AuthorizationError(
+            str(exc.detail) if exc.detail else "Access denied"
+        )
+    elif exc.status_code == 429:
+        e2i_error = RateLimitError(
+            limit=100,  # Default values since we don't have actual limits here
+            window_seconds=60,
+        )
+    elif exc.status_code == 503:
+        e2i_error = DependencyError(
+            dependency="service",
+            original_error=Exception(str(exc.detail)) if exc.detail else None,
+        )
+    elif exc.status_code == 504:
+        e2i_error = E2ITimeoutError(
+            operation="request",
+            timeout_seconds=30.0,
+        )
+    else:
+        # Generic HTTP error - wrap in E2IError
+        e2i_error = E2IError(
+            str(exc.detail) if exc.detail else f"HTTP {exc.status_code} error",
+            suggested_action="Check the API documentation for valid request format.",
+        )
+        e2i_error.status_code = exc.status_code
+
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=error_response(e2i_error, include_debug=DEBUG_MODE),
+    )
+
 
 @app.exception_handler(404)
 async def not_found_handler(request, exc):
-    """Custom 404 handler."""
+    """Custom 404 handler with structured response."""
+    e2i_error = EndpointNotFoundError(request.url.path)
+
     return JSONResponse(
         status_code=404,
-        content={
-            "error": "not_found",
-            "message": f"Endpoint {request.url.path} not found",
-            "available_docs": "/api/docs",
-        },
+        content=error_response(e2i_error, include_debug=DEBUG_MODE),
     )
 
 
 @app.exception_handler(500)
 async def internal_error_handler(request, exc):
-    """Custom 500 handler."""
-    logger.error(f"Internal error on {request.url.path}: {exc}", exc_info=True)
-    return JSONResponse(
-        status_code=500,
-        content={
-            "error": "internal_server_error",
-            "message": "An internal error occurred. Please contact support.",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+    """
+    Custom 500 handler with detailed error context.
+
+    Wraps unknown exceptions in E2IError with appropriate categorization.
+    """
+    # Try to extract agent context from request state if available
+    agent_name = getattr(request.state, "current_agent", None) if hasattr(request, "state") else None
+    operation = getattr(request.state, "current_operation", None) if hasattr(request, "state") else None
+
+    # Wrap the exception with context
+    e2i_error = wrap_exception(
+        exc,
+        agent_name=agent_name,
+        operation=operation,
+        include_trace=DEBUG_MODE,
+    )
+
+    # Log with full context
+    logger.error(
+        f"[{e2i_error.error_id}] Internal error on {request.url.path}: {exc}",
+        exc_info=True,
+        extra={
+            "error_id": e2i_error.error_id,
+            "path": request.url.path,
+            "method": request.method,
+            "agent": agent_name,
+            "operation": operation,
         },
+    )
+
+    return JSONResponse(
+        status_code=e2i_error.status_code,
+        content=error_response(e2i_error, include_debug=DEBUG_MODE),
+    )
+
+
+@app.exception_handler(Exception)
+async def generic_exception_handler(request, exc: Exception):
+    """
+    Catch-all handler for any unhandled exceptions.
+
+    Ensures all errors return structured responses.
+    """
+    # Check if already an E2IError (shouldn't happen but safety check)
+    if isinstance(exc, E2IError):
+        return await e2i_error_handler(request, exc)
+
+    # Extract any available context
+    agent_name = getattr(request.state, "current_agent", None) if hasattr(request, "state") else None
+    operation = getattr(request.state, "current_operation", None) if hasattr(request, "state") else None
+
+    # Wrap with intelligent categorization
+    e2i_error = wrap_exception(
+        exc,
+        agent_name=agent_name,
+        operation=operation,
+        include_trace=DEBUG_MODE,
+    )
+
+    logger.error(
+        f"[{e2i_error.error_id}] Unhandled exception on {request.url.path}: {type(exc).__name__}: {exc}",
+        exc_info=True,
+        extra={
+            "error_id": e2i_error.error_id,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    return JSONResponse(
+        status_code=e2i_error.status_code,
+        content=error_response(e2i_error, include_debug=DEBUG_MODE),
     )
 
 

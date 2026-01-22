@@ -186,6 +186,60 @@ class TestChatResponse:
         assert response.agent_name is None
         assert response.error is None
 
+    def test_dispatch_observability_fields_default(self):
+        """Test that dispatch observability fields have correct defaults."""
+        response = ChatResponse(
+            success=True,
+            session_id="session-1",
+            response="Test response",
+        )
+        # Phase 1 System Evaluation fields
+        assert response.orchestrator_used is False
+        assert response.agents_dispatched == []
+        assert response.routed_agent is None
+        assert response.response_confidence is None
+        assert response.execution_time_ms is None
+        assert response.intent is None
+        assert response.intent_confidence is None
+
+    def test_dispatch_observability_fields_populated(self):
+        """Test ChatResponse with all dispatch observability fields."""
+        response = ChatResponse(
+            success=True,
+            session_id="session-123",
+            response="Causal analysis shows...",
+            conversation_title="Causal Query",
+            agent_name="orchestrator",
+            # Phase 1 System Evaluation fields
+            orchestrator_used=True,
+            agents_dispatched=["causal_impact", "gap_analyzer"],
+            routed_agent="causal_impact",
+            response_confidence=0.87,
+            execution_time_ms=1523.45,
+            intent="causal_analysis",
+            intent_confidence=0.92,
+        )
+        assert response.orchestrator_used is True
+        assert response.agents_dispatched == ["causal_impact", "gap_analyzer"]
+        assert response.routed_agent == "causal_impact"
+        assert response.response_confidence == 0.87
+        assert response.execution_time_ms == 1523.45
+        assert response.intent == "causal_analysis"
+        assert response.intent_confidence == 0.92
+
+    def test_error_response_includes_execution_time(self):
+        """Test that error responses include execution_time_ms."""
+        response = ChatResponse(
+            success=False,
+            session_id="",
+            response="",
+            error="Agent timeout",
+            execution_time_ms=30045.12,
+        )
+        assert response.success is False
+        assert response.error == "Agent timeout"
+        assert response.execution_time_ms == 30045.12
+
 
 # =============================================================================
 # FeedbackRequest Model Tests
@@ -409,6 +463,83 @@ class TestChatEndpoint:
         assert data["response"] == "The TRx for Kisqali is 1,234 units."
         assert data["session_id"] == "session-123"
         assert data["agent_name"] == "tool_composer"
+
+    def test_chat_returns_dispatch_observability(self, test_client):
+        """Test that chat returns dispatch observability fields from orchestrator."""
+        mock_result = {
+            "response_text": "Based on causal analysis...",
+            "session_id": "session-456",
+            "agent_name": "orchestrator",
+            # Phase 1 System Evaluation fields
+            "orchestrator_used": True,
+            "agents_dispatched": ["causal_impact", "gap_analyzer"],
+            "routed_agent": "causal_impact",
+            "response_confidence": 0.87,
+            "intent": "causal_analysis",
+            "intent_confidence": 0.92,
+        }
+
+        with patch(
+            "src.api.routes.chatbot_graph.run_chatbot",
+            new_callable=AsyncMock,
+            return_value=mock_result,
+        ):
+            response = test_client.post(
+                "/copilotkit/chat",
+                json={
+                    "query": "What caused the drop in TRx?",
+                    "user_id": "user-123",
+                    "request_id": "req-456",
+                },
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        # Verify dispatch observability fields
+        assert data["orchestrator_used"] is True
+        assert data["agents_dispatched"] == ["causal_impact", "gap_analyzer"]
+        assert data["routed_agent"] == "causal_impact"
+        assert data["response_confidence"] == 0.87
+        assert data["intent"] == "causal_analysis"
+        assert data["intent_confidence"] == 0.92
+        # execution_time_ms is always returned
+        assert "execution_time_ms" in data
+        assert data["execution_time_ms"] > 0
+
+    def test_chat_execution_time_always_present(self, test_client):
+        """Test that execution_time_ms is always returned, even without orchestrator."""
+        mock_result = {
+            "response_text": "Hello! How can I help?",
+            "session_id": "session-789",
+            "agent_name": "chatbot",
+            "intent": "greeting",
+        }
+
+        with patch(
+            "src.api.routes.chatbot_graph.run_chatbot",
+            new_callable=AsyncMock,
+            return_value=mock_result,
+        ):
+            response = test_client.post(
+                "/copilotkit/chat",
+                json={
+                    "query": "Hello",
+                    "user_id": "user-123",
+                    "request_id": "req-456",
+                },
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        # execution_time_ms is always calculated
+        assert "execution_time_ms" in data
+        assert isinstance(data["execution_time_ms"], (int, float))
+        assert data["execution_time_ms"] > 0
+        # When orchestrator not used, these should be defaults
+        assert data["orchestrator_used"] is False
+        assert data["agents_dispatched"] == []
 
     def test_chat_generates_title(self, test_client):
         """Test that chat generates a conversation title."""
