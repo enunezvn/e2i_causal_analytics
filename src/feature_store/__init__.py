@@ -19,6 +19,20 @@ from .models import (
     FeatureValueType,
     FreshnessStatus,
 )
+from .monitoring import (
+    FeatureRetrievalMetrics,
+    LatencyStats,
+    LatencyTracker,
+    get_latency_tracker,
+    init_feature_store_metrics,
+    record_batch_size,
+    record_cache_hit,
+    record_cache_miss,
+    record_error,
+    track_cache_operation,
+    track_db_operation,
+    track_retrieval,
+)
 from .retrieval import FeatureRetriever
 from .writer import FeatureWriter
 
@@ -37,4 +51,17 @@ __all__ = [
     # Feature analyzer integration
     "FeatureAnalyzerAdapter",
     "get_feature_analyzer_adapter",
+    # Monitoring (Phase 4 - G17)
+    "init_feature_store_metrics",
+    "track_retrieval",
+    "track_cache_operation",
+    "track_db_operation",
+    "record_cache_hit",
+    "record_cache_miss",
+    "record_batch_size",
+    "record_error",
+    "FeatureRetrievalMetrics",
+    "LatencyStats",
+    "LatencyTracker",
+    "get_latency_tracker",
 ]
