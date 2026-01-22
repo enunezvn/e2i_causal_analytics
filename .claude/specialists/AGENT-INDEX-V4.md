@@ -2,14 +2,15 @@
 
 ## Architecture Overview
 
-The E2I Causal Analytics platform implements an **19-agent, 6-tier architecture** for pharmaceutical commercial operations. Each agent has a specialist documentation file (CLAUDE.md) containing complete LangGraph implementation details.
+The E2I Causal Analytics platform implements a **21-agent, 6-tier architecture** for pharmaceutical commercial operations. Each agent has a specialist documentation file (CLAUDE.md) containing complete LangGraph implementation details.
 
 **V4 Changes**: Added Tier 0 (ML Foundation) with 8 agents for the complete ML lifecycle (including CohortConstructor).
+**V4.2 Changes**: Added Tool Composer (Tier 1) and Experiment Monitor (Tier 3) to official index (19 → 21 agents).
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                          E2I AGENT ARCHITECTURE V4                           │
-│                          19 Agents, 6 Tiers                                  │
+│                          E2I AGENT ARCHITECTURE V4.2                         │
+│                          21 Agents, 6 Tiers                                  │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
 │  TIER 0: ML FOUNDATION (NEW)                                                 │
@@ -28,11 +29,11 @@ The E2I Causal Analytics platform implements an **19-agent, 6-tier architecture*
 │  ═══════════════════════════════════════════════════════════════════════════│
 │                                                                              │
 │  TIER 1: ORCHESTRATION                                                       │
-│  ┌─────────────────────────────────────────────────────────────────────┐    │
-│  │                         ORCHESTRATOR                                 │    │
-│  │            Intent Classification → Routing → Dispatch                │    │
-│  │                        (Standard, <2s)                               │    │
-│  └─────────────────────────────────────────────────────────────────────┘    │
+│  ┌───────────────────────────────────┐  ┌───────────────────────────────┐   │
+│  │          ORCHESTRATOR             │  │      TOOL COMPOSER            │   │
+│  │  Intent Classification → Routing  │  │  Multi-faceted Query          │   │
+│  │         (Standard, <2s)           │  │  Composition (Hybrid, <30s)   │   │
+│  └───────────────────────────────────┘  └───────────────────────────────┘   │
 │                                    │                                         │
 │  ───────────────────────────────────────────────────────────────────────────│
 │                                                                              │
@@ -46,12 +47,12 @@ The E2I Causal Analytics platform implements an **19-agent, 6-tier architecture*
 │  ───────────────────────────────────────────────────────────────────────────│
 │                                                                              │
 │  TIER 3: DESIGN & MONITORING                                                 │
-│  ┌───────────────┐  ┌───────────────┐  ┌───────────────┐                   │
-│  │  EXPERIMENT   │  │ DRIFT MONITOR │  │ HEALTH SCORE  │                   │
-│  │   DESIGNER    │  │  (Standard)   │  │  (Standard)   │                   │
-│  │   (Hybrid)    │  │   10s max     │  │   5s max      │                   │
-│  │   60s max     │  └───────────────┘  └───────────────┘                   │
-│  └───────────────┘                                                          │
+│  ┌───────────────┐  ┌───────────────┐  ┌───────────────┐  ┌─────────────┐  │
+│  │  EXPERIMENT   │  │ DRIFT MONITOR │  │ HEALTH SCORE  │  │ EXPERIMENT  │  │
+│  │   DESIGNER    │  │  (Standard)   │  │  (Standard)   │  │   MONITOR   │  │
+│  │   (Hybrid)    │  │   10s max     │  │   5s max      │  │ (Standard)  │  │
+│  │   60s max     │  └───────────────┘  └───────────────┘  │   5s max    │  │
+│  └───────────────┘                                        └─────────────┘  │
 │                                                                              │
 │  ───────────────────────────────────────────────────────────────────────────│
 │                                                                              │
@@ -89,17 +90,19 @@ The E2I Causal Analytics platform implements an **19-agent, 6-tier architecture*
 | Model Deployer | 0 | Standard | None | <30s | No |
 | Observability Connector | 0 | Standard (Async) | None | <100ms | No (cross-cutting) |
 
-### Tiers 1-5: Causal Analytics (Unchanged from V3)
+### Tiers 1-5: Causal Analytics
 
 | Agent | Tier | Type | Model | Latency | Critical Path |
 |-------|------|------|-------|---------|---------------|
 | Orchestrator | 1 | Standard (Fast) | Haiku/Sonnet | <2s (strict) | Yes |
+| Tool Composer | 1 | Hybrid | Sonnet | <30s | No |
 | Causal Impact | 2 | Hybrid | Sonnet + Opus | <120s | Yes |
 | Gap Analyzer | 2 | Standard | Sonnet | <20s | No |
 | Heterogeneous Optimizer | 2 | Standard | Sonnet | <150s | No |
 | Experiment Designer | 3 | Hybrid | Sonnet + Opus | <60s | No |
 | Drift Monitor | 3 | Standard (Fast) | Haiku/Sonnet | <10s | No |
 | Health Score | 3 | Standard (Fast) | Haiku | <5s | No |
+| Experiment Monitor | 3 | Standard (Fast) | None | <5s | No |
 | Prediction Synthesizer | 4 | Standard | Sonnet | <15s | No |
 | Resource Optimizer | 4 | Standard | Sonnet | <20s | No |
 | Explainer | 5 | Deep | Opus/Sonnet | <45s | No |
@@ -125,6 +128,7 @@ The E2I Causal Analytics platform implements an **19-agent, 6-tier architecture*
 | Agent | Specialist File | Status |
 |-------|-----------------|--------|
 | Orchestrator | [orchestrator-agent.md](specialists/orchestrator-agent.md) | ✅ Complete |
+| Tool Composer | [tool_composer/CLAUDE.md](../src/agents/tool_composer/CLAUDE.md) | ✅ Complete |
 
 ### Tier 2: Causal Inference
 | Agent | Specialist File | Status |
@@ -139,6 +143,7 @@ The E2I Causal Analytics platform implements an **19-agent, 6-tier architecture*
 | Experiment Designer | [experiment-designer.md](specialists/experiment-designer.md) | ✅ Complete |
 | Drift Monitor | [drift-monitor.md](specialists/drift-monitor.md) | ✅ Complete |
 | Health Score | [health-score.md](specialists/health-score.md) | ✅ Complete |
+| Experiment Monitor | [experiment_monitor/CLAUDE.md](specialists/experiment-monitor.md) | ✅ Complete |
 
 ### Tier 4: ML Predictions
 | Agent | Specialist File | Status |
@@ -158,7 +163,7 @@ The E2I Causal Analytics platform implements an **19-agent, 6-tier architecture*
 - Linear node flow
 - Minimal or no LLM usage
 - Computational focus
-- **Agents**: Orchestrator, Gap Analyzer, Heterogeneous Optimizer, Drift Monitor, Health Score, Prediction Synthesizer, Resource Optimizer, **Scope Definer, Cohort Constructor, Data Preparer, Model Selector, Model Trainer, Model Deployer, Observability Connector**
+- **Agents**: Orchestrator, Gap Analyzer, Heterogeneous Optimizer, Drift Monitor, Health Score, Prediction Synthesizer, Resource Optimizer, **Experiment Monitor**, **Scope Definer, Cohort Constructor, Data Preparer, Model Selector, Model Trainer, Model Deployer, Observability Connector**
 
 ```
 [Input] → [Node 1] → [Node 2] → [Node 3] → [Output]
@@ -167,7 +172,7 @@ The E2I Causal Analytics platform implements an **19-agent, 6-tier architecture*
 ### Hybrid Pattern
 - Computation nodes + Deep reasoning node
 - Separates deterministic execution from interpretation
-- **Agents**: Causal Impact, Experiment Designer, **Feature Analyzer**
+- **Agents**: **Tool Composer**, Causal Impact, Experiment Designer, **Feature Analyzer**
 
 ```
 [Input] → [Computation Nodes] → [Deep Reasoning Node] → [Output]
@@ -320,6 +325,8 @@ See [context/](context/) directory for context management:
 | "Train a new model for X" | **Model Trainer** | Scope Definer, Data Preparer, Model Selector |
 | "What features matter most?" | **Feature Analyzer** | Explainer |
 | "Deploy model to production" | **Model Deployer** | Model Trainer |
+| "Check experiment health" | **Experiment Monitor** | Experiment Designer, Drift Monitor |
+| "Complex multi-faceted query" | **Tool Composer** | Multiple (composed dynamically) |
 
 ### By Latency Requirement
 
@@ -429,6 +436,7 @@ All agents must implement:
 
 | Date | Change | Reason |
 |------|--------|--------|
+| 2026-01-22 | V4.2: Added Tool Composer and Experiment Monitor (21 agents total) | Agent audit remediation |
 | 2026-01-16 | V4.1: Added Cohort Constructor to Tier 0 (8 agents total) | Patient cohort construction for ML pipeline |
 | 2025-12-08 | V4: Added Tier 0 ML Foundation (7 agents) | Complete ML lifecycle support |
 | 2025-12-08 | V4: Total agents increased 11 → 18 | ML Foundation expansion |
