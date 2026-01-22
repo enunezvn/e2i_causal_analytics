@@ -2,8 +2,8 @@
 
 **Date**: 2026-01-21
 **Prepared By**: Claude Code Observability Audit
-**Version**: 1.1
-**Last Updated**: 2026-01-21
+**Version**: 1.2
+**Last Updated**: 2026-01-22
 
 ---
 
@@ -43,8 +43,44 @@ With Quick Wins + Phase 1 Critical Fixes complete:
 
 ### Next Steps: Phase 2 MLflow Coverage
 
-- [ ] G05: Tier 2 Causal Agents MLflow instrumentation
-- [ ] G06: Tier 3 Monitoring Agents MLflow instrumentation
+- [ ] G05: Tier 2 Causal Agents MLflow instrumentation (16h estimated)
+  - Causal Impact Agent: ATE, CATE, refutation results, e-value
+  - Gap Analyzer Agent: gap_score, roi_opportunity, priority_ranking
+  - Heterogeneous Optimizer Agent: cate_estimate, segment_validity_score
+
+- [ ] G06: Tier 3 Monitoring Agents MLflow instrumentation (12h estimated)
+  - Experiment Designer Agent: statistical_power, sample_size, min_effect_size
+  - Drift Monitor Agent: psi_score, drift_detected, drift_severity
+  - Health Score Agent: component_health_scores, system_health_score
+
+---
+
+## Session Log
+
+### 2026-01-22: Phase 1 Complete & Deployed
+
+**Completed**:
+- G07: Prediction audit trail in BentoML templates
+  - Created `src/mlops/bentoml_prediction_audit.py`
+  - Updated classification, regression, causal service templates (v1.1.0)
+  - Async audit logging with graceful degradation
+
+**Deployed**:
+- Commit `b4707ce` pushed to origin/main
+- Production droplet updated via `git pull`
+- Service restarted: `sudo systemctl restart e2i-api`
+- Health verified: API responding healthy at 138.197.4.36:8000
+
+**Production Notes**:
+- BentoML shows "unhealthy" - expected, no ML models deployed yet
+- All other components operational
+
+### 2026-01-21: Quick Wins + Phase 1 Critical Fixes
+
+**Completed**:
+- QW1-QW5: All quick wins implemented
+- G02: OpenTelemetry TracerProvider configured
+- G08: Request ID propagation to agents
 
 ---
 
