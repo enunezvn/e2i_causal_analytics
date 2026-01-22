@@ -2,7 +2,7 @@
 
 **Date**: 2026-01-21
 **Prepared By**: Claude Code Observability Audit
-**Version**: 1.2
+**Version**: 1.3
 **Last Updated**: 2026-01-22
 
 ---
@@ -19,13 +19,14 @@
 | QW4 | Fix `log_model_prediction()` | ✅ Done | 2026-01-21 |
 | QW5 | Add trace header extraction | ✅ Done | 2026-01-21 |
 
-### Updated Health Score: **75/100** (↑ from 70)
+### Updated Health Score: **85/100** (↑ from 75)
 
-With Quick Wins + Phase 1 Critical Fixes complete:
+With Quick Wins + Phase 1 + Phase 2 complete:
 - ✅ Error Tracking: 0% → **80%** (Sentry integrated with FastAPI)
 - ✅ Infrastructure Monitoring: 25% → **45%** (/metrics endpoint, timing middleware)
 - ✅ Model Serving Observability: 40% → **80%** (log_model_prediction + BentoML audit trail)
 - ✅ Distributed Tracing: 0% → **80%** (OpenTelemetry + request ID propagation)
+- ✅ MLflow Coverage: 33% → **100%** (All Tier 2 & Tier 3 agents instrumented)
 
 ### Phase 1 Critical Fixes Status: **2/2 COMPLETE** ✅
 
@@ -41,21 +42,72 @@ With Quick Wins + Phase 1 Critical Fixes complete:
 | G07 | Prediction audit trail in BentoML templates | ✅ Done | 2026-01-21 |
 | G01 | BentoML-Opik integration | ⚠️ Partial (QW4 done) | - |
 
-### Next Steps: Phase 2 MLflow Coverage
+### Phase 2 MLflow Coverage: **6/6 COMPLETE** ✅
 
-- [ ] G05: Tier 2 Causal Agents MLflow instrumentation (16h estimated)
-  - Causal Impact Agent: ATE, CATE, refutation results, e-value
-  - Gap Analyzer Agent: gap_score, roi_opportunity, priority_ranking
-  - Heterogeneous Optimizer Agent: cate_estimate, segment_validity_score
+| ID | Task | Status | Date |
+|----|------|--------|------|
+| G05 | Causal Impact Agent MLflow instrumentation | ✅ Done | 2026-01-22 |
+| G05 | Gap Analyzer Agent MLflow instrumentation | ✅ Done | 2026-01-22 |
+| G05 | Heterogeneous Optimizer Agent MLflow instrumentation | ✅ Done | 2026-01-22 |
+| G06 | Experiment Designer Agent MLflow instrumentation | ✅ Done | 2026-01-22 |
+| G06 | Drift Monitor Agent MLflow instrumentation | ✅ Done | 2026-01-22 |
+| G06 | Health Score Agent MLflow instrumentation | ✅ Done | 2026-01-22 |
 
-- [ ] G06: Tier 3 Monitoring Agents MLflow instrumentation (12h estimated)
-  - Experiment Designer Agent: statistical_power, sample_size, min_effect_size
-  - Drift Monitor Agent: psi_score, drift_detected, drift_severity
-  - Health Score Agent: component_health_scores, system_health_score
+### Next Steps: Phase 3 Infrastructure Hardening
+
+- [ ] G12: Celery event consumer implementation
+- [ ] G13: Database query logging
+- [ ] G14: Structured logging standardization
+- [ ] G15: Remaining agent Opik coverage (5 agents)
 
 ---
 
 ## Session Log
+
+### 2026-01-22: Phase 2 Complete - MLflow Instrumentation for Tier 2 & 3
+
+**Completed G05 - Tier 2 Causal Agents**:
+- **Causal Impact Agent**: Created `src/agents/causal_impact/mlflow_tracker.py`
+  - Tracks effect estimation metrics (ATE, CATE, confidence intervals)
+  - Logs methodological choices (estimator, refuter results)
+  - Artifact logging for detailed causal analysis results
+- **Gap Analyzer Agent**: Created `src/agents/gap_analyzer/mlflow_tracker.py`
+  - Tracks opportunity metrics (gaps found, total revenue potential)
+  - Logs segment-level gap analysis results
+  - Artifact logging for gap details by category
+- **Heterogeneous Optimizer Agent**: Created `src/agents/heterogeneous_optimizer/mlflow_tracker.py`
+  - Tracks CATE estimation metrics (avg CATE, segments analyzed)
+  - Logs segment recommendations and effect heterogeneity
+  - Artifact logging for segment-level optimization results
+
+**Completed G06 - Tier 3 Monitoring Agents**:
+- **Experiment Designer Agent**: Created `src/agents/experiment_designer/mlflow_tracker.py`
+  - Tracks power analysis metrics (sample size, achieved power, MDE, alpha)
+  - Logs validity metrics (threats count by severity, overall validity score)
+  - Logs design metrics (treatments, outcomes, stratification vars)
+- **Drift Monitor Agent**: Created `src/agents/drift_monitor/mlflow_tracker.py`
+  - Tracks drift detection metrics (PSI scores, KS statistics, overall drift score)
+  - Logs severity breakdown and alert metrics
+  - Includes drift trend analysis method
+  - Integrated alongside existing Opik tracing
+- **Health Score Agent**: Created `src/agents/health_score/mlflow_tracker.py`
+  - Tracks overall and component health scores
+  - Logs issue counts (critical, warnings)
+  - Includes health trend analysis method
+
+**All trackers follow established pattern**:
+- Async context manager for run tracking (`@asynccontextmanager`)
+- Lazy initialization to avoid import errors when MLflow unavailable
+- Dataclass-based metrics structures for type safety
+- Historical query methods for dashboard integration
+- Artifact logging with JSON serialization
+
+**Deployed**:
+- Commit `50cb4d2` (Tier 2) and `5d0cbb3` (Tier 3) pushed to origin/main
+- Production droplet updated via `git pull`
+- Service restarted: `sudo systemctl restart e2i-api`
+- Health verified: API responding healthy at 138.197.4.36:8000
+- All 6 MLflow trackers validated on droplet
 
 ### 2026-01-22: Phase 1 Complete & Deployed
 
