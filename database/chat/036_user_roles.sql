@@ -1,15 +1,15 @@
--- Migration: Add Role-Based Access Control (RBAC) to user_profiles
+-- Migration: Add Role-Based Access Control (RBAC) to chatbot_user_profiles
 -- Date: 2026-01-21
 -- Description: Implements a 4-role hierarchical system: ADMIN > OPERATOR > ANALYST > VIEWER
 
 -- Step 1: Create the user_role enum type
 CREATE TYPE user_role AS ENUM ('viewer', 'analyst', 'operator', 'admin');
 
--- Step 2: Add role column to user_profiles with default 'viewer'
-ALTER TABLE user_profiles ADD COLUMN role user_role DEFAULT 'viewer' NOT NULL;
+-- Step 2: Add role column to chatbot_user_profiles with default 'viewer'
+ALTER TABLE chatbot_user_profiles ADD COLUMN role user_role DEFAULT 'viewer' NOT NULL;
 
 -- Step 3: Migrate existing admins - set role to 'admin' where is_admin is TRUE
-UPDATE user_profiles SET role = 'admin' WHERE is_admin = TRUE;
+UPDATE chatbot_user_profiles SET role = 'admin' WHERE is_admin = TRUE;
 
 -- Step 4: Create helper function to get numeric level for role comparison
 -- Higher number = more privileges
@@ -43,7 +43,7 @@ DECLARE
 BEGIN
     -- Get the current user's role level
     SELECT role_level(role) INTO user_role_level
-    FROM user_profiles
+    FROM chatbot_user_profiles
     WHERE id = auth.uid();
 
     -- If user not found, deny access
@@ -60,9 +60,13 @@ END;
 $$;
 
 -- Step 6: Create index on role column for efficient filtering
-CREATE INDEX idx_user_profiles_role ON user_profiles(role);
+CREATE INDEX idx_chatbot_user_profiles_role ON chatbot_user_profiles(role);
 
 -- Step 7: Add comment documenting the role hierarchy
-COMMENT ON COLUMN user_profiles.role IS 'User role for RBAC: viewer (read-only) < analyst (run analyses) < operator (manage experiments) < admin (full access)';
+COMMENT ON COLUMN chatbot_user_profiles.role IS 'User role for RBAC: viewer (read-only) < analyst (run analyses) < operator (manage experiments) < admin (full access)';
+
+-- Step 8: Grant execute permissions on new functions
+GRANT EXECUTE ON FUNCTION role_level(user_role) TO authenticated;
+GRANT EXECUTE ON FUNCTION has_role(user_role) TO authenticated;
 COMMENT ON FUNCTION role_level(user_role) IS 'Returns numeric level for role comparison: viewer=1, analyst=2, operator=3, admin=4';
 COMMENT ON FUNCTION has_role(user_role) IS 'Checks if current authenticated user has at least the specified role level';
