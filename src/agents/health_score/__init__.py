@@ -23,6 +23,12 @@ from .mlflow_tracker import (
     HealthScoreContext,
     create_tracker as create_mlflow_tracker,
 )
+from .opik_tracer import (
+    HealthScoreOpikTracer,
+    HealthCheckTraceContext,
+    NodeSpanContext,
+    get_health_score_tracer,
+)
 from .state import (
     AgentStatus,
     ComponentStatus,
@@ -46,4 +52,9 @@ __all__ = [
     "HealthScoreMetrics",
     "HealthScoreContext",
     "create_mlflow_tracker",
+    # Opik tracing
+    "HealthScoreOpikTracer",
+    "HealthCheckTraceContext",
+    "NodeSpanContext",
+    "get_health_score_tracer",
 ]

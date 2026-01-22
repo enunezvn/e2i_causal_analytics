@@ -152,6 +152,22 @@ from src.repositories.chatbot_analytics import (
 # Re-export get_supabase_client for convenience
 from src.memory.services.factories import get_supabase_client
 
+# Query Logging (G13 - Observability)
+from src.repositories.query_logger import (
+    QueryLogger,
+    QueryMetrics,
+    SlowQueryConfig,
+    SlowQueryDetector,
+    SlowQueryRecord,
+    configure_slow_query_thresholds,
+    get_query_stats,
+    logged_query,
+    logged_query_async,
+    query_logger,
+    query_metrics,
+    slow_query_detector,
+)
+
 __all__ = [
     # Base classes
     "BaseRepository",
@@ -244,4 +260,17 @@ __all__ = [
     "get_chatbot_analytics_repository",
     # Utilities
     "get_supabase_client",
+    # Query Logging (G13 - Observability)
+    "QueryLogger",
+    "QueryMetrics",
+    "SlowQueryConfig",
+    "SlowQueryDetector",
+    "SlowQueryRecord",
+    "configure_slow_query_thresholds",
+    "get_query_stats",
+    "logged_query",
+    "logged_query_async",
+    "query_logger",
+    "query_metrics",
+    "slow_query_detector",
 ]

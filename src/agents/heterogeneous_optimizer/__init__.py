@@ -12,6 +12,12 @@ from .mlflow_tracker import (
     HeterogeneousOptimizerContext,
     create_tracker as create_mlflow_tracker,
 )
+from .opik_tracer import (
+    HeterogeneousOptimizerOpikTracer,
+    CATEAnalysisTraceContext,
+    NodeSpanContext,
+    get_heterogeneous_optimizer_tracer,
+)
 from .state import (
     CATEResult,
     HeterogeneousOptimizerState,
@@ -31,4 +37,9 @@ __all__ = [
     "HeterogeneousOptimizerMetrics",
     "HeterogeneousOptimizerContext",
     "create_mlflow_tracker",
+    # Opik tracing
+    "HeterogeneousOptimizerOpikTracer",
+    "CATEAnalysisTraceContext",
+    "NodeSpanContext",
+    "get_heterogeneous_optimizer_tracer",
 ]

@@ -24,6 +24,7 @@ from .state import HealthScoreState
 
 if TYPE_CHECKING:
     from .mlflow_tracker import HealthScoreMLflowTracker
+    from .opik_tracer import HealthScoreOpikTracer
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +89,7 @@ class HealthScoreAgent:
         pipeline_store: Optional[Any] = None,
         agent_registry: Optional[Any] = None,
         enable_mlflow: bool = True,
+        enable_opik: bool = True,
     ):
         """
         Initialize Health Score agent.
@@ -98,13 +100,16 @@ class HealthScoreAgent:
             pipeline_store: Store for pipeline status
             agent_registry: Registry of system agents
             enable_mlflow: Whether to enable MLflow tracking (default: True)
+            enable_opik: Whether to enable Opik distributed tracing (default: True)
         """
         self.health_client = health_client
         self.metrics_store = metrics_store
         self.pipeline_store = pipeline_store
         self.agent_registry = agent_registry
         self.enable_mlflow = enable_mlflow
+        self.enable_opik = enable_opik
         self._mlflow_tracker: Optional["HealthScoreMLflowTracker"] = None
+        self._opik_tracer: Optional["HealthScoreOpikTracer"] = None
 
         # Build graphs
         self._full_graph = build_health_score_graph(
@@ -134,6 +139,22 @@ class HealthScoreAgent:
                 return None
 
         return self._mlflow_tracker
+
+    def _get_opik_tracer(self) -> Optional["HealthScoreOpikTracer"]:
+        """Get or create Opik tracer instance (lazy initialization)."""
+        if not self.enable_opik:
+            return None
+
+        if self._opik_tracer is None:
+            try:
+                from .opik_tracer import get_health_score_tracer
+
+                self._opik_tracer = get_health_score_tracer()
+            except ImportError:
+                logger.warning("Opik tracer not available")
+                return None
+
+        return self._opik_tracer
 
     async def check_health(
         self,
@@ -178,8 +199,9 @@ class HealthScoreAgent:
             "status": "pending",
         }
 
-        # Get MLflow tracker
+        # Get trackers
         mlflow_tracker = self._get_mlflow_tracker()
+        opik_tracer = self._get_opik_tracer()
 
         async def execute_workflow() -> Dict[str, Any]:
             """Execute the health check workflow."""
@@ -192,8 +214,8 @@ class HealthScoreAgent:
             # Run graph
             return await graph.ainvoke(initial_state)
 
-        try:
-            # Execute with MLflow tracking if available
+        async def run_with_mlflow(trace_ctx=None) -> HealthScoreOutput:
+            """Execute workflow with optional MLflow tracking."""
             if mlflow_tracker:
                 async with mlflow_tracker.start_health_run(
                     experiment_name=experiment_name,
@@ -219,19 +241,13 @@ class HealthScoreAgent:
                     # Log to MLflow
                     await mlflow_tracker.log_health_result(output, result)
 
-                    elapsed = int((time.time() - start_time) * 1000)
-                    logger.info(
-                        f"Health check complete: grade={output.health_grade}, "
-                        f"score={output.overall_health_score:.1f}, latency={elapsed}ms"
-                    )
-
                     return output
             else:
                 # Execute without MLflow tracking
                 result = await execute_workflow()
 
                 # Build output
-                output = HealthScoreOutput(
+                return HealthScoreOutput(
                     overall_health_score=result.get("overall_health_score", 0.0),
                     health_grade=result.get("health_grade", "F"),
                     component_health_score=result.get("component_health_score", 0.0),
@@ -244,6 +260,44 @@ class HealthScoreAgent:
                     check_latency_ms=result.get("check_latency_ms", 0),
                     timestamp=result.get("timestamp", datetime.now(timezone.utc).isoformat()),
                 )
+
+        try:
+            # Execute with Opik tracing if available
+            if opik_tracer:
+                async with opik_tracer.trace_health_check(
+                    check_scope=scope,
+                    experiment_name=experiment_name,
+                ) as trace_ctx:
+                    trace_ctx.log_check_started(check_scope=scope, query=query)
+
+                    # Run workflow (nested MLflow tracking if available)
+                    output = await run_with_mlflow(trace_ctx)
+
+                    # Log to Opik
+                    elapsed = int((time.time() - start_time) * 1000)
+                    trace_ctx.log_check_complete(
+                        status="success",
+                        success=True,
+                        total_duration_ms=output.check_latency_ms,
+                        overall_score=output.overall_health_score,
+                        health_grade=output.health_grade,
+                        component_score=output.component_health_score,
+                        model_score=output.model_health_score,
+                        pipeline_score=output.pipeline_health_score,
+                        agent_score=output.agent_health_score,
+                        critical_issues=output.critical_issues,
+                        warnings=output.warnings,
+                    )
+
+                    logger.info(
+                        f"Health check complete: grade={output.health_grade}, "
+                        f"score={output.overall_health_score:.1f}, latency={elapsed}ms"
+                    )
+
+                    return output
+            else:
+                # Execute without Opik tracing
+                output = await run_with_mlflow()
 
                 elapsed = int((time.time() - start_time) * 1000)
                 logger.info(
