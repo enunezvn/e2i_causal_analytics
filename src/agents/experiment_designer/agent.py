@@ -18,7 +18,8 @@ Algorithm: .claude/specialists/Agent_Specialists_Tiers 1-5/experiment-designer.m
 Contract: .claude/contracts/tier3-contracts.md lines 82-142
 """
 
-from typing import Any, Literal, Optional
+import logging
+from typing import Any, Literal, Optional, TYPE_CHECKING
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -26,6 +27,11 @@ from src.agents.experiment_designer.graph import (
     create_experiment_designer_graph,
 )
 from src.agents.experiment_designer.state import ExperimentDesignState
+
+if TYPE_CHECKING:
+    from src.agents.experiment_designer.mlflow_tracker import ExperimentDesignerMLflowTracker
+
+logger = logging.getLogger(__name__)
 
 # ===== INPUT/OUTPUT MODELS =====
 
@@ -230,16 +236,37 @@ class ExperimentDesignerAgent:
         - Template generation: <500ms
     """
 
-    def __init__(self, max_redesign_iterations: int = 2):
+    def __init__(self, max_redesign_iterations: int = 2, enable_mlflow: bool = True):
         """Initialize experiment designer agent.
 
         Args:
             max_redesign_iterations: Maximum number of design iterations
+            enable_mlflow: Whether to enable MLflow tracking (default: True)
         """
         self.max_redesign_iterations = max_redesign_iterations
+        self.enable_mlflow = enable_mlflow
+        self._mlflow_tracker: Optional["ExperimentDesignerMLflowTracker"] = None
         self.graph = create_experiment_designer_graph(
             max_redesign_iterations=max_redesign_iterations
         )
+
+    def _get_mlflow_tracker(self) -> Optional["ExperimentDesignerMLflowTracker"]:
+        """Get or create MLflow tracker instance (lazy initialization)."""
+        if not self.enable_mlflow:
+            return None
+
+        if self._mlflow_tracker is None:
+            try:
+                from src.agents.experiment_designer.mlflow_tracker import (
+                    ExperimentDesignerMLflowTracker,
+                )
+
+                self._mlflow_tracker = ExperimentDesignerMLflowTracker()
+            except ImportError:
+                logger.warning("MLflow tracker not available")
+                return None
+
+        return self._mlflow_tracker
 
     def run(self, input_data: ExperimentDesignerInput) -> ExperimentDesignerOutput:
         """Execute experiment design workflow.
@@ -286,18 +313,53 @@ class ExperimentDesignerAgent:
         # Create initial state from input
         initial_state = self._create_initial_state(input_data)
 
-        # Execute graph asynchronously
-        final_state = await self.graph.ainvoke(initial_state)
+        # Get MLflow tracker
+        tracker = self._get_mlflow_tracker()
 
-        # Convert to output model
-        output = self._create_output(final_state)
+        # Execute with MLflow tracking if available
+        if tracker:
+            async with tracker.start_design_run(
+                experiment_name=getattr(input_data, "experiment_name", "default")
+                if hasattr(input_data, "experiment_name")
+                else "default",
+                brand=input_data.brand,
+                business_question=input_data.business_question,
+                design_type=None,  # Will be determined during execution
+            ) as ctx:
+                # Execute graph asynchronously
+                final_state = await self.graph.ainvoke(initial_state)
 
-        # Check for failures
-        if final_state.get("status") == "failed":
-            error_messages = [e.get("error", "Unknown") for e in final_state.get("errors", [])]
-            raise RuntimeError(f"Experiment design failed: {'; '.join(error_messages)}")
+                # Convert to output model
+                output = self._create_output(final_state)
 
-        return output
+                # Log to MLflow
+                await tracker.log_design_result(output, final_state)
+
+                # Check for failures
+                if final_state.get("status") == "failed":
+                    error_messages = [
+                        e.get("error", "Unknown") for e in final_state.get("errors", [])
+                    ]
+                    raise RuntimeError(
+                        f"Experiment design failed: {'; '.join(error_messages)}"
+                    )
+
+                return output
+        else:
+            # Execute graph asynchronously without MLflow
+            final_state = await self.graph.ainvoke(initial_state)
+
+            # Convert to output model
+            output = self._create_output(final_state)
+
+            # Check for failures
+            if final_state.get("status") == "failed":
+                error_messages = [
+                    e.get("error", "Unknown") for e in final_state.get("errors", [])
+                ]
+                raise RuntimeError(f"Experiment design failed: {'; '.join(error_messages)}")
+
+            return output
 
     def _create_initial_state(self, input_data: ExperimentDesignerInput) -> ExperimentDesignState:
         """Create initial state from input.

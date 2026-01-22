@@ -15,12 +15,15 @@ from __future__ import annotations
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
 from .graph import build_health_score_graph, build_quick_check_graph
 from .state import HealthScoreState
+
+if TYPE_CHECKING:
+    from .mlflow_tracker import HealthScoreMLflowTracker
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +87,7 @@ class HealthScoreAgent:
         metrics_store: Optional[Any] = None,
         pipeline_store: Optional[Any] = None,
         agent_registry: Optional[Any] = None,
+        enable_mlflow: bool = True,
     ):
         """
         Initialize Health Score agent.
@@ -93,11 +97,14 @@ class HealthScoreAgent:
             metrics_store: Store for model metrics
             pipeline_store: Store for pipeline status
             agent_registry: Registry of system agents
+            enable_mlflow: Whether to enable MLflow tracking (default: True)
         """
         self.health_client = health_client
         self.metrics_store = metrics_store
         self.pipeline_store = pipeline_store
         self.agent_registry = agent_registry
+        self.enable_mlflow = enable_mlflow
+        self._mlflow_tracker: Optional["HealthScoreMLflowTracker"] = None
 
         # Build graphs
         self._full_graph = build_health_score_graph(
@@ -112,10 +119,27 @@ class HealthScoreAgent:
 
         logger.info("HealthScoreAgent initialized")
 
+    def _get_mlflow_tracker(self) -> Optional["HealthScoreMLflowTracker"]:
+        """Get or create MLflow tracker instance (lazy initialization)."""
+        if not self.enable_mlflow:
+            return None
+
+        if self._mlflow_tracker is None:
+            try:
+                from .mlflow_tracker import HealthScoreMLflowTracker
+
+                self._mlflow_tracker = HealthScoreMLflowTracker()
+            except ImportError:
+                logger.warning("MLflow tracker not available")
+                return None
+
+        return self._mlflow_tracker
+
     async def check_health(
         self,
         scope: Literal["full", "quick", "models", "pipelines", "agents"] = "full",
         query: str = "",
+        experiment_name: str = "default",
     ) -> HealthScoreOutput:
         """
         Run a health check.
@@ -123,6 +147,7 @@ class HealthScoreAgent:
         Args:
             scope: Scope of health check
             query: Optional query text
+            experiment_name: Name of MLflow experiment (default: "default")
 
         Returns:
             HealthScoreOutput with health metrics
@@ -153,7 +178,11 @@ class HealthScoreAgent:
             "status": "pending",
         }
 
-        try:
+        # Get MLflow tracker
+        mlflow_tracker = self._get_mlflow_tracker()
+
+        async def execute_workflow() -> Dict[str, Any]:
+            """Execute the health check workflow."""
             # Select appropriate graph
             if scope == "quick":
                 graph = self._quick_graph
@@ -161,30 +190,68 @@ class HealthScoreAgent:
                 graph = self._full_graph
 
             # Run graph
-            result = await graph.ainvoke(initial_state)
+            return await graph.ainvoke(initial_state)
 
-            # Build output
-            output = HealthScoreOutput(
-                overall_health_score=result.get("overall_health_score", 0.0),
-                health_grade=result.get("health_grade", "F"),
-                component_health_score=result.get("component_health_score", 0.0),
-                model_health_score=result.get("model_health_score", 1.0),
-                pipeline_health_score=result.get("pipeline_health_score", 1.0),
-                agent_health_score=result.get("agent_health_score", 1.0),
-                critical_issues=result.get("critical_issues", []),
-                warnings=result.get("warnings", []),
-                health_summary=result.get("health_summary", "Health check completed"),
-                check_latency_ms=result.get("check_latency_ms", 0),
-                timestamp=result.get("timestamp", datetime.now(timezone.utc).isoformat()),
-            )
+        try:
+            # Execute with MLflow tracking if available
+            if mlflow_tracker:
+                async with mlflow_tracker.start_health_run(
+                    experiment_name=experiment_name,
+                    check_scope=scope,
+                ) as ctx:
+                    result = await execute_workflow()
 
-            elapsed = int((time.time() - start_time) * 1000)
-            logger.info(
-                f"Health check complete: grade={output.health_grade}, "
-                f"score={output.overall_health_score:.1f}, latency={elapsed}ms"
-            )
+                    # Build output
+                    output = HealthScoreOutput(
+                        overall_health_score=result.get("overall_health_score", 0.0),
+                        health_grade=result.get("health_grade", "F"),
+                        component_health_score=result.get("component_health_score", 0.0),
+                        model_health_score=result.get("model_health_score", 1.0),
+                        pipeline_health_score=result.get("pipeline_health_score", 1.0),
+                        agent_health_score=result.get("agent_health_score", 1.0),
+                        critical_issues=result.get("critical_issues", []),
+                        warnings=result.get("warnings", []),
+                        health_summary=result.get("health_summary", "Health check completed"),
+                        check_latency_ms=result.get("check_latency_ms", 0),
+                        timestamp=result.get("timestamp", datetime.now(timezone.utc).isoformat()),
+                    )
 
-            return output
+                    # Log to MLflow
+                    await mlflow_tracker.log_health_result(output, result)
+
+                    elapsed = int((time.time() - start_time) * 1000)
+                    logger.info(
+                        f"Health check complete: grade={output.health_grade}, "
+                        f"score={output.overall_health_score:.1f}, latency={elapsed}ms"
+                    )
+
+                    return output
+            else:
+                # Execute without MLflow tracking
+                result = await execute_workflow()
+
+                # Build output
+                output = HealthScoreOutput(
+                    overall_health_score=result.get("overall_health_score", 0.0),
+                    health_grade=result.get("health_grade", "F"),
+                    component_health_score=result.get("component_health_score", 0.0),
+                    model_health_score=result.get("model_health_score", 1.0),
+                    pipeline_health_score=result.get("pipeline_health_score", 1.0),
+                    agent_health_score=result.get("agent_health_score", 1.0),
+                    critical_issues=result.get("critical_issues", []),
+                    warnings=result.get("warnings", []),
+                    health_summary=result.get("health_summary", "Health check completed"),
+                    check_latency_ms=result.get("check_latency_ms", 0),
+                    timestamp=result.get("timestamp", datetime.now(timezone.utc).isoformat()),
+                )
+
+                elapsed = int((time.time() - start_time) * 1000)
+                logger.info(
+                    f"Health check complete: grade={output.health_grade}, "
+                    f"score={output.overall_health_score:.1f}, latency={elapsed}ms"
+                )
+
+                return output
 
         except Exception as e:
             logger.error(f"Health check failed: {e}")

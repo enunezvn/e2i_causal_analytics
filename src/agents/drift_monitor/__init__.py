@@ -40,6 +40,12 @@ from src.agents.drift_monitor.agent import (
     DriftMonitorInput,
     DriftMonitorOutput,
 )
+from src.agents.drift_monitor.mlflow_tracker import (
+    DriftMonitorMLflowTracker,
+    DriftMonitorMetrics,
+    DriftMonitorContext,
+    create_tracker as create_mlflow_tracker,
+)
 from src.agents.drift_monitor.state import (
     DriftAlert,
     DriftMonitorState,
@@ -53,4 +59,9 @@ __all__ = [
     "DriftMonitorState",
     "DriftResult",
     "DriftAlert",
+    # MLflow tracking
+    "DriftMonitorMLflowTracker",
+    "DriftMonitorMetrics",
+    "DriftMonitorContext",
+    "create_mlflow_tracker",
 ]
