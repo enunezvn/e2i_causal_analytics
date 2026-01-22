@@ -23,6 +23,7 @@ from .state import GapAnalyzerState
 
 if TYPE_CHECKING:
     from .mlflow_tracker import GapAnalyzerMLflowTracker
+    from .opik_tracer import GapAnalyzerOpikTracer
 
 logger = logging.getLogger(__name__)
 
@@ -33,19 +34,23 @@ class GapAnalyzerAgent:
     Tier 2 Standard Agent: Computational focus with minimal LLM usage.
     """
 
-    def __init__(self, enable_mlflow: bool = True):
+    def __init__(self, enable_mlflow: bool = True, enable_opik: bool = True):
         """Initialize Gap Analyzer Agent.
 
         Args:
             enable_mlflow: Whether to enable MLflow tracking (default: True)
+            enable_opik: Whether to enable Opik distributed tracing (default: True)
         """
         self.graph = create_gap_analyzer_graph()
         self.agent_name = "gap_analyzer"
         self.agent_tier = 2
         self.enable_mlflow = enable_mlflow
+        self.enable_opik = enable_opik
 
         # MLflow tracker (lazy initialization)
         self._mlflow_tracker: Optional["GapAnalyzerMLflowTracker"] = None
+        # Opik tracer (lazy initialization)
+        self._opik_tracer: Optional["GapAnalyzerOpikTracer"] = None
 
     def _get_mlflow_tracker(self) -> Optional["GapAnalyzerMLflowTracker"]:
         """Get or create MLflow tracker instance (lazy initialization)."""
@@ -62,6 +67,22 @@ class GapAnalyzerAgent:
                 return None
 
         return self._mlflow_tracker
+
+    def _get_opik_tracer(self) -> Optional["GapAnalyzerOpikTracer"]:
+        """Get or create Opik tracer instance (lazy initialization)."""
+        if not self.enable_opik:
+            return None
+
+        if self._opik_tracer is None:
+            try:
+                from .opik_tracer import GapAnalyzerOpikTracer
+
+                self._opik_tracer = GapAnalyzerOpikTracer()
+            except ImportError:
+                logger.warning("Opik tracer not available")
+                return None
+
+        return self._opik_tracer
 
     async def run(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """Execute gap analyzer workflow.
@@ -80,40 +101,89 @@ class GapAnalyzerAgent:
 
         start_time = time.time()
 
-        # Get MLflow tracker
+        # Get trackers
         tracker = self._get_mlflow_tracker()
+        opik_tracer = self._get_opik_tracer()
 
         try:
             # Initialize state
             state = self._initialize_state(input_data)
 
-            # Run with MLflow tracking if available
-            if tracker:
-                async with tracker.start_analysis_run(
-                    experiment_name=input_data.get("experiment_name", "default"),
-                    brand=input_data.get("brand"),
-                    region=input_data.get("region"),
-                    gap_type=input_data.get("gap_type"),
+            # Execute with Opik tracing if available
+            if opik_tracer:
+                async with opik_tracer.trace_analysis(
+                    query=input_data["query"],
+                    brand=input_data["brand"],
+                    metrics=input_data.get("metrics"),
+                    segments=input_data.get("segments"),
+                    gap_type=input_data.get("gap_type", "vs_potential"),
                     query_id=input_data.get("query_id"),
-                ):
-                    # Execute workflow
+                ) as trace_ctx:
+                    # Run with MLflow tracking if available
+                    if tracker:
+                        async with tracker.start_analysis_run(
+                            experiment_name=input_data.get("experiment_name", "default"),
+                            brand=input_data.get("brand"),
+                            region=input_data.get("region"),
+                            gap_type=input_data.get("gap_type"),
+                            query_id=input_data.get("query_id"),
+                        ):
+                            # Execute workflow
+                            final_state = await self.graph.ainvoke(state)
+
+                            # Build output
+                            output = self._build_output(final_state)
+
+                            # Log to MLflow
+                            await tracker.log_analysis_result(output, final_state)
+                    else:
+                        # Execute workflow without MLflow
+                        final_state = await self.graph.ainvoke(state)
+                        output = self._build_output(final_state)
+
+                    # Log analysis results to Opik
+                    trace_ctx.log_analysis_complete(
+                        status="success",
+                        success=True,
+                        total_duration_ms=output.get("total_latency_ms", 0),
+                        gaps_detected=len(final_state.get("gaps_detected", [])),
+                        opportunities_count=len(output.get("prioritized_opportunities", [])),
+                        quick_wins_count=len(output.get("quick_wins", [])),
+                        strategic_bets_count=len(output.get("strategic_bets", [])),
+                        total_addressable_value=output.get("total_addressable_value", 0.0),
+                        confidence=output.get("confidence", 0.0),
+                        suggested_next_agent=output.get("suggested_next_agent"),
+                    )
+
+                    return output
+            else:
+                # Run without Opik tracing
+                if tracker:
+                    async with tracker.start_analysis_run(
+                        experiment_name=input_data.get("experiment_name", "default"),
+                        brand=input_data.get("brand"),
+                        region=input_data.get("region"),
+                        gap_type=input_data.get("gap_type"),
+                        query_id=input_data.get("query_id"),
+                    ):
+                        # Execute workflow
+                        final_state = await self.graph.ainvoke(state)
+
+                        # Build output
+                        output = self._build_output(final_state)
+
+                        # Log to MLflow
+                        await tracker.log_analysis_result(output, final_state)
+
+                        return output
+                else:
+                    # Execute workflow without any tracking
                     final_state = await self.graph.ainvoke(state)
 
                     # Build output
                     output = self._build_output(final_state)
 
-                    # Log to MLflow
-                    await tracker.log_analysis_result(output, final_state)
-
                     return output
-            else:
-                # Execute workflow without MLflow
-                final_state = await self.graph.ainvoke(state)
-
-                # Build output
-                output = self._build_output(final_state)
-
-                return output
 
         except Exception as e:
             # Build error output for workflow errors (not validation errors)
