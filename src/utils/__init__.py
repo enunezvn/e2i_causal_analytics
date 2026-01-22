@@ -13,7 +13,13 @@ from src.utils.audit_chain import (
     create_audit_chain_service,
     AgentTier,
 )
-from src.utils.llm_factory import create_llm_client, get_llm_client, LLMConfig
+from src.utils.llm_factory import (
+    get_chat_llm,
+    get_fast_llm,
+    get_standard_llm,
+    get_reasoning_llm,
+    get_llm_provider,
+)
 from src.utils.logging_config import (
     # Configuration
     configure_logging,
@@ -46,9 +52,11 @@ __all__ = [
     "create_audit_chain_service",
     "AgentTier",
     # LLM factory
-    "create_llm_client",
-    "get_llm_client",
-    "LLMConfig",
+    "get_chat_llm",
+    "get_fast_llm",
+    "get_standard_llm",
+    "get_reasoning_llm",
+    "get_llm_provider",
     # Logging (G14)
     "configure_logging",
     "LoggingConfig",
