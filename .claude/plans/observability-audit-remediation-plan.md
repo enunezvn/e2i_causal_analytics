@@ -37,12 +37,12 @@ With Quick Wins + Phase 1 + Phase 2 + Phase 3 complete:
 | G02 | Configure OpenTelemetry TracerProvider | ✅ Done | 2026-01-21 |
 | G08 | Request ID propagation to agents | ✅ Done | 2026-01-21 |
 
-### Phase 1 Additional Items Status: **1/2 COMPLETE**
+### Phase 1 Additional Items Status: **2/2 COMPLETE** ✅
 
 | ID | Task | Status | Date |
 |----|------|--------|------|
 | G07 | Prediction audit trail in BentoML templates | ✅ Done | 2026-01-21 |
-| G01 | BentoML-Opik integration | ⚠️ Partial (QW4 done) | - |
+| G01 | BentoML-Opik integration | ✅ Done | 2026-01-22 |
 
 ### Phase 2 MLflow Coverage: **6/6 COMPLETE** ✅
 
@@ -81,6 +81,20 @@ With Quick Wins + Phase 1 + Phase 2 + Phase 3 complete:
 ---
 
 ## Session Log
+
+### 2026-01-22: G01 Complete - BentoML-Opik Integration
+
+**Completed G01 - BentoML-Opik Integration**:
+- Modified `src/mlops/bentoml_service.py` (v1.1.0) to integrate Opik audit trail
+- Added import for `log_prediction_audit` from `bentoml_prediction_audit.py`
+- Instrumented `predict()` method with async Opik logging (fire-and-forget)
+- Instrumented `predict_proba()` method with async Opik logging
+- Added `OPIK_AUDIT_AVAILABLE` flag for graceful degradation
+- Audit trail captures: model_name, model_tag, service_type, input/output data, latency, metadata
+
+**All Phase 1 Additional Items now complete!**
+
+---
 
 ### 2026-01-22: Phase 4 Progress - Enhanced Observability
 
