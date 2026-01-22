@@ -8,6 +8,7 @@ Components:
 -----------
 - opik_connector.py: Opik SDK wrapper with circuit breaker (CLOSED → OPEN → HALF_OPEN)
 - opik_feedback.py: Opik feedback loop integration (Phase 4 - G23)
+- business_context.py: Business context labels for observability (Phase 4 - G24)
 - shap_explainer_realtime.py: Real-Time SHAP computation engine
 - data_quality.py: Great Expectations data quality validation
 - pandera_schemas.py: Pandera schema validation for E2I data sources
@@ -15,7 +16,7 @@ Components:
 - (future) feast_client.py: Feast feature store client
 
 Author: E2I Causal Analytics Team
-Version: 4.6.0 (Opik Feedback Loop Integration)
+Version: 4.7.0 (Business Context Labels - G24)
 """
 
 from .data_quality import (
@@ -77,6 +78,28 @@ from .opik_feedback import (
     get_feedback_signals_for_gepa,
     log_user_feedback,
 )
+from .business_context import (
+    # Enums
+    E2IBrand,
+    E2IRegion,
+    E2ISegmentType,
+    # Constants
+    VALID_BRANDS,
+    VALID_REGIONS,
+    # Classes
+    BusinessContext,
+    BusinessContextModel,
+    # Extraction
+    get_context_from_request,
+    get_context_from_dataframe,
+    merge_contexts,
+    # Propagation
+    apply_context_to_span,
+    apply_context_to_mlflow,
+    context_to_labels,
+    # Response
+    enrich_response_with_context,
+)
 
 __all__ = [
     # SHAP Explainer
@@ -132,6 +155,21 @@ __all__ = [
     "get_feedback_collector",
     "log_user_feedback",
     "get_feedback_signals_for_gepa",
+    # Business Context (Phase 4 - G24)
+    "E2IBrand",
+    "E2IRegion",
+    "E2ISegmentType",
+    "VALID_BRANDS",
+    "VALID_REGIONS",
+    "BusinessContext",
+    "BusinessContextModel",
+    "get_context_from_request",
+    "get_context_from_dataframe",
+    "merge_contexts",
+    "apply_context_to_span",
+    "apply_context_to_mlflow",
+    "context_to_labels",
+    "enrich_response_with_context",
 ]
 
-__version__ = "4.6.0"
+__version__ = "4.7.0"
