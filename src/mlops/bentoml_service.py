@@ -5,8 +5,9 @@ This module provides BentoML integration for model serving:
 - Prediction service creation
 - Health checks and monitoring
 - Model versioning and deployment
+- Opik observability integration (G01)
 
-Version: 1.0.0
+Version: 1.1.0
 """
 
 import hashlib
@@ -41,6 +42,19 @@ except ImportError:
     Field = lambda *args, **kwargs: None
 
 logger = logging.getLogger(__name__)
+
+# Import prediction audit for Opik integration (G01)
+try:
+    from src.mlops.bentoml_prediction_audit import (
+        log_prediction_audit,
+        prediction_audit_context,
+    )
+    OPIK_AUDIT_AVAILABLE = True
+except ImportError:
+    OPIK_AUDIT_AVAILABLE = False
+    log_prediction_audit = None
+    prediction_audit_context = None
+    logger.debug("Prediction audit not available - Opik logging disabled")
 
 # Default model store path
 DEFAULT_MODEL_STORE_PATH = os.environ.get(
@@ -466,7 +480,11 @@ def create_prediction_service(
                 Predictions array
             """
             import time
+            import asyncio
             start_time = time.time()
+
+            # Store original input for audit trail
+            original_input = input_data.copy() if hasattr(input_data, 'copy') else input_data
 
             # Apply preprocessing if available
             if self._preprocessor is not None:
@@ -477,6 +495,24 @@ def create_prediction_service(
 
             elapsed_ms = (time.time() - start_time) * 1000
             logger.debug(f"Prediction completed in {elapsed_ms:.2f}ms")
+
+            # Log to Opik for observability (G01 - BentoML-Opik integration)
+            if OPIK_AUDIT_AVAILABLE and log_prediction_audit is not None:
+                try:
+                    # Fire and forget - don't block on audit logging
+                    asyncio.create_task(
+                        log_prediction_audit(
+                            model_name=self.model_tag.split(":")[0],
+                            model_tag=self.model_tag,
+                            service_type="prediction",
+                            input_data={"features": original_input.tolist() if hasattr(original_input, 'tolist') else original_input},
+                            output_data={"predictions": predictions.tolist() if hasattr(predictions, 'tolist') else predictions},
+                            latency_ms=elapsed_ms,
+                            metadata={"framework": self.framework, "batch_size": len(original_input)},
+                        )
+                    )
+                except Exception as e:
+                    logger.debug(f"Failed to log prediction audit: {e}")
 
             return predictions
 
@@ -493,6 +529,13 @@ def create_prediction_service(
             Returns:
                 Probability array (samples x classes)
             """
+            import time
+            import asyncio
+            start_time = time.time()
+
+            # Store original input for audit trail
+            original_input = input_data.copy() if hasattr(input_data, 'copy') else input_data
+
             # Apply preprocessing if available
             if self._preprocessor is not None:
                 input_data = self._preprocessor.transform(input_data)
@@ -501,7 +544,29 @@ def create_prediction_service(
             if not hasattr(self._model, 'predict_proba'):
                 raise ValueError("Model does not support probability predictions")
 
-            return self._model.predict_proba(input_data)
+            probabilities = self._model.predict_proba(input_data)
+
+            elapsed_ms = (time.time() - start_time) * 1000
+            logger.debug(f"Probability prediction completed in {elapsed_ms:.2f}ms")
+
+            # Log to Opik for observability (G01 - BentoML-Opik integration)
+            if OPIK_AUDIT_AVAILABLE and log_prediction_audit is not None:
+                try:
+                    asyncio.create_task(
+                        log_prediction_audit(
+                            model_name=self.model_tag.split(":")[0],
+                            model_tag=self.model_tag,
+                            service_type="classification_proba",
+                            input_data={"features": original_input.tolist() if hasattr(original_input, 'tolist') else original_input},
+                            output_data={"probabilities": probabilities.tolist() if hasattr(probabilities, 'tolist') else probabilities},
+                            latency_ms=elapsed_ms,
+                            metadata={"framework": self.framework, "batch_size": len(original_input)},
+                        )
+                    )
+                except Exception as e:
+                    logger.debug(f"Failed to log prediction audit: {e}")
+
+            return probabilities
 
         @bentoml.api
         async def health(self) -> Dict[str, Any]:
@@ -961,4 +1026,5 @@ __all__ = [
     "get_model_serving_status",
     # Constants
     "BENTOML_AVAILABLE",
+    "OPIK_AUDIT_AVAILABLE",
 ]
