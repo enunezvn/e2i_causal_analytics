@@ -6,6 +6,12 @@ optimal treatment allocation.
 
 from .agent import HeterogeneousOptimizerAgent
 from .graph import create_heterogeneous_optimizer_graph
+from .mlflow_tracker import (
+    HeterogeneousOptimizerMLflowTracker,
+    HeterogeneousOptimizerMetrics,
+    HeterogeneousOptimizerContext,
+    create_tracker as create_mlflow_tracker,
+)
 from .state import (
     CATEResult,
     HeterogeneousOptimizerState,
@@ -20,4 +26,9 @@ __all__ = [
     "SegmentProfile",
     "PolicyRecommendation",
     "create_heterogeneous_optimizer_graph",
+    # MLflow tracking
+    "HeterogeneousOptimizerMLflowTracker",
+    "HeterogeneousOptimizerMetrics",
+    "HeterogeneousOptimizerContext",
+    "create_mlflow_tracker",
 ]

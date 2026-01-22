@@ -6,13 +6,16 @@ Estimates causal effects using DoWhy/EconML with natural language interpretation
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, TYPE_CHECKING
 
 from src.agents.causal_impact.graph import create_causal_impact_graph
 from src.agents.causal_impact.state import (
     CausalImpactOutput,
     CausalImpactState,
 )
+
+if TYPE_CHECKING:
+    from src.agents.causal_impact.mlflow_tracker import CausalImpactMLflowTracker
 
 logger = logging.getLogger(__name__)
 
@@ -92,15 +95,18 @@ class CausalImpactAgent:
         self,
         enable_checkpointing: bool = False,
         config: Optional[Dict[str, Any]] = None,
+        enable_mlflow: bool = True,
     ):
         """Initialize Causal Impact Agent.
 
         Args:
             enable_checkpointing: Whether to enable state checkpointing
             config: Optional configuration overrides
+            enable_mlflow: Whether to enable MLflow tracking (default: True)
         """
         self.enable_checkpointing = enable_checkpointing
         self.config = config or {}
+        self.enable_mlflow = enable_mlflow
 
         # Initialize fallback chain (Contract: AgentConfig.fallback_models)
         self._fallback_chain = FallbackChain(self.fallback_models)
@@ -109,8 +115,27 @@ class CausalImpactAgent:
         self._semantic_memory = None
         self._episodic_memory_initialized = False
 
+        # MLflow tracker (lazy initialization)
+        self._mlflow_tracker: Optional["CausalImpactMLflowTracker"] = None
+
         # Create workflow graph
         self.graph = create_causal_impact_graph(enable_checkpointing)
+
+    def _get_mlflow_tracker(self) -> Optional["CausalImpactMLflowTracker"]:
+        """Get or create MLflow tracker instance (lazy initialization)."""
+        if not self.enable_mlflow:
+            return None
+
+        if self._mlflow_tracker is None:
+            try:
+                from src.agents.causal_impact.mlflow_tracker import CausalImpactMLflowTracker
+
+                self._mlflow_tracker = CausalImpactMLflowTracker()
+            except ImportError:
+                logger.warning("MLflow tracker not available")
+                return None
+
+        return self._mlflow_tracker
 
     async def run(self, input_data: Dict[str, Any]) -> CausalImpactOutput:
         """Execute causal impact analysis.
@@ -135,14 +160,38 @@ class CausalImpactAgent:
         # Initialize state
         initial_state = self._initialize_state(input_data)
 
+        # Get MLflow tracker
+        tracker = self._get_mlflow_tracker()
+
         try:
-            # Run workflow
-            final_state = await self.graph.ainvoke(initial_state)
+            # Run with MLflow tracking if available
+            if tracker:
+                async with tracker.start_analysis_run(
+                    experiment_name=input_data.get("experiment_name", "default"),
+                    brand=input_data.get("brand"),
+                    region=input_data.get("region"),
+                    treatment_var=input_data.get("treatment_var"),
+                    outcome_var=input_data.get("outcome_var"),
+                    query_id=initial_state.get("query_id"),
+                ):
+                    # Run workflow
+                    final_state = await self.graph.ainvoke(initial_state)
 
-            # Build output
-            output = self._build_output(final_state, start_time)
+                    # Build output
+                    output = self._build_output(final_state, start_time)
 
-            return output
+                    # Log to MLflow
+                    await tracker.log_analysis_result(output, final_state)
+
+                    return output
+            else:
+                # Run workflow without MLflow
+                final_state = await self.graph.ainvoke(initial_state)
+
+                # Build output
+                output = self._build_output(final_state, start_time)
+
+                return output
 
         except Exception as e:
             # Error handling with FallbackChain (Contract: AgentConfig.fallback_models)
@@ -162,6 +211,14 @@ class CausalImpactAgent:
                     final_state = await self.graph.ainvoke(initial_state)
                     output = self._build_output(final_state, start_time)
                     output["fallback_model_used"] = fallback_model
+
+                    # Log fallback result to MLflow
+                    if tracker:
+                        try:
+                            await tracker.log_analysis_result(output, final_state)
+                        except Exception as log_error:
+                            logger.warning(f"Failed to log fallback result to MLflow: {log_error}")
+
                     return output
 
                 except Exception as fallback_error:
