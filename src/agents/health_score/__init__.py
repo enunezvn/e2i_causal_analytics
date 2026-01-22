@@ -8,10 +8,21 @@ This is a Fast Path Agent optimized for:
 - System status aggregation
 - Dashboard metrics
 - Zero LLM usage in critical path
+
+Integration:
+- Memory: Working Memory (Redis) for caching health results
+- Observability: MLflow tracking for health metrics trending
+- Data: Component, model, pipeline, and agent health monitoring
 """
 
-from .agent import HealthScoreAgent
+from .agent import HealthScoreAgent, HealthScoreInput, HealthScoreOutput
 from .graph import build_health_score_graph
+from .mlflow_tracker import (
+    HealthScoreMLflowTracker,
+    HealthScoreMetrics,
+    HealthScoreContext,
+    create_tracker as create_mlflow_tracker,
+)
 from .state import (
     AgentStatus,
     ComponentStatus,
@@ -22,10 +33,17 @@ from .state import (
 
 __all__ = [
     "HealthScoreAgent",
+    "HealthScoreInput",
+    "HealthScoreOutput",
     "HealthScoreState",
     "ComponentStatus",
     "ModelMetrics",
     "PipelineStatus",
     "AgentStatus",
     "build_health_score_graph",
+    # MLflow tracking
+    "HealthScoreMLflowTracker",
+    "HealthScoreMetrics",
+    "HealthScoreContext",
+    "create_mlflow_tracker",
 ]
