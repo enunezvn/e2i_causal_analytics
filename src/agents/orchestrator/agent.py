@@ -93,13 +93,10 @@ class OrchestratorAgent:
         # Execute LangGraph workflow
         final_state = await self.graph.ainvoke(initial_state)
 
-        # Check for errors
-        if final_state.get("error"):
-            error_msg = final_state["error"]
-            error_type = final_state.get("error_type", "unknown")
-            raise RuntimeError(f"{error_type}: {error_msg}")
-
         # Build output conforming to contract
+        # Note: We no longer raise RuntimeError for partial failures.
+        # Instead, we include failure info in the response and let callers
+        # decide how to handle partial results.
         output = self._build_output(final_state)
 
         return output
@@ -107,26 +104,65 @@ class OrchestratorAgent:
     def _build_output(self, state: OrchestratorState) -> Dict[str, Any]:
         """Build output conforming to OrchestratorOutput contract.
 
+        Includes partial failure information when some agents fail but
+        others succeed. This allows callers to display partial results
+        with appropriate warnings.
+
         Args:
             state: Final orchestrator state
 
         Returns:
-            Output data
+            Output data with partial failure info if applicable
         """
-        # Collect agents used
-        agents_dispatched = [r["agent_name"] for r in state.get("agent_results", [])]
+        agent_results = state.get("agent_results", [])
+
+        # Separate successful and failed agents
+        successful_results = [r for r in agent_results if r.get("success")]
+        failed_results = [r for r in agent_results if not r.get("success")]
+
+        # Collect all agents that were dispatched
+        agents_dispatched = [r["agent_name"] for r in agent_results]
+        successful_agents = [r["agent_name"] for r in successful_results]
+        failed_agents = [r["agent_name"] for r in failed_results]
+
+        # Determine status based on partial vs complete failure
+        status = state.get("status", "failed")
+        has_partial_failure = len(successful_results) > 0 and len(failed_results) > 0
+
+        if has_partial_failure:
+            status = "partial_success"
+
+        # Build failure details for failed agents
+        failure_details = []
+        for r in failed_results:
+            failure_details.append({
+                "agent_name": r["agent_name"],
+                "error": r.get("error", "Unknown error"),
+                "latency_ms": r.get("latency_ms", 0),
+            })
+
+        # Include orchestrator-level error if present
+        orchestrator_error = state.get("error")
+        orchestrator_error_type = state.get("error_type")
 
         return {
             # Query identification
             "query_id": state.get("query_id"),
-            # Status
-            "status": state.get("status", "failed"),
-            # Synthesized response
+            # Status - now includes "partial_success"
+            "status": status,
+            # Synthesized response (from successful agents only)
             "response_text": state.get("synthesized_response", ""),
             "response_confidence": state.get("response_confidence", 0.0),
-            # Agent execution details
+            # Agent execution details - now with success/failure breakdown
             "agents_dispatched": agents_dispatched,
-            "agent_results": state.get("agent_results", []),
+            "successful_agents": successful_agents,
+            "failed_agents": failed_agents,
+            "agent_results": agent_results,
+            # Partial failure info - new fields for Phase 3 enhancement
+            "has_partial_failure": has_partial_failure,
+            "failure_details": failure_details if failure_details else None,
+            "orchestrator_error": orchestrator_error,
+            "orchestrator_error_type": orchestrator_error_type,
             # RAG context
             "rag_context": state.get("rag_context"),
             # Metadata
@@ -137,7 +173,7 @@ class OrchestratorAgent:
             # Performance
             "total_latency_ms": state.get("total_latency_ms", 0),
             "timestamp": datetime.now(timezone.utc),
-            # Additional metadata (not in contract but useful)
+            # Additional metadata
             "classification_latency_ms": state.get("classification_latency_ms", 0),
             "rag_latency_ms": state.get("rag_latency_ms", 0),
             "routing_latency_ms": state.get("routing_latency_ms", 0),

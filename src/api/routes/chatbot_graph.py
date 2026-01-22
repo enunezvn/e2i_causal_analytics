@@ -743,6 +743,56 @@ async def classify_intent_node(state: ChatbotState) -> Dict[str, Any]:
     }
 
 
+def _build_partial_failure_warning(
+    failed_agents: List[str],
+    failure_details: List[Dict[str, Any]],
+) -> str:
+    """Build a user-friendly warning message about partial failures.
+
+    Phase 3: Partial failure handling enhancement.
+
+    Args:
+        failed_agents: List of agent names that failed
+        failure_details: List of failure detail dicts with agent_name and error
+
+    Returns:
+        Warning message string, or empty string if no failures
+    """
+    if not failed_agents:
+        return ""
+
+    # Build failure summary
+    failure_lines = []
+    for detail in failure_details:
+        agent = detail.get("agent_name", "Unknown agent")
+        error = detail.get("error", "Unknown error")
+        # Simplify error messages for users
+        if "timed out" in error.lower():
+            failure_lines.append(f"• {agent}: Operation took too long")
+        elif "connection" in error.lower() or "unavailable" in error.lower():
+            failure_lines.append(f"• {agent}: Service temporarily unavailable")
+        else:
+            # Truncate long error messages
+            error_summary = error[:100] + "..." if len(error) > 100 else error
+            failure_lines.append(f"• {agent}: {error_summary}")
+
+    # Build warning message
+    if len(failed_agents) == 1:
+        warning = (
+            "⚠️ **Note**: One analysis component did not complete successfully:\n"
+            + "\n".join(failure_lines)
+            + "\n\nThe results above are based on the analyses that completed successfully."
+        )
+    else:
+        warning = (
+            f"⚠️ **Note**: {len(failed_agents)} analysis components did not complete successfully:\n"
+            + "\n".join(failure_lines)
+            + "\n\nThe results above are based on the analyses that completed successfully."
+        )
+
+    return warning
+
+
 async def orchestrator_node(state: ChatbotState) -> Dict[str, Any]:
     """
     Route complex queries through the orchestrator for agent dispatch.
@@ -774,7 +824,12 @@ async def orchestrator_node(state: ChatbotState) -> Dict[str, Any]:
     response_confidence = 0.0
 
     async def _execute_orchestrator():
-        """Execute query through orchestrator."""
+        """Execute query through orchestrator with partial failure handling.
+
+        Phase 3 Enhancement: Handles partial failures gracefully.
+        If some agents succeed and others fail, returns the successful results
+        with warnings about the failed agents.
+        """
         nonlocal result, orchestrator_used, agents_dispatched, response_text, response_confidence
 
         orchestrator = get_orchestrator()
@@ -803,19 +858,43 @@ async def orchestrator_node(state: ChatbotState) -> Dict[str, Any]:
             response_confidence = orchestrator_result.get("response_confidence", 0.0)
             agents_dispatched = orchestrator_result.get("agents_dispatched", [])
 
-            # Determine primary agent from orchestrator dispatch
+            # Phase 3: Extract partial failure information
+            has_partial_failure = orchestrator_result.get("has_partial_failure", False)
+            successful_agents = orchestrator_result.get("successful_agents", [])
+            failed_agents = orchestrator_result.get("failed_agents", [])
+            failure_details = orchestrator_result.get("failure_details", [])
+            status = orchestrator_result.get("status", "completed")
+
+            # Determine primary agent from successful agents
             primary_agent = "orchestrator"
-            if agents_dispatched:
+            if successful_agents:
+                primary_agent = successful_agents[0]
+            elif agents_dispatched:
                 primary_agent = agents_dispatched[0]
 
-            logger.info(
-                f"Orchestrator processed query: agents={agents_dispatched}, "
-                f"confidence={response_confidence:.2f}"
-            )
+            # Log based on success/failure status
+            if has_partial_failure:
+                logger.warning(
+                    f"Orchestrator partial success: succeeded={successful_agents}, "
+                    f"failed={failed_agents}, confidence={response_confidence:.2f}"
+                )
+                # Add partial failure warning to response text
+                failure_warning = _build_partial_failure_warning(failed_agents, failure_details)
+                if response_text and failure_warning:
+                    response_text = f"{response_text}\n\n{failure_warning}"
+            elif status == "failed":
+                logger.error(
+                    f"Orchestrator complete failure: all agents failed - {failed_agents}"
+                )
+            else:
+                logger.info(
+                    f"Orchestrator processed query: agents={agents_dispatched}, "
+                    f"confidence={response_confidence:.2f}"
+                )
 
             # Create response message and update state
-            if response_text:
-                response_msg = AIMessage(content=response_text)
+            if response_text or has_partial_failure:
+                response_msg = AIMessage(content=response_text or "Analysis could not be completed.")
                 result = {
                     "messages": [response_msg],
                     "response_text": response_text,
@@ -829,11 +908,17 @@ async def orchestrator_node(state: ChatbotState) -> Dict[str, Any]:
                         "orchestrator_used": True,
                         "agents_dispatched": agents_dispatched,
                         "orchestrator_confidence": response_confidence,
+                        # Phase 3: Add partial failure metadata
+                        "has_partial_failure": has_partial_failure,
+                        "successful_agents": successful_agents,
+                        "failed_agents": failed_agents,
+                        "failure_details": failure_details,
+                        "orchestrator_status": status,
                     },
                 }
 
         except Exception as e:
-            logger.warning(f"Orchestrator execution failed: {e}")
+            logger.error(f"Orchestrator execution failed with exception: {e}")
             # Fall through to generate_node by returning empty result
 
     # Only route through orchestrator for complex intents
