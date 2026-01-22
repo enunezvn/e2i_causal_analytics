@@ -7,7 +7,12 @@ Provides shared utilities across the application:
 - Structured logging configuration (G14)
 """
 
-from src.utils.audit_chain import AuditChain, AuditChainConfig, get_audit_chain
+from src.utils.audit_chain import (
+    AuditChainService,
+    AuditChainEntry,
+    create_audit_chain_service,
+    AgentTier,
+)
 from src.utils.llm_factory import create_llm_client, get_llm_client, LLMConfig
 from src.utils.logging_config import (
     # Configuration
@@ -36,9 +41,10 @@ from src.utils.logging_config import (
 
 __all__ = [
     # Audit chain
-    "AuditChain",
-    "AuditChainConfig",
-    "get_audit_chain",
+    "AuditChainService",
+    "AuditChainEntry",
+    "create_audit_chain_service",
+    "AgentTier",
     # LLM factory
     "create_llm_client",
     "get_llm_client",
