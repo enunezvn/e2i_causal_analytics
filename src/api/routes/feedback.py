@@ -4,7 +4,7 @@ E2I Feedback Learning API
 
 FastAPI endpoints for feedback processing, pattern detection, and knowledge updates.
 
-Phase: Agent Output Routing
+Phase: Agent Output Routing + Phase 4 (G23: Opik Feedback Loop)
 
 Endpoints:
 - POST /feedback/learn: Run feedback learning cycle
@@ -13,14 +13,19 @@ Endpoints:
 - GET  /feedback/patterns: List detected patterns
 - GET  /feedback/updates: List knowledge updates
 - GET  /feedback/health: Service health check
+- POST /feedback/trace: Record feedback for an Opik trace (G23)
+- GET  /feedback/agent/{agent_name}/stats: Get agent feedback stats (G23)
+- GET  /feedback/agent/{agent_name}/signals: Get GEPA optimization signals (G23)
 
 Integration Points:
 - Feedback Learner Agent (Tier 5)
 - Orchestrator for agent invocation
 - Supabase for persistence
+- Opik for trace feedback (Phase 4 - G23)
+- GEPA for prompt optimization (Phase 4 - G23)
 
 Author: E2I Causal Analytics Team
-Version: 4.2.0
+Version: 4.3.0 (Opik Feedback Loop Integration)
 """
 
 import logging
@@ -33,6 +38,20 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.api.dependencies.auth import require_operator
+
+# Opik Feedback Loop imports (Phase 4 - G23)
+try:
+    from src.mlops.opik_feedback import (
+        AgentFeedbackStats,
+        FeedbackRecord as OpikFeedbackRecord,
+        get_feedback_collector,
+        get_feedback_signals_for_gepa,
+        log_user_feedback,
+    )
+
+    OPIK_FEEDBACK_AVAILABLE = True
+except ImportError:
+    OPIK_FEEDBACK_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -802,6 +821,307 @@ async def get_feedback_health() -> FeedbackHealthResponse:
         patterns_active=patterns_active,
         pending_updates=pending_updates,
     )
+
+
+# =============================================================================
+# OPIK FEEDBACK LOOP ENDPOINTS (Phase 4 - G23)
+# =============================================================================
+
+
+class TraceFeedbackRequest(BaseModel):
+    """Request to record feedback for an Opik trace."""
+
+    trace_id: str = Field(..., description="Opik trace ID")
+    score: float = Field(..., description="Feedback score (0.0 to 1.0)", ge=0.0, le=1.0)
+    agent_name: str = Field(..., description="Agent that generated the response")
+    feedback_type: str = Field(
+        default="rating", description="Type of feedback (rating, correction, outcome, explicit)"
+    )
+    span_id: Optional[str] = Field(default=None, description="Optional specific span ID")
+    category: Optional[str] = Field(
+        default=None, description="Feedback category (accuracy, relevance, latency, format)"
+    )
+    user_feedback: Optional[Dict[str, Any]] = Field(
+        default=None, description="Raw user feedback data"
+    )
+    query: Optional[str] = Field(default=None, description="Original user query")
+    response: Optional[str] = Field(default=None, description="Agent response")
+    metadata: Optional[Dict[str, Any]] = Field(default=None, description="Additional metadata")
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "trace_id": "trace_abc123",
+                "score": 0.8,
+                "agent_name": "causal_impact",
+                "feedback_type": "rating",
+                "category": "accuracy",
+                "user_feedback": {"rating": 4, "helpful": True, "comment": "Good analysis"},
+                "query": "What drives TRx for Kisqali?",
+            }
+        }
+    )
+
+
+class TraceFeedbackResponse(BaseModel):
+    """Response from recording trace feedback."""
+
+    feedback_id: str = Field(..., description="Unique feedback identifier")
+    trace_id: str = Field(..., description="Associated trace ID")
+    agent_name: str = Field(..., description="Agent name")
+    score: float = Field(..., description="Recorded score")
+    logged_to_opik: bool = Field(..., description="Whether feedback was logged to Opik")
+    timestamp: datetime = Field(..., description="Recording timestamp")
+
+
+class AgentFeedbackStatsResponse(BaseModel):
+    """Response with agent feedback statistics."""
+
+    agent_name: str = Field(..., description="Agent name")
+    total_feedback: int = Field(..., description="Total feedback count")
+    average_score: float = Field(..., description="Average feedback score")
+    positive_ratio: float = Field(..., description="Ratio of positive feedback")
+    positive_count: int = Field(..., description="Positive feedback count")
+    negative_count: int = Field(..., description="Negative feedback count")
+    by_type: Dict[str, int] = Field(..., description="Count by feedback type")
+    by_category: Dict[str, int] = Field(..., description="Count by category")
+    score_trend: List[float] = Field(..., description="Recent score trend")
+    last_feedback_time: Optional[datetime] = Field(default=None, description="Last feedback time")
+
+
+class OptimizationSignal(BaseModel):
+    """GEPA optimization signal from feedback."""
+
+    signal_type: str = Field(..., description="Signal type (positive, negative, correction)")
+    weight: float = Field(..., description="Signal weight (0.0 to 1.0)")
+    feedback: str = Field(..., description="Signal description")
+    suggested_action: Optional[str] = Field(default=None, description="Suggested improvement")
+    confidence: float = Field(..., description="Signal confidence")
+
+
+class OptimizationSignalsResponse(BaseModel):
+    """Response with GEPA optimization signals."""
+
+    agent_name: str = Field(..., description="Agent name")
+    signals: List[OptimizationSignal] = Field(..., description="Optimization signals")
+    total_feedback_analyzed: int = Field(..., description="Total feedback analyzed")
+    ready_for_optimization: bool = Field(
+        ..., description="Whether enough feedback for optimization"
+    )
+
+
+@router.post(
+    "/trace",
+    response_model=TraceFeedbackResponse,
+    summary="Record feedback for Opik trace (G23)",
+    description="Record user feedback and associate it with an Opik trace for observability.",
+)
+async def record_trace_feedback(
+    request: TraceFeedbackRequest,
+) -> TraceFeedbackResponse:
+    """
+    Record user feedback for a specific Opik trace.
+
+    This endpoint integrates with Opik to:
+    1. Store feedback in the feedback collector
+    2. Log feedback to the associated Opik trace
+    3. Make feedback available for GEPA optimization
+
+    Args:
+        request: Trace feedback details
+
+    Returns:
+        Feedback recording confirmation
+    """
+    if not OPIK_FEEDBACK_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="Opik feedback integration not available",
+        )
+
+    try:
+        # Record feedback using the Opik feedback collector
+        record = await log_user_feedback(
+            trace_id=request.trace_id,
+            score=request.score,
+            feedback_type=request.feedback_type,
+            agent_name=request.agent_name,
+            span_id=request.span_id,
+            category=request.category,
+            user_feedback=request.user_feedback,
+            query=request.query,
+            response=request.response,
+            metadata=request.metadata,
+        )
+
+        # Check if logged to Opik
+        collector = get_feedback_collector()
+        logged_to_opik = collector.opik_enabled
+
+        logger.info(
+            f"Recorded trace feedback {record.feedback_id} for {request.agent_name}: "
+            f"score={request.score:.2f}, opik={logged_to_opik}"
+        )
+
+        return TraceFeedbackResponse(
+            feedback_id=record.feedback_id,
+            trace_id=record.trace_id,
+            agent_name=record.agent_name,
+            score=record.score,
+            logged_to_opik=logged_to_opik,
+            timestamp=record.timestamp,
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to record trace feedback: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to record feedback: {e}")
+
+
+@router.get(
+    "/agent/{agent_name}/stats",
+    response_model=AgentFeedbackStatsResponse,
+    summary="Get agent feedback statistics (G23)",
+    description="Get aggregated feedback statistics for an agent.",
+)
+async def get_agent_feedback_stats(
+    agent_name: str,
+) -> AgentFeedbackStatsResponse:
+    """
+    Get aggregated feedback statistics for an agent.
+
+    Provides insights into agent performance based on user feedback.
+
+    Args:
+        agent_name: Name of the agent
+
+    Returns:
+        Aggregated feedback statistics
+    """
+    if not OPIK_FEEDBACK_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="Opik feedback integration not available",
+        )
+
+    try:
+        collector = get_feedback_collector()
+        stats = collector.get_agent_stats(agent_name)
+
+        return AgentFeedbackStatsResponse(
+            agent_name=stats.agent_name,
+            total_feedback=stats.total_feedback,
+            average_score=stats.average_score,
+            positive_ratio=stats.positive_ratio,
+            positive_count=stats.positive_count,
+            negative_count=stats.negative_count,
+            by_type=stats.by_type,
+            by_category=stats.by_category,
+            score_trend=stats.score_trend,
+            last_feedback_time=stats.last_feedback_time,
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to get agent stats: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get stats: {e}")
+
+
+@router.get(
+    "/agent/{agent_name}/signals",
+    response_model=OptimizationSignalsResponse,
+    summary="Get GEPA optimization signals (G23)",
+    description="Get feedback-derived optimization signals for GEPA prompt improvement.",
+)
+async def get_optimization_signals(
+    agent_name: str,
+    min_feedback_count: int = Query(
+        default=5, description="Minimum feedback required", ge=1
+    ),
+) -> OptimizationSignalsResponse:
+    """
+    Get GEPA optimization signals derived from user feedback.
+
+    Analyzes accumulated feedback to generate actionable signals
+    that GEPA can use to improve agent prompts.
+
+    Args:
+        agent_name: Name of the agent
+        min_feedback_count: Minimum feedback required to generate signals
+
+    Returns:
+        Optimization signals for GEPA
+    """
+    if not OPIK_FEEDBACK_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="Opik feedback integration not available",
+        )
+
+    try:
+        collector = get_feedback_collector()
+        stats = collector.get_agent_stats(agent_name)
+        signal_dicts = get_feedback_signals_for_gepa(agent_name, min_feedback_count)
+
+        signals = [
+            OptimizationSignal(
+                signal_type=s["signal_type"],
+                weight=s["weight"],
+                feedback=s["feedback"],
+                suggested_action=s.get("suggested_action"),
+                confidence=s["confidence"],
+            )
+            for s in signal_dicts
+        ]
+
+        return OptimizationSignalsResponse(
+            agent_name=agent_name,
+            signals=signals,
+            total_feedback_analyzed=stats.total_feedback,
+            ready_for_optimization=stats.total_feedback >= min_feedback_count,
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to get optimization signals: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get signals: {e}")
+
+
+@router.get(
+    "/agent/{agent_name}/gepa-batch",
+    summary="Get GEPA training batch (G23)",
+    description="Get a batch of feedback examples for GEPA training.",
+)
+async def get_gepa_training_batch(
+    agent_name: str,
+    batch_size: int = Query(default=50, description="Batch size", ge=1, le=200),
+) -> Dict[str, Any]:
+    """
+    Get a batch of feedback examples formatted for GEPA training.
+
+    Args:
+        agent_name: Name of the agent
+        batch_size: Number of examples to return
+
+    Returns:
+        GEPA-formatted training examples
+    """
+    if not OPIK_FEEDBACK_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="Opik feedback integration not available",
+        )
+
+    try:
+        collector = get_feedback_collector()
+        examples = collector.get_gepa_feedback_batch(agent_name, batch_size)
+
+        return {
+            "agent_name": agent_name,
+            "batch_size": len(examples),
+            "examples": examples,
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to get GEPA batch: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get batch: {e}")
 
 
 # =============================================================================

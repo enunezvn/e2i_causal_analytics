@@ -2,6 +2,8 @@
 Feature Retrieval Service
 
 Handles online and offline feature retrieval with Redis caching.
+
+Includes latency tracking for observability (Phase 4 - G17).
 """
 
 import hashlib
@@ -14,6 +16,12 @@ import redis
 from supabase import Client
 
 from .models import EntityFeatures
+from .monitoring import (
+    get_latency_tracker,
+    track_cache_operation,
+    track_db_operation,
+    track_retrieval,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -66,31 +74,69 @@ class FeatureRetriever:
         Returns:
             EntityFeatures object
         """
-        # Generate cache key
-        cache_key = self._generate_cache_key(entity_values, feature_group, feature_names)
+        fg_name = feature_group or "all"
 
-        # Try cache first
-        if use_cache and self.redis_client:
-            cached = self._get_from_cache(cache_key)
-            if cached:
-                logger.debug(f"Cache HIT for entity: {entity_values}")
-                return cached
+        with track_retrieval(feature_group=fg_name, operation="get_entity_features") as metrics:
+            # Generate cache key
+            cache_key = self._generate_cache_key(entity_values, feature_group, feature_names)
 
-        logger.debug(f"Cache MISS for entity: {entity_values}")
+            # Try cache first
+            if use_cache and self.redis_client:
+                with track_cache_operation("get") as cache_ctx:
+                    cached = self._get_from_cache(cache_key)
+                    if cached:
+                        cache_ctx["hit"] = True
+                        metrics.cache_hit = True
+                        metrics.cache_latency_ms = cache_ctx["latency_ms"]
+                        metrics.feature_count = len(cached.features)
 
-        # Query Supabase
-        features_data = self._query_supabase_features(
-            entity_values, feature_group, feature_names, include_stale
-        )
+                        # Count stale features
+                        stale_count = sum(
+                            1
+                            for meta in cached.metadata.values()
+                            if meta.get("freshness_status") == "stale"
+                        )
+                        metrics.stale_count = stale_count
 
-        # Build EntityFeatures object
-        entity_features = self._build_entity_features(entity_values, features_data)
+                        logger.debug(f"Cache HIT for entity: {entity_values}")
 
-        # Cache results
-        if use_cache and self.redis_client:
-            self._set_in_cache(cache_key, entity_features)
+                        # Record to latency tracker
+                        get_latency_tracker().record(metrics)
 
-        return entity_features
+                        return cached
+
+            logger.debug(f"Cache MISS for entity: {entity_values}")
+            metrics.cache_hit = False
+
+            # Query Supabase
+            with track_db_operation("query_features", fg_name) as db_ctx:
+                features_data = self._query_supabase_features(
+                    entity_values, feature_group, feature_names, include_stale
+                )
+                metrics.db_latency_ms = db_ctx["latency_ms"]
+                db_ctx["row_count"] = len(features_data)
+
+            # Build EntityFeatures object
+            entity_features = self._build_entity_features(entity_values, features_data)
+            metrics.feature_count = len(entity_features.features)
+
+            # Count stale features
+            stale_count = sum(
+                1
+                for meta in entity_features.metadata.values()
+                if meta.get("freshness_status") == "stale"
+            )
+            metrics.stale_count = stale_count
+
+            # Cache results
+            if use_cache and self.redis_client:
+                with track_cache_operation("set"):
+                    self._set_in_cache(cache_key, entity_features)
+
+            # Record to latency tracker
+            get_latency_tracker().record(metrics)
+
+            return entity_features
 
     def get_historical_features(
         self,
@@ -111,43 +157,56 @@ class FeatureRetriever:
         Returns:
             List of historical feature records
         """
-        # Build query
-        query = (
-            self.supabase.table("feature_values")
-            .select(
-                """
-                *,
-                features!inner(name, feature_groups!inner(name))
-            """
-            )
-            .eq("entity_values", json.dumps(entity_values))
-        )
-
-        # Add time filters
-        if start_time:
-            query = query.gte("event_timestamp", start_time.isoformat())
-        if end_time:
-            query = query.lte("event_timestamp", end_time.isoformat())
-
-        # Execute query
-        response = query.order("event_timestamp", desc=True).execute()
-
-        # Filter by feature names if specified
-        results = []
-        for record in response.data:
-            feature_name = record["features"]["name"]
-            if feature_name in feature_names:
-                results.append(
-                    {
-                        "feature_name": feature_name,
-                        "feature_group": record["features"]["feature_groups"]["name"],
-                        "value": record["value"],
-                        "event_timestamp": record["event_timestamp"],
-                        "freshness_status": record["freshness_status"],
-                    }
+        with track_retrieval(feature_group="historical", operation="get_historical_features") as metrics:
+            with track_db_operation("query_historical", "historical") as db_ctx:
+                # Build query
+                query = (
+                    self.supabase.table("feature_values")
+                    .select(
+                        """
+                        *,
+                        features!inner(name, feature_groups!inner(name))
+                    """
+                    )
+                    .eq("entity_values", json.dumps(entity_values))
                 )
 
-        return results
+                # Add time filters
+                if start_time:
+                    query = query.gte("event_timestamp", start_time.isoformat())
+                if end_time:
+                    query = query.lte("event_timestamp", end_time.isoformat())
+
+                # Execute query
+                response = query.order("event_timestamp", desc=True).execute()
+                metrics.db_latency_ms = db_ctx["latency_ms"]
+
+            # Filter by feature names if specified
+            results = []
+            for record in response.data:
+                feature_name = record["features"]["name"]
+                if feature_name in feature_names:
+                    results.append(
+                        {
+                            "feature_name": feature_name,
+                            "feature_group": record["features"]["feature_groups"]["name"],
+                            "value": record["value"],
+                            "event_timestamp": record["event_timestamp"],
+                            "freshness_status": record["freshness_status"],
+                        }
+                    )
+
+            metrics.feature_count = len(results)
+            metrics.cache_hit = False  # Historical queries don't use cache
+
+            # Count stale features
+            stale_count = sum(1 for r in results if r.get("freshness_status") == "stale")
+            metrics.stale_count = stale_count
+
+            # Record to latency tracker
+            get_latency_tracker().record(metrics)
+
+            return results
 
     def _query_supabase_features(
         self,

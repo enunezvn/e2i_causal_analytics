@@ -7,6 +7,7 @@ ML Operations components for model serving, monitoring, and interpretability.
 Components:
 -----------
 - opik_connector.py: Opik SDK wrapper with circuit breaker (CLOSED → OPEN → HALF_OPEN)
+- opik_feedback.py: Opik feedback loop integration (Phase 4 - G23)
 - shap_explainer_realtime.py: Real-Time SHAP computation engine
 - data_quality.py: Great Expectations data quality validation
 - pandera_schemas.py: Pandera schema validation for E2I data sources
@@ -14,7 +15,7 @@ Components:
 - (future) feast_client.py: Feast feature store client
 
 Author: E2I Causal Analytics Team
-Version: 4.5.0 (Pandera Schema Validation Integration)
+Version: 4.6.0 (Opik Feedback Loop Integration)
 """
 
 from .data_quality import (
@@ -67,6 +68,15 @@ from .pandera_schemas import (
     E2I_BRANDS,
     E2I_REGIONS,
 )
+from .opik_feedback import (
+    AgentFeedbackStats,
+    FeedbackRecord,
+    FeedbackSignal,
+    OpikFeedbackCollector,
+    get_feedback_collector,
+    get_feedback_signals_for_gepa,
+    log_user_feedback,
+)
 
 __all__ = [
     # SHAP Explainer
@@ -114,6 +124,14 @@ __all__ = [
     "list_registered_schemas",
     "E2I_BRANDS",
     "E2I_REGIONS",
+    # Opik Feedback Loop (Phase 4 - G23)
+    "OpikFeedbackCollector",
+    "FeedbackRecord",
+    "AgentFeedbackStats",
+    "FeedbackSignal",
+    "get_feedback_collector",
+    "log_user_feedback",
+    "get_feedback_signals_for_gepa",
 ]
 
-__version__ = "4.5.0"
+__version__ = "4.6.0"
