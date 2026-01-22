@@ -9,6 +9,8 @@ Components:
 - opik_connector.py: Opik SDK wrapper with circuit breaker (CLOSED → OPEN → HALF_OPEN)
 - opik_feedback.py: Opik feedback loop integration (Phase 4 - G23)
 - business_context.py: Business context labels for observability (Phase 4 - G24)
+- agent_cost_tracker.py: Per-agent LLM cost tracking (Phase 4 - G25)
+- slo_monitor.py: SLO monitoring for agent tiers (Phase 4 - G26)
 - shap_explainer_realtime.py: Real-Time SHAP computation engine
 - data_quality.py: Great Expectations data quality validation
 - pandera_schemas.py: Pandera schema validation for E2I data sources
@@ -16,7 +18,7 @@ Components:
 - (future) feast_client.py: Feast feature store client
 
 Author: E2I Causal Analytics Team
-Version: 4.7.0 (Business Context Labels - G24)
+Version: 4.9.0 (SLO Monitoring - G26)
 """
 
 from .data_quality import (
@@ -100,6 +102,47 @@ from .business_context import (
     # Response
     enrich_response_with_context,
 )
+from .agent_cost_tracker import (
+    # Classes
+    AgentCostTracker,
+    CostRecord,
+    AgentCostSummary,
+    ModelPricing,
+    LLMProvider,
+    # Pricing
+    MODEL_PRICING,
+    calculate_cost,
+    # Singleton
+    get_cost_tracker,
+    reset_cost_tracker,
+    # Convenience
+    record_agent_cost,
+    get_agent_cost_summary,
+    get_total_cost_summary,
+)
+from .slo_monitor import (
+    # Enums
+    AgentTier,
+    # Classes
+    SLOTarget,
+    RequestRecord,
+    SLOCompliance,
+    SLOMonitor,
+    # Configuration
+    DEFAULT_SLO_TARGETS,
+    AGENT_TIER_MAP,
+    get_agent_tier,
+    get_slo_target,
+    # Singleton
+    get_slo_monitor,
+    reset_slo_monitor,
+    # Convenience
+    record_request,
+    get_slo_compliance,
+    get_all_slo_compliance,
+    get_slo_summary,
+    get_violated_slos,
+)
 
 __all__ = [
     # SHAP Explainer
@@ -170,6 +213,36 @@ __all__ = [
     "apply_context_to_mlflow",
     "context_to_labels",
     "enrich_response_with_context",
+    # Agent Cost Tracking (Phase 4 - G25)
+    "AgentCostTracker",
+    "CostRecord",
+    "AgentCostSummary",
+    "ModelPricing",
+    "LLMProvider",
+    "MODEL_PRICING",
+    "calculate_cost",
+    "get_cost_tracker",
+    "reset_cost_tracker",
+    "record_agent_cost",
+    "get_agent_cost_summary",
+    "get_total_cost_summary",
+    # SLO Monitoring (Phase 4 - G26)
+    "AgentTier",
+    "SLOTarget",
+    "RequestRecord",
+    "SLOCompliance",
+    "SLOMonitor",
+    "DEFAULT_SLO_TARGETS",
+    "AGENT_TIER_MAP",
+    "get_agent_tier",
+    "get_slo_target",
+    "get_slo_monitor",
+    "reset_slo_monitor",
+    "record_request",
+    "get_slo_compliance",
+    "get_all_slo_compliance",
+    "get_slo_summary",
+    "get_violated_slos",
 ]
 
-__version__ = "4.7.0"
+__version__ = "4.9.0"
