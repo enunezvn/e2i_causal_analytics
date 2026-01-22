@@ -52,11 +52,21 @@ from src.api.dependencies.supabase_client import (
 from src.api.middleware.auth_middleware import JWTAuthMiddleware
 from src.api.middleware.rate_limit_middleware import RateLimitMiddleware
 from src.api.middleware.security_middleware import SecurityHeadersMiddleware
+from src.api.middleware.timing import TimingMiddleware
+from src.api.middleware.tracing import TracingMiddleware
 
 # Import MLOps connectors
 from src.feature_store.feast_client import FeastClient, get_feast_client
 from src.mlops.mlflow_connector import get_mlflow_connector
 from src.mlops.opik_connector import get_opik_connector, OpikConfig
+
+# Import OpenTelemetry configuration (Phase 1 G02)
+from src.api.dependencies.opentelemetry_config import (
+    init_opentelemetry,
+    shutdown_opentelemetry,
+    instrument_fastapi,
+    OTEL_ENABLED,
+)
 
 # Import routers
 from src.api.routes.agents import router as agents_router
@@ -79,12 +89,86 @@ from src.api.routes.segments import router as segments_router
 from src.api.routes.resource_optimizer import router as resource_optimizer_router
 from src.api.routes.feedback import router as feedback_router
 from src.api.routes.health_score import router as health_score_router
+from src.api.routes.metrics import router as metrics_router
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+# =============================================================================
+# SENTRY ERROR TRACKING INITIALIZATION
+# =============================================================================
+
+# Initialize Sentry SDK as early as possible to capture all exceptions
+# Quick Win QW2 from observability audit remediation plan
+try:
+    import sentry_sdk
+    from sentry_sdk.integrations.fastapi import FastApiIntegration
+    from sentry_sdk.integrations.starlette import StarletteIntegration
+    from sentry_sdk.integrations.logging import LoggingIntegration
+
+    SENTRY_DSN = os.environ.get("SENTRY_DSN")
+    SENTRY_ENVIRONMENT = os.environ.get("ENVIRONMENT", "development")
+    SENTRY_RELEASE = os.environ.get("SENTRY_RELEASE", "e2i-causal-analytics@4.2.0")
+
+    if SENTRY_DSN:
+        sentry_sdk.init(
+            dsn=SENTRY_DSN,
+            environment=SENTRY_ENVIRONMENT,
+            release=SENTRY_RELEASE,
+            # Performance monitoring
+            traces_sample_rate=float(os.environ.get("SENTRY_TRACES_SAMPLE_RATE", "0.1")),
+            # Profile sampling (requires profiling to be enabled)
+            profiles_sample_rate=float(os.environ.get("SENTRY_PROFILES_SAMPLE_RATE", "0.1")),
+            # Integrations
+            integrations=[
+                FastApiIntegration(transaction_style="endpoint"),
+                StarletteIntegration(transaction_style="endpoint"),
+                LoggingIntegration(
+                    level=logging.INFO,  # Capture INFO and above as breadcrumbs
+                    event_level=logging.ERROR,  # Send ERROR and above as events
+                ),
+            ],
+            # Capture 100% of exceptions but sample traces/profiles
+            sample_rate=1.0,
+            # Don't send PII by default
+            send_default_pii=False,
+            # Set server name for grouping
+            server_name=os.environ.get("HOSTNAME", "e2i-api"),
+            # Enable request body capture for debugging (be careful with PII)
+            max_request_body_size="medium",
+            # Attach stacktrace to all messages
+            attach_stacktrace=True,
+        )
+        logger.info(f"Sentry: ENABLED (env={SENTRY_ENVIRONMENT}, release={SENTRY_RELEASE})")
+    else:
+        logger.info("Sentry: DISABLED (SENTRY_DSN not set)")
+        sentry_sdk = None
+except ImportError:
+    logger.warning("Sentry: sentry-sdk not installed, error tracking disabled")
+    sentry_sdk = None
+
+# =============================================================================
+# OPENTELEMETRY INITIALIZATION
+# =============================================================================
+# Initialize OpenTelemetry at module load time to capture traces from first request
+# Phase 1 G02 from observability audit remediation plan
+
+OPENTELEMETRY_INITIALIZED = False
+try:
+    if OTEL_ENABLED:
+        OPENTELEMETRY_INITIALIZED = init_opentelemetry()
+        if OPENTELEMETRY_INITIALIZED:
+            logger.info("OpenTelemetry: Initialized at module load")
+        else:
+            logger.info("OpenTelemetry: Initialization returned False")
+    else:
+        logger.info("OpenTelemetry: Disabled via OTEL_ENABLED=false")
+except Exception as e:
+    logger.warning(f"OpenTelemetry: Module-level initialization failed: {e}")
+    OPENTELEMETRY_INITIALIZED = False
 
 # =============================================================================
 # LIFESPAN CONTEXT MANAGER
@@ -192,6 +276,14 @@ async def lifespan(app: FastAPI):
         app.state.opik_available = False
         logger.warning(f"Opik initialization failed (non-critical): {e}")
 
+    # Set OpenTelemetry state (initialized at module load)
+    # Phase 1 G02 from observability audit remediation plan
+    app.state.opentelemetry_available = OPENTELEMETRY_INITIALIZED
+    if OPENTELEMETRY_INITIALIZED:
+        logger.info("OpenTelemetry: Tracing available for this instance")
+    else:
+        logger.info("OpenTelemetry: Tracing not available")
+
     logger.info("API server ready to accept connections")
 
     yield  # Application runs here
@@ -242,6 +334,13 @@ async def lifespan(app: FastAPI):
         logger.info("Opik traces flushed")
     except Exception as e:
         logger.warning(f"Opik flush failed: {e}")
+
+    # Shutdown OpenTelemetry (flush pending spans)
+    try:
+        shutdown_opentelemetry()
+        logger.info("OpenTelemetry shutdown complete")
+    except Exception as e:
+        logger.warning(f"OpenTelemetry shutdown failed: {e}")
 
     logger.info("Shutdown complete")
 
@@ -355,6 +454,29 @@ if os.environ.get("DISABLE_RATE_LIMITING", "").lower() not in ("1", "true", "yes
     logger.info("Rate Limiting: ENABLED")
 else:
     logger.info("Rate Limiting: DISABLED (DISABLE_RATE_LIMITING set)")
+
+# Request Timing middleware
+# Records request latency metrics for Prometheus and adds Server-Timing header
+# Quick Win QW3 from observability audit remediation plan
+slow_threshold = float(os.environ.get("TIMING_SLOW_THRESHOLD_MS", "1000"))
+app.add_middleware(TimingMiddleware, slow_threshold_ms=slow_threshold)
+logger.info(f"Request Timing: ENABLED (slow threshold: {slow_threshold}ms)")
+
+# Trace Header Extraction middleware
+# Extracts X-Request-ID, X-Correlation-ID, traceparent and makes them available
+# Quick Win QW5 from observability audit remediation plan
+log_trace = os.environ.get("LOG_TRACE_CONTEXT", "").lower() in ("1", "true", "yes")
+app.add_middleware(TracingMiddleware, log_trace_context=log_trace)
+logger.info("Request Tracing: ENABLED (W3C Trace Context, X-Request-ID support)")
+
+# OpenTelemetry ASGI instrumentation (outermost layer for accurate timing)
+# Phase 1 G02 from observability audit remediation plan
+# Added LAST so it wraps all other middleware (middleware is LIFO in Starlette)
+if OPENTELEMETRY_INITIALIZED:
+    if instrument_fastapi(app):
+        logger.info("OpenTelemetry: ASGI instrumentation added to FastAPI")
+    else:
+        logger.warning("OpenTelemetry: ASGI instrumentation not available")
 
 # =============================================================================
 # ROOT ENDPOINTS
@@ -610,6 +732,9 @@ add_copilotkit_routes(app, prefix="/api/copilotkit")
 # Agent orchestration endpoints (/api/agents/*)
 app.include_router(agents_router, prefix="/api")
 
+# Prometheus metrics endpoint (/metrics) - no /api prefix per convention
+app.include_router(metrics_router)
+
 # TODO: Add additional routers as they're developed:
 # - Feature engineering: /api/features
 # - Model training: /api/models
@@ -649,6 +774,8 @@ async def e2i_error_handler(request, exc: E2IError):
 
     Provides detailed error context while controlling what's exposed
     based on error severity and debug mode.
+
+    Integrates with Sentry for CRITICAL and HIGH severity errors.
     """
     # Log based on severity
     if exc.severity == ErrorSeverity.CRITICAL:
@@ -657,12 +784,30 @@ async def e2i_error_handler(request, exc: E2IError):
             exc_info=exc.original_error,
             extra={"error_id": exc.error_id, "path": request.url.path},
         )
+        # Capture critical errors to Sentry
+        if sentry_sdk:
+            sentry_sdk.set_context("e2i_error", {
+                "error_id": exc.error_id,
+                "category": exc.category.value,
+                "severity": exc.severity.value,
+                "path": request.url.path,
+            })
+            sentry_sdk.capture_exception(exc.original_error or exc)
     elif exc.severity == ErrorSeverity.HIGH:
         logger.error(
             f"[{exc.error_id}] {exc.category.value}: {exc.message}",
             exc_info=exc.original_error,
             extra={"error_id": exc.error_id, "path": request.url.path},
         )
+        # Capture high severity errors to Sentry
+        if sentry_sdk:
+            sentry_sdk.set_context("e2i_error", {
+                "error_id": exc.error_id,
+                "category": exc.category.value,
+                "severity": exc.severity.value,
+                "path": request.url.path,
+            })
+            sentry_sdk.capture_exception(exc.original_error or exc)
     elif exc.severity == ErrorSeverity.MEDIUM:
         logger.warning(
             f"[{exc.error_id}] {exc.category.value}: {exc.message}",
@@ -837,6 +982,18 @@ async def generic_exception_handler(request, exc: Exception):
             "exception_type": type(exc).__name__,
         },
     )
+
+    # Capture unhandled exceptions to Sentry (these are always important)
+    if sentry_sdk:
+        sentry_sdk.set_context("e2i_error", {
+            "error_id": e2i_error.error_id,
+            "category": e2i_error.category.value,
+            "severity": e2i_error.severity.value,
+            "path": request.url.path,
+            "agent_name": agent_name,
+            "operation": operation,
+        })
+        sentry_sdk.capture_exception(exc)
 
     return JSONResponse(
         status_code=e2i_error.status_code,

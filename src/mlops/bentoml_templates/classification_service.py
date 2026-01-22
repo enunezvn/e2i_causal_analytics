@@ -6,16 +6,27 @@ This template provides a production-ready classification service with:
 - Confidence thresholds
 - Batch prediction support
 - Health checks and metrics
+- Prediction audit trail (Phase 1 G07)
 
-Version: 1.0.0
+Version: 1.1.0
 """
 
+import asyncio
 import logging
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Type
 
 import numpy as np
+
+# Prediction audit trail (Phase 1 G07)
+try:
+    from src.mlops.bentoml_prediction_audit import log_prediction_audit
+
+    AUDIT_AVAILABLE = True
+except ImportError:
+    AUDIT_AVAILABLE = False
+    log_prediction_audit = None
 
 try:
     import bentoml
@@ -275,7 +286,7 @@ class ClassificationServiceTemplate:
                 self._prediction_count += len(predictions)
                 self._total_latency_ms += elapsed_ms
 
-                return ClassificationOutput(
+                output = ClassificationOutput(
                     predictions=list(map(int, predictions)),
                     probabilities=probabilities,
                     all_probabilities=all_proba.tolist() if input_data.return_all_classes and all_proba is not None else None,
@@ -283,6 +294,33 @@ class ClassificationServiceTemplate:
                     model_id=self.model_tag,
                     prediction_time_ms=elapsed_ms,
                 )
+
+                # Prediction audit trail (Phase 1 G07)
+                if AUDIT_AVAILABLE and log_prediction_audit:
+                    asyncio.create_task(
+                        log_prediction_audit(
+                            model_name=service_name,
+                            model_tag=self.model_tag,
+                            service_type="classification",
+                            input_data={
+                                "features": input_data.features,
+                                "threshold": input_data.threshold,
+                                "n_samples": len(input_data.features),
+                            },
+                            output_data={
+                                "predictions": output.predictions,
+                                "probabilities": output.probabilities[:10] if len(output.probabilities) > 10 else output.probabilities,
+                                "n_predictions": len(output.predictions),
+                            },
+                            latency_ms=elapsed_ms,
+                            metadata={
+                                "n_classes": self.n_classes,
+                                "class_names": self.class_names,
+                            },
+                        )
+                    )
+
+                return output
 
             @bentoml.api
             async def predict_batch(
@@ -316,13 +354,38 @@ class ClassificationServiceTemplate:
 
                 elapsed_ms = (time.time() - start_time) * 1000
 
-                return BatchClassificationOutput(
+                output = BatchClassificationOutput(
                     batch_id=input_data.batch_id,
                     total_samples=len(predictions),
                     predictions=list(map(int, predictions)),
                     probabilities=probabilities,
                     processing_time_ms=elapsed_ms,
                 )
+
+                # Prediction audit trail (Phase 1 G07)
+                if AUDIT_AVAILABLE and log_prediction_audit:
+                    asyncio.create_task(
+                        log_prediction_audit(
+                            model_name=service_name,
+                            model_tag=self.model_tag,
+                            service_type="classification",
+                            input_data={
+                                "batch_id": input_data.batch_id,
+                                "n_samples": len(input_data.features),
+                            },
+                            output_data={
+                                "batch_id": output.batch_id,
+                                "total_samples": output.total_samples,
+                            },
+                            latency_ms=elapsed_ms,
+                            metadata={
+                                "is_batch": True,
+                                "n_classes": self.n_classes,
+                            },
+                        )
+                    )
+
+                return output
 
             @bentoml.api
             async def health(self) -> Dict[str, Any]:
