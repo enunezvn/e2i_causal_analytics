@@ -91,10 +91,10 @@ from src.api.routes.feedback import router as feedback_router
 from src.api.routes.health_score import router as health_score_router
 from src.api.routes.metrics import router as metrics_router
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
+# Configure structured logging (G14 - Observability)
+from src.utils.logging_config import configure_logging, set_request_context
+
+configure_logging()
 logger = logging.getLogger(__name__)
 
 # =============================================================================

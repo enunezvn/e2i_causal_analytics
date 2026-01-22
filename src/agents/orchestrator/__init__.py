@@ -24,6 +24,12 @@ Version: 4.1.0
 
 from .agent import OrchestratorAgent
 from .graph import create_orchestrator_graph
+from .opik_tracer import (
+    OrchestratorOpikTracer,
+    OrchestrationTraceContext,
+    NodeSpanContext,
+    get_orchestrator_tracer,
+)
 from .state import (
     AgentDispatch,
     AgentResult,
@@ -46,4 +52,9 @@ __all__ = [
     "ParsedEntity",
     "Citation",
     "create_orchestrator_graph",
+    # Opik tracing
+    "OrchestratorOpikTracer",
+    "OrchestrationTraceContext",
+    "NodeSpanContext",
+    "get_orchestrator_tracer",
 ]

@@ -295,6 +295,17 @@ celery_app.autodiscover_tasks(
 )
 
 # =============================================================================
+# MONITORING TASKS (G12)
+# =============================================================================
+
+# Register monitoring tasks for queue depth and worker metrics
+try:
+    from .monitoring import register_monitoring_tasks
+    register_monitoring_tasks(celery_app)
+except ImportError:
+    pass  # Monitoring module not available
+
+# =============================================================================
 # CUSTOM CONFIGURATION
 # =============================================================================
 

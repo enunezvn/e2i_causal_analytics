@@ -14,6 +14,12 @@ from .graph import (
     build_resource_optimizer_graph,
     build_simple_optimizer_graph,
 )
+from .opik_tracer import (
+    ResourceOptimizerOpikTracer,
+    OptimizationTraceContext,
+    NodeSpanContext,
+    get_resource_optimizer_tracer,
+)
 from .state import (
     AllocationResult,
     AllocationTarget,
@@ -31,6 +37,11 @@ __all__ = [
     # Graph
     "build_resource_optimizer_graph",
     "build_simple_optimizer_graph",
+    # Opik tracing
+    "ResourceOptimizerOpikTracer",
+    "OptimizationTraceContext",
+    "NodeSpanContext",
+    "get_resource_optimizer_tracer",
     # State
     "AllocationResult",
     "AllocationTarget",

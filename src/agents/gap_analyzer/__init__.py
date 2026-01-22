@@ -7,6 +7,7 @@ Exports:
 - GapAnalyzerState: Workflow state type
 - create_gap_analyzer_graph: Graph factory
 - GapAnalyzerMLflowTracker: MLflow tracking integration
+- GapAnalyzerOpikTracer: Opik distributed tracing
 """
 
 from .agent import GapAnalyzerAgent
@@ -16,6 +17,12 @@ from .mlflow_tracker import (
     GapAnalyzerMetrics,
     GapAnalysisContext,
     create_tracker as create_mlflow_tracker,
+)
+from .opik_tracer import (
+    GapAnalyzerOpikTracer,
+    GapAnalysisTraceContext,
+    NodeSpanContext,
+    get_gap_analyzer_tracer,
 )
 from .state import GapAnalyzerState
 
@@ -28,4 +35,9 @@ __all__ = [
     "GapAnalyzerMetrics",
     "GapAnalysisContext",
     "create_mlflow_tracker",
+    # Opik tracing
+    "GapAnalyzerOpikTracer",
+    "GapAnalysisTraceContext",
+    "NodeSpanContext",
+    "get_gap_analyzer_tracer",
 ]

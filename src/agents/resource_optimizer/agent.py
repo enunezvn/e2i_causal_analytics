@@ -7,10 +7,14 @@ Purpose: Resource allocation optimization for pharmaceutical operations
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, TYPE_CHECKING
 
 from pydantic import BaseModel, Field
+
+if TYPE_CHECKING:
+    from .opik_tracer import ResourceOptimizerOpikTracer
 
 from .graph import build_resource_optimizer_graph, build_simple_optimizer_graph
 from .state import (
@@ -80,10 +84,17 @@ class ResourceOptimizerAgent:
     - Project allocation impact
     """
 
-    def __init__(self):
-        """Initialize Resource Optimizer agent."""
+    def __init__(self, enable_opik: bool = True):
+        """
+        Initialize Resource Optimizer agent.
+
+        Args:
+            enable_opik: Whether to enable Opik distributed tracing (default: True)
+        """
         self._full_graph = None
         self._simple_graph = None
+        self.enable_opik = enable_opik
+        self._opik_tracer: Optional["ResourceOptimizerOpikTracer"] = None
 
     @property
     def full_graph(self):
@@ -98,6 +109,22 @@ class ResourceOptimizerAgent:
         if self._simple_graph is None:
             self._simple_graph = build_simple_optimizer_graph()
         return self._simple_graph
+
+    def _get_opik_tracer(self) -> Optional["ResourceOptimizerOpikTracer"]:
+        """Get or create Opik tracer instance (lazy initialization)."""
+        if not self.enable_opik:
+            return None
+
+        if self._opik_tracer is None:
+            try:
+                from .opik_tracer import get_resource_optimizer_tracer
+
+                self._opik_tracer = get_resource_optimizer_tracer()
+            except ImportError:
+                logger.warning("Opik tracer not available")
+                return None
+
+        return self._opik_tracer
 
     async def optimize(
         self,
@@ -126,6 +153,8 @@ class ResourceOptimizerAgent:
         Returns:
             ResourceOptimizerOutput with optimal allocations
         """
+        start_time = time.time()
+
         initial_state: ResourceOptimizerState = {
             "query": query,
             "resource_type": resource_type,
@@ -166,25 +195,90 @@ class ResourceOptimizerAgent:
             f"objective={objective}, solver={solver_type}"
         )
 
-        result = await graph.ainvoke(initial_state)
+        # Get Opik tracer
+        opik_tracer = self._get_opik_tracer()
 
-        return ResourceOptimizerOutput(
-            optimal_allocations=result.get("optimal_allocations") or [],
-            objective_value=result.get("objective_value"),
-            solver_status=result.get("solver_status"),
-            projected_total_outcome=result.get("projected_total_outcome"),
-            projected_roi=result.get("projected_roi"),
-            impact_by_segment=result.get("impact_by_segment"),
-            scenarios=result.get("scenarios"),
-            sensitivity_analysis=result.get("sensitivity_analysis"),
-            optimization_summary=result.get("optimization_summary", ""),
-            recommendations=result.get("recommendations") or [],
-            total_latency_ms=result.get("total_latency_ms", 0),
-            timestamp=result.get("timestamp", datetime.now(timezone.utc).isoformat()),
-            status=result.get("status", "failed"),
-            errors=result.get("errors") or [],
-            warnings=result.get("warnings") or [],
-        )
+        async def execute_and_build_output() -> ResourceOptimizerOutput:
+            """Execute workflow and build output."""
+            result = await graph.ainvoke(initial_state)
+
+            allocations = result.get("optimal_allocations") or []
+            return ResourceOptimizerOutput(
+                optimal_allocations=allocations,
+                objective_value=result.get("objective_value"),
+                solver_status=result.get("solver_status"),
+                projected_total_outcome=result.get("projected_total_outcome"),
+                projected_roi=result.get("projected_roi"),
+                impact_by_segment=result.get("impact_by_segment"),
+                scenarios=result.get("scenarios"),
+                sensitivity_analysis=result.get("sensitivity_analysis"),
+                optimization_summary=result.get("optimization_summary", ""),
+                recommendations=result.get("recommendations") or [],
+                total_latency_ms=result.get("total_latency_ms", 0),
+                timestamp=result.get("timestamp", datetime.now(timezone.utc).isoformat()),
+                status=result.get("status", "failed"),
+                errors=result.get("errors") or [],
+                warnings=result.get("warnings") or [],
+            )
+
+        if opik_tracer:
+            async with opik_tracer.trace_optimization(
+                resource_type=resource_type,
+                objective=objective,
+                solver_type=solver_type,
+                query=query,
+            ) as trace_ctx:
+                trace_ctx.log_optimization_started(
+                    resource_type=resource_type,
+                    objective=objective,
+                    solver_type=solver_type,
+                    target_count=len(allocation_targets),
+                    constraint_count=len(constraints),
+                    run_scenarios=run_scenarios,
+                )
+
+                output = await execute_and_build_output()
+
+                # Count allocation changes
+                allocations = output.optimal_allocations or []
+                increases = len([a for a in allocations if a.get("change", 0) > 0])
+                decreases = len([a for a in allocations if a.get("change", 0) < 0])
+
+                # Log completion
+                elapsed_ms = int((time.time() - start_time) * 1000)
+                trace_ctx.log_optimization_complete(
+                    status=output.status,
+                    success=output.status == "completed",
+                    total_duration_ms=output.total_latency_ms,
+                    objective_value=output.objective_value,
+                    solver_status=output.solver_status,
+                    projected_outcome=output.projected_total_outcome,
+                    projected_roi=output.projected_roi,
+                    allocations_count=len(allocations),
+                    increases_count=increases,
+                    decreases_count=decreases,
+                    recommendations=output.recommendations,
+                    errors=output.errors,
+                    warnings=output.warnings,
+                )
+
+                logger.info(
+                    f"Optimization complete: status={output.status}, "
+                    f"allocations={len(allocations)}, latency={elapsed_ms}ms"
+                )
+
+                return output
+        else:
+            # Execute without Opik tracing
+            output = await execute_and_build_output()
+
+            elapsed_ms = int((time.time() - start_time) * 1000)
+            logger.info(
+                f"Optimization complete: status={output.status}, "
+                f"allocations={len(output.optimal_allocations or [])}, latency={elapsed_ms}ms"
+            )
+
+            return output
 
     async def quick_optimize(
         self,

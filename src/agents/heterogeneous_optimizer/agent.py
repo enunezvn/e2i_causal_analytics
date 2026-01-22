@@ -21,6 +21,7 @@ from .state import HeterogeneousOptimizerState
 
 if TYPE_CHECKING:
     from .mlflow_tracker import HeterogeneousOptimizerMLflowTracker
+    from .opik_tracer import HeterogeneousOptimizerOpikTracer
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,7 @@ class HeterogeneousOptimizerAgent:
         data_connector=None,
         enable_memory: bool = True,
         enable_mlflow: bool = True,
+        enable_opik: bool = True,
     ):
         """Initialize the Heterogeneous Optimizer agent.
 
@@ -47,12 +49,15 @@ class HeterogeneousOptimizerAgent:
             data_connector: Data connector for fetching data (optional, uses mock if None)
             enable_memory: Whether to enable tri-memory integration (default: True)
             enable_mlflow: Whether to enable MLflow tracking (default: True)
+            enable_opik: Whether to enable Opik distributed tracing (default: True)
         """
         self.graph = create_heterogeneous_optimizer_graph(data_connector)
         self.enable_memory = enable_memory
         self.enable_mlflow = enable_mlflow
+        self.enable_opik = enable_opik
         self._memory_hooks = None
         self._mlflow_tracker: Optional["HeterogeneousOptimizerMLflowTracker"] = None
+        self._opik_tracer: Optional["HeterogeneousOptimizerOpikTracer"] = None
 
     def _get_mlflow_tracker(self) -> Optional["HeterogeneousOptimizerMLflowTracker"]:
         """Get or create MLflow tracker instance (lazy initialization)."""
@@ -69,6 +74,22 @@ class HeterogeneousOptimizerAgent:
                 return None
 
         return self._mlflow_tracker
+
+    def _get_opik_tracer(self) -> Optional["HeterogeneousOptimizerOpikTracer"]:
+        """Get or create Opik tracer instance (lazy initialization)."""
+        if not self.enable_opik:
+            return None
+
+        if self._opik_tracer is None:
+            try:
+                from .opik_tracer import HeterogeneousOptimizerOpikTracer
+
+                self._opik_tracer = HeterogeneousOptimizerOpikTracer()
+            except ImportError:
+                logger.warning("Opik tracer not available")
+                return None
+
+        return self._opik_tracer
 
     @property
     def memory_hooks(self):
@@ -116,51 +137,12 @@ class HeterogeneousOptimizerAgent:
         # Build initial state with memory context
         initial_state = self._build_initial_state(input_data, session_id, memory_context)
 
-        # Get MLflow tracker
+        # Get trackers
         tracker = self._get_mlflow_tracker()
+        opik_tracer = self._get_opik_tracer()
 
-        # Execute with MLflow tracking if available
-        if tracker:
-            async with tracker.start_analysis_run(
-                experiment_name=input_data.get("experiment_name", "default"),
-                brand=input_data.get("brand"),
-                region=input_data.get("region"),
-                treatment_var=input_data.get("treatment_var"),
-                outcome_var=input_data.get("outcome_var"),
-                query_id=session_id,
-            ):
-                # Execute workflow
-                final_state = await self.graph.ainvoke(initial_state)
-
-                # Build output
-                output = self._build_output(final_state)
-
-                # Log to MLflow
-                await tracker.log_analysis_result(output, final_state)
-
-                # Contribute to memory (if enabled and analysis succeeded)
-                if self.enable_memory and output.get("status") != "failed":
-                    try:
-                        await contribute_to_memory(
-                            result=output,
-                            state=final_state,
-                            memory_hooks=self.memory_hooks,
-                            session_id=session_id,
-                            brand=input_data.get("brand"),
-                            region=input_data.get("region"),
-                        )
-                    except Exception as e:
-                        logger.warning(f"Failed to contribute to memory: {e}")
-
-                return output
-        else:
-            # Execute workflow without MLflow
-            final_state = await self.graph.ainvoke(initial_state)
-
-            # Build output
-            output = self._build_output(final_state)
-
-            # Contribute to memory (if enabled and analysis succeeded)
+        # Helper function for memory contribution
+        async def _contribute_to_memory(output: Dict[str, Any], final_state) -> None:
             if self.enable_memory and output.get("status") != "failed":
                 try:
                     await contribute_to_memory(
@@ -174,7 +156,76 @@ class HeterogeneousOptimizerAgent:
                 except Exception as e:
                     logger.warning(f"Failed to contribute to memory: {e}")
 
-            return output
+        # Execute with Opik tracing if available
+        if opik_tracer:
+            async with opik_tracer.trace_analysis(
+                query=input_data["query"],
+                treatment_var=input_data["treatment_var"],
+                outcome_var=input_data.get("outcome_var"),
+                segment_vars=input_data.get("segment_vars"),
+                brand=input_data.get("brand"),
+                session_id=session_id,
+            ) as trace_ctx:
+                # Execute with MLflow tracking if available
+                if tracker:
+                    async with tracker.start_analysis_run(
+                        experiment_name=input_data.get("experiment_name", "default"),
+                        brand=input_data.get("brand"),
+                        region=input_data.get("region"),
+                        treatment_var=input_data.get("treatment_var"),
+                        outcome_var=input_data.get("outcome_var"),
+                        query_id=session_id,
+                    ):
+                        # Execute workflow
+                        final_state = await self.graph.ainvoke(initial_state)
+                        output = self._build_output(final_state)
+                        await tracker.log_analysis_result(output, final_state)
+                else:
+                    # Execute workflow without MLflow
+                    final_state = await self.graph.ainvoke(initial_state)
+                    output = self._build_output(final_state)
+
+                # Log analysis results to Opik
+                trace_ctx.log_analysis_complete(
+                    status=output.get("status", "completed"),
+                    success=output.get("status") != "failed",
+                    total_duration_ms=output.get("total_latency_ms", 0),
+                    overall_ate=output.get("overall_ate", 0.0),
+                    heterogeneity_score=output.get("heterogeneity_score", 0.0),
+                    high_responders_count=len(output.get("high_responders", [])),
+                    low_responders_count=len(output.get("low_responders", [])),
+                    recommendations_count=len(output.get("policy_recommendations", [])),
+                    expected_total_lift=output.get("expected_total_lift", 0.0),
+                    confidence=output.get("confidence", 0.0),
+                    errors=output.get("errors"),
+                    suggested_next_agent=output.get("suggested_next_agent"),
+                )
+
+                # Contribute to memory
+                await _contribute_to_memory(output, final_state)
+                return output
+        else:
+            # Run without Opik tracing
+            if tracker:
+                async with tracker.start_analysis_run(
+                    experiment_name=input_data.get("experiment_name", "default"),
+                    brand=input_data.get("brand"),
+                    region=input_data.get("region"),
+                    treatment_var=input_data.get("treatment_var"),
+                    outcome_var=input_data.get("outcome_var"),
+                    query_id=session_id,
+                ):
+                    final_state = await self.graph.ainvoke(initial_state)
+                    output = self._build_output(final_state)
+                    await tracker.log_analysis_result(output, final_state)
+                    await _contribute_to_memory(output, final_state)
+                    return output
+            else:
+                # Execute workflow without any tracking
+                final_state = await self.graph.ainvoke(initial_state)
+                output = self._build_output(final_state)
+                await _contribute_to_memory(output, final_state)
+                return output
 
     def _validate_input(self, input_data: Dict[str, Any]) -> None:
         """Validate input data against contract.

@@ -9,12 +9,19 @@ The orchestrator is the entry point for all queries. It performs:
 Total orchestration overhead target: <2 seconds
 """
 
+import logging
+import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from .graph import create_orchestrator_graph
 from .state import OrchestratorState
+
+if TYPE_CHECKING:
+    from .opik_tracer import OrchestratorOpikTracer
+
+logger = logging.getLogger(__name__)
 
 
 class OrchestratorAgent:
@@ -36,17 +43,41 @@ class OrchestratorAgent:
         self,
         agent_registry: Optional[Dict[str, Any]] = None,
         enable_checkpointing: bool = False,
+        enable_opik: bool = True,
     ):
         """Initialize orchestrator agent.
 
         Args:
             agent_registry: Optional dict mapping agent_name to agent instance
             enable_checkpointing: Whether to enable graph checkpointing
+            enable_opik: Whether to enable Opik distributed tracing (default: True)
         """
         self.agent_registry = agent_registry or {}
         self.graph = create_orchestrator_graph(
             agent_registry=agent_registry, enable_checkpointing=enable_checkpointing
         )
+        self.enable_opik = enable_opik
+        self._opik_tracer: Optional["OrchestratorOpikTracer"] = None
+
+    def _get_opik_tracer(self) -> Optional["OrchestratorOpikTracer"]:
+        """Get or create Opik tracer instance (lazy initialization).
+
+        Returns:
+            OrchestratorOpikTracer instance if enabled, None otherwise
+        """
+        if not self.enable_opik:
+            return None
+
+        if self._opik_tracer is None:
+            try:
+                from .opik_tracer import get_orchestrator_tracer
+
+                self._opik_tracer = get_orchestrator_tracer()
+            except ImportError:
+                logger.warning("Opik tracer not available for Orchestrator")
+                return None
+
+        return self._opik_tracer
 
     async def run(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """Execute orchestrator workflow.
@@ -61,16 +92,24 @@ class OrchestratorAgent:
             ValueError: If required input fields are missing
             RuntimeError: If orchestration fails
         """
+        start_time = time.time()
+
         # Validate required fields
         if "query" not in input_data:
             raise ValueError("Missing required field: query")
 
+        # Generate query_id early for tracing
+        query_id = input_data.get("query_id", self._generate_query_id())
+        query = input_data["query"]
+        user_id = input_data.get("user_id")
+        session_id = input_data.get("session_id")
+
         # Prepare initial state
         initial_state: OrchestratorState = {
-            "query": input_data["query"],
-            "query_id": input_data.get("query_id", self._generate_query_id()),
-            "user_id": input_data.get("user_id"),
-            "session_id": input_data.get("session_id"),
+            "query": query,
+            "query_id": query_id,
+            "user_id": user_id,
+            "session_id": session_id,
             "user_context": input_data.get("user_context", {}),
             "conversation_history": input_data.get("conversation_history"),
             "start_time": datetime.now(timezone.utc).isoformat(),
@@ -90,16 +129,67 @@ class OrchestratorAgent:
             "agents_dispatched": [],
         }
 
-        # Execute LangGraph workflow
-        final_state = await self.graph.ainvoke(initial_state)
+        # Get Opik tracer
+        opik_tracer = self._get_opik_tracer()
 
-        # Build output conforming to contract
-        # Note: We no longer raise RuntimeError for partial failures.
-        # Instead, we include failure info in the response and let callers
-        # decide how to handle partial results.
-        output = self._build_output(final_state)
+        async def execute_and_build_output() -> Dict[str, Any]:
+            """Execute workflow and build output."""
+            final_state = await self.graph.ainvoke(initial_state)
+            return self._build_output(final_state)
 
-        return output
+        if opik_tracer:
+            async with opik_tracer.trace_orchestration(
+                query_id=query_id,
+                query=query,
+                user_id=user_id,
+                session_id=session_id,
+            ) as trace_ctx:
+                trace_ctx.log_orchestration_started(
+                    query=query,
+                    user_id=user_id,
+                    session_id=session_id,
+                )
+
+                output = await execute_and_build_output()
+
+                # Log orchestration completion with full details
+                elapsed_ms = int((time.time() - start_time) * 1000)
+                trace_ctx.log_orchestration_complete(
+                    status=output.get("status", "unknown"),
+                    success=output.get("status") == "completed",
+                    total_duration_ms=output.get("total_latency_ms", elapsed_ms),
+                    response_confidence=output.get("response_confidence", 0.0),
+                    agents_dispatched=output.get("agents_dispatched", []),
+                    successful_agents=output.get("successful_agents", []),
+                    failed_agents=output.get("failed_agents", []),
+                    has_partial_failure=output.get("has_partial_failure", False),
+                    primary_intent=output.get("intent_classified"),
+                    classification_latency_ms=output.get("classification_latency_ms", 0),
+                    rag_latency_ms=output.get("rag_latency_ms", 0),
+                    routing_latency_ms=output.get("routing_latency_ms", 0),
+                    dispatch_latency_ms=output.get("dispatch_latency_ms", 0),
+                    synthesis_latency_ms=output.get("synthesis_latency_ms", 0),
+                    errors=output.get("failure_details", []),
+                    warnings=[],
+                )
+
+                logger.info(
+                    f"Orchestration complete: query_id={query_id}, "
+                    f"status={output.get('status')}, latency={elapsed_ms}ms"
+                )
+
+                return output
+        else:
+            # Execute without Opik tracing
+            output = await execute_and_build_output()
+
+            elapsed_ms = int((time.time() - start_time) * 1000)
+            logger.info(
+                f"Orchestration complete: query_id={query_id}, "
+                f"status={output.get('status')}, latency={elapsed_ms}ms"
+            )
+
+            return output
 
     def _build_output(self, state: OrchestratorState) -> Dict[str, Any]:
         """Build output conforming to OrchestratorOutput contract.

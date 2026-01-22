@@ -26,6 +26,12 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
+# Import structured logging context (G14)
+from src.utils.logging_config import (
+    set_request_context as set_logging_context,
+    clear_request_context as clear_logging_context,
+)
+
 # Use UUID7 for new request IDs (required by Opik)
 try:
     from uuid_extensions import uuid7
@@ -217,6 +223,13 @@ class TracingMiddleware(BaseHTTPMiddleware):
         span_id_token = _span_id.set(trace_ctx.span_id or "")
         trace_flags_token = _trace_flags.set(trace_ctx.trace_flags)
 
+        # Set structured logging context (G14)
+        set_logging_context(
+            request_id=trace_ctx.request_id,
+            trace_id=trace_ctx.trace_id,
+            span_id=trace_ctx.span_id,
+        )
+
         # Store in request state for handler access
         request.state.trace_context = trace_ctx
         request.state.request_id = trace_ctx.request_id
@@ -254,6 +267,9 @@ class TracingMiddleware(BaseHTTPMiddleware):
             _trace_id.reset(trace_id_token)
             _span_id.reset(span_id_token)
             _trace_flags.reset(trace_flags_token)
+
+            # Clear structured logging context (G14)
+            clear_logging_context()
 
 
 # Utility for structured logging with trace context
