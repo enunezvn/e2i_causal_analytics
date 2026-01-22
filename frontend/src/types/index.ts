@@ -55,3 +55,12 @@ export * from './health-score';
 
 // Audit Chain types
 export * from './audit';
+
+// KPI types (Phase 3 - Type Safety)
+export * from './kpi';
+
+// Monitoring types (Phase 3 - Type Safety)
+export * from './monitoring';
+
+// Predictions types (Phase 3 - Type Safety)
+export * from './predictions';

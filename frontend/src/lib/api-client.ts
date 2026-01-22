@@ -16,8 +16,10 @@ import axios, {
   AxiosResponse,
   InternalAxiosRequestConfig,
 } from 'axios';
+import type { ZodTypeAny } from 'zod';
 import { env, buildApiUrl } from '@/config/env';
 import { useAuthStore } from '@/stores/auth-store';
+import { validateApiResponse, ApiValidationError } from './api-schemas';
 
 /**
  * Generate a UUID v4 with fallback for non-secure contexts (HTTP)
@@ -310,6 +312,136 @@ export async function checkApiHealth(): Promise<boolean> {
     return false;
   }
 }
+
+// =============================================================================
+// VALIDATED REQUEST HELPERS (Phase 3 - Type Safety)
+// =============================================================================
+
+/**
+ * Configuration for validated requests
+ */
+export interface ValidatedRequestConfig {
+  /** Log validation errors to console (default: true in dev) */
+  logErrors?: boolean;
+  /** Throw error on validation failure (default: true) */
+  throwOnError?: boolean;
+}
+
+/**
+ * Type-safe GET request with runtime Zod validation
+ *
+ * @param schema - Zod schema to validate response against
+ * @param endpoint - API endpoint
+ * @param params - Query parameters
+ * @param config - Validation config
+ * @returns Validated response data
+ *
+ * @example
+ * ```typescript
+ * import { KPIListResponseSchema } from '@/lib/api-schemas';
+ *
+ * const kpis = await getValidated(
+ *   KPIListResponseSchema,
+ *   '/kpis',
+ *   { workstream: 'ws1_data_quality' }
+ * );
+ * ```
+ */
+export async function getValidated<T extends ZodTypeAny>(
+  schema: T,
+  endpoint: string,
+  params?: Record<string, unknown>,
+  config?: ValidatedRequestConfig
+): Promise<T['_output']> {
+  const response = await apiClient.get(endpoint, { params });
+  return validateApiResponse(schema, response.data, endpoint, {
+    logErrors: config?.logErrors ?? env.isDev,
+    throwOnError: config?.throwOnError ?? true,
+  });
+}
+
+/**
+ * Type-safe POST request with runtime Zod validation
+ *
+ * @param schema - Zod schema to validate response against
+ * @param endpoint - API endpoint
+ * @param data - Request body
+ * @param config - Additional axios config and validation config
+ * @returns Validated response data
+ *
+ * @example
+ * ```typescript
+ * import { KPIResultSchema } from '@/lib/api-schemas';
+ *
+ * const result = await postValidated(
+ *   KPIResultSchema,
+ *   '/kpis/calculate',
+ *   { kpi_id: 'WS1-DQ-001', force_refresh: true }
+ * );
+ * ```
+ */
+export async function postValidated<T extends ZodTypeAny, D = unknown>(
+  schema: T,
+  endpoint: string,
+  data?: D,
+  config?: { params?: Record<string, unknown> } & ValidatedRequestConfig
+): Promise<T['_output']> {
+  const response = await apiClient.post(endpoint, data, { params: config?.params });
+  return validateApiResponse(schema, response.data, endpoint, {
+    logErrors: config?.logErrors ?? env.isDev,
+    throwOnError: config?.throwOnError ?? true,
+  });
+}
+
+/**
+ * Type-safe PUT request with runtime Zod validation
+ */
+export async function putValidated<T extends ZodTypeAny, D = unknown>(
+  schema: T,
+  endpoint: string,
+  data?: D,
+  config?: ValidatedRequestConfig
+): Promise<T['_output']> {
+  const response = await apiClient.put(endpoint, data);
+  return validateApiResponse(schema, response.data, endpoint, {
+    logErrors: config?.logErrors ?? env.isDev,
+    throwOnError: config?.throwOnError ?? true,
+  });
+}
+
+/**
+ * Type-safe PATCH request with runtime Zod validation
+ */
+export async function patchValidated<T extends ZodTypeAny, D = unknown>(
+  schema: T,
+  endpoint: string,
+  data?: D,
+  config?: ValidatedRequestConfig
+): Promise<T['_output']> {
+  const response = await apiClient.patch(endpoint, data);
+  return validateApiResponse(schema, response.data, endpoint, {
+    logErrors: config?.logErrors ?? env.isDev,
+    throwOnError: config?.throwOnError ?? true,
+  });
+}
+
+/**
+ * Type-safe DELETE request with runtime Zod validation
+ */
+export async function delValidated<T extends ZodTypeAny>(
+  schema: T,
+  endpoint: string,
+  config?: { data?: unknown } & ValidatedRequestConfig
+): Promise<T['_output']> {
+  const response = await apiClient.delete(endpoint, { data: config?.data });
+  return validateApiResponse(schema, response.data, endpoint, {
+    logErrors: config?.logErrors ?? env.isDev,
+    throwOnError: config?.throwOnError ?? true,
+  });
+}
+
+// Re-export validation utilities for convenience
+export { ApiValidationError } from './api-schemas';
 
 /**
  * Create a WebSocket connection to the graph stream endpoint

@@ -25,6 +25,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.api.dependencies.auth import require_auth
+from src.api.utils.data_masking import mask_identifier
 
 # Real implementations
 from src.api.dependencies.bentoml_client import BentoMLClient, get_bentoml_client
@@ -612,10 +613,14 @@ async def explain_prediction(
 
         computation_time_ms = (time.time() - start_time) * 1000
 
+        # Mask patient_id in response to protect PII (Phase 3 security enhancement)
+        # Original patient_id is preserved in audit records for authorized access
+        masked_patient_id = mask_identifier(request.patient_id)
+
         return ExplainResponse(
             explanation_id=explanation_id,
             request_timestamp=datetime.now(timezone.utc),
-            patient_id=request.patient_id,
+            patient_id=masked_patient_id,
             model_type=request.model_type,
             model_version_id=prediction["model_version_id"],
             prediction_class=prediction["prediction_class"],
@@ -660,7 +665,8 @@ async def explain_batch(
         try:
             return await explain_prediction(req, background_tasks)
         except HTTPException as e:
-            errors.append({"patient_id": req.patient_id, "error": e.detail})
+            # Mask patient_id in error responses to protect PII
+            errors.append({"patient_id": mask_identifier(req.patient_id), "error": e.detail})
             return None
 
     if request.parallel:
@@ -705,11 +711,14 @@ async def get_explanation_history(
     - Understanding prediction evolution over time
     - Debugging model behavior
     """
+    # Mask patient_id in all responses to protect PII
+    masked_patient_id = mask_identifier(patient_id)
+
     try:
         repo = get_shap_analysis_repository()
         if repo.client is None:
             return {
-                "patient_id": patient_id,
+                "patient_id": masked_patient_id,
                 "total_explanations": 0,
                 "explanations": [],
                 "message": "Database connection not available",
@@ -730,7 +739,7 @@ async def get_explanation_history(
         explanations = result.data if result.data else []
 
         return {
-            "patient_id": patient_id,
+            "patient_id": masked_patient_id,
             "total_explanations": len(explanations),
             "explanations": explanations,
             "note": "Currently showing recent analyses. Patient-level filtering requires schema extension.",
@@ -739,7 +748,7 @@ async def get_explanation_history(
     except Exception as e:
         logger.error(f"Error retrieving explanation history: {e}")
         return {
-            "patient_id": patient_id,
+            "patient_id": masked_patient_id,
             "total_explanations": 0,
             "explanations": [],
             "error": str(e),
