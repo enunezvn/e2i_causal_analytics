@@ -39,7 +39,7 @@ from uuid import UUID
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
-from src.api.dependencies.auth import require_auth
+from src.api.dependencies.auth import require_auth, require_operator
 
 logger = logging.getLogger(__name__)
 
@@ -403,7 +403,7 @@ class MonitorResponse(BaseModel):
 async def randomize_units(
     experiment_id: str,
     request: RandomizeRequest,
-    user: Dict[str, Any] = Depends(require_auth),
+    user: Dict[str, Any] = Depends(require_operator),
 ) -> RandomizeResponse:
     """
     Randomize units to experiment variants.
@@ -544,7 +544,7 @@ async def get_assignments(
 async def enroll_unit(
     experiment_id: str,
     request: EnrollUnitRequest,
-    user: Dict[str, Any] = Depends(require_auth),
+    user: Dict[str, Any] = Depends(require_operator),
 ) -> EnrollmentResult:
     """
     Enroll a unit in an experiment.
@@ -682,7 +682,7 @@ async def trigger_interim_analysis(
     request: TriggerInterimAnalysisRequest,
     background_tasks: BackgroundTasks,
     async_mode: bool = Query(default=False, description="Run asynchronously"),
-    user: Dict[str, Any] = Depends(require_auth),
+    user: Dict[str, Any] = Depends(require_operator),
 ) -> InterimAnalysisResult:
     """
     Trigger an interim analysis for an experiment.

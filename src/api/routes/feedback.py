@@ -29,8 +29,10 @@ from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
 from uuid import uuid4
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
+
+from src.api.dependencies.auth import require_operator
 
 logger = logging.getLogger(__name__)
 
@@ -378,6 +380,7 @@ async def run_learning_cycle(
     async_mode: bool = Query(
         default=True, description="Run asynchronously (returns immediately with ID)"
     ),
+    user: Dict[str, Any] = Depends(require_operator),
 ) -> LearningResponse:
     """
     Run a feedback learning cycle.
@@ -468,6 +471,7 @@ async def get_learning_results(batch_id: str) -> LearningResponse:
 )
 async def process_feedback(
     request: ProcessFeedbackRequest,
+    user: Dict[str, Any] = Depends(require_operator),
 ) -> LearningResponse:
     """
     Process specific feedback items.
@@ -658,6 +662,7 @@ async def list_updates(
 async def apply_update(
     update_id: str,
     request: ApplyUpdateRequest,
+    user: Dict[str, Any] = Depends(require_operator),
 ) -> KnowledgeUpdate:
     """
     Apply a knowledge update.
@@ -706,7 +711,10 @@ async def apply_update(
     summary="Rollback knowledge update",
     description="Rollback a previously applied knowledge update.",
 )
-async def rollback_update(update_id: str) -> KnowledgeUpdate:
+async def rollback_update(
+    update_id: str,
+    user: Dict[str, Any] = Depends(require_operator),
+) -> KnowledgeUpdate:
     """
     Rollback a knowledge update.
 

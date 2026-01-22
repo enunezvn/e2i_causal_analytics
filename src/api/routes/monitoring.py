@@ -28,8 +28,10 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
+
+from src.api.dependencies.auth import require_admin
 
 logger = logging.getLogger(__name__)
 
@@ -1280,6 +1282,7 @@ async def trigger_retraining(
     model_id: str,
     request: TriggerRetrainingRequest,
     triggered_by: str = Query(default="api_user", description="User triggering retraining"),
+    _admin: dict = Depends(require_admin),
 ) -> RetrainingJobResponse:
     """
     Trigger model retraining.
@@ -1429,6 +1432,7 @@ async def complete_retraining(
 async def rollback_retraining(
     job_id: str,
     request: RollbackRetrainingRequest,
+    _admin: dict = Depends(require_admin),
 ) -> RetrainingJobResponse:
     """
     Rollback a completed retraining.
@@ -1477,7 +1481,9 @@ async def rollback_retraining(
 
 
 @router.post("/retraining/sweep")
-async def trigger_retraining_sweep() -> Dict[str, Any]:
+async def trigger_retraining_sweep(
+    _admin: dict = Depends(require_admin),
+) -> Dict[str, Any]:
     """
     Evaluate retraining need for all production models.
 
