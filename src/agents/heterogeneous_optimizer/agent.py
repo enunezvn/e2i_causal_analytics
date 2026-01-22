@@ -10,7 +10,7 @@ Latency: Up to 150s
 
 import logging
 import uuid
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, Literal, Optional, TYPE_CHECKING
 
 from .graph import create_heterogeneous_optimizer_graph
 from .memory_hooks import (
@@ -18,6 +18,9 @@ from .memory_hooks import (
     get_heterogeneous_optimizer_memory_hooks,
 )
 from .state import HeterogeneousOptimizerState
+
+if TYPE_CHECKING:
+    from .mlflow_tracker import HeterogeneousOptimizerMLflowTracker
 
 logger = logging.getLogger(__name__)
 
@@ -32,16 +35,40 @@ class HeterogeneousOptimizerAgent:
     4. Creates visualization data and insights
     """
 
-    def __init__(self, data_connector=None, enable_memory: bool = True):
+    def __init__(
+        self,
+        data_connector=None,
+        enable_memory: bool = True,
+        enable_mlflow: bool = True,
+    ):
         """Initialize the Heterogeneous Optimizer agent.
 
         Args:
             data_connector: Data connector for fetching data (optional, uses mock if None)
             enable_memory: Whether to enable tri-memory integration (default: True)
+            enable_mlflow: Whether to enable MLflow tracking (default: True)
         """
         self.graph = create_heterogeneous_optimizer_graph(data_connector)
         self.enable_memory = enable_memory
+        self.enable_mlflow = enable_mlflow
         self._memory_hooks = None
+        self._mlflow_tracker: Optional["HeterogeneousOptimizerMLflowTracker"] = None
+
+    def _get_mlflow_tracker(self) -> Optional["HeterogeneousOptimizerMLflowTracker"]:
+        """Get or create MLflow tracker instance (lazy initialization)."""
+        if not self.enable_mlflow:
+            return None
+
+        if self._mlflow_tracker is None:
+            try:
+                from .mlflow_tracker import HeterogeneousOptimizerMLflowTracker
+
+                self._mlflow_tracker = HeterogeneousOptimizerMLflowTracker()
+            except ImportError:
+                logger.warning("MLflow tracker not available")
+                return None
+
+        return self._mlflow_tracker
 
     @property
     def memory_hooks(self):
@@ -89,27 +116,65 @@ class HeterogeneousOptimizerAgent:
         # Build initial state with memory context
         initial_state = self._build_initial_state(input_data, session_id, memory_context)
 
-        # Execute workflow
-        final_state = await self.graph.ainvoke(initial_state)
+        # Get MLflow tracker
+        tracker = self._get_mlflow_tracker()
 
-        # Build output
-        output = self._build_output(final_state)
+        # Execute with MLflow tracking if available
+        if tracker:
+            async with tracker.start_analysis_run(
+                experiment_name=input_data.get("experiment_name", "default"),
+                brand=input_data.get("brand"),
+                region=input_data.get("region"),
+                treatment_var=input_data.get("treatment_var"),
+                outcome_var=input_data.get("outcome_var"),
+                query_id=session_id,
+            ):
+                # Execute workflow
+                final_state = await self.graph.ainvoke(initial_state)
 
-        # Contribute to memory (if enabled and analysis succeeded)
-        if self.enable_memory and output.get("status") != "failed":
-            try:
-                await contribute_to_memory(
-                    result=output,
-                    state=final_state,
-                    memory_hooks=self.memory_hooks,
-                    session_id=session_id,
-                    brand=input_data.get("brand"),
-                    region=input_data.get("region"),
-                )
-            except Exception as e:
-                logger.warning(f"Failed to contribute to memory: {e}")
+                # Build output
+                output = self._build_output(final_state)
 
-        return output
+                # Log to MLflow
+                await tracker.log_analysis_result(output, final_state)
+
+                # Contribute to memory (if enabled and analysis succeeded)
+                if self.enable_memory and output.get("status") != "failed":
+                    try:
+                        await contribute_to_memory(
+                            result=output,
+                            state=final_state,
+                            memory_hooks=self.memory_hooks,
+                            session_id=session_id,
+                            brand=input_data.get("brand"),
+                            region=input_data.get("region"),
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to contribute to memory: {e}")
+
+                return output
+        else:
+            # Execute workflow without MLflow
+            final_state = await self.graph.ainvoke(initial_state)
+
+            # Build output
+            output = self._build_output(final_state)
+
+            # Contribute to memory (if enabled and analysis succeeded)
+            if self.enable_memory and output.get("status") != "failed":
+                try:
+                    await contribute_to_memory(
+                        result=output,
+                        state=final_state,
+                        memory_hooks=self.memory_hooks,
+                        session_id=session_id,
+                        brand=input_data.get("brand"),
+                        region=input_data.get("region"),
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to contribute to memory: {e}")
+
+            return output
 
     def _validate_input(self, input_data: Dict[str, Any]) -> None:
         """Validate input data against contract.

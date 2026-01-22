@@ -5,6 +5,12 @@ This package implements causal inference using DoWhy/EconML with natural languag
 
 from src.agents.causal_impact.agent import CausalImpactAgent
 from src.agents.causal_impact.graph import create_causal_impact_graph
+from src.agents.causal_impact.mlflow_tracker import (
+    CausalImpactMLflowTracker,
+    CausalImpactMetrics,
+    AnalysisContext,
+    create_tracker as create_mlflow_tracker,
+)
 from src.agents.causal_impact.state import (
     CausalGraph,
     CausalImpactInput,
@@ -29,4 +35,9 @@ __all__ = [
     "SensitivityAnalysis",
     "NaturalLanguageInterpretation",
     "create_causal_impact_graph",
+    # MLflow tracking
+    "CausalImpactMLflowTracker",
+    "CausalImpactMetrics",
+    "AnalysisContext",
+    "create_mlflow_tracker",
 ]
