@@ -28,8 +28,10 @@ from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
 from uuid import uuid4
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
+
+from src.api.dependencies.auth import require_analyst
 
 logger = logging.getLogger(__name__)
 
@@ -340,6 +342,7 @@ async def run_segment_analysis(
     async_mode: bool = Query(
         default=True, description="Run asynchronously (returns immediately with ID)"
     ),
+    user: Dict[str, Any] = Depends(require_analyst),
 ) -> SegmentAnalysisResponse:
     """
     Run segment analysis for treatment effect heterogeneity.

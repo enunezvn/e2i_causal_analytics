@@ -3,29 +3,65 @@
 Validates JWT tokens issued by Supabase Auth.
 Tokens are passed in the Authorization header as Bearer tokens.
 
+Role-Based Access Control (RBAC):
+    Hierarchical roles: ADMIN > OPERATOR > ANALYST > VIEWER
+    - viewer: Read-only dashboard access
+    - analyst: Run analyses (causal, gap, segment)
+    - operator: Manage experiments, feedback learning, digital twin
+    - admin: System management (cache, retraining, user management)
+
 Usage:
     from src.api.dependencies.auth import get_current_user, require_auth
+    from src.api.dependencies.auth import require_viewer, require_analyst, require_operator, require_admin
 
     # Get user info (optional auth)
     @app.get("/profile")
     async def profile(user: Optional[dict] = Depends(get_current_user)):
         ...
 
-    # Require authentication
+    # Require authentication (any role)
     @app.post("/protected")
     async def protected(user: dict = Depends(require_auth)):
         ...
 
+    # Require specific role level
+    @app.post("/analyze")
+    async def analyze(user: dict = Depends(require_analyst)):
+        ...
+
 Author: E2I Causal Analytics Team
-Version: 4.2.1
+Version: 4.3.0
 """
 
 import logging
 import os
+from enum import Enum
 from typing import Any, Dict, Optional
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
+
+class UserRole(str, Enum):
+    """User roles for RBAC with hierarchical permissions.
+
+    Hierarchy: ADMIN > OPERATOR > ANALYST > VIEWER
+    Higher roles inherit all permissions from lower roles.
+    """
+
+    VIEWER = "viewer"
+    ANALYST = "analyst"
+    OPERATOR = "operator"
+    ADMIN = "admin"
+
+
+# Role hierarchy levels - higher number = more privileges
+ROLE_LEVELS: Dict[UserRole, int] = {
+    UserRole.VIEWER: 1,
+    UserRole.ANALYST: 2,
+    UserRole.OPERATOR: 3,
+    UserRole.ADMIN: 4,
+}
 
 logger = logging.getLogger(__name__)
 
@@ -37,16 +73,69 @@ SUPABASE_JWT_SECRET = os.environ.get("SUPABASE_JWT_SECRET", "")
 # Testing mode - bypasses authentication for integration/e2e tests
 TESTING_MODE = os.environ.get("E2I_TESTING_MODE", "").lower() in ("true", "1", "yes")
 
-# Mock user for testing mode
+# Mock user for testing mode (defaults to admin for full access in tests)
 TEST_USER: Dict[str, Any] = {
     "id": "test-user-id",
     "email": "test@e2i-analytics.com",
     "role": "authenticated",
     "aud": "authenticated",
     "created_at": None,
-    "app_metadata": {"role": "admin"},
+    "app_metadata": {"role": "admin"},  # RBAC role stored here
     "user_metadata": {"name": "Test User"},
 }
+
+
+def get_user_role(user: Dict[str, Any]) -> UserRole:
+    """Extract the RBAC role from user data.
+
+    Looks for role in the following order:
+    1. app_metadata.role (preferred - Supabase convention)
+    2. user.role (fallback)
+    3. Default to VIEWER if not found
+
+    Args:
+        user: User dict from authentication
+
+    Returns:
+        UserRole enum value
+    """
+    # Check app_metadata.role first (Supabase convention)
+    role_str = user.get("app_metadata", {}).get("role")
+
+    # Fallback to top-level role field
+    if not role_str:
+        role_str = user.get("role")
+
+    # Handle legacy is_admin flag
+    if not role_str and user.get("app_metadata", {}).get("is_admin"):
+        return UserRole.ADMIN
+
+    # Convert string to enum, default to viewer
+    if role_str:
+        try:
+            return UserRole(role_str.lower())
+        except ValueError:
+            logger.warning(f"Unknown role '{role_str}', defaulting to viewer")
+
+    return UserRole.VIEWER
+
+
+def has_role(user: Dict[str, Any], required_role: UserRole) -> bool:
+    """Check if user has at least the required role level.
+
+    Uses hierarchical comparison: ADMIN > OPERATOR > ANALYST > VIEWER
+
+    Args:
+        user: User dict from authentication
+        required_role: Minimum required role
+
+    Returns:
+        True if user's role level >= required role level
+    """
+    user_role = get_user_role(user)
+    user_level = ROLE_LEVELS.get(user_role, 0)
+    required_level = ROLE_LEVELS.get(required_role, 0)
+    return user_level >= required_level
 
 # Security scheme for OpenAPI docs
 security = HTTPBearer(auto_error=False)
@@ -180,11 +269,87 @@ async def require_auth(
     return user
 
 
+async def require_viewer(
+    user: Dict[str, Any] = Depends(require_auth),
+) -> Dict[str, Any]:
+    """Require at least viewer role (any authenticated user).
+
+    This is effectively the same as require_auth but explicitly
+    documents the minimum role requirement.
+
+    Args:
+        user: Authenticated user from require_auth
+
+    Returns:
+        User dict if viewer or higher
+
+    Raises:
+        AuthError: If not authenticated (via require_auth)
+    """
+    # All authenticated users have at least viewer access
+    if not has_role(user, UserRole.VIEWER):
+        raise AuthError(
+            "Viewer access required",
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+    return user
+
+
+async def require_analyst(
+    user: Dict[str, Any] = Depends(require_auth),
+) -> Dict[str, Any]:
+    """Require at least analyst role.
+
+    Analysts can run analyses (causal, gap, segment).
+
+    Args:
+        user: Authenticated user from require_auth
+
+    Returns:
+        User dict if analyst or higher
+
+    Raises:
+        AuthError: If insufficient role
+    """
+    if not has_role(user, UserRole.ANALYST):
+        raise AuthError(
+            "Analyst privileges required",
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+    return user
+
+
+async def require_operator(
+    user: Dict[str, Any] = Depends(require_auth),
+) -> Dict[str, Any]:
+    """Require at least operator role.
+
+    Operators can manage experiments, feedback learning, digital twin.
+
+    Args:
+        user: Authenticated user from require_auth
+
+    Returns:
+        User dict if operator or higher
+
+    Raises:
+        AuthError: If insufficient role
+    """
+    if not has_role(user, UserRole.OPERATOR):
+        raise AuthError(
+            "Operator privileges required",
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+    return user
+
+
 async def require_admin(
     user: Dict[str, Any] = Depends(require_auth),
 ) -> Dict[str, Any]:
-    """
-    Require admin role.
+    """Require admin role.
+
+    Admins have full system access including cache invalidation,
+    model retraining, and user management.
 
     Args:
         user: Authenticated user from require_auth
@@ -195,19 +360,11 @@ async def require_admin(
     Raises:
         AuthError: If not admin
     """
-    # Check for admin in app_metadata or role
-    is_admin = (
-        user.get("role") == "admin"
-        or user.get("app_metadata", {}).get("role") == "admin"
-        or user.get("app_metadata", {}).get("is_admin", False)
-    )
-
-    if not is_admin:
+    if not has_role(user, UserRole.ADMIN):
         raise AuthError(
             "Admin privileges required",
             status_code=status.HTTP_403_FORBIDDEN,
         )
-
     return user
 
 
