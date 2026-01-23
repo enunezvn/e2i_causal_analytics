@@ -6,10 +6,17 @@ This package implements causal inference using DoWhy/EconML with natural languag
 from src.agents.causal_impact.agent import CausalImpactAgent
 from src.agents.causal_impact.graph import create_causal_impact_graph
 from src.agents.causal_impact.mlflow_tracker import (
-    CausalImpactMLflowTracker,
-    CausalImpactMetrics,
     AnalysisContext,
+    CausalImpactMetrics,
+    CausalImpactMLflowTracker,
     create_tracker as create_mlflow_tracker,
+)
+from src.agents.causal_impact.opik_tracer import (
+    AnalysisTraceContext,
+    CausalImpactOpikTracer,
+    NodeSpanContext,
+    get_causal_impact_tracer,
+    reset_tracer as reset_opik_tracer,
 )
 from src.agents.causal_impact.state import (
     CausalGraph,
@@ -40,4 +47,10 @@ __all__ = [
     "CausalImpactMetrics",
     "AnalysisContext",
     "create_mlflow_tracker",
+    # Opik tracing
+    "CausalImpactOpikTracer",
+    "AnalysisTraceContext",
+    "NodeSpanContext",
+    "get_causal_impact_tracer",
+    "reset_opik_tracer",
 ]

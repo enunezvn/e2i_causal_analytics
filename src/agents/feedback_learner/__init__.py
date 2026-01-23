@@ -45,6 +45,12 @@ from .evaluation import (
     RubricEvaluator,
 )
 from .graph import build_feedback_learner_graph, build_simple_feedback_learner_graph
+from .mlflow_tracker import (
+    FeedbackLearnerMLflowTracker,
+    FeedbackLearnerMetrics,
+    LearningContext,
+    create_tracker as create_mlflow_tracker,
+)
 
 # Node exports
 from .nodes import RubricNode
@@ -79,6 +85,11 @@ __all__ = [
     "FeedbackLearnerOptimizer",
     "create_memory_contribution",
     "DSPY_AVAILABLE",
+    # MLflow Tracking
+    "FeedbackLearnerMLflowTracker",
+    "FeedbackLearnerMetrics",
+    "LearningContext",
+    "create_mlflow_tracker",
     # Rubric Evaluation
     "RubricEvaluator",
     "RubricEvaluation",
