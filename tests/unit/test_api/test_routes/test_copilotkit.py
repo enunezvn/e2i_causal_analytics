@@ -131,13 +131,13 @@ class TestChatRequest:
                 request_id="req-456",
             )
 
-    def test_request_requires_request_id(self):
-        """Test that request_id is required."""
-        with pytest.raises(ValueError):
-            ChatRequest(
-                query="Test query",
-                user_id="user-123",
-            )
+    def test_request_request_id_is_optional(self):
+        """Test that request_id is optional (auto-extracted from header if not provided)."""
+        request = ChatRequest(
+            query="Test query",
+            user_id="user-123",
+        )
+        assert request.request_id is None
 
 
 # =============================================================================

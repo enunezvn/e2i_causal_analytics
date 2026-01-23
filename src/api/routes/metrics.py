@@ -243,7 +243,7 @@ async def metrics_endpoint() -> Response:
         )
 
 
-@router.get("/metrics/health", response_class=Response)
+@router.get("/metrics/health")
 async def metrics_health() -> Dict[str, Any]:
     """
     Check if metrics collection is operational.

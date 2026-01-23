@@ -36,6 +36,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# MLflow experiment prefix for this agent
+EXPERIMENT_PREFIX = "e2i_causal/heterogeneous_optimizer"
+
 
 @dataclass
 class HeterogeneousOptimizerContext:
