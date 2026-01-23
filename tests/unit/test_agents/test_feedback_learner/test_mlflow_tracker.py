@@ -709,7 +709,7 @@ class TestGetLearningSummary:
             assert summary["total_feedback_processed"] == 25
             assert summary["total_patterns_detected"] == 5
             assert summary["total_recommendations"] == 8
-            assert summary["avg_rubric_score"] == 0.85
+            assert summary["avg_rubric_score"] == pytest.approx(0.85)
             assert summary["successful_runs"] == 2
 
 
