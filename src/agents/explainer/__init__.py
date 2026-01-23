@@ -13,6 +13,12 @@ from .agent import (
     explain_analysis,
 )
 from .graph import build_explainer_graph, build_simple_explainer_graph
+from .mlflow_tracker import (
+    ExplainerMLflowTracker,
+    ExplainerMetrics,
+    ExplanationContext,
+    create_tracker as create_mlflow_tracker,
+)
 from .state import (
     AnalysisContext,
     ExplainerState,
@@ -29,6 +35,11 @@ __all__ = [
     # Graph
     "build_explainer_graph",
     "build_simple_explainer_graph",
+    # MLflow Tracking
+    "ExplainerMLflowTracker",
+    "ExplainerMetrics",
+    "ExplanationContext",
+    "create_mlflow_tracker",
     # State
     "AnalysisContext",
     "ExplainerState",

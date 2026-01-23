@@ -45,6 +45,12 @@ from .graph import (
     create_feature_engineering_graph,
     create_shap_analysis_graph,
 )
+from .mlflow_tracker import (
+    FeatureAnalyzerMLflowTracker,
+    FeatureAnalyzerMetrics,
+    FeatureAnalysisContext,
+    create_tracker as create_mlflow_tracker,
+)
 from .nodes import (
     compute_shap,
     detect_interactions,
@@ -65,6 +71,11 @@ __all__ = [
     "create_shap_analysis_graph",
     # State
     "FeatureAnalyzerState",
+    # MLflow Tracking
+    "FeatureAnalyzerMLflowTracker",
+    "FeatureAnalyzerMetrics",
+    "FeatureAnalysisContext",
+    "create_mlflow_tracker",
     # Nodes
     "generate_features",
     "select_features",

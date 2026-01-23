@@ -23,6 +23,12 @@ from .clients import (
     get_model_client,
 )
 from .graph import build_prediction_synthesizer_graph
+from .mlflow_tracker import (
+    PredictionSynthesizerMLflowTracker,
+    PredictionSynthesizerMetrics,
+    PredictionContext as MLflowPredictionContext,
+    create_tracker as create_mlflow_tracker,
+)
 from .state import (
     EnsemblePrediction,
     ModelPrediction,
@@ -48,4 +54,9 @@ __all__ = [
     "HTTPModelClientConfig",
     "ModelClientFactory",
     "get_model_client",
+    # MLflow Tracking
+    "PredictionSynthesizerMLflowTracker",
+    "PredictionSynthesizerMetrics",
+    "MLflowPredictionContext",
+    "create_mlflow_tracker",
 ]

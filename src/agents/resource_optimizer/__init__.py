@@ -14,6 +14,12 @@ from .graph import (
     build_resource_optimizer_graph,
     build_simple_optimizer_graph,
 )
+from .mlflow_tracker import (
+    ResourceOptimizerMLflowTracker,
+    ResourceOptimizerMetrics,
+    OptimizationContext,
+    create_tracker as create_mlflow_tracker,
+)
 from .opik_tracer import (
     ResourceOptimizerOpikTracer,
     OptimizationTraceContext,
@@ -37,6 +43,11 @@ __all__ = [
     # Graph
     "build_resource_optimizer_graph",
     "build_simple_optimizer_graph",
+    # MLflow Tracking
+    "ResourceOptimizerMLflowTracker",
+    "ResourceOptimizerMetrics",
+    "OptimizationContext",
+    "create_mlflow_tracker",
     # Opik tracing
     "ResourceOptimizerOpikTracer",
     "OptimizationTraceContext",
