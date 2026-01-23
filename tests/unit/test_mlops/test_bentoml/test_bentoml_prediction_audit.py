@@ -32,8 +32,12 @@ from src.mlops.bentoml_prediction_audit import (
 
 @pytest.fixture
 def mock_opik_connector():
-    """Mock OpikConnector for testing."""
-    with patch("src.mlops.bentoml_prediction_audit.OpikConnector") as MockConnector:
+    """Mock OpikConnector for testing.
+
+    Note: OpikConnector is imported locally inside functions in bentoml_prediction_audit,
+    so we must patch at the source location (src.mlops.opik_connector.OpikConnector).
+    """
+    with patch("src.mlops.opik_connector.OpikConnector") as MockConnector:
         mock_instance = AsyncMock()
         mock_instance.log_model_prediction = AsyncMock(return_value="trace-123")
         MockConnector.return_value = mock_instance
@@ -69,13 +73,16 @@ class TestCheckOpikAvailable:
 
     def test_returns_true_when_opik_available(self, reset_opik_available):
         """Test returns True when OpikConnector can be imported."""
-        with patch.dict("sys.modules", {"src.mlops.opik_connector": MagicMock()}):
-            with patch("src.mlops.bentoml_prediction_audit.OpikConnector", MagicMock()):
-                import src.mlops.bentoml_prediction_audit as module
-                module._OPIK_AVAILABLE = None
-                result = _check_opik_available()
-                # May be True or False depending on actual import
-                assert isinstance(result, bool)
+        import src.mlops.bentoml_prediction_audit as module
+        module._OPIK_AVAILABLE = None
+
+        # Mock the opik_connector module to make import succeed
+        mock_opik_module = MagicMock()
+        mock_opik_module.OpikConnector = MagicMock()
+        with patch.dict("sys.modules", {"src.mlops.opik_connector": mock_opik_module}):
+            result = _check_opik_available()
+            # May be True or False depending on actual import
+            assert isinstance(result, bool)
 
     def test_caches_availability_result(self, reset_opik_available):
         """Test that availability result is cached."""
@@ -194,7 +201,7 @@ class TestLogPredictionAudit:
         module._OPIK_AVAILABLE = True
 
         with patch(
-            "src.mlops.bentoml_prediction_audit.OpikConnector",
+            "src.mlops.opik_connector.OpikConnector",
             side_effect=Exception("Connection failed")
         ):
             result = await log_prediction_audit(

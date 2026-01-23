@@ -181,7 +181,7 @@ class TestTrackerInitialization:
     def test_tracker_lazy_mlflow_loading(self, tracker):
         """Test MLflow is lazily loaded."""
         # MLflow should not be loaded until first use
-        assert hasattr(tracker, "_mlflow") or hasattr(tracker, "_check_mlflow")
+        assert hasattr(tracker, "_mlflow_available") or hasattr(tracker, "_check_mlflow")
 
     def test_check_mlflow_returns_bool(self, tracker):
         """Test _check_mlflow returns boolean."""
@@ -194,16 +194,15 @@ class TestMLflowAvailability:
 
     def test_mlflow_available_when_installed(self, tracker, mock_mlflow):
         """Test MLflow detection when installed."""
-        with patch.object(tracker, "_mlflow", mock_mlflow):
-            with patch.object(tracker, "_check_mlflow", return_value=True):
-                assert tracker._check_mlflow() is True
+        # _check_mlflow is a method that returns bool based on import success
+        result = tracker._check_mlflow()
+        assert isinstance(result, bool)
 
     def test_graceful_degradation_when_unavailable(self, tracker):
         """Test tracker works when MLflow unavailable."""
-        with patch.object(tracker, "_check_mlflow", return_value=False):
-            # Should not raise
-            result = tracker._check_mlflow()
-            assert result is False
+        with patch.object(tracker, "_mlflow_available", False):
+            # Should work without raising
+            assert tracker._mlflow_available is False
 
 
 # =============================================================================
@@ -231,16 +230,17 @@ class TestStartAnalysisRun:
         with patch.object(tracker, "_mlflow_available", True):
             with patch("mlflow.get_experiment_by_name", return_value=MagicMock(experiment_id="exp_123")):
                 with patch("mlflow.start_run") as mock_start_run:
-                    mock_run = MagicMock()
-                    mock_run.info.run_id = "test_run_123"
-                    mock_start_run.return_value.__enter__ = MagicMock(return_value=mock_run)
-                    mock_start_run.return_value.__exit__ = MagicMock(return_value=False)
+                    with patch("mlflow.set_tag"):  # Mock set_tag to prevent real MLflow calls
+                        mock_run = MagicMock()
+                        mock_run.info.run_id = "test_run_123"
+                        mock_start_run.return_value.__enter__ = MagicMock(return_value=mock_run)
+                        mock_start_run.return_value.__exit__ = MagicMock(return_value=False)
 
-                    async with tracker.start_analysis_run(
-                        experiment_name="test_experiment",
-                        brand="test_brand",
-                    ) as ctx:
-                        assert ctx is not None or ctx is None
+                        async with tracker.start_analysis_run(
+                            experiment_name="test_experiment",
+                            brand="test_brand",
+                        ) as ctx:
+                            assert ctx is not None or ctx is None
 
     @pytest.mark.asyncio
     async def test_start_run_accepts_optional_params(self, tracker):
@@ -269,20 +269,26 @@ class TestMetricExtraction:
     def test_extract_metrics_from_dict(self, tracker, sample_result):
         """Test metric extraction from result dict."""
         metrics = tracker._extract_metrics(sample_result)
-        assert isinstance(metrics, dict)
-        assert "ate" in metrics or len(metrics) >= 0
+        # Returns CausalImpactMetrics dataclass, not dict
+        assert isinstance(metrics, CausalImpactMetrics)
+        # Verify extraction captured known values from sample_result
+        assert metrics.p_value == 0.001
+        assert metrics.refutation_passed is True
 
     def test_extract_metrics_handles_missing_fields(self, tracker):
         """Test metric extraction with missing fields."""
         result = {"ate": 0.15}  # Minimal result
         metrics = tracker._extract_metrics(result)
-        assert isinstance(metrics, dict)
+        # Returns CausalImpactMetrics dataclass with defaults for missing fields
+        assert isinstance(metrics, CausalImpactMetrics)
 
     def test_extract_metrics_handles_none(self, tracker):
         """Test metric extraction with None values."""
         result = {"ate": None, "p_value": 0.05}
         metrics = tracker._extract_metrics(result)
-        assert isinstance(metrics, dict)
+        # Returns CausalImpactMetrics dataclass, handles None gracefully
+        assert isinstance(metrics, CausalImpactMetrics)
+        assert metrics.p_value == 0.05
 
 
 # =============================================================================
@@ -296,39 +302,65 @@ class TestLogAnalysisResult:
     @pytest.mark.asyncio
     async def test_log_result_without_mlflow(self, tracker):
         """Test logging result when MLflow unavailable."""
-        mock_output = MagicMock()
-        mock_output.ate = 0.15
-        mock_output.success = True
+        # Output must be dict-like with .get() method
+        mock_output = {"ate_estimate": 0.15, "success": True}
 
         with patch.object(tracker, "_mlflow_available", False):
             # Should not raise
             await tracker.log_analysis_result(mock_output, None)
 
     @pytest.mark.asyncio
-    async def test_log_result_with_mlflow(self, tracker, mock_mlflow):
+    async def test_log_result_with_mlflow(self, tracker):
         """Test logging result with MLflow available."""
-        mock_output = MagicMock()
-        mock_output.ate = 0.15
-        mock_output.success = True
+        # Output must be dict-like with .get() method
+        mock_output = {
+            "ate_estimate": 0.15,
+            "success": True,
+            "estimation_method": "propensity_matching",
+            "effect_type": "ate",
+            "model_used": "dowhy",
+        }
+        # Create mock metrics object
+        mock_metrics = CausalImpactMetrics(
+            ate=0.15,
+            ate_ci_lower=0.10,
+            ate_ci_upper=0.20,
+            p_value=0.001,
+        )
 
         with patch.object(tracker, "_mlflow_available", True):
-            with patch("mlflow.log_metrics") as mock_log_metrics:
-                with patch("mlflow.log_params") as mock_log_params:
-                    with patch.object(tracker, "_extract_metrics", return_value={"ate": 0.15}):
+            with patch("mlflow.log_metric") as mock_log_metric:
+                with patch("mlflow.log_param") as mock_log_param:
+                    with patch.object(tracker, "_extract_metrics", return_value=mock_metrics):
                         await tracker.log_analysis_result(mock_output, None)
-                        # Verify logging was attempted
-                        assert mock_log_metrics.called or mock_log_params.called
+                        # Verify logging was attempted (singular versions)
+                        assert mock_log_metric.called or mock_log_param.called
 
 
 class TestLogParams:
     """Tests for _log_params method."""
 
-    def test_log_params_from_context(self, tracker, sample_context, mock_mlflow):
-        """Test parameter logging from context."""
-        with patch.object(tracker, "_mlflow", mock_mlflow):
-            with patch.object(tracker, "_check_mlflow", return_value=True):
-                tracker._log_params(sample_context)
-                assert mock_mlflow.log_params.called or mock_mlflow.log_param.called
+    def test_log_params_from_output(self, tracker, mock_mlflow):
+        """Test parameter logging from output dict."""
+        # _log_params expects a dict-like output, not AnalysisContext
+        output = {
+            "estimation_method": "propensity_matching",
+            "effect_type": "ate",
+            "model_used": "dowhy",
+        }
+        state = {
+            "treatment_var": "marketing_spend",
+            "outcome_var": "sales",
+            "confounders": ["region", "season"],
+            "mediators": [],
+            "interpretation_depth": "standard",
+            "brand": "remibrutinib",
+        }
+        with patch.object(tracker, "_mlflow_available", True):
+            with patch("mlflow.log_param", mock_mlflow.log_param):
+                tracker._log_params(output, state)
+                # Verify logging was attempted
+                assert mock_mlflow.log_param.called
 
 
 class TestLogArtifacts:
@@ -337,16 +369,17 @@ class TestLogArtifacts:
     @pytest.mark.asyncio
     async def test_log_artifacts_creates_json(self, tracker, sample_result, mock_mlflow):
         """Test artifact logging creates JSON file."""
-        with patch.object(tracker, "_mlflow", mock_mlflow):
+        with patch.object(tracker, "_mlflow_available", True):
             with patch.object(tracker, "_check_mlflow", return_value=True):
-                with patch("tempfile.NamedTemporaryFile") as mock_temp:
-                    mock_file = MagicMock()
-                    mock_file.__enter__ = MagicMock(return_value=mock_file)
-                    mock_file.__exit__ = MagicMock(return_value=False)
-                    mock_file.name = "/tmp/test_artifact.json"
-                    mock_temp.return_value = mock_file
+                with patch("mlflow.log_artifact", mock_mlflow.log_artifact):
+                    with patch("tempfile.NamedTemporaryFile") as mock_temp:
+                        mock_file = MagicMock()
+                        mock_file.__enter__ = MagicMock(return_value=mock_file)
+                        mock_file.__exit__ = MagicMock(return_value=False)
+                        mock_file.name = "/tmp/test_artifact.json"
+                        mock_temp.return_value = mock_file
 
-                    await tracker._log_artifacts(sample_result)
+                        await tracker._log_artifacts(sample_result)
 
 
 # =============================================================================
@@ -367,28 +400,35 @@ class TestGetAnalysisHistory:
     @pytest.mark.asyncio
     async def test_get_history_with_mlflow(self, tracker, mock_mlflow):
         """Test history query with MLflow available."""
-        with patch.object(tracker, "_mlflow", mock_mlflow):
+        with patch.object(tracker, "_mlflow_available", True):
             with patch.object(tracker, "_check_mlflow", return_value=True):
-                mock_mlflow.search_runs.return_value = MagicMock(
-                    to_dict=MagicMock(return_value={"run_id": ["run1", "run2"]})
-                )
-
-                history = await tracker.get_analysis_history()
-                mock_mlflow.search_runs.assert_called()
+                # Mock search_experiments (called when no experiment_name provided)
+                mock_experiment = MagicMock(experiment_id="exp_123")
+                with patch("mlflow.search_experiments", return_value=[mock_experiment]):
+                    # Mock search_runs - return DataFrame-like with iterrows
+                    mock_runs_df = MagicMock()
+                    mock_runs_df.iterrows.return_value = iter([])
+                    with patch("mlflow.search_runs", return_value=mock_runs_df) as mock_search:
+                        history = await tracker.get_analysis_history()
+                        mock_search.assert_called()
 
     @pytest.mark.asyncio
     async def test_get_history_with_limit(self, tracker, mock_mlflow):
-        """Test history query with max_results limit."""
-        with patch.object(tracker, "_mlflow", mock_mlflow):
+        """Test history query with limit parameter."""
+        with patch.object(tracker, "_mlflow_available", True):
             with patch.object(tracker, "_check_mlflow", return_value=True):
-                mock_mlflow.search_runs.return_value = MagicMock(
-                    to_dict=MagicMock(return_value={"run_id": ["run1"]})
-                )
-
-                await tracker.get_analysis_history(max_results=10)
-                # Verify limit was passed
-                call_args = mock_mlflow.search_runs.call_args
-                assert call_args is not None
+                # Mock search_experiments (called when no experiment_name provided)
+                mock_experiment = MagicMock(experiment_id="exp_123")
+                with patch("mlflow.search_experiments", return_value=[mock_experiment]):
+                    # Mock search_runs - return DataFrame-like with iterrows
+                    mock_runs_df = MagicMock()
+                    mock_runs_df.iterrows.return_value = iter([])
+                    with patch("mlflow.search_runs", return_value=mock_runs_df) as mock_search:
+                        await tracker.get_analysis_history(limit=10)
+                        # Verify search_runs was called with max_results=10
+                        call_args = mock_search.call_args
+                        assert call_args is not None
+                        assert call_args.kwargs.get("max_results") == 10
 
 
 class TestGetPerformanceSummary:
@@ -404,17 +444,18 @@ class TestGetPerformanceSummary:
     @pytest.mark.asyncio
     async def test_get_summary_returns_dict(self, tracker, mock_mlflow):
         """Test summary returns dictionary structure."""
-        with patch.object(tracker, "_mlflow", mock_mlflow):
+        with patch.object(tracker, "_mlflow_available", True):
             with patch.object(tracker, "_check_mlflow", return_value=True):
-                mock_df = MagicMock()
-                mock_df.to_dict.return_value = {
-                    "metrics.ate": [0.15, 0.18],
-                    "metrics.p_value": [0.01, 0.02],
-                }
-                mock_mlflow.search_runs.return_value = mock_df
+                with patch("mlflow.search_runs", mock_mlflow.search_runs):
+                    mock_df = MagicMock()
+                    mock_df.to_dict.return_value = {
+                        "metrics.ate": [0.15, 0.18],
+                        "metrics.p_value": [0.01, 0.02],
+                    }
+                    mock_mlflow.search_runs.return_value = mock_df
 
-                summary = await tracker.get_performance_summary()
-                assert summary is None or isinstance(summary, dict)
+                    summary = await tracker.get_performance_summary()
+                    assert summary is None or isinstance(summary, dict)
 
 
 # =============================================================================
@@ -428,19 +469,20 @@ class TestErrorHandling:
     @pytest.mark.asyncio
     async def test_handles_mlflow_connection_error(self, tracker, mock_mlflow):
         """Test handling of MLflow connection errors."""
-        with patch.object(tracker, "_mlflow", mock_mlflow):
+        with patch.object(tracker, "_mlflow_available", True):
             with patch.object(tracker, "_check_mlflow", return_value=True):
-                mock_mlflow.set_experiment.side_effect = Exception("Connection failed")
+                with patch("mlflow.set_experiment") as mock_set_exp:
+                    mock_set_exp.side_effect = Exception("Connection failed")
 
-                # Should not raise, should handle gracefully
-                try:
-                    async with tracker.start_analysis_run(
-                        experiment_name="test",
-                        brand="test_brand",
-                    ):
-                        pass
-                except Exception:
-                    pass  # Expected behavior depends on implementation
+                    # Should not raise, should handle gracefully
+                    try:
+                        async with tracker.start_analysis_run(
+                            experiment_name="test",
+                            brand="test_brand",
+                        ):
+                            pass
+                    except Exception:
+                        pass  # Expected behavior depends on implementation
 
     @pytest.mark.asyncio
     async def test_handles_invalid_result_format(self, tracker):

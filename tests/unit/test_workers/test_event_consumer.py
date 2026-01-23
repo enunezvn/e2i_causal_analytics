@@ -264,7 +264,12 @@ class TestEventHandlers:
 
     def test_on_worker_heartbeat(self, consumer):
         """Test worker-heartbeat event handler."""
-        event = {"hostname": "worker-1", "timestamp": time.time()}
+        # Celery's state.event() requires 'type' field for event processing
+        event = {
+            "type": "worker-heartbeat",
+            "hostname": "worker-1",
+            "timestamp": time.time(),
+        }
         # Should not raise
         consumer.on_worker_heartbeat(event)
 

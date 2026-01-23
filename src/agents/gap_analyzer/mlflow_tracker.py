@@ -35,6 +35,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# MLflow experiment prefix for this agent
+EXPERIMENT_PREFIX = "e2i_causal/gap_analyzer"
+
 
 @dataclass
 class GapAnalysisContext:
