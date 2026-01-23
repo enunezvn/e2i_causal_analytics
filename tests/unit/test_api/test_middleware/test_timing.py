@@ -134,11 +134,13 @@ class TestPathExclusion:
 
     def test_custom_exclude_paths(self, mock_record_request, mock_record_error):
         """Test custom path exclusion."""
-        app = create_test_app(middleware_kwargs={"exclude_paths": ["/", "/slow"]})
+        # Note: Don't use "/" as exclude path - it would exclude ALL paths
+        # since _should_track uses startswith() matching
+        app = create_test_app(middleware_kwargs={"exclude_paths": ["/slow", "/error"]})
         client = TestClient(app)
 
         # Excluded path
-        client.get("/")
+        client.get("/slow")
         mock_record_request.assert_not_called()
 
         # Non-excluded path (health is not in custom list)

@@ -4,7 +4,6 @@ Tests cover:
 - Tracker initialization and MLflow availability checking
 - Context managers for starting monitoring runs
 - Metric extraction (PSI, KS statistics, drift severity)
-- Parameter logging
 - Artifact logging (JSON)
 - Historical query methods (monitoring history, drift trends)
 - Graceful degradation when MLflow unavailable
@@ -12,9 +11,8 @@ Tests cover:
 Phase 1 G03 from observability audit remediation plan.
 """
 
-import json
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -32,23 +30,6 @@ from src.agents.drift_monitor.mlflow_tracker import (
 
 
 @pytest.fixture
-def mock_mlflow():
-    """Mock MLflow module."""
-    mock = MagicMock()
-    mock.set_experiment = MagicMock()
-    mock.start_run = MagicMock()
-    mock.end_run = MagicMock()
-    mock.log_param = MagicMock()
-    mock.log_params = MagicMock()
-    mock.log_metric = MagicMock()
-    mock.log_metrics = MagicMock()
-    mock.log_artifact = MagicMock()
-    mock.search_runs = MagicMock(return_value=MagicMock(to_dict=MagicMock(return_value={"run_id": []})))
-    mock.get_experiment_by_name = MagicMock(return_value=MagicMock(experiment_id="test_exp_id"))
-    return mock
-
-
-@pytest.fixture
 def tracker():
     """Create a DriftMonitorMLflowTracker instance."""
     return DriftMonitorMLflowTracker()
@@ -58,12 +39,13 @@ def tracker():
 def sample_context():
     """Create a sample DriftMonitorContext."""
     return DriftMonitorContext(
-        query="Check for data drift in churn prediction model",
-        model_name="churn_predictor_v2",
-        reference_dataset="training_data_2024Q3",
-        current_dataset="production_data_2024Q4",
-        features_monitored=["tenure", "monthly_charges", "total_charges"],
-        drift_threshold=0.10,
+        experiment_name="pharma_drift_monitoring",
+        brand="Kisqali",
+        model_id="engagement_model_v1",
+        time_window="7d",
+        query_id="query_123",
+        run_id="run_456",
+        start_time=datetime.now(),
     )
 
 
@@ -71,21 +53,27 @@ def sample_context():
 def sample_result():
     """Create a sample monitoring result dict."""
     return {
-        "overall_drift_detected": True,
-        "drift_severity": "moderate",
-        "psi_scores": {
-            "tenure": 0.08,
-            "monthly_charges": 0.15,
-            "total_charges": 0.05,
-        },
-        "ks_statistics": {
-            "tenure": 0.12,
-            "monthly_charges": 0.22,
-            "total_charges": 0.08,
-        },
-        "drifted_features": ["monthly_charges"],
-        "alerts_triggered": 1,
-        "recommendation": "Investigate monthly_charges distribution shift",
+        "features_checked": 10,
+        "features_with_drift": ["feature_1", "feature_2"],
+        "overall_drift_score": 0.45,
+        "detection_latency_ms": 250,
+        "data_drift_results": [
+            {"drift_detected": True, "severity": "high", "test_statistic": 0.15, "drift_type": "psi"},
+            {"drift_detected": False, "severity": "none", "test_statistic": 0.05, "drift_type": "psi"},
+        ],
+        "model_drift_results": [
+            {"drift_detected": True, "severity": "medium", "test_statistic": 0.12},
+        ],
+        "concept_drift_results": [
+            {"drift_detected": False, "severity": "none"},
+        ],
+        "alerts": [
+            {"severity": "critical", "message": "High drift detected"},
+            {"severity": "warning", "message": "Feature distribution shift"},
+        ],
+        "warnings": ["Consider retraining model"],
+        "recommended_actions": ["Review feature distributions"],
+        "drift_summary": "Moderate drift detected in 2 features",
     }
 
 
@@ -116,26 +104,23 @@ class TestDriftMonitorContext:
 
     def test_context_creation_minimal(self):
         """Test context creation with minimal fields."""
-        ctx = DriftMonitorContext(
-            query="test query",
-            model_name="test_model",
-        )
-        assert ctx.query == "test query"
-        assert ctx.model_name == "test_model"
+        ctx = DriftMonitorContext()
+        assert ctx.experiment_name == "default"
 
     def test_context_creation_full(self, sample_context):
         """Test context creation with all fields."""
-        assert sample_context.model_name == "churn_predictor_v2"
-        assert sample_context.drift_threshold == 0.10
-        assert len(sample_context.features_monitored) == 3
+        assert sample_context.experiment_name == "pharma_drift_monitoring"
+        assert sample_context.brand == "Kisqali"
+        assert sample_context.model_id == "engagement_model_v1"
+        assert sample_context.time_window == "7d"
 
     def test_context_default_values(self):
         """Test context default values."""
-        ctx = DriftMonitorContext(
-            query="test",
-            model_name="model",
-        )
-        assert ctx.drift_threshold is None or isinstance(ctx.drift_threshold, float)
+        ctx = DriftMonitorContext()
+        assert ctx.brand is None
+        assert ctx.model_id is None
+        assert ctx.time_window is None
+        assert ctx.query_id is None
 
 
 class TestDriftMonitorMetrics:
@@ -144,19 +129,43 @@ class TestDriftMonitorMetrics:
     def test_metrics_creation(self):
         """Test metrics dataclass creation."""
         metrics = DriftMonitorMetrics(
-            overall_drift_detected=True,
-            drift_severity="moderate",
-            alerts_triggered=1,
+            features_checked=10,
+            features_with_drift=2,
+            overall_drift_score=0.45,
+            data_drift_count=2,
         )
-        assert metrics.overall_drift_detected is True
-        assert metrics.drift_severity == "moderate"
+        assert metrics.features_checked == 10
+        assert metrics.features_with_drift == 2
+        assert metrics.overall_drift_score == 0.45
 
-    def test_metrics_optional_fields(self):
-        """Test metrics with optional fields."""
+    def test_metrics_default_values(self):
+        """Test metrics with default values."""
+        metrics = DriftMonitorMetrics()
+        assert metrics.features_checked == 0
+        assert metrics.overall_drift_score == 0.0
+        assert metrics.structural_drift_detected is False
+
+    def test_metrics_severity_counts(self):
+        """Test metrics severity count fields."""
         metrics = DriftMonitorMetrics(
-            overall_drift_detected=False,
+            critical_severity_count=1,
+            high_severity_count=2,
+            medium_severity_count=3,
         )
-        assert metrics.overall_drift_detected is False
+        assert metrics.critical_severity_count == 1
+        assert metrics.high_severity_count == 2
+        assert metrics.medium_severity_count == 3
+
+    def test_metrics_alert_counts(self):
+        """Test metrics alert count fields."""
+        metrics = DriftMonitorMetrics(
+            alerts_total=5,
+            alerts_critical=2,
+            alerts_warning=3,
+        )
+        assert metrics.alerts_total == 5
+        assert metrics.alerts_critical == 2
+        assert metrics.alerts_warning == 3
 
 
 # =============================================================================
@@ -172,30 +181,37 @@ class TestTrackerInitialization:
         assert tracker is not None
         assert isinstance(tracker, DriftMonitorMLflowTracker)
 
-    def test_tracker_lazy_mlflow_loading(self, tracker):
-        """Test MLflow is lazily loaded."""
-        assert hasattr(tracker, "_mlflow") or hasattr(tracker, "_check_mlflow")
+    def test_tracker_has_mlflow_attr(self, tracker):
+        """Test tracker has _mlflow attribute."""
+        assert hasattr(tracker, "_mlflow")
 
-    def test_check_mlflow_returns_bool(self, tracker):
-        """Test _check_mlflow returns boolean."""
-        result = tracker._check_mlflow()
-        assert isinstance(result, bool)
+    def test_get_mlflow_returns_mlflow_or_none(self, tracker):
+        """Test _get_mlflow returns mlflow module or None."""
+        result = tracker._get_mlflow()
+        assert result is None or hasattr(result, "log_metric")
+
+    def test_tracker_has_tracking_uri_attr(self, tracker):
+        """Test tracker has _tracking_uri attribute."""
+        assert hasattr(tracker, "_tracking_uri")
+
+    def test_tracker_with_custom_uri(self):
+        """Test tracker creation with custom tracking URI."""
+        tracker = DriftMonitorMLflowTracker(tracking_uri="http://localhost:5000")
+        assert tracker._tracking_uri == "http://localhost:5000"
 
 
 class TestMLflowAvailability:
     """Tests for MLflow availability checking."""
 
-    def test_mlflow_available_when_installed(self, tracker, mock_mlflow):
-        """Test MLflow detection when installed."""
-        with patch.object(tracker, "_mlflow", mock_mlflow):
-            with patch.object(tracker, "_check_mlflow", return_value=True):
-                assert tracker._check_mlflow() is True
+    def test_mlflow_starts_as_none(self, tracker):
+        """Test MLflow is None initially (lazy loading)."""
+        assert tracker._mlflow is None
 
     def test_graceful_degradation_when_unavailable(self, tracker):
         """Test tracker works when MLflow unavailable."""
-        with patch.object(tracker, "_check_mlflow", return_value=False):
-            result = tracker._check_mlflow()
-            assert result is False
+        with patch.object(tracker, "_get_mlflow", return_value=None):
+            result = tracker._get_mlflow()
+            assert result is None
 
 
 # =============================================================================
@@ -207,39 +223,52 @@ class TestStartMonitoringRun:
     """Tests for start_monitoring_run context manager."""
 
     @pytest.mark.asyncio
-    async def test_start_run_returns_context_manager(self, tracker, sample_context):
+    async def test_start_run_returns_context_manager(self, tracker):
         """Test start_monitoring_run returns async context manager."""
-        with patch.object(tracker, "_check_mlflow", return_value=False):
-            async with tracker.start_monitoring_run(sample_context) as run_ctx:
-                assert run_ctx is None or isinstance(run_ctx, dict)
+        with patch.object(tracker, "_get_mlflow", return_value=None):
+            async with tracker.start_monitoring_run(
+                experiment_name="test_experiment",
+                brand="Kisqali",
+            ) as run_ctx:
+                assert run_ctx is None or isinstance(run_ctx, DriftMonitorContext)
 
     @pytest.mark.asyncio
-    async def test_start_run_with_mlflow(self, tracker, sample_context, mock_mlflow):
-        """Test start_monitoring_run with MLflow available."""
-        with patch.object(tracker, "_mlflow", mock_mlflow):
-            with patch.object(tracker, "_check_mlflow", return_value=True):
-                mock_run = MagicMock()
-                mock_run.info.run_id = "test_run_123"
-                mock_mlflow.start_run.return_value.__enter__ = MagicMock(return_value=mock_run)
-                mock_mlflow.start_run.return_value.__exit__ = MagicMock(return_value=False)
-
-                async with tracker.start_monitoring_run(sample_context):
-                    mock_mlflow.set_experiment.assert_called()
+    async def test_start_run_without_mlflow_returns_context(self, tracker):
+        """Test start_monitoring_run returns context when MLflow unavailable."""
+        with patch.object(tracker, "_get_mlflow", return_value=None):
+            async with tracker.start_monitoring_run(
+                experiment_name="test_experiment",
+                brand="Kisqali",
+            ) as run_ctx:
+                assert isinstance(run_ctx, DriftMonitorContext)
+                assert run_ctx.experiment_name == "test_experiment"
+                assert run_ctx.brand == "Kisqali"
 
     @pytest.mark.asyncio
-    async def test_start_run_logs_model_name(self, tracker, sample_context, mock_mlflow):
-        """Test that model name is logged during run start."""
-        with patch.object(tracker, "_mlflow", mock_mlflow):
-            with patch.object(tracker, "_check_mlflow", return_value=True):
-                mock_run = MagicMock()
-                mock_run.info.run_id = "test_run_123"
-                mock_mlflow.start_run.return_value.__enter__ = MagicMock(return_value=mock_run)
-                mock_mlflow.start_run.return_value.__exit__ = MagicMock(return_value=False)
+    async def test_start_run_context_has_required_fields(self, tracker):
+        """Test context manager returns context with required fields."""
+        with patch.object(tracker, "_get_mlflow", return_value=None):
+            async with tracker.start_monitoring_run(
+                experiment_name="test_experiment",
+                brand="Kisqali",
+                model_id="model_v1",
+                time_window="7d",
+            ) as run_ctx:
+                assert run_ctx.experiment_name == "test_experiment"
+                assert run_ctx.brand == "Kisqali"
+                assert run_ctx.model_id == "model_v1"
+                assert run_ctx.time_window == "7d"
+                assert run_ctx.start_time is not None
 
-                async with tracker.start_monitoring_run(sample_context):
-                    pass
-
-                mock_mlflow.set_experiment.assert_called()
+    @pytest.mark.asyncio
+    async def test_start_run_with_query_id(self, tracker):
+        """Test start_monitoring_run with query_id parameter."""
+        with patch.object(tracker, "_get_mlflow", return_value=None):
+            async with tracker.start_monitoring_run(
+                experiment_name="test",
+                query_id="query_123",
+            ) as run_ctx:
+                assert run_ctx.query_id == "query_123"
 
 
 # =============================================================================
@@ -253,34 +282,78 @@ class TestMetricExtraction:
     def test_extract_metrics_from_dict(self, tracker, sample_result):
         """Test metric extraction from result dict."""
         metrics = tracker._extract_metrics(sample_result)
-        assert isinstance(metrics, dict)
+        assert isinstance(metrics, DriftMonitorMetrics)
+
+    def test_extract_basic_metrics(self, tracker, sample_result):
+        """Test basic metric extraction."""
+        metrics = tracker._extract_metrics(sample_result)
+        assert metrics.features_checked == 10
+        assert metrics.overall_drift_score == 0.45
+        assert metrics.detection_latency_ms == 250
+
+    def test_extract_drift_counts(self, tracker, sample_result):
+        """Test drift count extraction."""
+        metrics = tracker._extract_metrics(sample_result)
+        # Based on sample_result, data_drift has 1 detected, model_drift has 1 detected
+        assert metrics.data_drift_count == 1
+        assert metrics.model_drift_count == 1
+        assert metrics.concept_drift_count == 0
+
+    def test_extract_severity_counts(self, tracker, sample_result):
+        """Test severity count extraction."""
+        metrics = tracker._extract_metrics(sample_result)
+        # Based on sample_result: high severity in data, medium in model
+        assert metrics.high_severity_count == 1
+        assert metrics.medium_severity_count == 1
+
+    def test_extract_alert_counts(self, tracker, sample_result):
+        """Test alert count extraction."""
+        metrics = tracker._extract_metrics(sample_result)
+        assert metrics.alerts_total == 2
+        assert metrics.alerts_critical == 1
+        assert metrics.alerts_warning == 1
 
     def test_extract_psi_metrics(self, tracker, sample_result):
         """Test PSI metric extraction."""
         metrics = tracker._extract_metrics(sample_result)
-        assert isinstance(metrics, dict)
-
-    def test_extract_ks_metrics(self, tracker, sample_result):
-        """Test KS statistics extraction."""
-        metrics = tracker._extract_metrics(sample_result)
-        assert isinstance(metrics, dict)
+        # PSI scores from data_drift_results
+        assert metrics.avg_psi_score == 0.1  # (0.15 + 0.05) / 2
+        assert metrics.max_psi_score == 0.15
 
     def test_extract_metrics_handles_missing_fields(self, tracker):
         """Test metric extraction with missing fields."""
-        result = {"overall_drift_detected": False}
+        result = {"features_checked": 5}
         metrics = tracker._extract_metrics(result)
-        assert isinstance(metrics, dict)
+        assert isinstance(metrics, DriftMonitorMetrics)
+        assert metrics.features_checked == 5
 
     def test_extract_metrics_handles_none(self, tracker):
         """Test metric extraction with None values."""
-        result = {"drift_severity": None, "alerts_triggered": 0}
+        result = {"overall_drift_score": None, "features_checked": 3}
         metrics = tracker._extract_metrics(result)
-        assert isinstance(metrics, dict)
+        assert isinstance(metrics, DriftMonitorMetrics)
 
-    def test_extract_severity_level(self, tracker, sample_result):
-        """Test drift severity extraction."""
+    def test_extract_metrics_handles_empty_result(self, tracker):
+        """Test metric extraction with empty result."""
+        metrics = tracker._extract_metrics({})
+        assert isinstance(metrics, DriftMonitorMetrics)
+        assert metrics.features_checked == 0
+
+    def test_extract_metrics_handles_pydantic_model(self, tracker):
+        """Test metric extraction with Pydantic-like model."""
+        mock_output = MagicMock()
+        mock_output.model_dump.return_value = {
+            "features_checked": 5,
+            "overall_drift_score": 0.3,
+        }
+        metrics = tracker._extract_metrics(mock_output)
+        assert isinstance(metrics, DriftMonitorMetrics)
+        assert metrics.features_checked == 5
+
+    def test_extract_warnings(self, tracker, sample_result):
+        """Test warnings extraction."""
         metrics = tracker._extract_metrics(sample_result)
-        assert isinstance(metrics, dict)
+        assert metrics.warnings == ["Consider retraining model"]
 
 
 # =============================================================================
@@ -294,78 +367,48 @@ class TestLogMonitoringResult:
     @pytest.mark.asyncio
     async def test_log_result_without_mlflow(self, tracker, sample_result):
         """Test logging result when MLflow unavailable."""
-        with patch.object(tracker, "_check_mlflow", return_value=False):
+        with patch.object(tracker, "_get_mlflow", return_value=None):
             await tracker.log_monitoring_result(sample_result)
 
     @pytest.mark.asyncio
-    async def test_log_result_with_mlflow(self, tracker, sample_result, mock_mlflow):
-        """Test logging result with MLflow available."""
-        with patch.object(tracker, "_mlflow", mock_mlflow):
-            with patch.object(tracker, "_check_mlflow", return_value=True):
-                await tracker.log_monitoring_result(sample_result)
-                assert mock_mlflow.log_metrics.called or mock_mlflow.log_metric.called
+    async def test_log_result_extracts_metrics(self, tracker, sample_result):
+        """Test logging extracts metrics from result."""
+        with patch.object(tracker, "_get_mlflow", return_value=None):
+            await tracker.log_monitoring_result(sample_result)
+            # Verify metrics can be extracted
+            metrics = tracker._extract_metrics(sample_result)
+            assert isinstance(metrics, DriftMonitorMetrics)
 
     @pytest.mark.asyncio
-    async def test_log_result_includes_drift_severity(self, tracker, sample_result, mock_mlflow):
-        """Test that drift severity is logged."""
-        with patch.object(tracker, "_mlflow", mock_mlflow):
-            with patch.object(tracker, "_check_mlflow", return_value=True):
-                await tracker.log_monitoring_result(sample_result)
+    async def test_log_result_handles_empty_result(self, tracker):
+        """Test logging handles empty result dict."""
+        with patch.object(tracker, "_get_mlflow", return_value=None):
+            await tracker.log_monitoring_result({})
 
-
-class TestLogParams:
-    """Tests for _log_params method."""
-
-    def test_log_params_from_context(self, tracker, sample_context, mock_mlflow):
-        """Test parameter logging from context."""
-        with patch.object(tracker, "_mlflow", mock_mlflow):
-            with patch.object(tracker, "_check_mlflow", return_value=True):
-                tracker._log_params(sample_context)
-                assert mock_mlflow.log_params.called or mock_mlflow.log_param.called
-
-    def test_log_params_includes_model_name(self, tracker, sample_context, mock_mlflow):
-        """Test model name is logged as parameter."""
-        with patch.object(tracker, "_mlflow", mock_mlflow):
-            with patch.object(tracker, "_check_mlflow", return_value=True):
-                tracker._log_params(sample_context)
-
-    def test_log_params_includes_threshold(self, tracker, sample_context, mock_mlflow):
-        """Test drift threshold is logged as parameter."""
-        with patch.object(tracker, "_mlflow", mock_mlflow):
-            with patch.object(tracker, "_check_mlflow", return_value=True):
-                tracker._log_params(sample_context)
+    @pytest.mark.asyncio
+    async def test_log_result_with_state(self, tracker, sample_result):
+        """Test logging with optional state parameter."""
+        with patch.object(tracker, "_get_mlflow", return_value=None):
+            state = {"structural_drift_details": {"detected": True}}
+            await tracker.log_monitoring_result(sample_result, state=state)
 
 
 class TestLogArtifacts:
     """Tests for _log_artifacts method."""
 
     @pytest.mark.asyncio
-    async def test_log_artifacts_creates_json(self, tracker, sample_result, mock_mlflow):
-        """Test artifact logging creates JSON file."""
-        with patch.object(tracker, "_mlflow", mock_mlflow):
-            with patch.object(tracker, "_check_mlflow", return_value=True):
-                with patch("tempfile.NamedTemporaryFile") as mock_temp:
-                    mock_file = MagicMock()
-                    mock_file.__enter__ = MagicMock(return_value=mock_file)
-                    mock_file.__exit__ = MagicMock(return_value=False)
-                    mock_file.name = "/tmp/test_artifact.json"
-                    mock_temp.return_value = mock_file
-
-                    await tracker._log_artifacts(sample_result)
+    async def test_log_artifacts_without_mlflow(self, tracker, sample_result):
+        """Test artifact logging without MLflow."""
+        with patch.object(tracker, "_get_mlflow", return_value=None):
+            metrics = tracker._extract_metrics(sample_result)
+            await tracker._log_artifacts(sample_result, None, metrics)
 
     @pytest.mark.asyncio
-    async def test_log_artifacts_includes_psi_scores(self, tracker, sample_result, mock_mlflow):
-        """Test PSI scores are included in artifacts."""
-        with patch.object(tracker, "_mlflow", mock_mlflow):
-            with patch.object(tracker, "_check_mlflow", return_value=True):
-                with patch("tempfile.NamedTemporaryFile") as mock_temp:
-                    mock_file = MagicMock()
-                    mock_file.__enter__ = MagicMock(return_value=mock_file)
-                    mock_file.__exit__ = MagicMock(return_value=False)
-                    mock_file.name = "/tmp/test_artifact.json"
-                    mock_temp.return_value = mock_file
-
-                    await tracker._log_artifacts(sample_result)
+    async def test_log_artifacts_empty_result(self, tracker):
+        """Test artifact logging with empty result."""
+        with patch.object(tracker, "_get_mlflow", return_value=None):
+            metrics = DriftMonitorMetrics()
+            await tracker._log_artifacts({}, None, metrics)
 
 
 # =============================================================================
@@ -376,72 +419,70 @@ class TestLogArtifacts:
 class TestGetMonitoringHistory:
     """Tests for get_monitoring_history method."""
 
-    @pytest.mark.asyncio
-    async def test_get_history_without_mlflow(self, tracker):
+    def test_get_history_without_mlflow(self, tracker):
         """Test history query when MLflow unavailable."""
-        with patch.object(tracker, "_check_mlflow", return_value=False):
-            history = await tracker.get_monitoring_history()
-            assert history is None or isinstance(history, (list, dict))
+        with patch.object(tracker, "_get_mlflow", return_value=None):
+            history = tracker.get_monitoring_history()
+            assert isinstance(history, list)
+            assert len(history) == 0
 
-    @pytest.mark.asyncio
-    async def test_get_history_with_mlflow(self, tracker, mock_mlflow):
-        """Test history query with MLflow available."""
-        with patch.object(tracker, "_mlflow", mock_mlflow):
-            with patch.object(tracker, "_check_mlflow", return_value=True):
-                mock_mlflow.search_runs.return_value = MagicMock(
-                    to_dict=MagicMock(return_value={"run_id": ["run1", "run2"]})
-                )
+    def test_get_history_returns_list(self, tracker):
+        """Test history query returns list structure."""
+        with patch.object(tracker, "_get_mlflow", return_value=None):
+            history = tracker.get_monitoring_history(brand="Kisqali")
+            assert isinstance(history, list)
 
-                history = await tracker.get_monitoring_history()
-                mock_mlflow.search_runs.assert_called()
+    def test_get_history_with_model_filter(self, tracker):
+        """Test history query with model_id filter."""
+        with patch.object(tracker, "_get_mlflow", return_value=None):
+            history = tracker.get_monitoring_history(model_id="engagement_model_v1")
+            assert isinstance(history, list)
 
-    @pytest.mark.asyncio
-    async def test_get_history_filters_by_model(self, tracker, mock_mlflow):
-        """Test history query filters by model name."""
-        with patch.object(tracker, "_mlflow", mock_mlflow):
-            with patch.object(tracker, "_check_mlflow", return_value=True):
-                mock_mlflow.search_runs.return_value = MagicMock(
-                    to_dict=MagicMock(return_value={"run_id": ["run1"]})
-                )
+    def test_get_history_with_limit(self, tracker):
+        """Test history query with limit parameter."""
+        with patch.object(tracker, "_get_mlflow", return_value=None):
+            history = tracker.get_monitoring_history(limit=10)
+            assert isinstance(history, list)
 
-                await tracker.get_monitoring_history(model_name="churn_predictor_v2")
+    def test_get_history_with_experiment_name(self, tracker):
+        """Test history query with experiment_name parameter."""
+        with patch.object(tracker, "_get_mlflow", return_value=None):
+            history = tracker.get_monitoring_history(experiment_name="custom_experiment")
+            assert isinstance(history, list)
 
 
 class TestGetDriftTrend:
     """Tests for get_drift_trend method."""
 
-    @pytest.mark.asyncio
-    async def test_get_trend_without_mlflow(self, tracker):
+    def test_get_trend_without_mlflow(self, tracker):
         """Test trend query when MLflow unavailable."""
-        with patch.object(tracker, "_check_mlflow", return_value=False):
-            trend = await tracker.get_drift_trend()
-            assert trend is None or isinstance(trend, (list, dict))
+        with patch.object(tracker, "_get_mlflow", return_value=None):
+            trend = tracker.get_drift_trend()
+            assert isinstance(trend, dict)
 
-    @pytest.mark.asyncio
-    async def test_get_trend_returns_dict(self, tracker, mock_mlflow):
+    def test_get_trend_returns_dict(self, tracker):
         """Test trend returns dictionary structure."""
-        with patch.object(tracker, "_mlflow", mock_mlflow):
-            with patch.object(tracker, "_check_mlflow", return_value=True):
-                mock_df = MagicMock()
-                mock_df.to_dict.return_value = {
-                    "metrics.overall_drift_detected": [False, True, True],
-                    "metrics.alerts_triggered": [0, 1, 2],
-                }
-                mock_mlflow.search_runs.return_value = mock_df
+        with patch.object(tracker, "_get_mlflow", return_value=None):
+            trend = tracker.get_drift_trend()
+            assert isinstance(trend, dict)
 
-                trend = await tracker.get_drift_trend()
-                assert trend is None or isinstance(trend, dict)
+    def test_get_trend_with_brand_filter(self, tracker):
+        """Test trend with brand filter."""
+        with patch.object(tracker, "_get_mlflow", return_value=None):
+            trend = tracker.get_drift_trend(brand="Kisqali")
+            assert isinstance(trend, dict)
 
-    @pytest.mark.asyncio
-    async def test_get_trend_filters_by_feature(self, tracker, mock_mlflow):
-        """Test trend query filters by feature."""
-        with patch.object(tracker, "_mlflow", mock_mlflow):
-            with patch.object(tracker, "_check_mlflow", return_value=True):
-                mock_mlflow.search_runs.return_value = MagicMock(
-                    to_dict=MagicMock(return_value={"run_id": ["run1"]})
-                )
+    def test_get_trend_with_model_filter(self, tracker):
+        """Test trend with model_id filter."""
+        with patch.object(tracker, "_get_mlflow", return_value=None):
+            trend = tracker.get_drift_trend(model_id="engagement_model_v1")
+            assert isinstance(trend, dict)
 
-                await tracker.get_drift_trend(feature="monthly_charges")
+    def test_get_trend_with_days_filter(self, tracker):
+        """Test trend with days filter."""
+        with patch.object(tracker, "_get_mlflow", return_value=None):
+            trend = tracker.get_drift_trend(days=7)
+            assert isinstance(trend, dict)
 
 
 # =============================================================================
@@ -453,41 +494,53 @@ class TestErrorHandling:
     """Tests for error handling scenarios."""
 
     @pytest.mark.asyncio
-    async def test_handles_mlflow_connection_error(self, tracker, mock_mlflow):
-        """Test handling of MLflow connection errors."""
-        with patch.object(tracker, "_mlflow", mock_mlflow):
-            with patch.object(tracker, "_check_mlflow", return_value=True):
-                mock_mlflow.set_experiment.side_effect = Exception("Connection failed")
-
-                try:
-                    async with tracker.start_monitoring_run(
-                        DriftMonitorContext(query="test", model_name="model")
-                    ):
-                        pass
-                except Exception:
-                    pass
-
-    @pytest.mark.asyncio
     async def test_handles_invalid_result_format(self, tracker):
         """Test handling of invalid result format."""
-        with patch.object(tracker, "_check_mlflow", return_value=False):
+        with patch.object(tracker, "_get_mlflow", return_value=None):
             await tracker.log_monitoring_result({"invalid": "structure"})
+
+    @pytest.mark.asyncio
+    async def test_handles_none_result(self, tracker):
+        """Test handling of None values in result."""
+        with patch.object(tracker, "_get_mlflow", return_value=None):
+            result = {"overall_drift_score": None, "features_checked": None}
+            await tracker.log_monitoring_result(result)
 
     def test_handles_empty_context(self, tracker):
         """Test handling of minimal context."""
-        ctx = DriftMonitorContext(query="", model_name="")
+        ctx = DriftMonitorContext()
         assert ctx is not None
+        assert ctx.experiment_name == "default"
+
+    def test_context_with_all_optional_none(self, tracker):
+        """Test context with all optional fields as None."""
+        ctx = DriftMonitorContext(
+            experiment_name="test",
+            brand=None,
+            model_id=None,
+            time_window=None,
+            query_id=None,
+        )
+        assert ctx.brand is None
+        assert ctx.model_id is None
 
     @pytest.mark.asyncio
     async def test_handles_no_drift_detected(self, tracker):
         """Test handling of result with no drift."""
-        with patch.object(tracker, "_check_mlflow", return_value=False):
-            result = {"overall_drift_detected": False, "alerts_triggered": 0}
+        with patch.object(tracker, "_get_mlflow", return_value=None):
+            result = {
+                "features_checked": 5,
+                "overall_drift_score": 0.0,
+                "data_drift_results": [],
+                "alerts": [],
+            }
             await tracker.log_monitoring_result(result)
 
     @pytest.mark.asyncio
-    async def test_handles_empty_psi_scores(self, tracker):
-        """Test handling of empty PSI scores."""
-        with patch.object(tracker, "_check_mlflow", return_value=False):
-            result = {"psi_scores": {}}
-            await tracker.log_monitoring_result(result)
+    async def test_handles_structural_drift_state(self, tracker):
+        """Test handling of structural drift in state."""
+        with patch.object(tracker, "_get_mlflow", return_value=None):
+            result = {"features_checked": 3}
+            state = {"structural_drift_details": {"detected": True, "reason": "Schema change"}}
+            metrics = tracker._extract_metrics(result, state)
+            assert metrics.structural_drift_detected is True

@@ -3009,7 +3009,7 @@ async def chat(chat_request: ChatRequest, request: Request) -> ChatResponse:
         intent_confidence = result.get("intent_confidence")
 
         # Generate title from query
-        title = request.query[:50] + "..." if len(request.query) > 50 else request.query
+        title = chat_request.query[:50] + "..." if len(chat_request.query) > 50 else chat_request.query
 
         logger.info(
             f"[Chatbot] Response: orchestrator={orchestrator_used}, "
@@ -3039,7 +3039,7 @@ async def chat(chat_request: ChatRequest, request: Request) -> ChatResponse:
         logger.error(f"Chat error after {execution_time_ms:.1f}ms: {e}")
         return ChatResponse(
             success=False,
-            session_id=request.session_id or "",
+            session_id=chat_request.session_id or "",
             response="",
             error=str(e),
             execution_time_ms=round(execution_time_ms, 2),

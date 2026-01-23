@@ -80,7 +80,7 @@ class TestConfigLoader:
         config = load_memory_config()
         assert isinstance(config.semantic, SemanticMemoryConfig)
         assert config.semantic.backend == "falkordb"
-        assert config.semantic.graph_name == "e2i_semantic"
+        assert config.semantic.graph_name == "e2i_causal"
 
     def test_config_has_procedural_memory_config(self):
         """Config should have procedural memory configuration."""

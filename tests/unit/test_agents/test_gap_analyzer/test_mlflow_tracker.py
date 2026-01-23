@@ -58,11 +58,14 @@ def tracker():
 def sample_context():
     """Create a sample GapAnalysisContext."""
     return GapAnalysisContext(
-        query="Find ROI opportunities in Northeast region",
+        experiment_id="exp_123",
+        run_id="run_456",
+        experiment_name="roi_opportunities",
+        started_at=datetime.now(),
         brand="Kisqali",
         region="Northeast",
-        time_period="Q4_2024",
-        analysis_type="roi_optimization",
+        gap_type="roi_optimization",
+        query_id="query_789",
     )
 
 
@@ -108,25 +111,29 @@ class TestGapAnalysisContext:
     """Tests for GapAnalysisContext dataclass."""
 
     def test_context_creation_minimal(self):
-        """Test context creation with minimal fields."""
+        """Test context creation with required fields."""
         ctx = GapAnalysisContext(
-            query="test query",
-            brand="TestBrand",
+            experiment_id="exp_123",
+            run_id="run_456",
+            experiment_name="test_experiment",
+            started_at=datetime.now(),
         )
-        assert ctx.query == "test query"
-        assert ctx.brand == "TestBrand"
+        assert ctx.experiment_id == "exp_123"
+        assert ctx.run_id == "run_456"
 
     def test_context_creation_full(self, sample_context):
         """Test context creation with all fields."""
         assert sample_context.brand == "Kisqali"
         assert sample_context.region == "Northeast"
-        assert sample_context.analysis_type == "roi_optimization"
+        assert sample_context.gap_type == "roi_optimization"
 
     def test_context_default_values(self):
         """Test context default values."""
         ctx = GapAnalysisContext(
-            query="test",
-            brand="brand",
+            experiment_id="exp_123",
+            run_id="run_456",
+            experiment_name="test",
+            started_at=datetime.now(),
         )
         assert ctx.region is None or isinstance(ctx.region, str)
 
@@ -137,19 +144,19 @@ class TestGapAnalyzerMetrics:
     def test_metrics_creation(self):
         """Test metrics dataclass creation."""
         metrics = GapAnalyzerMetrics(
-            gaps_identified=5,
-            total_roi_potential=1000000.0,
-            avg_gap_severity=0.75,
+            total_gaps_detected=5,
+            total_addressable_value=1000000.0,
+            avg_gap_percentage=0.75,
         )
-        assert metrics.gaps_identified == 5
-        assert metrics.total_roi_potential == 1000000.0
+        assert metrics.total_gaps_detected == 5
+        assert metrics.total_addressable_value == 1000000.0
 
     def test_metrics_optional_fields(self):
         """Test metrics with optional fields."""
         metrics = GapAnalyzerMetrics(
-            gaps_identified=3,
+            total_gaps_detected=3,
         )
-        assert metrics.gaps_identified == 3
+        assert metrics.total_gaps_detected == 3
 
 
 # =============================================================================
@@ -178,17 +185,15 @@ class TestTrackerInitialization:
 class TestMLflowAvailability:
     """Tests for MLflow availability checking."""
 
-    def test_mlflow_available_when_installed(self, tracker, mock_mlflow):
-        """Test MLflow detection when installed."""
-        with patch.object(tracker, "_mlflow", mock_mlflow):
-            with patch.object(tracker, "_check_mlflow", return_value=True):
-                assert tracker._check_mlflow() is True
+    def test_mlflow_available_attribute_set(self, tracker):
+        """Test MLflow availability attribute is set on init."""
+        assert hasattr(tracker, "_mlflow_available")
+        assert isinstance(tracker._mlflow_available, bool)
 
     def test_graceful_degradation_when_unavailable(self, tracker):
         """Test tracker works when MLflow unavailable."""
-        with patch.object(tracker, "_check_mlflow", return_value=False):
-            result = tracker._check_mlflow()
-            assert result is False
+        tracker._mlflow_available = False
+        assert tracker._mlflow_available is False
 
 
 # =============================================================================
@@ -200,39 +205,41 @@ class TestStartAnalysisRun:
     """Tests for start_analysis_run context manager."""
 
     @pytest.mark.asyncio
-    async def test_start_run_returns_context_manager(self, tracker, sample_context):
+    async def test_start_run_returns_context_manager(self, tracker):
         """Test start_analysis_run returns async context manager."""
-        with patch.object(tracker, "_check_mlflow", return_value=False):
-            async with tracker.start_analysis_run(sample_context) as run_ctx:
-                assert run_ctx is None or isinstance(run_ctx, dict)
+        tracker._mlflow_available = False
+        async with tracker.start_analysis_run(
+            experiment_name="test_experiment",
+            brand="Kisqali",
+        ) as run_ctx:
+            assert run_ctx is None or isinstance(run_ctx, GapAnalysisContext)
 
     @pytest.mark.asyncio
-    async def test_start_run_with_mlflow(self, tracker, sample_context, mock_mlflow):
-        """Test start_analysis_run with MLflow available."""
-        with patch.object(tracker, "_mlflow", mock_mlflow):
-            with patch.object(tracker, "_check_mlflow", return_value=True):
-                mock_run = MagicMock()
-                mock_run.info.run_id = "test_run_123"
-                mock_mlflow.start_run.return_value.__enter__ = MagicMock(return_value=mock_run)
-                mock_mlflow.start_run.return_value.__exit__ = MagicMock(return_value=False)
-
-                async with tracker.start_analysis_run(sample_context):
-                    mock_mlflow.set_experiment.assert_called()
+    async def test_start_run_without_mlflow_returns_context(self, tracker):
+        """Test start_analysis_run returns context when MLflow unavailable."""
+        tracker._mlflow_available = False
+        async with tracker.start_analysis_run(
+            experiment_name="test_experiment",
+            brand="Kisqali",
+        ) as run_ctx:
+            assert isinstance(run_ctx, GapAnalysisContext)
+            assert run_ctx.experiment_name == "test_experiment"
+            assert run_ctx.brand == "Kisqali"
 
     @pytest.mark.asyncio
-    async def test_start_run_logs_brand_context(self, tracker, sample_context, mock_mlflow):
-        """Test that brand context is logged during run start."""
-        with patch.object(tracker, "_mlflow", mock_mlflow):
-            with patch.object(tracker, "_check_mlflow", return_value=True):
-                mock_run = MagicMock()
-                mock_run.info.run_id = "test_run_123"
-                mock_mlflow.start_run.return_value.__enter__ = MagicMock(return_value=mock_run)
-                mock_mlflow.start_run.return_value.__exit__ = MagicMock(return_value=False)
-
-                async with tracker.start_analysis_run(sample_context):
-                    pass
-
-                mock_mlflow.set_experiment.assert_called()
+    async def test_start_run_context_has_required_fields(self, tracker):
+        """Test context manager returns context with required fields."""
+        tracker._mlflow_available = False
+        async with tracker.start_analysis_run(
+            experiment_name="test_experiment",
+            brand="Kisqali",
+            region="Northeast",
+        ) as run_ctx:
+            assert run_ctx.experiment_id is not None
+            assert run_ctx.run_id is not None
+            assert run_ctx.started_at is not None
+            assert run_ctx.brand == "Kisqali"
+            assert run_ctx.region == "Northeast"
 
 
 # =============================================================================
@@ -246,27 +253,27 @@ class TestMetricExtraction:
     def test_extract_metrics_from_dict(self, tracker, sample_result):
         """Test metric extraction from result dict."""
         metrics = tracker._extract_metrics(sample_result)
-        assert isinstance(metrics, dict)
+        assert isinstance(metrics, GapAnalyzerMetrics)
 
-    def test_extract_roi_metrics(self, tracker, sample_result):
+    def test_extract_roi_metrics(self, tracker):
         """Test ROI metric extraction."""
-        metrics = tracker._extract_metrics(sample_result)
-        assert isinstance(metrics, dict)
-        # ROI metrics should be extracted
-        if "total_roi_potential" in metrics:
-            assert metrics["total_roi_potential"] == 1250000.0
+        result = {"total_addressable_value": 1250000.0}
+        metrics = tracker._extract_metrics(result)
+        assert isinstance(metrics, GapAnalyzerMetrics)
+        assert metrics.total_addressable_value == 1250000.0
 
     def test_extract_metrics_handles_missing_fields(self, tracker):
         """Test metric extraction with missing fields."""
-        result = {"gaps_identified": 2}
+        result = {"total_gaps_detected": 2}
         metrics = tracker._extract_metrics(result)
-        assert isinstance(metrics, dict)
+        assert isinstance(metrics, GapAnalyzerMetrics)
 
     def test_extract_metrics_handles_none(self, tracker):
         """Test metric extraction with None values."""
-        result = {"gaps_identified": None, "total_roi_potential": 500000}
+        result = {"total_gap_value": None, "total_addressable_value": 500000}
         metrics = tracker._extract_metrics(result)
-        assert isinstance(metrics, dict)
+        assert isinstance(metrics, GapAnalyzerMetrics)
+        assert metrics.total_addressable_value == 500000
 
 
 # =============================================================================
@@ -280,59 +287,59 @@ class TestLogAnalysisResult:
     @pytest.mark.asyncio
     async def test_log_result_without_mlflow(self, tracker, sample_result):
         """Test logging result when MLflow unavailable."""
-        with patch.object(tracker, "_check_mlflow", return_value=False):
-            await tracker.log_analysis_result(sample_result)
+        tracker._mlflow_available = False
+        await tracker.log_analysis_result(sample_result)
 
     @pytest.mark.asyncio
-    async def test_log_result_with_mlflow(self, tracker, sample_result, mock_mlflow):
+    async def test_log_result_with_mlflow(self, tracker, sample_result):
         """Test logging result with MLflow available."""
-        with patch.object(tracker, "_mlflow", mock_mlflow):
-            with patch.object(tracker, "_check_mlflow", return_value=True):
+        tracker._mlflow_available = True
+        with patch("mlflow.log_metric") as mock_log_metric:
+            with patch("mlflow.log_param"):
                 await tracker.log_analysis_result(sample_result)
-                assert mock_mlflow.log_metrics.called or mock_mlflow.log_metric.called
+                assert mock_log_metric.called
 
     @pytest.mark.asyncio
-    async def test_log_result_includes_roi(self, tracker, sample_result, mock_mlflow):
-        """Test that ROI metrics are logged."""
-        with patch.object(tracker, "_mlflow", mock_mlflow):
-            with patch.object(tracker, "_check_mlflow", return_value=True):
-                await tracker.log_analysis_result(sample_result)
-                # Verify ROI-related logging
+    async def test_log_result_handles_empty_result(self, tracker):
+        """Test logging handles empty result dict."""
+        tracker._mlflow_available = False
+        await tracker.log_analysis_result({})
 
 
 class TestLogParams:
     """Tests for _log_params method."""
 
-    def test_log_params_from_context(self, tracker, sample_context, mock_mlflow):
-        """Test parameter logging from context."""
-        with patch.object(tracker, "_mlflow", mock_mlflow):
-            with patch.object(tracker, "_check_mlflow", return_value=True):
-                tracker._log_params(sample_context)
-                assert mock_mlflow.log_params.called or mock_mlflow.log_param.called
+    def test_log_params_from_output(self, tracker, sample_result):
+        """Test parameter logging from output dict."""
+        with patch("mlflow.log_param") as mock_log_param:
+            tracker._log_params(sample_result)
+            # Should not fail, logging is called
 
-    def test_log_params_includes_brand(self, tracker, sample_context, mock_mlflow):
+    def test_log_params_includes_brand(self, tracker, sample_result):
         """Test brand is logged as parameter."""
-        with patch.object(tracker, "_mlflow", mock_mlflow):
-            with patch.object(tracker, "_check_mlflow", return_value=True):
-                tracker._log_params(sample_context)
+        mock_state = {"brand": "Kisqali", "gap_type": "roi"}
+        with patch("mlflow.log_param") as mock_log_param:
+            tracker._log_params(sample_result, state=mock_state)
+            # Verify brand was logged
+            calls = [str(c) for c in mock_log_param.call_args_list]
+            assert any("brand" in str(c) for c in calls)
 
 
 class TestLogArtifacts:
     """Tests for _log_artifacts method."""
 
     @pytest.mark.asyncio
-    async def test_log_artifacts_creates_json(self, tracker, sample_result, mock_mlflow):
-        """Test artifact logging creates JSON file."""
-        with patch.object(tracker, "_mlflow", mock_mlflow):
-            with patch.object(tracker, "_check_mlflow", return_value=True):
-                with patch("tempfile.NamedTemporaryFile") as mock_temp:
-                    mock_file = MagicMock()
-                    mock_file.__enter__ = MagicMock(return_value=mock_file)
-                    mock_file.__exit__ = MagicMock(return_value=False)
-                    mock_file.name = "/tmp/test_artifact.json"
-                    mock_temp.return_value = mock_file
+    async def test_log_artifacts_with_opportunities(self, tracker, sample_result):
+        """Test artifact logging with opportunities."""
+        sample_result["prioritized_opportunities"] = [{"id": 1, "name": "test"}]
+        with patch("mlflow.log_artifact"):
+            await tracker._log_artifacts(sample_result)
 
-                    await tracker._log_artifacts(sample_result)
+    @pytest.mark.asyncio
+    async def test_log_artifacts_empty_result(self, tracker):
+        """Test artifact logging with empty result."""
+        with patch("mlflow.log_artifact"):
+            await tracker._log_artifacts({})
 
 
 # =============================================================================
@@ -346,33 +353,24 @@ class TestGetROIHistory:
     @pytest.mark.asyncio
     async def test_get_history_without_mlflow(self, tracker):
         """Test history query when MLflow unavailable."""
-        with patch.object(tracker, "_check_mlflow", return_value=False):
-            history = await tracker.get_roi_history()
-            assert history is None or isinstance(history, (list, dict))
+        tracker._mlflow_available = False
+        history = await tracker.get_roi_history()
+        assert isinstance(history, list)
+        assert len(history) == 0
 
     @pytest.mark.asyncio
-    async def test_get_history_with_mlflow(self, tracker, mock_mlflow):
-        """Test history query with MLflow available."""
-        with patch.object(tracker, "_mlflow", mock_mlflow):
-            with patch.object(tracker, "_check_mlflow", return_value=True):
-                mock_mlflow.search_runs.return_value = MagicMock(
-                    to_dict=MagicMock(return_value={"run_id": ["run1", "run2"]})
-                )
-
-                history = await tracker.get_roi_history()
-                mock_mlflow.search_runs.assert_called()
+    async def test_get_history_returns_list(self, tracker):
+        """Test history query returns list structure."""
+        tracker._mlflow_available = False
+        history = await tracker.get_roi_history(brand="Kisqali")
+        assert isinstance(history, list)
 
     @pytest.mark.asyncio
-    async def test_get_history_filters_by_brand(self, tracker, mock_mlflow):
-        """Test history query filters by brand."""
-        with patch.object(tracker, "_mlflow", mock_mlflow):
-            with patch.object(tracker, "_check_mlflow", return_value=True):
-                mock_mlflow.search_runs.return_value = MagicMock(
-                    to_dict=MagicMock(return_value={"run_id": ["run1"]})
-                )
-
-                await tracker.get_roi_history(brand="Kisqali")
-                # Verify brand filter was applied
+    async def test_get_history_with_days_filter(self, tracker):
+        """Test history query with days filter."""
+        tracker._mlflow_available = False
+        history = await tracker.get_roi_history(days=7)
+        assert isinstance(history, list)
 
 
 class TestGetPerformanceSummary:
@@ -381,24 +379,24 @@ class TestGetPerformanceSummary:
     @pytest.mark.asyncio
     async def test_get_summary_without_mlflow(self, tracker):
         """Test summary query when MLflow unavailable."""
-        with patch.object(tracker, "_check_mlflow", return_value=False):
-            summary = await tracker.get_performance_summary()
-            assert summary is None or isinstance(summary, dict)
+        tracker._mlflow_available = False
+        summary = await tracker.get_performance_summary()
+        assert isinstance(summary, dict)
 
     @pytest.mark.asyncio
-    async def test_get_summary_returns_dict(self, tracker, mock_mlflow):
-        """Test summary returns dictionary structure."""
-        with patch.object(tracker, "_mlflow", mock_mlflow):
-            with patch.object(tracker, "_check_mlflow", return_value=True):
-                mock_df = MagicMock()
-                mock_df.to_dict.return_value = {
-                    "metrics.total_roi_potential": [1000000, 1500000],
-                    "metrics.gaps_identified": [3, 5],
-                }
-                mock_mlflow.search_runs.return_value = mock_df
+    async def test_get_summary_returns_dict_structure(self, tracker):
+        """Test summary returns dictionary with expected keys."""
+        tracker._mlflow_available = False
+        summary = await tracker.get_performance_summary()
+        assert isinstance(summary, dict)
+        assert "total_analyses" in summary
 
-                summary = await tracker.get_performance_summary()
-                assert summary is None or isinstance(summary, dict)
+    @pytest.mark.asyncio
+    async def test_get_summary_with_days_filter(self, tracker):
+        """Test summary with days filter."""
+        tracker._mlflow_available = False
+        summary = await tracker.get_performance_summary(days=7)
+        assert isinstance(summary, dict)
 
 
 # =============================================================================
@@ -410,27 +408,39 @@ class TestErrorHandling:
     """Tests for error handling scenarios."""
 
     @pytest.mark.asyncio
-    async def test_handles_mlflow_connection_error(self, tracker, mock_mlflow):
-        """Test handling of MLflow connection errors."""
-        with patch.object(tracker, "_mlflow", mock_mlflow):
-            with patch.object(tracker, "_check_mlflow", return_value=True):
-                mock_mlflow.set_experiment.side_effect = Exception("Connection failed")
-
-                try:
-                    async with tracker.start_analysis_run(
-                        GapAnalysisContext(query="test", brand="Test")
-                    ):
-                        pass
-                except Exception:
-                    pass
-
-    @pytest.mark.asyncio
     async def test_handles_invalid_result_format(self, tracker):
         """Test handling of invalid result format."""
-        with patch.object(tracker, "_check_mlflow", return_value=False):
-            await tracker.log_analysis_result({"invalid": "structure"})
+        tracker._mlflow_available = False
+        await tracker.log_analysis_result({"invalid": "structure"})
+
+    @pytest.mark.asyncio
+    async def test_handles_none_result(self, tracker):
+        """Test handling of None values in result."""
+        tracker._mlflow_available = False
+        result = {"gaps_identified": None, "total_roi_potential": None}
+        await tracker.log_analysis_result(result)
 
     def test_handles_empty_context(self, tracker):
         """Test handling of minimal context."""
-        ctx = GapAnalysisContext(query="", brand="")
+        ctx = GapAnalysisContext(
+            experiment_id="",
+            run_id="",
+            experiment_name="",
+            started_at=datetime.now(),
+        )
         assert ctx is not None
+
+    def test_context_with_all_optional_none(self, tracker):
+        """Test context with all optional fields as None."""
+        ctx = GapAnalysisContext(
+            experiment_id="exp_1",
+            run_id="run_1",
+            experiment_name="test",
+            started_at=datetime.now(),
+            brand=None,
+            region=None,
+            gap_type=None,
+            query_id=None,
+        )
+        assert ctx.brand is None
+        assert ctx.region is None
