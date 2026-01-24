@@ -715,3 +715,350 @@ class TestGetStatistics:
 
         assert "grade_distribution" in stats
         assert len(stats["grade_distribution"]) > 0
+
+
+# =============================================================================
+# RETRAINING TRIGGER TESTS (Phase 6)
+# =============================================================================
+
+
+class TestRetrainingTriggerIntegration:
+    """Tests for retraining trigger integration with FidelityTracker."""
+
+    @pytest.fixture
+    def mock_retraining_service(self):
+        """Create mock retraining service."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        service = MagicMock()
+        service.check_and_trigger_retraining = AsyncMock(return_value=None)
+        service.evaluate_retraining_need = AsyncMock()
+        return service
+
+    def test_tracker_init_with_retraining_service(self, mock_retraining_service):
+        """Test FidelityTracker initialization with retraining service."""
+        tracker = FidelityTracker(
+            retraining_service=mock_retraining_service,
+            auto_trigger_retraining=False,
+        )
+
+        assert tracker._retraining_service == mock_retraining_service
+        assert tracker._auto_trigger_retraining is False
+
+    def test_tracker_init_auto_retraining_enabled(self, mock_retraining_service):
+        """Test FidelityTracker with auto retraining enabled."""
+        tracker = FidelityTracker(
+            retraining_service=mock_retraining_service,
+            auto_trigger_retraining=True,
+        )
+
+        assert tracker._auto_trigger_retraining is True
+
+    def test_tracker_default_no_retraining(self):
+        """Test that default tracker has no retraining service."""
+        tracker = FidelityTracker()
+
+        assert tracker._retraining_service is None
+        assert tracker._auto_trigger_retraining is False
+
+    def test_poor_fidelity_logged_for_retraining(self):
+        """Test that poor fidelity grades are logged for potential retraining."""
+        tracker = FidelityTracker()
+
+        result = SimulationResult(
+            model_id=uuid4(),
+            intervention_config=InterventionConfig(
+                intervention_type="email_campaign",
+                channel="email",
+            ),
+            twin_count=1000,
+            simulated_ate=0.20,
+            simulated_ci_lower=0.15,
+            simulated_ci_upper=0.25,
+            simulated_std_error=0.025,
+            status=SimulationStatus.COMPLETED,
+            recommendation=SimulationRecommendation.DEPLOY,
+            recommendation_rationale="Effect is significant",
+            simulation_confidence=0.85,
+            execution_time_ms=150,
+        )
+
+        tracker.record_prediction(result)
+
+        # Validate with very different actual (50% error -> POOR)
+        validated = tracker.validate(
+            simulation_id=result.simulation_id,
+            actual_ate=0.10,  # 50% error from 0.20
+            actual_ci=(0.07, 0.13),
+            actual_sample_size=500,
+        )
+
+        assert validated.fidelity_grade == FidelityGrade.POOR
+
+    def test_validate_with_retraining_service(self, mock_retraining_service):
+        """Test validation triggers retraining check when enabled."""
+        tracker = FidelityTracker(
+            retraining_service=mock_retraining_service,
+            auto_trigger_retraining=True,
+        )
+
+        result = SimulationResult(
+            model_id=uuid4(),
+            intervention_config=InterventionConfig(
+                intervention_type="email_campaign",
+                channel="email",
+            ),
+            twin_count=1000,
+            simulated_ate=0.20,
+            simulated_ci_lower=0.15,
+            simulated_ci_upper=0.25,
+            simulated_std_error=0.025,
+            status=SimulationStatus.COMPLETED,
+            recommendation=SimulationRecommendation.DEPLOY,
+            recommendation_rationale="Test",
+            simulation_confidence=0.85,
+            execution_time_ms=150,
+        )
+
+        tracker.record_prediction(result)
+
+        # Validate with poor result
+        validated = tracker.validate(
+            simulation_id=result.simulation_id,
+            actual_ate=0.05,  # Large error
+            actual_ci=(0.02, 0.08),
+            actual_sample_size=500,
+        )
+
+        # Should have logged for retraining (POOR or FAIR grade)
+        assert validated.fidelity_grade in [
+            FidelityGrade.POOR,
+            FidelityGrade.FAIR,
+        ]
+
+    def test_validate_good_fidelity_no_retraining_trigger(self, mock_retraining_service):
+        """Test that good fidelity doesn't trigger retraining check."""
+        tracker = FidelityTracker(
+            retraining_service=mock_retraining_service,
+            auto_trigger_retraining=True,
+        )
+
+        result = SimulationResult(
+            model_id=uuid4(),
+            intervention_config=InterventionConfig(
+                intervention_type="email_campaign",
+                channel="email",
+            ),
+            twin_count=1000,
+            simulated_ate=0.10,
+            simulated_ci_lower=0.07,
+            simulated_ci_upper=0.13,
+            simulated_std_error=0.015,
+            status=SimulationStatus.COMPLETED,
+            recommendation=SimulationRecommendation.DEPLOY,
+            recommendation_rationale="Test",
+            simulation_confidence=0.85,
+            execution_time_ms=150,
+        )
+
+        tracker.record_prediction(result)
+
+        # Validate with accurate result (small error)
+        validated = tracker.validate(
+            simulation_id=result.simulation_id,
+            actual_ate=0.095,  # 5% error
+            actual_ci=(0.065, 0.125),
+            actual_sample_size=800,
+        )
+
+        # Should be EXCELLENT or GOOD
+        assert validated.fidelity_grade in [
+            FidelityGrade.EXCELLENT,
+            FidelityGrade.GOOD,
+        ]
+
+
+class TestRetrainingService:
+    """Tests for TwinRetrainingService."""
+
+    @pytest.fixture
+    def retraining_config(self):
+        """Create test retraining configuration."""
+        from src.digital_twin.retraining_service import TwinRetrainingConfig
+
+        return TwinRetrainingConfig(
+            fidelity_threshold=0.70,
+            min_validations_for_decision=3,
+            cooldown_hours=1,
+            auto_approve_threshold=0.50,
+        )
+
+    @pytest.fixture
+    def retraining_service(self, retraining_config):
+        """Create retraining service."""
+        from src.digital_twin.retraining_service import TwinRetrainingService
+
+        return TwinRetrainingService(config=retraining_config)
+
+    @pytest.mark.asyncio
+    async def test_evaluate_insufficient_validations(self, retraining_service):
+        """Test evaluation with insufficient validations."""
+        model_id = uuid4()
+
+        # Empty fidelity report
+        fidelity_report = {
+            "validation_count": 2,  # Less than min (3)
+            "fidelity_score": 0.50,  # Would trigger if enough validations
+            "metrics": {},
+        }
+
+        decision = await retraining_service.evaluate_retraining_need(
+            model_id, fidelity_report
+        )
+
+        assert decision.should_retrain is False
+        assert "insufficient_validations" in decision.details.get("blocked_reason", "")
+
+    @pytest.mark.asyncio
+    async def test_evaluate_triggers_on_low_fidelity(self, retraining_service):
+        """Test that low fidelity triggers retraining."""
+        model_id = uuid4()
+
+        fidelity_report = {
+            "validation_count": 10,
+            "fidelity_score": 0.50,  # Below 0.70 threshold
+            "metrics": {
+                "mean_absolute_error": 0.15,
+                "ci_coverage_rate": 0.70,
+            },
+        }
+
+        decision = await retraining_service.evaluate_retraining_need(
+            model_id, fidelity_report
+        )
+
+        assert decision.should_retrain is True
+        from src.digital_twin.retraining_service import TwinTriggerReason
+
+        assert decision.reason == TwinTriggerReason.FIDELITY_DEGRADATION
+
+    @pytest.mark.asyncio
+    async def test_evaluate_no_retrain_good_fidelity(self, retraining_service):
+        """Test that good fidelity doesn't trigger retraining."""
+        model_id = uuid4()
+
+        fidelity_report = {
+            "validation_count": 10,
+            "fidelity_score": 0.85,  # Above threshold
+            "metrics": {
+                "mean_absolute_error": 0.08,
+                "ci_coverage_rate": 0.90,
+            },
+        }
+
+        decision = await retraining_service.evaluate_retraining_need(
+            model_id, fidelity_report
+        )
+
+        assert decision.should_retrain is False
+
+    @pytest.mark.asyncio
+    async def test_auto_approve_critical_degradation(self, retraining_service):
+        """Test auto-approval when fidelity is critically low."""
+        model_id = uuid4()
+
+        fidelity_report = {
+            "validation_count": 10,
+            "fidelity_score": 0.40,  # Below auto_approve_threshold (0.50)
+            "metrics": {
+                "mean_absolute_error": 0.30,
+                "ci_coverage_rate": 0.50,
+            },
+        }
+
+        decision = await retraining_service.evaluate_retraining_need(
+            model_id, fidelity_report
+        )
+
+        assert decision.should_retrain is True
+        assert decision.requires_approval is False  # Auto-approved
+
+    @pytest.mark.asyncio
+    async def test_trigger_creates_job(self, retraining_service):
+        """Test that triggering retraining creates a job."""
+        from src.digital_twin.retraining_service import (
+            TwinRetrainingStatus,
+            TwinTriggerReason,
+        )
+
+        model_id = uuid4()
+
+        job = await retraining_service.trigger_retraining(
+            model_id=model_id,
+            reason=TwinTriggerReason.FIDELITY_DEGRADATION,
+            approved_by="test_user",
+        )
+
+        assert job is not None
+        assert job.model_id == str(model_id)
+        assert job.status == TwinRetrainingStatus.PENDING
+        assert job.trigger_reason == TwinTriggerReason.FIDELITY_DEGRADATION
+        assert job.training_config["approved_by"] == "test_user"
+
+    @pytest.mark.asyncio
+    async def test_complete_retraining_job(self, retraining_service):
+        """Test completing a retraining job."""
+        from src.digital_twin.retraining_service import (
+            TwinRetrainingStatus,
+            TwinTriggerReason,
+        )
+
+        model_id = uuid4()
+
+        # Create job
+        job = await retraining_service.trigger_retraining(
+            model_id=model_id,
+            reason=TwinTriggerReason.FIDELITY_DEGRADATION,
+        )
+
+        # Complete it
+        completed = await retraining_service.complete_retraining(
+            job_id=job.job_id,
+            new_model_id=str(uuid4()),
+            fidelity_after=0.85,
+            success=True,
+        )
+
+        assert completed.status == TwinRetrainingStatus.COMPLETED
+        assert completed.fidelity_after == 0.85
+
+    @pytest.mark.asyncio
+    async def test_cancel_retraining_job(self, retraining_service):
+        """Test cancelling a pending retraining job."""
+        from src.digital_twin.retraining_service import (
+            TwinRetrainingStatus,
+            TwinTriggerReason,
+        )
+
+        model_id = uuid4()
+
+        job = await retraining_service.trigger_retraining(
+            model_id=model_id,
+            reason=TwinTriggerReason.MANUAL,
+        )
+
+        cancelled = await retraining_service.cancel_retraining(
+            job_id=job.job_id,
+            reason="Test cancellation",
+        )
+
+        assert cancelled.status == TwinRetrainingStatus.CANCELLED
+        assert "Test cancellation" in cancelled.error_message
+
+    def test_service_statistics(self, retraining_service):
+        """Test getting service statistics."""
+        stats = retraining_service.get_statistics()
+
+        assert "total_jobs" in stats
+        assert "config" in stats
+        assert stats["config"]["fidelity_threshold"] == 0.70
