@@ -87,6 +87,7 @@ class PredictionSynthesizerAgent:
         context_store: Optional[Any] = None,
         feature_store: Optional[Any] = None,
         enable_memory: bool = True,
+        enable_dspy: bool = True,
     ):
         """
         Initialize Prediction Synthesizer agent.
@@ -97,12 +98,14 @@ class PredictionSynthesizerAgent:
             context_store: Store for historical context
             feature_store: Store for feature metadata
             enable_memory: Whether to enable memory integration (default: True)
+            enable_dspy: Whether to enable DSPy signal emission (default: True)
         """
         self.model_registry = model_registry
         self.model_clients = model_clients or {}
         self.context_store = context_store
         self.feature_store = feature_store
         self.enable_memory = enable_memory
+        self.enable_dspy = enable_dspy
 
         self._full_graph = None
         self._simple_graph = None
@@ -260,6 +263,20 @@ class PredictionSynthesizerAgent:
                 )
             except Exception as e:
                 logger.warning(f"Failed to contribute to memory: {e}")
+
+        # Emit DSPy training signal after successful prediction
+        if self.enable_dspy and output.status != "failed":
+            try:
+                from .dspy_integration import collect_and_emit_signal
+
+                await collect_and_emit_signal(
+                    session_id=session_id,
+                    state=result,
+                    output=output.model_dump(),
+                    min_reward_threshold=0.5,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to emit DSPy training signal: {e}")
 
         return output
 
