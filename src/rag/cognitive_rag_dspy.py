@@ -968,9 +968,11 @@ class CognitiveRAGOptimizer:
         val_examples = trainset[split_idx:] if split_idx < len(trainset) else trainset[-2:]
 
         # Create RAGAS-based metric for RAG evaluation
+        # Uses correct signature: create_ragas_metric(provider, agent_name, weights)
+        phase_weights = self._get_phase_weights(phase)
         ragas_metric = create_ragas_metric(
-            phase=phase,
-            fallback_metric=self._get_phase_metric(phase),
+            agent_name=f"cognitive_rag_{phase}",
+            weights=phase_weights,
         )
 
         # Convert budget string to GEPA format if needed
@@ -1060,6 +1062,42 @@ class CognitiveRAGOptimizer:
             "agent": self.agent_metric,
         }
         return metrics.get(phase, self.summarizer_metric)
+
+    def _get_phase_weights(self, phase: str) -> Optional[dict[str, float]]:
+        """Get RAGAS metric weights optimized for a specific RAG phase.
+
+        Different phases have different priorities:
+        - Summarizer: Focus on relevancy (query understanding)
+        - Investigator: Focus on precision and faithfulness (retrieval quality)
+        - Agent: Balanced focus on all metrics (synthesis quality)
+
+        Args:
+            phase: The RAG phase name
+
+        Returns:
+            Dict of weights or None for default equal weights
+        """
+        weights = {
+            "summarizer": {
+                "faithfulness": 0.15,
+                "answer_relevancy": 0.45,
+                "context_precision": 0.25,
+                "context_recall": 0.15,
+            },
+            "investigator": {
+                "faithfulness": 0.30,
+                "answer_relevancy": 0.15,
+                "context_precision": 0.35,
+                "context_recall": 0.20,
+            },
+            "agent": {
+                "faithfulness": 0.30,
+                "answer_relevancy": 0.30,
+                "context_precision": 0.20,
+                "context_recall": 0.20,
+            },
+        }
+        return weights.get(phase)  # None for unknown phases uses default
 
     def _signals_to_examples(self, signals: List[Dict], phase: str) -> List[dspy.Example]:
         """Convert training signals to DSPy Examples."""
