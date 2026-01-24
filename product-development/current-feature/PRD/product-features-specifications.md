@@ -32,14 +32,15 @@ Output:
 
 ---
 
-### 2. 18-Agent Multi-Agent System
+### 2. 21-Agent Multi-Agent System
 
 **Description**: Specialized AI agents organized in 6 tiers, each with specific expertise, collaborating to deliver comprehensive analytics.
 
 **Agent Architecture**:
 
-**Tier 0: ML Foundation (7 agents)**
+**Tier 0: ML Foundation (8 agents)**
 - `scope_definer`: Translates business questions to ML scopes
+- `cohort_constructor`: Patient cohort construction with audit trails
 - `data_preparer`: Data cleaning, validation, feature engineering
 - `feature_analyzer`: Feature importance, selection, interaction analysis
 - `model_selector`: Algorithm selection based on data characteristics

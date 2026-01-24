@@ -1,7 +1,7 @@
 # Tier 0: ML Foundation - Agent Specialist Overview
 
 **Architecture Tier**: 0 (Foundation Layer)
-**Total Agents**: 7
+**Total Agents**: 8
 **Purpose**: Complete ML lifecycle from problem definition to production deployment
 **Dependencies**: None (foundation for all other tiers)
 
@@ -9,14 +9,14 @@
 
 ## 🎯 Tier Overview
 
-Tier 0 (ML Foundation) is the **base layer** of the E2I 18-agent, 6-tier architecture. All Tiers 1-5 depend on models, features, and infrastructure established by these 7 agents.
+Tier 0 (ML Foundation) is the **base layer** of the E2I 21-agent, 6-tier architecture. All Tiers 1-5 depend on models, features, and infrastructure established by these 8 agents.
 
 ### Tier 0 in the Complete Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                          E2I AGENT ARCHITECTURE V4                       │
-│                          18 Agents, 6 Tiers                              │
+│                          21 Agents, 6 Tiers                              │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                          │
 │  ★ TIER 0: ML FOUNDATION (THIS TIER) ★                                  │
@@ -47,19 +47,20 @@ Tier 0 (ML Foundation) is the **base layer** of the E2I 18-agent, 6-tier archite
 
 ---
 
-## 📊 The 7 ML Foundation Agents
+## 📊 The 8 ML Foundation Agents
 
 ### Agent Classification Matrix
 
 | # | Agent | Type | Model | Latency | Critical Path | Primary Output |
 |---|-------|------|-------|---------|---------------|----------------|
 | 1 | **Scope Definer** | Standard | None | <5s | Yes (ML) | ScopeSpec, SuccessCriteria |
-| 2 | **Data Preparer** | Standard | None | <60s | Yes (QC Gate) | QCReport, BaselineMetrics |
-| 3 | **Model Selector** | Standard | None | <120s | Yes (ML) | ModelCandidate, SelectionRationale |
-| 4 | **Model Trainer** | Standard | None | Variable | Yes (ML) | TrainedModel, ValidationMetrics |
-| 5 | **Feature Analyzer** | **Hybrid** | Sonnet | <120s | No | SHAPAnalysis, FeatureImpacts |
-| 6 | **Model Deployer** | Standard | None | <30s | No | DeploymentManifest, VersionRecord |
-| 7 | **Observability Connector** | Standard (Async) | None | <100ms | No (cross-cutting) | Spans, QualityMetrics |
+| 2 | **Cohort Constructor** | Standard | None | <120s | Yes (ML) | CohortDefinition, EligibilityLog |
+| 3 | **Data Preparer** | Standard | None | <60s | Yes (QC Gate) | QCReport, BaselineMetrics |
+| 4 | **Model Selector** | Standard | None | <120s | Yes (ML) | ModelCandidate, SelectionRationale |
+| 5 | **Model Trainer** | Standard | None | Variable | Yes (ML) | TrainedModel, ValidationMetrics |
+| 6 | **Feature Analyzer** | **Hybrid** | Sonnet | <120s | No | SHAPAnalysis, FeatureImpacts |
+| 7 | **Model Deployer** | Standard | None | <30s | No | DeploymentManifest, VersionRecord |
+| 8 | **Observability Connector** | Standard (Async) | None | <100ms | No (cross-cutting) | Spans, QualityMetrics |
 
 ---
 
