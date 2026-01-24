@@ -63,3 +63,15 @@ export type {
   UseQueryErrorOptions,
   UseQueryErrorReturn,
 } from './use-query-error';
+
+// WebSocket cache sync hook (Phase 4: Cache invalidation sync)
+export {
+  useWebSocketCacheSync,
+  invalidateCacheForEvent,
+} from './use-websocket-cache-sync';
+export type {
+  GraphEventType,
+  GraphStreamPayload,
+  UseWebSocketCacheSyncOptions,
+  UseWebSocketCacheSyncReturn,
+} from './use-websocket-cache-sync';
