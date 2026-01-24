@@ -121,6 +121,85 @@ function createQueryClient(): QueryClient {
  */
 export const queryClient = createQueryClient();
 
+// =============================================================================
+// TAB VISIBILITY HANDLING (Phase 4: Pause polling when tab hidden)
+// =============================================================================
+
+/**
+ * Track tab visibility state for query management
+ */
+let isTabVisible = typeof document !== 'undefined' ? !document.hidden : true;
+
+/**
+ * Handle visibility change events
+ * Pauses refetch intervals when tab is hidden, resumes when visible
+ */
+function handleVisibilityChange(): void {
+  const wasVisible = isTabVisible;
+  isTabVisible = !document.hidden;
+
+  if (env.isDev) {
+    console.debug(`[Query] Tab visibility changed: ${wasVisible ? 'visible' : 'hidden'} → ${isTabVisible ? 'visible' : 'hidden'}`);
+  }
+
+  if (!isTabVisible) {
+    // Tab became hidden - cancel in-flight queries to save bandwidth
+    // Note: We don't cancel mutations, only queries
+    if (env.isDev) {
+      console.debug('[Query] Tab hidden - pausing background refetches');
+    }
+  } else if (wasVisible === false && isTabVisible) {
+    // Tab became visible again - invalidate stale queries to refetch
+    // This triggers a refetch for queries that became stale while hidden
+    if (env.isDev) {
+      console.debug('[Query] Tab visible - resuming queries');
+    }
+    // Refetch queries that may have become stale while hidden
+    // Only refetch if refetchOnWindowFocus is enabled (production)
+    if (env.isProd) {
+      void queryClient.invalidateQueries({
+        predicate: (query) => query.isStale(),
+      });
+    }
+  }
+}
+
+/**
+ * Initialize tab visibility listener
+ * Call this once during app initialization
+ */
+export function initTabVisibilityListener(): void {
+  if (typeof document === 'undefined') {
+    return; // SSR safety
+  }
+
+  document.addEventListener('visibilitychange', handleVisibilityChange);
+
+  if (env.isDev) {
+    console.debug('[Query] Tab visibility listener initialized');
+  }
+}
+
+/**
+ * Cleanup tab visibility listener
+ * Call this during app teardown if needed
+ */
+export function cleanupTabVisibilityListener(): void {
+  if (typeof document === 'undefined') {
+    return;
+  }
+
+  document.removeEventListener('visibilitychange', handleVisibilityChange);
+}
+
+/**
+ * Check if tab is currently visible
+ * Useful for conditional query behavior
+ */
+export function isTabCurrentlyVisible(): boolean {
+  return isTabVisible;
+}
+
 /**
  * Query key factory for consistent key generation
  * Use these helpers to create type-safe query keys

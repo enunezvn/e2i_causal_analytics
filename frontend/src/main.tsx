@@ -1,7 +1,7 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { QueryClientProvider } from '@tanstack/react-query'
-import { queryClient } from './lib/query-client'
+import { queryClient, initTabVisibilityListener } from './lib/query-client'
 import { AuthProvider } from './providers'
 import { AppRouter } from './router'
 import { AppErrorBoundary } from './components/ui/error-boundary'
@@ -19,6 +19,9 @@ async function initApp() {
     const { initMSW } = await import('./mocks/browser')
     await initMSW()
   }
+
+  // Initialize tab visibility listener (Phase 4: pause polling when tab hidden)
+  initTabVisibilityListener()
 
   // Render the React application
   // Provider order (outer to inner):
