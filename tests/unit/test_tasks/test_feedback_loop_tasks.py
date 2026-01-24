@@ -264,6 +264,7 @@ class TestRunFeedbackLoopLongWindow:
 # =============================================================================
 
 
+@pytest.mark.xdist_group(name="concept_drift_integration")
 class TestAnalyzeConceptDriftFromTruth:
     """Tests for analyze_concept_drift_from_truth Celery task."""
 

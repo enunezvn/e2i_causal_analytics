@@ -267,7 +267,7 @@ class TestHybridSearch:
         )
 
         assert response.status_code == 503
-        assert "unavailable" in response.json()["detail"].lower()
+        assert "unavailable" in response.json()["message"].lower()
 
     def test_search_timeout(self, mock_rag_service):
         """Should return 504 on timeout."""
@@ -283,7 +283,7 @@ class TestHybridSearch:
         )
 
         assert response.status_code == 504
-        assert "timed out" in response.json()["detail"].lower()
+        assert "timed out" in response.json()["message"].lower()
 
 
 class TestEntityExtraction:
