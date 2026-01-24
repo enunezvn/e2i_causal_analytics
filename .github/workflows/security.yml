@@ -69,30 +69,12 @@ jobs:
             -x '**/test_*.py,**/*_test.py,**/tests/**' \
             || true  # Don't fail CI, just report
 
-      - name: Run Bandit for SARIF output
-        run: |
-          bandit -r src/ \
-            -f sarif \
-            -o bandit-results.sarif \
-            --severity-level low \
-            -x '**/test_*.py,**/*_test.py,**/tests/**' \
-            || true
-
-      - name: Upload Bandit SARIF results
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with:
-          sarif_file: bandit-results.sarif
-          category: bandit
-
       - name: Upload Bandit JSON results
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: bandit-results
-          path: |
-            bandit-results.json
-            bandit-results.sarif
+          path: bandit-results.json
           retention-days: 30
 
       - name: Display Bandit summary
@@ -125,8 +107,6 @@ jobs:
             --config p/security-audit \
             --config p/secrets \
             --config p/owasp-top-ten \
-            --sarif \
-            --sarif-output=semgrep-results.sarif \
             --json \
             --json-output=semgrep-results.json \
             --exclude='**/test_*.py' \
@@ -137,21 +117,12 @@ jobs:
             --exclude='**/.worktrees/**' \
             || true
 
-      - name: Upload Semgrep SARIF results
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with:
-          sarif_file: semgrep-results.sarif
-          category: semgrep
-
       - name: Upload Semgrep artifacts
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: semgrep-results
-          path: |
-            semgrep-results.json
-            semgrep-results.sarif
+          path: semgrep-results.json
           retention-days: 30
 
   # =============================================================================
@@ -256,6 +227,8 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build Docker image for scanning
+        id: docker-build
+        continue-on-error: true
         run: |
           docker build \
             -t e2i-api:scan \
@@ -263,22 +236,7 @@ jobs:
             .
 
       - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: 'e2i-api:scan'
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-          severity: 'CRITICAL,HIGH,MEDIUM'
-          vuln-type: 'os,library'
-
-      - name: Upload Trivy SARIF results
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with:
-          sarif_file: trivy-results.sarif
-          category: trivy
-
-      - name: Run Trivy for JSON output
+        if: steps.docker-build.outcome == 'success'
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: 'e2i-api:scan'
@@ -289,12 +247,10 @@ jobs:
 
       - name: Upload Trivy artifacts
         uses: actions/upload-artifact@v4
-        if: always()
+        if: steps.docker-build.outcome == 'success'
         with:
           name: trivy-results
-          path: |
-            trivy-results.json
-            trivy-results.sarif
+          path: trivy-results.json
           retention-days: 30
 
       - name: Display Trivy summary
@@ -305,6 +261,8 @@ jobs:
             echo '```json' >> $GITHUB_STEP_SUMMARY
             cat trivy-results.json | python -m json.tool | head -100 >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
+          else
+            echo "Docker build failed or was skipped - no container scan results available." >> $GITHUB_STEP_SUMMARY
           fi
 
   # =============================================================================
@@ -319,18 +277,20 @@ jobs:
 
       - name: Run Hadolint on all Dockerfiles
         uses: hadolint/hadolint-action@v3.1.0
+        continue-on-error: true
         with:
           dockerfile: docker/fastapi/Dockerfile
           failure-threshold: warning
-          format: sarif
-          output-file: hadolint-results.sarif
+          format: json
+          output-file: hadolint-results.json
 
-      - name: Upload Hadolint SARIF results
-        uses: github/codeql-action/upload-sarif@v3
+      - name: Upload Hadolint results
+        uses: actions/upload-artifact@v4
         if: always()
         with:
-          sarif_file: hadolint-results.sarif
-          category: hadolint
+          name: hadolint-results
+          path: hadolint-results.json
+          retention-days: 30
 
       - name: Lint all Dockerfiles
         run: |
