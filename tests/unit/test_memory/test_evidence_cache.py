@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 import pytest
 
-from src.memory.004_cognitive_workflow import (
+from src.memory.evidence_cache import (
     EvidenceEvaluationCache,
     get_evidence_cache,
     is_evidence_cache_enabled,
