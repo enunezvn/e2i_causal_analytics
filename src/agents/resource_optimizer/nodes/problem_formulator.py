@@ -124,11 +124,31 @@ class ProblemFormulatorNode:
         lb = [t.get("min_allocation", 0) or 0 for t in targets]
         ub = [t.get("max_allocation") or float("inf") for t in targets]
 
+        # Variable types for MILP
+        var_types = []
+        for t in targets:
+            if t.get("is_binary", False):
+                var_types.append("binary")
+            elif t.get("is_integer", False):
+                var_types.append("integer")
+            else:
+                var_types.append("continuous")
+
+        # Fixed costs for binary selection (adjust objective if present)
+        fixed_costs = [t.get("fixed_cost", 0.0) for t in targets]
+
+        # Allocation units (for discrete step sizes)
+        allocation_units = [t.get("allocation_unit") for t in targets]
+
         # Constraint matrices
         a_ub = []
         b_ub = []
         a_eq = []
         b_eq = []
+
+        # Cardinality constraints (min/max entities to select)
+        min_entities: Optional[int] = None
+        max_entities: Optional[int] = None
 
         for constraint in constraints:
             constraint_type = constraint.get("constraint_type", "")
@@ -146,6 +166,12 @@ class ProblemFormulatorNode:
                 # Sum of allocations == value
                 a_eq.append([1.0] * n)
                 b_eq.append(value)
+            elif constraint_type == "cardinality":
+                # Cardinality constraint (min/max entities to select)
+                min_entities = constraint.get("min_entities")
+                max_entities = constraint.get("max_entities")
+                if max_entities is None and value > 0:
+                    max_entities = int(value)
 
         return {
             "c": c,
@@ -158,14 +184,25 @@ class ProblemFormulatorNode:
             "n": n,
             "targets": targets,
             "objective": objective,
+            # MILP extensions
+            "var_types": var_types,
+            "fixed_costs": fixed_costs,
+            "allocation_units": allocation_units,
+            "min_entities": min_entities,
+            "max_entities": max_entities,
+            "has_integer_vars": any(t != "continuous" for t in var_types),
         }
 
     def _select_solver(self, problem: Dict[str, Any], requested: Optional[str]) -> str:
         """Select appropriate solver for the problem."""
-        # Check for integer variables (would need to be specified in targets)
-        has_integer = False  # Future: check targets for discrete requirements
+        # Check for integer/binary variables or cardinality constraints
+        has_integer = problem.get("has_integer_vars", False)
+        has_cardinality = (
+            problem.get("min_entities") is not None
+            or problem.get("max_entities") is not None
+        )
 
-        if has_integer:
+        if has_integer or has_cardinality:
             return "milp"
         elif requested:
             return requested
