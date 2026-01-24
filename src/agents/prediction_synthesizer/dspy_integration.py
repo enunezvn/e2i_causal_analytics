@@ -1,6 +1,6 @@
 """
 E2I Prediction Synthesizer Agent - DSPy Integration Module
-Version: 4.2
+Version: 4.3
 Purpose: DSPy signatures and training signals for prediction_synthesizer Sender role
 
 The Prediction Synthesizer agent is a DSPy Sender agent that:
@@ -12,6 +12,7 @@ The Prediction Synthesizer agent is a DSPy Sender agent that:
 from __future__ import annotations
 
 import logging
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
@@ -407,7 +408,183 @@ def reset_dspy_integration() -> None:
 
 
 # =============================================================================
-# 5. EXPORTS
+# 5. SIGNAL EMISSION TO FEEDBACK LEARNER
+# =============================================================================
+
+
+async def emit_training_signal(
+    signal: PredictionSynthesisTrainingSignal,
+    min_reward_threshold: float = 0.5,
+) -> bool:
+    """
+    Emit a training signal to the feedback learner.
+
+    Only emits signals above the reward threshold to avoid
+    polluting the training data with low-quality examples.
+
+    Args:
+        signal: The training signal to emit
+        min_reward_threshold: Minimum reward to emit (default: 0.5)
+
+    Returns:
+        True if signal was emitted successfully
+    """
+    reward = signal.compute_reward()
+
+    if reward < min_reward_threshold:
+        logger.debug(
+            f"Signal not emitted: reward {reward:.3f} < threshold {min_reward_threshold}"
+        )
+        return False
+
+    try:
+        from src.agents.feedback_learner.memory_hooks import (
+            get_feedback_learner_memory_hooks,
+            LearningSignal,
+        )
+
+        hooks = get_feedback_learner_memory_hooks()
+
+        # Convert to LearningSignal format
+        learning_signal = LearningSignal(
+            signal_id=signal.signal_id or f"ps_{signal.session_id}_{uuid.uuid4().hex[:8]}",
+            session_id=signal.session_id,
+            cycle_id=f"synthesis_{signal.entity_id}",
+            signal_type="training",
+            signal_value=reward,
+            rated_agent="prediction_synthesizer",
+            applies_to_type="prediction",
+            applies_to_id=f"{signal.entity_type}:{signal.entity_id}:{signal.prediction_target}",
+            signal_details={
+                "source_agent": "prediction_synthesizer",
+                "dspy_type": "sender",
+                "query": signal.query[:500] if signal.query else "",
+                "prediction_target": signal.prediction_target,
+                "entity_type": signal.entity_type,
+                "ensemble_method": signal.ensemble_method,
+                "point_estimate": signal.point_estimate,
+                "ensemble_confidence": signal.ensemble_confidence,
+                "model_agreement": signal.model_agreement,
+                "models_succeeded": signal.models_succeeded,
+                "models_failed": signal.models_failed,
+                "is_training_example": reward >= 0.7,  # High quality examples
+            },
+        )
+
+        await hooks.receive_signal(learning_signal)
+        logger.info(
+            f"Emitted training signal to feedback_learner: "
+            f"reward={reward:.3f}, entity={signal.entity_id}"
+        )
+        return True
+
+    except ImportError:
+        logger.warning("Feedback learner not available for signal emission")
+        return False
+    except Exception as e:
+        logger.error(f"Failed to emit training signal: {e}")
+        return False
+
+
+def create_signal_from_result(
+    session_id: str,
+    state: Dict[str, Any],
+    output: Dict[str, Any],
+) -> PredictionSynthesisTrainingSignal:
+    """
+    Create a training signal from prediction result.
+
+    Convenience function to create a signal from the output
+    of a prediction synthesis.
+
+    Args:
+        session_id: Session identifier
+        state: PredictionSynthesizerState after execution
+        output: PredictionSynthesizerOutput as dict
+
+    Returns:
+        PredictionSynthesisTrainingSignal ready for emission
+    """
+    ensemble = output.get("ensemble_prediction") or {}
+    context = output.get("prediction_context") or {}
+
+    # Calculate prediction interval width
+    interval_lower = ensemble.get("prediction_interval_lower", 0)
+    interval_upper = ensemble.get("prediction_interval_upper", 0)
+    interval_width = interval_upper - interval_lower
+
+    # Determine models requested from state
+    models_to_use = state.get("models_to_use") or []
+    models_requested = len(models_to_use) if models_to_use else 3  # Default assumption
+
+    signal = PredictionSynthesisTrainingSignal(
+        signal_id=f"ps_{session_id}_{uuid.uuid4().hex[:8]}",
+        session_id=session_id,
+        query=state.get("query", ""),
+        entity_id=state.get("entity_id", ""),
+        entity_type=state.get("entity_type", ""),
+        prediction_target=state.get("prediction_target", ""),
+        time_horizon=state.get("time_horizon", ""),
+        models_requested=models_requested,
+        models_succeeded=output.get("models_succeeded", 0),
+        models_failed=output.get("models_failed", 0),
+        ensemble_method=ensemble.get("ensemble_method", state.get("ensemble_method", "")),
+        point_estimate=ensemble.get("point_estimate", 0.0),
+        prediction_interval_width=interval_width,
+        ensemble_confidence=ensemble.get("confidence", 0.0),
+        model_agreement=ensemble.get("model_agreement", 0.0),
+        similar_cases_found=len(context.get("similar_cases", [])),
+        feature_importance_calculated=bool(context.get("feature_importance")),
+        historical_accuracy=context.get("historical_accuracy", 0.0),
+        trend_direction=context.get("trend_direction", ""),
+        total_latency_ms=float(output.get("total_latency_ms", 0)),
+        orchestration_latency_ms=float(state.get("orchestration_latency_ms", 0)),
+        ensemble_latency_ms=float(state.get("ensemble_latency_ms", 0)),
+    )
+
+    return signal
+
+
+async def collect_and_emit_signal(
+    session_id: str,
+    state: Dict[str, Any],
+    output: Dict[str, Any],
+    min_reward_threshold: float = 0.5,
+) -> Optional[PredictionSynthesisTrainingSignal]:
+    """
+    Convenience function to create and emit a training signal.
+
+    Args:
+        session_id: Session identifier
+        state: PredictionSynthesizerState after execution
+        output: PredictionSynthesizerOutput as dict
+        min_reward_threshold: Minimum reward to emit
+
+    Returns:
+        The created signal if emitted, None otherwise
+    """
+    # Don't emit for failed predictions
+    if output.get("status") == "failed":
+        return None
+
+    signal = create_signal_from_result(session_id, state, output)
+
+    # Add to local collector buffer
+    collector = get_prediction_synthesizer_signal_collector()
+    collector._signals_buffer.append(signal)
+    if len(collector._signals_buffer) > collector._buffer_limit:
+        collector._signals_buffer.pop(0)
+
+    # Emit to feedback learner
+    emitted = await emit_training_signal(signal, min_reward_threshold)
+
+    if emitted:
+        return signal
+    return None
+
+
+# =============================================================================
+# 6. EXPORTS
 # =============================================================================
 
 __all__ = [
@@ -423,4 +600,8 @@ __all__ = [
     # Access
     "get_prediction_synthesizer_signal_collector",
     "reset_dspy_integration",
+    # Signal Emission
+    "emit_training_signal",
+    "create_signal_from_result",
+    "collect_and_emit_signal",
 ]
