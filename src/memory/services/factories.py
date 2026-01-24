@@ -158,6 +158,206 @@ class BedrockEmbeddingService(EmbeddingService):
         return embeddings
 
 
+class LocalEmbeddingService(EmbeddingService):
+    """
+    Local sentence-transformers embeddings for fallback/offline use.
+
+    Uses the lightweight all-MiniLM-L6-v2 model (80MB) which provides
+    384-dimensional embeddings. Model is loaded lazily on first use.
+
+    Note: Embeddings are NOT compatible with OpenAI/Bedrock embeddings
+    (different dimensions). Use only as fallback when primary is unavailable.
+    """
+
+    def __init__(self, model: str = "all-MiniLM-L6-v2"):
+        self._model = None
+        self.model_name = model
+        self._cache: Dict[int, List[float]] = {}
+
+    def _get_model(self):
+        """Lazy load the sentence-transformers model."""
+        if self._model is None:
+            try:
+                from sentence_transformers import SentenceTransformer
+
+                logger.info(f"Loading local embedding model: {self.model_name}")
+                self._model = SentenceTransformer(self.model_name)
+                logger.info(f"Local embedding model loaded successfully")
+            except ImportError as e:
+                raise ServiceConnectionError(
+                    "LocalEmbedding",
+                    "sentence-transformers package is not installed. "
+                    "Run: pip install sentence-transformers",
+                ) from e
+            except Exception as e:
+                raise ServiceConnectionError(
+                    "LocalEmbedding", f"Failed to load model: {e}", e
+                ) from e
+        return self._model
+
+    async def embed(self, text: str) -> List[float]:
+        """Generate embedding using local model with caching."""
+        cache_key = hash(text)
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        model = self._get_model()
+        try:
+            embedding = model.encode(text, convert_to_numpy=True).tolist()
+            self._cache[cache_key] = embedding
+            return embedding
+        except Exception as e:
+            raise ServiceConnectionError(
+                "LocalEmbedding", f"Failed to generate embedding: {e}", e
+            ) from e
+
+    async def embed_batch(self, texts: List[str]) -> List[List[float]]:
+        """Generate embeddings for multiple texts."""
+        model = self._get_model()
+        try:
+            embeddings = model.encode(texts, convert_to_numpy=True).tolist()
+            return embeddings
+        except Exception as e:
+            raise ServiceConnectionError(
+                "LocalEmbedding", f"Failed to generate batch embeddings: {e}", e
+            ) from e
+
+
+class FallbackEmbeddingService(EmbeddingService):
+    """
+    Cascading fallback embedding service.
+
+    Attempts primary embedding service first, falls back to local
+    sentence-transformers if primary fails. Provides resilience
+    against API outages and rate limits.
+
+    Fallback Chain:
+    1. Primary (OpenAI or Bedrock based on environment)
+    2. Local (sentence-transformers all-MiniLM-L6-v2)
+
+    Warning: Local embeddings have different dimensions (384 vs 1536).
+    When fallback is used, vector similarity searches may return
+    suboptimal results until primary is restored.
+    """
+
+    def __init__(self, environment: Optional[str] = None):
+        self._environment = environment or os.environ.get("E2I_ENVIRONMENT", "local_pilot")
+        self._primary: Optional[EmbeddingService] = None
+        self._fallback: Optional[EmbeddingService] = None
+        self._using_fallback = False
+        self._fallback_activated_at: Optional[float] = None
+        self._primary_retry_interval = 300.0  # Retry primary every 5 minutes
+
+    def _get_primary(self) -> EmbeddingService:
+        """Get or create primary embedding service."""
+        if self._primary is None:
+            if self._environment == "aws_production":
+                self._primary = BedrockEmbeddingService()
+            else:
+                self._primary = OpenAIEmbeddingService()
+        return self._primary
+
+    def _get_fallback(self) -> EmbeddingService:
+        """Get or create fallback embedding service."""
+        if self._fallback is None:
+            self._fallback = LocalEmbeddingService()
+        return self._fallback
+
+    def _should_retry_primary(self) -> bool:
+        """Check if we should attempt primary again after fallback activation."""
+        if not self._using_fallback or self._fallback_activated_at is None:
+            return True
+        import time
+        elapsed = time.time() - self._fallback_activated_at
+        return elapsed >= self._primary_retry_interval
+
+    async def embed(self, text: str) -> List[float]:
+        """Generate embedding with automatic fallback."""
+        import time
+
+        # Try primary if not in fallback mode or if retry interval elapsed
+        if self._should_retry_primary():
+            try:
+                primary = self._get_primary()
+                embedding = await primary.embed(text)
+
+                # Restore primary if we were in fallback
+                if self._using_fallback:
+                    logger.info("Primary embedding service restored")
+                    self._using_fallback = False
+                    self._fallback_activated_at = None
+
+                return embedding
+
+            except ServiceConnectionError as e:
+                logger.warning(f"Primary embedding failed: {e}, activating fallback")
+                self._using_fallback = True
+                self._fallback_activated_at = time.time()
+
+        # Use fallback
+        try:
+            fallback = self._get_fallback()
+            return await fallback.embed(text)
+        except ServiceConnectionError as e:
+            logger.error(f"Both primary and fallback embedding services failed")
+            raise ServiceConnectionError(
+                "FallbackEmbedding",
+                "All embedding services unavailable",
+                e,
+            ) from e
+
+    async def embed_batch(self, texts: List[str]) -> List[List[float]]:
+        """Generate batch embeddings with automatic fallback."""
+        import time
+
+        if self._should_retry_primary():
+            try:
+                primary = self._get_primary()
+                embeddings = await primary.embed_batch(texts)
+
+                if self._using_fallback:
+                    logger.info("Primary embedding service restored")
+                    self._using_fallback = False
+                    self._fallback_activated_at = None
+
+                return embeddings
+
+            except ServiceConnectionError as e:
+                logger.warning(f"Primary batch embedding failed: {e}, activating fallback")
+                self._using_fallback = True
+                self._fallback_activated_at = time.time()
+
+        try:
+            fallback = self._get_fallback()
+            return await fallback.embed_batch(texts)
+        except ServiceConnectionError as e:
+            logger.error(f"Both primary and fallback embedding services failed")
+            raise ServiceConnectionError(
+                "FallbackEmbedding",
+                "All embedding services unavailable",
+                e,
+            ) from e
+
+    @property
+    def is_using_fallback(self) -> bool:
+        """Check if currently using fallback service."""
+        return self._using_fallback
+
+    @property
+    def status(self) -> Dict[str, Any]:
+        """Get current service status."""
+        import time
+        return {
+            "using_fallback": self._using_fallback,
+            "fallback_duration_seconds": (
+                time.time() - self._fallback_activated_at
+                if self._fallback_activated_at
+                else None
+            ),
+            "environment": self._environment,
+        }
+
+
 # ============================================================================
 # LLM SERVICE ABSTRACTION
 # ============================================================================
@@ -560,27 +760,64 @@ def get_falkordb_client():
 # ============================================================================
 
 
-@lru_cache(maxsize=1)
-def get_embedding_service(environment: Optional[str] = None) -> EmbeddingService:
+def get_embedding_service(
+    environment: Optional[str] = None,
+    use_fallback: Optional[bool] = None,
+) -> EmbeddingService:
     """
-    Get embedding service based on environment.
+    Get embedding service based on environment with optional fallback.
 
     Args:
         environment: "local_pilot" or "aws_production". If not provided,
                      uses E2I_ENVIRONMENT env var or defaults to "local_pilot".
+        use_fallback: Enable fallback chain. If not provided, uses
+                      E2I_EMBEDDING_FALLBACK env var (default: true).
 
     Returns:
-        EmbeddingService: OpenAI or Bedrock embedding service
+        EmbeddingService: OpenAI, Bedrock, or FallbackEmbeddingService
+
+    Environment Variables:
+        E2I_ENVIRONMENT: "local_pilot" (OpenAI) or "aws_production" (Bedrock)
+        E2I_EMBEDDING_FALLBACK: "true" (default) enables fallback to local model
+
+    Examples:
+        # Default: uses env vars, fallback enabled
+        service = get_embedding_service()
+
+        # Explicit: disable fallback for testing
+        service = get_embedding_service(use_fallback=False)
+
+        # Production: Bedrock primary with local fallback
+        service = get_embedding_service(environment="aws_production")
     """
     if environment is None:
         environment = os.environ.get("E2I_ENVIRONMENT", "local_pilot")
 
-    logger.info(f"Creating embedding service for environment: {environment}")
+    if use_fallback is None:
+        use_fallback = os.environ.get("E2I_EMBEDDING_FALLBACK", "true").lower() == "true"
 
-    if environment == "aws_production":
+    logger.info(
+        f"Creating embedding service: environment={environment}, fallback={use_fallback}"
+    )
+
+    if use_fallback:
+        return FallbackEmbeddingService(environment=environment)
+    elif environment == "aws_production":
         return BedrockEmbeddingService()
     else:
         return OpenAIEmbeddingService()
+
+
+# Embedding service singleton
+_embedding_service: Optional[EmbeddingService] = None
+
+
+def get_embedding_service_cached() -> EmbeddingService:
+    """Get cached embedding service singleton."""
+    global _embedding_service
+    if _embedding_service is None:
+        _embedding_service = get_embedding_service()
+    return _embedding_service
 
 
 # Type alias for LLM providers
@@ -789,16 +1026,16 @@ async def test_all_connections() -> Dict[str, bool]:
 
 def reset_all_clients() -> None:
     """Reset all cached clients. Useful for testing."""
-    global _redis_client, _supabase_client, _async_supabase_client, _async_supabase_service_client, _falkordb_client
+    global _redis_client, _supabase_client, _async_supabase_client, _async_supabase_service_client, _falkordb_client, _embedding_service
 
     _redis_client = None
     _supabase_client = None
     _async_supabase_client = None
     _async_supabase_service_client = None
     _falkordb_client = None
+    _embedding_service = None
 
     # Clear LRU caches
-    get_embedding_service.cache_clear()
     _get_llm_service_cached.cache_clear()
 
     logger.info("All service clients have been reset")
