@@ -336,10 +336,13 @@ class TestConcurrentCacheWrites:
         await asyncio.gather(*tasks)
 
         # Verify stored data is valid
+        expected_ates = [0.05, 0.06, 0.07]
         for key, value in stored_data.items():
             data = pickle.loads(value.encode("latin-1"))
             assert "simulated_ate" in data
-            assert data["simulated_ate"] in [0.05, 0.06, 0.07]
+            # Use tolerance for floating point comparison
+            ate = data["simulated_ate"]
+            assert any(abs(ate - expected) < 1e-9 for expected in expected_ates)
 
 
 # =============================================================================
@@ -582,7 +585,7 @@ class TestTransactionRollback:
         mock_table.insert.return_value.execute = mock_insert
         mock_client.table.return_value = mock_table
 
-        repo = SimulationRepository(client=mock_client)
+        repo = SimulationRepository(supabase_client=mock_client)
 
         # First save should succeed, second should fail
         result1 = create_simulation_result()
