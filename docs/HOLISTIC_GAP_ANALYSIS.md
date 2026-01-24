@@ -16,7 +16,7 @@ This document provides a comprehensive analysis of implementation gaps across th
 - ✅ Database schemas (100%)
 - ✅ Documentation (90%)
 - ✅ Synthetic data (100%)
-- ⚠️  Agent implementations (17% - 3 of 18)
+- ⚠️  Agent implementations (17% - 3 of 21)
 - ❌ Causal engine (0%)
 - ❌ RAG module (0% code, 100% planning)
 - ❌ API layer (20% - 1 of 5 modules)
@@ -51,8 +51,8 @@ This document provides a comprehensive analysis of implementation gaps across th
 ### 🔴 GAP 1: Agent Implementation Deficit
 
 **Current State**:
-- Only **3 of 18** agents have any implementation
-- **15 agents** are completely missing
+- Only **3 of 21** agents have any implementation
+- **18 agents** are completely missing
 
 **What Exists**:
 1. ✅ **orchestrator** (TIER 1) - Partial implementation
@@ -70,10 +70,11 @@ This document provides a comprehensive analysis of implementation gaps across th
    - Digital twin tools stubbed
    - Missing: Core experiment logic
 
-**What's Missing** (15 agents):
+**What's Missing** (18 agents):
 
-**TIER 0: ML Foundation** (7 agents) - CRITICAL
+**TIER 0: ML Foundation** (8 agents) - CRITICAL
 - ❌ scope_definer - Defines ML problem scope
+- ❌ cohort_constructor - Patient cohort construction with audit trails
 - ❌ data_preparer - Data pipeline & preprocessing
 - ❌ feature_analyzer - Feature engineering & selection
 - ❌ model_selector - Algorithm selection

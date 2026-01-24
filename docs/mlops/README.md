@@ -42,8 +42,9 @@ Phase 1 → Phase 2 → Phase 5 → Phase 6 → Phase 8 → Phase 9 → Phase 10
 
 ## Key Achievements
 
-### Tier 0 ML Foundation Agents (7 Complete)
+### Tier 0 ML Foundation Agents (8 Complete)
 - **Scope Definer** - Defines ML problem scope and objectives
+- **Cohort Constructor** - Patient cohort construction with audit trails
 - **Data Preparer** - Data loading, validation, and preprocessing
 - **Feature Analyzer** - Feature engineering and selection with Feast
 - **Model Selector** - Model selection and benchmarking
@@ -71,7 +72,7 @@ Phase 1 → Phase 2 → Phase 5 → Phase 6 → Phase 8 → Phase 9 → Phase 10
 - Opik Connector (`src/mlops/opik_connector.py`) - v4.3.0
 - SHAP Explainer (`src/mlops/shap_explainer_realtime.py`) - v4.1.0
 - MLOps Database (`database/ml/mlops_tables.sql`) - 8 tables
-- Agent Configs (`config/agent_config.yaml`) - All 18 agents
+- Agent Configs (`config/agent_config.yaml`) - All 21 agents
 
 ## Quick Links
 

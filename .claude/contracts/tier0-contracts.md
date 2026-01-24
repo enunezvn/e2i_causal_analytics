@@ -1,6 +1,6 @@
 # Tier 0 (ML Foundation) Contracts
 
-**Purpose**: Define integration contracts for the 7 ML Foundation agents that handle the complete ML lifecycle from problem definition to production deployment.
+**Purpose**: Define integration contracts for the 8 ML Foundation agents that handle the complete ML lifecycle from problem definition to production deployment.
 
 **Version**: 1.1
 **Last Updated**: 2025-12-31 (V4.4 Causal Discovery Integration)
@@ -10,12 +10,12 @@
 
 ## Overview
 
-Tier 0 is the ML Foundation layer consisting of 7 agents that must execute **sequentially** in a strict pipeline:
+Tier 0 is the ML Foundation layer consisting of 8 agents that must execute **sequentially** in a strict pipeline:
 
 ```
-scope_definer → data_preparer → model_selector → model_trainer → feature_analyzer → model_deployer
-                                                                                           ↓
-                    observability_connector (cross-cutting, always running)
+scope_definer → cohort_constructor → data_preparer → model_selector → model_trainer → feature_analyzer → model_deployer
+                                                                                                                 ↓
+                                        observability_connector (cross-cutting, always running)
 ```
 
 **Critical Constraint**: `data_preparer` implements a **QC GATE** that blocks downstream training if data quality fails.
@@ -28,13 +28,14 @@ scope_definer → data_preparer → model_selector → model_trainer → feature
 
 | Step | Agent | Input From | Output To | Can Skip | Critical |
 |------|-------|------------|-----------|----------|----------|
-| 1 | scope_definer | User/Orchestrator | data_preparer | No | Yes |
-| 2 | data_preparer | scope_definer | model_selector | No | Yes (GATE) |
-| 3 | model_selector | data_preparer | model_trainer | No | Yes |
-| 4 | model_trainer | model_selector | feature_analyzer | No | Yes |
-| 5 | feature_analyzer | model_trainer | model_deployer | No | Yes |
-| 6 | model_deployer | feature_analyzer | Tier 1-5 agents | Sometimes | Yes |
-| 7 | observability_connector | All agents | Database | No | No |
+| 1 | scope_definer | User/Orchestrator | cohort_constructor | No | Yes |
+| 2 | cohort_constructor | scope_definer | data_preparer | No | Yes |
+| 3 | data_preparer | cohort_constructor | model_selector | No | Yes (GATE) |
+| 4 | model_selector | data_preparer | model_trainer | No | Yes |
+| 5 | model_trainer | model_selector | feature_analyzer | No | Yes |
+| 6 | feature_analyzer | model_trainer | model_deployer | No | Yes |
+| 7 | model_deployer | feature_analyzer | Tier 1-5 agents | Sometimes | Yes |
+| 8 | observability_connector | All agents | Database | No | No |
 
 ---
 
