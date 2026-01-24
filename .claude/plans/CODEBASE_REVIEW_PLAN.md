@@ -356,46 +356,47 @@ Both methods translate to PostgreSQL's `@>` operator for JSONB containment queri
 | **Container Scanning** | Add Trivy/Grype to CI/CD | 2 hrs |
 | **Audit Logging** | Implement centralized audit trail | 4-6 hrs |
 
-### 6.3 Medium Priority Security
+### 6.3 Medium Priority Security - ✅ MOSTLY RESOLVED (2026-01-24)
 
-| Item | Description | Effort |
-|------|-------------|--------|
-| **Enhanced RBAC** | Fine-grained role-based access | 8-12 hrs |
-| **Dependency Scanning** | Enable Dependabot | 1 hr |
-| **Network Policies** | Docker service segmentation | 4 hrs |
-| **API Key Rotation** | Implement rotation policies | 4 hrs |
-| **Request Correlation** | Add correlation IDs for tracing | 3 hrs |
+| Item | Description | Effort | Status |
+|------|-------------|--------|--------|
+| **Enhanced RBAC** | Fine-grained role-based access | 8-12 hrs | ⏳ Future |
+| **Dependency Scanning** | pip-audit + npm audit in CI | 1 hr | ✅ Done (security.yml) |
+| ~~**Network Policies**~~ | Docker service segmentation | 4 hrs | ✅ Done (e2i_network + opik_default) |
+| **API Key Rotation** | Implement rotation policies | 4 hrs | ⏳ Future |
+| ~~**Request Correlation**~~ | Add correlation IDs for tracing | 3 hrs | ✅ Already implemented (TracingMiddleware) |
 
-### 6.4 Docker Security Concerns
+### 6.4 Docker Security Concerns - ✅ PARTIALLY RESOLVED (2026-01-24)
 
-- **Flower Credentials**: Default `admin:admin` in env.example
-- **Exposed Ports**: Internal services (Redis, FalkorDB, MLflow) exposed to host
-- **Network Isolation**: All services on same bridge network
+| Concern | Status | Notes |
+|---------|--------|-------|
+| **Flower Credentials** | ⚠️ Pending | Default `admin:admin` in env.example - needs rotation |
+| **Exposed Ports** | ⚠️ Pending | Internal services (Redis 6382, FalkorDB 6381) exposed to host |
+| ~~**Network Isolation**~~ | ✅ Done | e2i_network + opik_default verified (2026-01-24) |
 
 ---
 
-## 7. Testing Gaps
+## 7. Testing Gaps - ✅ CRITICAL GAPS RESOLVED (2026-01-24)
 
-### 7.1 Completely Untested Modules (0% Coverage)
+### 7.1 Previously Untested Modules - ✅ ALL NOW HAVE TESTS
 
-| Module | Files | Priority | Effort |
-|--------|-------|----------|--------|
-| `src/utils/` | 3 | HIGH | 4 hrs |
-| `src/workers/` | 2 | HIGH | 4 hrs |
-| `src/causal/` (legacy) | 1 | LOW | 1 hr |
+| Module | Files | Status | Tests Added |
+|--------|-------|--------|-------------|
+| ~~`src/utils/`~~ | 3 | ✅ Done | test_audit_chain.py, test_llm_factory.py, test_logging_config.py |
+| ~~`src/workers/`~~ | 2 | ✅ Done | test_celery_app.py, test_event_consumer.py, test_monitoring.py |
+| `src/causal/` (legacy) | 1 | LOW | Legacy module, minimal priority |
 
-### 7.2 Major Untested Submodules
+### 7.2 Previously Untested Submodules - ✅ CRITICAL ONES RESOLVED
 
-| Component | Untested Files | Impact | Priority |
-|-----------|---------------|--------|----------|
-| Causal Discovery | 8 files | Core algorithms untested | HIGH |
-| Causal Pipeline | 7 files | ML pipeline orchestration | HIGH |
-| Causal Validation | 6 files | Inference validation | HIGH |
-| Causal Uplift | 5 files | Treatment effect estimation | MEDIUM |
-| API Routes | 7/19 routes (37%) | Endpoint coverage gap | HIGH |
-| ML Synthetic | 17 files | Data generation untested | MEDIUM |
-| RAG Backends | 7 files | Retrieval reliability | MEDIUM |
-| GEPA Metrics | 8 files | Optimization untested | LOW |
+| Component | Status | Notes |
+|-----------|--------|-------|
+| ~~Causal Discovery~~ | ✅ Done | 11 test files (260 tests) |
+| ~~Causal Pipeline~~ | ✅ Done | 6 test files (195 tests) |
+| ~~Causal Validation~~ | ✅ Done | 3 test files (122 tests) - energy score |
+| ~~API Routes~~ | ✅ Done | All 7 routes covered (486 tests) |
+| ML Synthetic | ⚠️ Pending | Data generation (MEDIUM priority) |
+| RAG Backends | ⚠️ Pending | Retrieval reliability (MEDIUM priority) |
+| GEPA Metrics | ⚠️ Pending | Optimization (LOW priority) |
 
 ### 7.3 API Routes Without Tests
 
