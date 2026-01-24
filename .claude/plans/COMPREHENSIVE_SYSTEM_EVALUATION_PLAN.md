@@ -733,67 +733,45 @@ This evaluation identified **32 specific issues** across 6 areas. **Phases 1-3 a
 | Timeout-specific error messages | Error Handling | 1d | ✅ Done (2026-01-21) |
 | Decision rationale in response | Observability | 0.5d | ✅ Done (2026-01-23) |
 | Tab visibility polling pause | Real-Time | 0.5d | ✅ Done (2026-01-23) |
-| Cache invalidation sync | Real-Time | 2d | Pending |
+| Cache invalidation sync | Real-Time | 2d | ✅ Done (2026-01-23) |
 | Stream execution progress | Observability | 2d | Pending |
 | OpenAPI → TypeScript generation | Type Safety | 1d | Pending (Low Priority) |
 
-**Remaining Effort:** ~5 days for remaining Phase 4 features (3 items)
+**Remaining Effort:** ~3 days for remaining Phase 4 features (2 items)
 
-The system has progressed from **49/100** to **84/100** (B+ grade) with strong foundations in security, type safety, error handling, and observability. Phase 4 items are enhancements rather than critical gaps.
+The system has progressed from **49/100** to **87/100** (B+ grade) with strong foundations in security, type safety, error handling, and observability. Phase 4 items are enhancements rather than critical gaps.
 
 ---
 
-**Document Version:** 1.8
+**Document Version:** 1.9
 **Last Updated:** 2026-01-23
-**Status:** Phases 1-3 Complete, Phase 4 In Progress (2/7 items complete, 1 partial)
+**Status:** Phases 1-3 Complete, Phase 4 In Progress (5/7 items complete)
 
 ### Implementation Summary
 - **Phase 1:** 5/5 items complete (security, stability, observability)
 - **Phase 2:** 5/5 items complete (UX & reliability)
 - **Phase 3:** 5/5 items complete (type safety, detailed errors, partial failures, PII masking)
-- **Phase 4:** 2.5/7 items complete (RBAC ✅, Timeout Errors ✅, Decision Rationale 🔄 partial)
+- **Phase 4:** 5/7 items complete (RBAC ✅, Timeout Errors ✅, Decision Rationale ✅, Tab Visibility ✅, Cache Sync ✅)
 - **Progress:** 17.5/22 total items complete, 17/21 acceptance criteria met
 
 ---
 
 ## Next Steps (Recommended Priority)
 
-### Quick Wins (Can implement today, ≤0.5 day each)
+### Completed Items ✅
+- ~~Decision Rationale in ChatResponse~~ (0.5d) - Done 2026-01-23
+- ~~Tab Visibility Polling Pause~~ (0.5d) - Done 2026-01-23
+- ~~Cache Invalidation Sync with WebSocket~~ (2d) - Done 2026-01-23
 
-**1. Expose Decision Rationale in ChatResponse** (0.5d)
-- **Location:** `src/api/routes/copilotkit.py:2751` - `ChatResponse` class
-- **Change:** Add `routing_rationale: Optional[str] = None` field
-- **Source:** Already tracked in `ChatbotState.routing_rationale`
-- **Impact:** Users see why their query was routed to specific agents
+### Remaining Items
 
-**2. Tab Visibility Polling Pause** (0.5d)
-- **Location:** `frontend/src/lib/query-client.ts`
-- **Change:** Add `visibilitychange` event listener to pause refetch intervals when tab hidden
-- **Pattern:**
-  ```typescript
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden) {
-      queryClient.cancelQueries();
-    }
-  });
-  ```
-- **Impact:** Reduces unnecessary API calls when user not actively viewing
-
-### Medium Effort (1-2 days each)
-
-**3. Cache Invalidation Sync with WebSocket** (2d)
-- **Problem:** WebSocket broadcasts graph updates, but React Query has 5-min stale time
-- **Solution:** On WebSocket message, call `queryClient.invalidateQueries()` for affected keys
-- **Files:** `frontend/src/hooks/use-websocket.ts`, hooks that use graph data
-
-**4. Stream Execution Progress** (2d)
+**1. Stream Execution Progress** (2d)
 - **Problem:** Long-running queries (>30s) show no feedback
 - **Solution:** Use SSE to stream progress updates (e.g., "Analyzing... 3/5 agents complete")
 - **Files:** `src/api/routes/chatbot_graph.py`, frontend chat components
+- **Approach:** Extend existing SSE streaming to include progress events with agent completion status
 
-### Low Priority (Nice-to-have)
-
-**5. OpenAPI → TypeScript Generation** (1d)
+**2. OpenAPI → TypeScript Generation** (1d) - Low Priority
 - **Purpose:** Auto-generate frontend types from FastAPI OpenAPI spec
 - **Tools:** `openapi-typescript-codegen` or `openapi-generator`
 - **Note:** Manual sync is working well; this is automation for maintainability
@@ -826,7 +804,7 @@ The system has progressed from **49/100** to **84/100** (B+ grade) with strong f
 
 ### Verification Notes (2026-01-23 Review)
 - **WebSocket Auto-Reconnect:** ✅ Confirmed - `frontend/src/hooks/use-websocket.ts` implements exponential backoff (1s-30s, 1.5x multiplier, max 10 attempts), heartbeat (30s ping), reconnectable close codes
-- **Decision Rationale:** 🔄 Partial - `routing_rationale` tracked in `ChatbotState` and `chatbot_dspy.py` but NOT exposed in `ChatResponse` model (line 2751 in copilotkit.py)
-- **Tab Visibility:** ❌ Not implemented - `refetchOnWindowFocus` exists but no `visibilitychange` listener to pause polling
-- **Cache Sync:** ❌ Not implemented - No WebSocket → React Query invalidation bridge found
-- **OpenAPI Codegen:** ❌ Not setup - No TypeScript codegen configuration found
+- **Decision Rationale:** ✅ Done - Added `routing_rationale` field to `ChatResponse` model in `src/api/routes/copilotkit.py`
+- **Tab Visibility:** ✅ Done - Added `visibilitychange` listener in `frontend/src/lib/query-client.ts` with `initTabVisibilityListener()`
+- **Cache Sync:** ✅ Done - Created `frontend/src/hooks/use-websocket-cache-sync.ts` with event-to-query-key mapping, debounced invalidation, 27 tests
+- **OpenAPI Codegen:** ❌ Not setup - No TypeScript codegen configuration found (Low Priority)
