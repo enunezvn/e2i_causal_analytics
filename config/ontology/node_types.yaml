@@ -360,22 +360,50 @@ node_types:
   
   Agent:
     description: "Agent entity for provenance tracking"
-    
+
     properties:
       agent_name:
         type: enum
         required: true
         unique: true
-        values: [CausalImpactAgent, HeterogeneousOptimizerAgent, ExperimentDesigner, GapAnalyzer, StakeQualAgent, RefutationAgent, RegulatoryComplianceAgent, UnintendedConsequenceAgent, DataQualityAgent, ROICalculatorAgent, InsightTranslatorAgent, ActionGeneratorAgent, StakeholderCommunicatorAgent, DigitalTwinAgent, OutcomePredictorAgent, OutcomeTruthLabelerAgent, ModelDriftDetectorAgent, SelfCriticAgent]
-        description: "Agent name"
-        
+        # 18-agent architecture aligned with domain_vocabulary.yaml Section 2
+        values:
+          # Tier 0: ML Foundation (7 agents)
+          - scope_definer
+          - data_preparer
+          - model_selector
+          - model_trainer
+          - model_evaluator
+          - model_deployer
+          - model_monitor
+          # Tier 1: Coordination (2 agents)
+          - orchestrator
+          - tool_composer
+          # Tier 2: Causal Analytics (4 agents)
+          - causal_impact
+          - heterogeneous_optimizer
+          - gap_analyzer
+          - experiment_designer
+          # Tier 3: Monitoring (3 agents)
+          - drift_monitor
+          - data_quality_monitor
+          - health_score
+          # Tier 4: Prediction (3 agents)
+          - prediction_synthesizer
+          - risk_assessor
+          - resource_optimizer
+          # Tier 5: Self-Improvement (2 agents)
+          - explainer
+          - feedback_learner
+        description: "Agent name (snake_case, matches domain_vocabulary.yaml)"
+
       tier:
         type: integer
         required: true
-        min: 1
-        max: 6
+        min: 0
+        max: 5
         index: true
-        description: "Agent tier (1-6)"
+        description: "Agent tier (0-5)"
         
       version:
         type: string
