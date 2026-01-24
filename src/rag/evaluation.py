@@ -812,6 +812,47 @@ class RAGASEvaluator:
 
 
 # =============================================================================
+# Factory Function for RAGASEvaluator
+# =============================================================================
+
+_ragas_evaluator_instance: Optional[RAGASEvaluator] = None
+
+
+def get_ragas_evaluator(
+    config: Optional[EvaluationConfig] = None,
+    enable_opik_tracing: bool = True,
+    reset: bool = False,
+) -> RAGASEvaluator:
+    """Get or create the singleton RAGASEvaluator instance.
+
+    This factory function provides a consistent evaluator instance
+    for use across the codebase, particularly by RAGASFeedbackProvider
+    in the GEPA optimization integration.
+
+    Args:
+        config: Optional evaluation configuration. Only used on first call
+                or when reset=True.
+        enable_opik_tracing: Whether to enable Opik tracing for evaluations.
+        reset: If True, create a new instance even if one exists.
+
+    Returns:
+        RAGASEvaluator singleton instance
+
+    Example:
+        >>> evaluator = get_ragas_evaluator()
+        >>> result = await evaluator.evaluate_sample(sample)
+    """
+    global _ragas_evaluator_instance
+    if _ragas_evaluator_instance is None or reset:
+        _ragas_evaluator_instance = RAGASEvaluator(
+            config=config,
+            enable_opik_tracing=enable_opik_tracing,
+        )
+        logger.debug("Created new RAGASEvaluator instance")
+    return _ragas_evaluator_instance
+
+
+# =============================================================================
 # Full Evaluation Pipeline
 # =============================================================================
 

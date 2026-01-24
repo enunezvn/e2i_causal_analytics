@@ -105,17 +105,20 @@ class RAGASFeedbackProvider:
 
     config: RAGASFeedbackConfig = field(default_factory=RAGASFeedbackConfig)
     _ragas_evaluator: Any = None
+    _evaluation_sample_class: Any = None
 
     def __post_init__(self) -> None:
         """Initialize RAGAS evaluator if available."""
         try:
-            from src.rag.evaluation import get_ragas_evaluator
+            from src.rag.evaluation import EvaluationSample, get_ragas_evaluator
 
             self._ragas_evaluator = get_ragas_evaluator()
+            self._evaluation_sample_class = EvaluationSample
             logger.debug("RAGASFeedbackProvider initialized with RAGAS evaluator")
-        except ImportError:
-            logger.warning("RAGAS evaluator not available, using mock evaluation")
+        except ImportError as e:
+            logger.warning(f"RAGAS evaluator not available ({e}), using mock evaluation")
             self._ragas_evaluator = None
+            self._evaluation_sample_class = None
 
     @property
     def enabled(self) -> bool:
@@ -202,6 +205,7 @@ class RAGASFeedbackProvider:
         answer: str,
         contexts: list[str],
         ground_truth: Optional[str] = None,
+        run_id: Optional[str] = None,
         **kwargs: Any,
     ) -> ScoreWithFeedback:
         """Evaluate a RAG response and return GEPA-compatible feedback.
@@ -211,26 +215,31 @@ class RAGASFeedbackProvider:
             answer: The generated answer
             contexts: Retrieved context documents
             ground_truth: Optional ground truth answer
+            run_id: Optional run ID for Opik tracing
             **kwargs: Additional evaluation parameters
 
         Returns:
             ScoreWithFeedback dict with 'score' and 'feedback' keys
         """
         try:
-            if self._ragas_evaluator:
-                # Use real RAGAS evaluation
-                result = await self._ragas_evaluator.evaluate(
-                    question=question,
+            if self._ragas_evaluator and self._evaluation_sample_class:
+                # Use real RAGAS evaluation via RAGASEvaluator
+                sample = self._evaluation_sample_class(
+                    query=question,
+                    ground_truth=ground_truth or answer,
                     answer=answer,
-                    contexts=contexts,
-                    ground_truth=ground_truth,
-                    **kwargs,
+                    retrieved_contexts=contexts,
+                    metadata=kwargs.get("metadata", {}),
+                )
+                result = await self._ragas_evaluator.evaluate_sample(
+                    sample,
+                    run_id=run_id,
                 )
                 scores = {
-                    "faithfulness": result.faithfulness,
-                    "answer_relevancy": result.answer_relevancy,
-                    "context_precision": result.context_precision,
-                    "context_recall": result.context_recall,
+                    "faithfulness": result.faithfulness or 0.0,
+                    "answer_relevancy": result.answer_relevancy or 0.0,
+                    "context_precision": result.context_precision or 0.0,
+                    "context_recall": result.context_recall or 0.0,
                 }
             else:
                 # Mock evaluation for testing
