@@ -27,6 +27,11 @@ from .models.simulation_models import (
     SimulationResult,
 )
 
+# Type hint for optional retraining service import
+TYPE_CHECKING = False
+if TYPE_CHECKING:
+    from .retraining_service import TwinRetrainingService
+
 logger = logging.getLogger(__name__)
 
 
@@ -65,18 +70,30 @@ class FidelityTracker:
     DEGRADATION_THRESHOLD = 0.10  # 10% increase in error
     MIN_VALIDATIONS_FOR_ALERT = 5
 
-    def __init__(self, repository=None):
+    def __init__(
+        self,
+        repository=None,
+        retraining_service: Optional["TwinRetrainingService"] = None,
+        auto_trigger_retraining: bool = False,
+    ):
         """
         Initialize fidelity tracker.
 
         Args:
             repository: Optional TwinRepository for persistence
+            retraining_service: Optional TwinRetrainingService for auto-retraining
+            auto_trigger_retraining: Whether to auto-trigger retraining on degradation
         """
         self.repository = repository
+        self._retraining_service = retraining_service
+        self._auto_trigger_retraining = auto_trigger_retraining
         self.records: Dict[UUID, FidelityRecord] = {}
         self.model_fidelity_cache: Dict[UUID, Dict[str, Any]] = {}
 
-        logger.info("Initialized FidelityTracker")
+        logger.info(
+            f"Initialized FidelityTracker "
+            f"(auto_retraining={'enabled' if auto_trigger_retraining else 'disabled'})"
+        )
 
     def record_prediction(
         self,
@@ -171,7 +188,57 @@ class FidelityTracker:
         # Invalidate model cache
         self._invalidate_model_cache(simulation_id)
 
+        # Check for retraining trigger if enabled (non-blocking)
+        if self._auto_trigger_retraining and self._retraining_service:
+            self._schedule_retraining_check(simulation_id, record)
+
         return record
+
+    def _schedule_retraining_check(
+        self,
+        simulation_id: UUID,
+        record: FidelityRecord,
+    ) -> None:
+        """Schedule async retraining check in a non-blocking manner."""
+        try:
+            import asyncio
+
+            # Check if retraining should be evaluated based on fidelity grade
+            if record.fidelity_grade not in (FidelityGrade.POOR, FidelityGrade.FAIR):
+                return
+
+            logger.info(
+                f"Fidelity grade {record.fidelity_grade.value} detected, "
+                f"scheduling retraining evaluation"
+            )
+
+            # Schedule the async check
+            async def _do_check():
+                try:
+                    # Get model ID from repository if available
+                    if self.repository:
+                        sim_record = await self.repository.get_simulation(simulation_id)
+                        if sim_record and sim_record.get("model_id"):
+                            model_id = UUID(sim_record["model_id"])
+                            await self._retraining_service.check_and_trigger_retraining(
+                                model_id, auto_approve=False
+                            )
+                except Exception as e:
+                    logger.warning(f"Retraining check failed: {e}")
+
+            # Try to schedule in existing event loop
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(_do_check())
+            except RuntimeError:
+                # No running loop, run synchronously in thread
+                import concurrent.futures
+
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    executor.submit(asyncio.run, _do_check())
+
+        except Exception as e:
+            logger.warning(f"Failed to schedule retraining check: {e}")
 
     def get_record(self, tracking_id: UUID) -> Optional[FidelityRecord]:
         """Get fidelity record by tracking ID."""

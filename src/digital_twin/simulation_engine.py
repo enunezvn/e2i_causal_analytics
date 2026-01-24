@@ -32,6 +32,11 @@ from .models.simulation_models import (
 )
 from .models.twin_models import DigitalTwin, TwinPopulation
 
+# Type hint for optional cache import
+TYPE_CHECKING = False
+if TYPE_CHECKING:
+    from .simulation_cache import SimulationCache
+
 logger = logging.getLogger(__name__)
 
 
@@ -103,6 +108,7 @@ class SimulationEngine:
         min_effect_threshold: float = DEFAULT_MIN_EFFECT_THRESHOLD,
         confidence_threshold: float = DEFAULT_CONFIDENCE_THRESHOLD,
         model_fidelity_score: Optional[float] = None,
+        cache: Optional["SimulationCache"] = None,
     ):
         """
         Initialize simulation engine.
@@ -112,16 +118,19 @@ class SimulationEngine:
             min_effect_threshold: Minimum ATE to recommend deployment
             confidence_threshold: Minimum confidence required
             model_fidelity_score: Fidelity score of generator model
+            cache: Optional simulation cache for result caching
         """
         self.population = population
         self.model_id = population.model_id
         self.min_effect_threshold = min_effect_threshold
         self.confidence_threshold = confidence_threshold
         self.model_fidelity_score = model_fidelity_score
+        self._cache = cache
 
         logger.info(
             f"Initialized SimulationEngine with {len(population)} twins "
-            f"(min_effect={min_effect_threshold}, confidence={confidence_threshold})"
+            f"(min_effect={min_effect_threshold}, confidence={confidence_threshold}, "
+            f"cache={'enabled' if cache else 'disabled'})"
         )
 
     def simulate(
@@ -130,6 +139,7 @@ class SimulationEngine:
         population_filter: Optional[PopulationFilter] = None,
         confidence_level: float = 0.95,
         calculate_heterogeneity: bool = True,
+        use_cache: bool = True,
     ) -> SimulationResult:
         """
         Run intervention simulation.
@@ -139,6 +149,7 @@ class SimulationEngine:
             population_filter: Optional filters to subset population
             confidence_level: Confidence level for CI calculation
             calculate_heterogeneity: Whether to compute subgroup effects
+            use_cache: Whether to use cache for results (default True)
 
         Returns:
             SimulationResult with ATE, CI, and recommendation
@@ -149,6 +160,41 @@ class SimulationEngine:
             f"Starting simulation: {intervention_config.intervention_type} "
             f"on {len(self.population)} twins"
         )
+
+        # Check cache first if enabled
+        if use_cache and self._cache and self.model_id:
+            try:
+                import asyncio
+
+                # Run async cache lookup synchronously
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # We're in an async context, create a task
+                    import concurrent.futures
+
+                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                        future = executor.submit(
+                            asyncio.run,
+                            self._cache.get_cached_result(
+                                intervention_config, population_filter, self.model_id
+                            ),
+                        )
+                        cached_result = future.result(timeout=5)
+                else:
+                    cached_result = loop.run_until_complete(
+                        self._cache.get_cached_result(
+                            intervention_config, population_filter, self.model_id
+                        )
+                    )
+
+                if cached_result:
+                    logger.info(
+                        f"Returning cached simulation result "
+                        f"(ATE={cached_result.simulated_ate:.4f})"
+                    )
+                    return cached_result
+            except Exception as e:
+                logger.debug(f"Cache lookup failed, proceeding with simulation: {e}")
 
         # Apply population filters
         filtered_population = self._apply_filters(population_filter)
@@ -231,6 +277,26 @@ class SimulationEngine:
             f"recommendation={recommendation.value}, time={execution_time_ms}ms"
         )
 
+        # Cache the result if caching is enabled
+        if use_cache and self._cache and self.model_id:
+            try:
+                import asyncio
+
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    import concurrent.futures
+
+                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                        executor.submit(
+                            asyncio.run,
+                            self._cache.cache_result(result),
+                        )
+                else:
+                    loop.run_until_complete(self._cache.cache_result(result))
+                logger.debug("Cached simulation result")
+            except Exception as e:
+                logger.debug(f"Failed to cache simulation result: {e}")
+
         return result
 
     def _apply_filters(self, filters: Optional[PopulationFilter]) -> TwinPopulation:
@@ -310,11 +376,17 @@ class SimulationEngine:
 
         # Decile-based multiplier (higher deciles = lower effect)
         decile = features.get("decile", 5)
-        effect_multiplier *= 1.2 - (decile - 1) * 0.04
+        # Clamp decile to valid range [1, 10]
+        decile = max(1, min(10, decile))
+        decile_mult = 1.2 - (decile - 1) * 0.04
+        effect_multiplier *= decile_mult
 
         # Engagement-based multiplier
         engagement = features.get("digital_engagement_score", 0.5)
-        effect_multiplier *= 0.8 + 0.4 * engagement
+        # Clamp engagement to valid range [0, 1]
+        engagement = max(0.0, min(1.0, engagement))
+        engagement_mult = 0.8 + 0.4 * engagement
+        effect_multiplier *= engagement_mult
 
         # Adoption stage multiplier
         adoption_stage = features.get("adoption_stage", "early_majority")
@@ -325,26 +397,52 @@ class SimulationEngine:
             "late_majority": 1.2,
             "laggard": 1.4,
         }
-        effect_multiplier *= adoption_multipliers.get(adoption_stage, 1.0)
+        adoption_mult = adoption_multipliers.get(adoption_stage, 1.0)
+        effect_multiplier *= adoption_mult
 
-        # Intensity multiplier from config
-        effect_multiplier *= config.intensity_multiplier
+        # Intensity multiplier from config (clamp to valid range)
+        intensity_mult = max(0.0, min(10.0, config.intensity_multiplier))
+        effect_multiplier *= intensity_mult
 
         # Duration adjustment (longer = stronger, with diminishing returns)
-        duration_factor = np.log1p(config.duration_weeks) / np.log1p(8)  # Normalized to 8 weeks
+        # Handle edge case of zero/negative duration
+        duration_weeks = max(1, config.duration_weeks)
+        duration_factor = np.log1p(duration_weeks) / np.log1p(8)  # Normalized to 8 weeks
         effect_multiplier *= duration_factor
 
         # Channel-specific adjustments
+        channel_mult = 1.0
         if "channel_multiplier" in params and config.channel:
             channel_mult = params["channel_multiplier"].get(config.channel, 1.0)
             effect_multiplier *= channel_mult
 
         # Apply propensity weighting (higher propensity = more responsive)
-        effect_multiplier *= 0.8 + 0.4 * twin.baseline_propensity
+        propensity = max(0.0, min(1.0, twin.baseline_propensity))
+        propensity_mult = 0.8 + 0.4 * propensity
+        effect_multiplier *= propensity_mult
+
+        # Log all modifier calculations at DEBUG level
+        logger.debug(
+            f"Effect modifiers for twin {twin.twin_id}: "
+            f"base_effect={base_effect:.4f}, "
+            f"decile={decile} (mult={decile_mult:.4f}), "
+            f"engagement={engagement:.4f} (mult={engagement_mult:.4f}), "
+            f"adoption={adoption_stage} (mult={adoption_mult:.4f}), "
+            f"intensity={intensity_mult:.4f}, "
+            f"duration={duration_weeks}wk (factor={duration_factor:.4f}), "
+            f"channel={config.channel} (mult={channel_mult:.4f}), "
+            f"propensity={propensity:.4f} (mult={propensity_mult:.4f}), "
+            f"total_multiplier={effect_multiplier:.4f}"
+        )
 
         # Calculate final effect with noise
         effect = base_effect * effect_multiplier
         effect += np.random.normal(0, variance)
+
+        logger.debug(
+            f"Final effect for twin {twin.twin_id}: "
+            f"effect={effect:.4f} (before_noise={base_effect * effect_multiplier:.4f})"
+        )
 
         return effect
 
