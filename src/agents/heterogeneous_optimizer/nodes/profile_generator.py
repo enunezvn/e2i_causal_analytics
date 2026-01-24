@@ -2,6 +2,9 @@
 
 This node generates visualization data and executive summaries.
 Pure computation - no LLM needed.
+
+Additionally handles:
+- DSPy training signal collection and routing
 """
 
 import logging
@@ -56,6 +59,14 @@ class ProfileGeneratorNode:
                     "insight_count": len(key_insights),
                     "latency_ms": generation_time,
                 },
+            )
+
+            # Collect and route DSPy training signal (non-blocking)
+            await self._collect_dspy_signal(
+                state=state,
+                executive_summary=executive_summary,
+                key_insights=key_insights,
+                generation_time=generation_time,
             )
 
             return {
@@ -267,3 +278,118 @@ class ProfileGeneratorNode:
             )
 
         return insights[:5]  # Limit to top 5 insights
+
+    async def _collect_dspy_signal(
+        self,
+        state: HeterogeneousOptimizerState,
+        executive_summary: str,
+        key_insights: List[str],
+        generation_time: int,
+    ) -> None:
+        """Collect and route DSPy training signal to feedback_learner.
+
+        Non-blocking: failures are logged but don't affect workflow.
+
+        Args:
+            state: Complete workflow state
+            executive_summary: Generated executive summary
+            key_insights: Generated key insights
+            generation_time: Profile generation latency in ms
+        """
+        try:
+            from src.agents.heterogeneous_optimizer.dspy_integration import (
+                get_heterogeneous_optimizer_signal_collector,
+            )
+            from src.agents.tier2_signal_router import route_heterogeneous_optimizer_signal
+
+            collector = get_heterogeneous_optimizer_signal_collector()
+
+            # Initialize signal with input context
+            signal = collector.collect_optimization_signal(
+                session_id=state.get("session_id", ""),
+                query=state.get("query", ""),
+                treatment_var=state.get("treatment_var", ""),
+                outcome_var=state.get("outcome_var", ""),
+                segment_vars_count=len(state.get("segment_vars", [])),
+                effect_modifiers_count=len(state.get("effect_modifiers", [])),
+            )
+
+            # Update with CATE estimation phase
+            cate_by_segment = state.get("cate_by_segment", {})
+            total_segments = sum(len(results) for results in cate_by_segment.values())
+            significant_count = sum(
+                1
+                for results in cate_by_segment.values()
+                for r in results
+                if r.get("statistical_significance", False)
+            )
+
+            collector.update_cate_estimation(
+                signal=signal,
+                overall_ate=state.get("overall_ate", 0.0),
+                heterogeneity_score=state.get("heterogeneity_score", 0.0),
+                cate_segments_count=total_segments,
+                significant_cate_count=significant_count,
+                estimation_latency_ms=state.get("estimation_latency_ms", 0.0),
+            )
+
+            # Update with segment discovery phase
+            high_responders = state.get("high_responders", [])
+            low_responders = state.get("low_responders", [])
+
+            # Calculate responder spread (difference between avg high and avg low CATE)
+            responder_spread = 0.0
+            if high_responders and low_responders:
+                avg_high = sum(h.get("cate_estimate", 0) for h in high_responders) / len(
+                    high_responders
+                )
+                avg_low = sum(l.get("cate_estimate", 0) for l in low_responders) / len(
+                    low_responders
+                )
+                responder_spread = abs(avg_high - avg_low)
+
+            collector.update_segment_discovery(
+                signal=signal,
+                high_responders_count=len(high_responders),
+                low_responders_count=len(low_responders),
+                responder_spread=responder_spread,
+                analysis_latency_ms=state.get("segment_latency_ms", 0.0),
+            )
+
+            # Calculate total latency
+            total_latency_ms = (
+                state.get("estimation_latency_ms", 0)
+                + state.get("segment_latency_ms", 0)
+                + state.get("hierarchical_latency_ms", 0)
+                + state.get("policy_latency_ms", 0)
+                + generation_time
+            )
+
+            # Update with policy learning phase (final)
+            policy_recommendations = state.get("policy_recommendations", [])
+            actionable_count = sum(
+                1 for p in policy_recommendations if p.get("actionable", True)
+            )
+
+            collector.update_policy_learning(
+                signal=signal,
+                policy_recommendations_count=len(policy_recommendations),
+                expected_total_lift=state.get("expected_total_lift", 0.0),
+                actionable_policies=actionable_count,
+                executive_summary_length=len(executive_summary),
+                key_insights_count=len(key_insights),
+                visualization_data_complete=True,
+                total_latency_ms=total_latency_ms,
+                confidence_score=state.get("confidence_score", 0.8),
+            )
+
+            # Route to feedback_learner
+            await route_heterogeneous_optimizer_signal(signal.to_dict())
+
+            logger.debug(
+                f"DSPy signal collected: reward={signal.compute_reward():.3f}, "
+                f"heterogeneity={state.get('heterogeneity_score', 0):.2f}"
+            )
+
+        except Exception as e:
+            logger.warning(f"DSPy signal collection failed (non-fatal): {e}")

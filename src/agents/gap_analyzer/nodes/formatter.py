@@ -5,12 +5,20 @@ This node generates the final output:
 - Key insights
 - Formatted opportunities
 - Performance metadata
+
+Additionally handles:
+- Memory contribution (episodic + working memory)
+- DSPy training signal collection
 """
 
+import asyncio
+import logging
 import time
 from typing import Any, Dict, List
 
 from ..state import GapAnalyzerState, PrioritizedOpportunity
+
+logger = logging.getLogger(__name__)
 
 
 class FormatterNode:
@@ -66,10 +74,28 @@ class FormatterNode:
                 detection_latency + roi_latency + prioritization_latency + formatting_latency_ms
             )
 
+            # Build result for memory contribution
+            result = {
+                "executive_summary": executive_summary,
+                "key_insights": key_insights,
+                "prioritized_opportunities": prioritized_opportunities,
+                "quick_wins": quick_wins,
+                "strategic_bets": strategic_bets,
+                "total_addressable_value": total_addressable_value,
+                "confidence": state.get("prioritization_confidence", 0.8),
+            }
+
+            # Contribute to memory (async, non-blocking on failure)
+            memory_contribution = await self._contribute_to_memory(result, state)
+
+            # Collect DSPy training signal (async, non-blocking on failure)
+            await self._collect_dspy_signal(state, result, total_latency_ms)
+
             return {
                 "executive_summary": executive_summary,
                 "key_insights": key_insights,
                 "total_latency_ms": total_latency_ms,
+                "memory_contribution": memory_contribution,
                 "status": "completed",
             }
 
@@ -86,6 +112,124 @@ class FormatterNode:
                 "total_latency_ms": formatting_latency_ms,
                 "status": "failed",
             }
+
+    async def _contribute_to_memory(
+        self,
+        result: Dict[str, Any],
+        state: GapAnalyzerState,
+    ) -> Dict[str, int]:
+        """Contribute gap analysis to memory systems.
+
+        Non-blocking: failures are logged but don't affect workflow.
+
+        Args:
+            result: Formatted gap analysis result
+            state: Current workflow state
+
+        Returns:
+            Memory contribution counts
+        """
+        try:
+            from ..memory_hooks import contribute_to_memory
+
+            memory_counts = await contribute_to_memory(
+                result=result,
+                state=dict(state),
+                session_id=state.get("session_id"),
+                region=state.get("region"),
+            )
+            logger.info(
+                f"Memory contribution: episodic={memory_counts.get('episodic_stored', 0)}, "
+                f"working={memory_counts.get('working_cached', 0)}"
+            )
+            return memory_counts
+        except Exception as e:
+            logger.warning(f"Memory contribution failed (non-fatal): {e}")
+            return {"episodic_stored": 0, "working_cached": 0}
+
+    async def _collect_dspy_signal(
+        self,
+        state: GapAnalyzerState,
+        result: Dict[str, Any],
+        total_latency_ms: float,
+    ) -> None:
+        """Collect DSPy training signal for feedback_learner.
+
+        Non-blocking: failures are logged but don't affect workflow.
+
+        Args:
+            state: Current workflow state
+            result: Formatted gap analysis result
+            total_latency_ms: Total workflow latency
+        """
+        try:
+            from ..dspy_integration import get_gap_analyzer_signal_collector
+
+            collector = get_gap_analyzer_signal_collector()
+
+            # Initialize signal
+            signal = collector.collect_analysis_signal(
+                session_id=state.get("session_id", ""),
+                query=state.get("query", ""),
+                brand=state.get("brand", ""),
+                metrics_analyzed=state.get("metrics", []),
+                segments_analyzed=state.get("segments_analyzed", 0),
+            )
+
+            # Update with detection phase data
+            gaps_detected = state.get("gaps_detected", [])
+            gap_types = list({g.get("gap_type", "unknown") for g in gaps_detected})
+            collector.update_detection(
+                signal=signal,
+                gaps_detected_count=len(gaps_detected),
+                total_gap_value=state.get("total_gap_value", 0.0),
+                gap_types=gap_types,
+                detection_latency_ms=state.get("detection_latency_ms", 0.0),
+            )
+
+            # Update with ROI phase data
+            prioritized_opps = state.get("prioritized_opportunities", [])
+            roi_estimates = [o.get("roi_estimate", {}) for o in prioritized_opps]
+            avg_roi = 0.0
+            high_roi_count = 0
+            if roi_estimates:
+                rois = [r.get("expected_roi", 0) for r in roi_estimates if r.get("expected_roi")]
+                if rois:
+                    avg_roi = sum(rois) / len(rois)
+                    high_roi_count = sum(1 for r in rois if r > 2.0)
+
+            collector.update_roi(
+                signal=signal,
+                roi_estimates_count=len(roi_estimates),
+                total_addressable_value=state.get("total_addressable_value", 0.0),
+                avg_expected_roi=avg_roi,
+                high_roi_count=high_roi_count,
+                roi_latency_ms=state.get("roi_latency_ms", 0.0),
+            )
+
+            # Update with prioritization phase data
+            quick_wins = state.get("quick_wins", [])
+            strategic_bets = state.get("strategic_bets", [])
+            key_insights = result.get("key_insights", [])
+            executive_summary = result.get("executive_summary", "")
+
+            collector.update_prioritization(
+                signal=signal,
+                quick_wins_count=len(quick_wins),
+                strategic_bets_count=len(strategic_bets),
+                prioritization_confidence=state.get("prioritization_confidence", 0.8),
+                executive_summary_length=len(executive_summary),
+                key_insights_count=len(key_insights),
+                actionable_recommendations=len(quick_wins) + len(strategic_bets),
+                total_latency_ms=total_latency_ms,
+            )
+
+            logger.debug(
+                f"DSPy signal collected: reward={signal.compute_reward():.3f}, "
+                f"gaps={len(gaps_detected)}, quick_wins={len(quick_wins)}"
+            )
+        except Exception as e:
+            logger.warning(f"DSPy signal collection failed (non-fatal): {e}")
 
     def _generate_executive_summary(
         self,
