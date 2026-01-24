@@ -175,6 +175,7 @@ class TestOrchestratorAgent:
 
         # Verify latency breakdown
         assert "classification_latency_ms" in result
+        assert "rag_latency_ms" in result
         assert "routing_latency_ms" in result
         assert "dispatch_latency_ms" in result
         assert "synthesis_latency_ms" in result
@@ -182,13 +183,15 @@ class TestOrchestratorAgent:
 
         # All should be non-negative
         assert result["classification_latency_ms"] >= 0
+        assert result["rag_latency_ms"] >= 0
         assert result["routing_latency_ms"] >= 0
         assert result["dispatch_latency_ms"] >= 0
         assert result["synthesis_latency_ms"] >= 0
 
-        # Total should be sum of components
+        # Total should be sum of components (including RAG latency)
         expected_total = (
             result["classification_latency_ms"]
+            + result["rag_latency_ms"]
             + result["routing_latency_ms"]
             + result["dispatch_latency_ms"]
             + result["synthesis_latency_ms"]

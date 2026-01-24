@@ -4,7 +4,7 @@ Version: 1.0.0
 Tests the data models for observability spans and metrics.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 import pytest
@@ -159,7 +159,7 @@ class TestObservabilitySpan:
             span_id="span-456",
             agent_name=AgentNameEnum.ORCHESTRATOR,
             agent_tier=AgentTierEnum.COORDINATION,
-            started_at=datetime.utcnow(),
+            started_at=datetime.now(timezone.utc),
         )
 
         assert span.trace_id == "trace-123"
@@ -170,7 +170,7 @@ class TestObservabilitySpan:
 
     def test_create_full_span(self):
         """Test creating span with all fields."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         span = ObservabilitySpan(
             trace_id="trace-123",
             span_id="span-456",
@@ -202,7 +202,7 @@ class TestObservabilitySpan:
             span_id="span-456",
             agent_name=AgentNameEnum.ORCHESTRATOR,
             agent_tier=AgentTierEnum.COORDINATION,
-            started_at=datetime.utcnow(),
+            started_at=datetime.now(timezone.utc),
         )
 
         assert span.id is not None
@@ -215,7 +215,7 @@ class TestObservabilitySpan:
             span_id="span-456",
             agent_name=AgentNameEnum.ORCHESTRATOR,
             agent_tier=AgentTierEnum.COORDINATION,
-            started_at=datetime.utcnow(),
+            started_at=datetime.now(timezone.utc),
         )
 
         span.add_event("checkpoint", {"step": 1})
@@ -231,7 +231,7 @@ class TestObservabilitySpan:
             span_id="span-456",
             agent_name=AgentNameEnum.ORCHESTRATOR,
             agent_tier=AgentTierEnum.COORDINATION,
-            started_at=datetime.utcnow(),
+            started_at=datetime.now(timezone.utc),
         )
 
         span.set_error("ValidationError", "Invalid input")
@@ -242,7 +242,7 @@ class TestObservabilitySpan:
 
     def test_complete_span(self):
         """Test completing a span."""
-        start = datetime.utcnow()
+        start = datetime.now(timezone.utc)
         span = ObservabilitySpan(
             trace_id="trace-123",
             span_id="span-456",
@@ -264,7 +264,7 @@ class TestObservabilitySpan:
             span_id="span-456",
             agent_name=AgentNameEnum.ORCHESTRATOR,
             agent_tier=AgentTierEnum.COORDINATION,
-            started_at=datetime.utcnow(),
+            started_at=datetime.now(timezone.utc),
         )
 
         db_dict = span.to_db_dict()
@@ -281,7 +281,7 @@ class TestObservabilitySpan:
                 span_id="span-456",
                 agent_name=AgentNameEnum.ORCHESTRATOR,
                 agent_tier=AgentTierEnum.COORDINATION,
-                started_at=datetime.utcnow(),
+                started_at=datetime.now(timezone.utc),
             )
 
     def test_span_validation_agent_name_required(self):
@@ -291,7 +291,7 @@ class TestObservabilitySpan:
                 trace_id="trace-123",
                 span_id="span-456",
                 agent_tier=AgentTierEnum.COORDINATION,
-                started_at=datetime.utcnow(),
+                started_at=datetime.now(timezone.utc),
             )
 
 
