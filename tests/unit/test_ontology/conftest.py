@@ -96,6 +96,76 @@ def minimal_vocabulary_data() -> Dict[str, Any]:
         },
         'diagnosis_codes': {
             'pattern': r'[A-Z][0-9]{2}\.?[0-9]*'
+        },
+        # V5.1.0 additions
+        'patient_engagement_stages': {
+            'description': '7-stage patient engagement funnel',
+            'values': ['aware', 'considering', 'prescribed', 'first_fill', 'adherent', 'discontinued', 'maintained']
+        },
+        'treatment_line_stages': {
+            'description': 'Treatment line progression stages',
+            'values': ['diagnosis', 'treatment_naive', 'first_line', 'second_line', 'maintenance', 'discontinuation', 'switch']
+        },
+        'state_to_region_mapping': {
+            'description': 'US state to region mapping',
+            'mapping': {
+                'northeast': ['CT', 'ME', 'MA', 'NH', 'NJ', 'NY', 'PA', 'RI', 'VT'],
+                'south': ['AL', 'FL', 'GA', 'TX', 'VA'],
+                'midwest': ['IL', 'IN', 'MI', 'OH', 'WI'],
+                'west': ['AZ', 'CA', 'CO', 'OR', 'WA']
+            }
+        },
+        'competitor_brands': {
+            'description': 'Competitor brands by therapeutic area',
+            'by_therapeutic_area': {
+                'csu_btk_inhibitors': ['Xolair', 'fenebrutinib'],
+                'pnh_complement': ['Soliris', 'Ultomiris'],
+                'breast_cancer_cdk46': ['Ibrance', 'Verzenio']
+            }
+        },
+        'marketing_channels': {
+            'description': 'Marketing channels',
+            'channels': {
+                'digital': ['email', 'website', 'webinar'],
+                'field': ['in_person', 'phone'],
+                'crm': ['crm_alert', 'mobile_app'],
+                'print': ['direct_mail', 'samples']
+            }
+        },
+        'payer_categories': {
+            'description': 'Payer categories',
+            'categories': {
+                'commercial': {
+                    'description': 'Commercial plans',
+                    'subcategories': ['national_plans', 'regional_plans']
+                },
+                'government': {
+                    'description': 'Government programs',
+                    'subcategories': ['medicare_part_d', 'medicaid']
+                }
+            }
+        },
+        'brand_icd10_mappings': {
+            'description': 'ICD-10 codes for brand indications',
+            'mappings': {
+                'TestBrand': {
+                    'primary_indication': 'Test Indication',
+                    'icd10_codes': ['L50.1', 'L50.8', 'L50.9']
+                },
+                'OtherBrand': {
+                    'primary_indication': 'Other Indication',
+                    'icd10_codes': ['D59.5']
+                }
+            }
+        },
+        'brand_ndc_codes': {
+            'description': 'NDC codes for brand products',
+            'mappings': {
+                'TestBrand': {
+                    'drug_name': 'testdrug',
+                    'ndc_codes': ['00078-0903-51', '00078-0903-21']
+                }
+            }
         }
     }
 
