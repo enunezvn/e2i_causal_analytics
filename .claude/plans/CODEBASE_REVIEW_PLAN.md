@@ -471,7 +471,7 @@ Both methods translate to PostgreSQL's `@>` operator for JSONB containment queri
 | Non-root users | ✅ | e2i:e2i (uid/gid 1000) |
 | Health checks | ✅ | All containers monitored |
 | SSL/TLS | ⚠️ | Configured, needs cert management |
-| Network isolation | ❌ | All services on same bridge |
+| Network isolation | ✅ | e2i_network + opik_default (verified 2026-01-24) |
 
 ### 9.3 CI/CD Improvements - ✅ SECURITY SCANNING COMPLETE (2026-01-24)
 
@@ -589,6 +589,15 @@ Both methods translate to PostgreSQL's `@>` operator for JSONB containment queri
 - ✅ **Centralized fixture library** - Created `tests/fixtures/` with mocks (MockLLMClient, MockSupabaseClient, MockRedisClient, MockFalkorDBClient), agent state helpers (StateProgression, create_base_state), and helpers (make_decomposition_response, etc.)
 - ✅ **Coverage tracking** - Added pytest-cov configuration in pyproject.toml with 50% threshold, HTML/XML reports, and `make test-cov` target
 - ✅ **Memory System tests** - Added `test_cognitive_integration.py` (53 tests) for CognitiveService 4-phase workflow, and `test_langgraph_saver.py` (21 tests) for checkpointer factory
+
+**Memory System Tests Verified on Droplet (2026-01-24)**:
+All 267 memory system tests pass on production droplet (138.197.4.36):
+- `test_cognitive_integration.py`: 53 passed
+- `test_langgraph_saver.py`: 21 passed
+- `test_episodic_memory.py`: 49 passed
+- `test_working_memory.py`: 49 passed
+- `test_procedural_memory.py`: 50 passed
+- `test_semantic_memory.py`: 45 passed
 
 **Total Effort**: ~34 hours (completed)
 
