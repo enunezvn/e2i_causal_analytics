@@ -12,7 +12,7 @@ This file contains compressed summaries of architectural decisions and implement
 E2I Causal Analytics is a **pharmaceutical commercial operations** platform (NOT clinical/medical) that:
 - Answers natural language questions about business KPIs
 - Performs causal inference on operational data
-- Uses **18 AI agents organized in 6 tiers** (V4: added Tier 0 ML Foundation)
+- Uses **21 AI agents organized in 6 tiers** (V4: added Tier 0 ML Foundation with 8 agents)
 - Supports 3 brands: Remibrutinib, Fabhalta, Kisqali
 - Integrates 7 MLOps tools for complete ML lifecycle
 
@@ -22,22 +22,22 @@ E2I Causal Analytics is a **pharmaceutical commercial operations** platform (NOT
 
 ## Implementation Status (as of 2025-12-22)
 
-**System Maturity**: ✅ All 18 Agents Implemented with Full Test Suites
+**System Maturity**: ✅ All 21 Agents Implemented with Full Test Suites
 
-### Fully Implemented (18 agents + 9 modules)
+### Fully Implemented (21 agents + 9 modules)
 
-**All 18 Agents Implemented** with LangGraph workflows, test suites, and CONTRACT_VALIDATION.md:
+**All 21 Agents Implemented** with LangGraph workflows, test suites, and CONTRACT_VALIDATION.md:
 
 | Tier | Agents | Test Coverage |
 |------|--------|---------------|
-| **Tier 0** (ML Foundation) | scope_definer, data_preparer, feature_analyzer, model_selector, model_trainer, model_deployer, observability_connector (284+ tests) | ✅ Full |
+| **Tier 0** (ML Foundation) | scope_definer, cohort_constructor, data_preparer, feature_analyzer, model_selector, model_trainer, model_deployer, observability_connector (284+ tests) | ✅ Full |
 | **Tier 1** (Orchestration) | orchestrator | ✅ Full |
 | **Tier 2** (Causal Analytics) | causal_impact, gap_analyzer (132 tests), heterogeneous_optimizer (100+ tests) | ✅ Full |
 | **Tier 3** (Monitoring) | drift_monitor, experiment_designer (209 tests), health_score (95 tests) | ✅ Full |
 | **Tier 4** (ML Predictions) | prediction_synthesizer (81 tests), resource_optimizer (75 tests) | ✅ Full |
 | **Tier 5** (Self-Improvement) | explainer (85 tests), feedback_learner (84 tests) | ✅ Full |
 
-**Additional Agents** (beyond original 18-agent spec):
+**Additional Agents** (included in 21-agent count):
 - **tool_composer** - src/agents/tool_composer/ - Multi-tool orchestration (needs CONTRACT_VALIDATION.md)
 - **experiment_monitor** - src/agents/experiment_monitor/ - Experiment health monitoring (needs CONTRACT_VALIDATION.md)
 
@@ -56,10 +56,10 @@ E2I Causal Analytics is a **pharmaceutical commercial operations** platform (NOT
 |-----------|--------|
 | Database Schema | ✅ 100% Complete (24+ tables) |
 | MLOps Tools Config | ✅ 100% Complete (7 tools configured) |
-| Agent Configs | ✅ 100% Complete (all 18 agents) |
+| Agent Configs | ✅ 100% Complete (all 21 agents) |
 | Specialist Docs | ✅ 100% Complete (all agents documented) |
-| Agent Code | ✅ 100% Complete (18/18 agents) |
-| CONTRACT_VALIDATION.md | ✅ 100% Complete (18/18 agents) |
+| Agent Code | ✅ 100% Complete (21/21 agents) |
+| CONTRACT_VALIDATION.md | ✅ 100% Complete (21/21 agents) |
 | MLOps Integration | ✅ 98% Complete (All 7 tools implemented with 323+ tests) |
 
 **Overall System Completion**: ~98% (All agents + MLOps tools implemented)
@@ -103,7 +103,7 @@ E2I Causal Analytics is a **pharmaceutical commercial operations** platform (NOT
 **Recent Changes**: Added Feedback Learner integration for DSPy optimization
 
 ### Agent Architecture
-**Status**: V4 (18 agents, 6 tiers) - Specialist Files Complete
+**Status**: V4 (21 agents, 6 tiers) - Specialist Files Complete
 **Key Decisions**:
 - **6-tier hierarchy** for routing priority (NEW: Tier 0 ML Foundation)
 - All agents inherit from BaseAgent
@@ -115,8 +115,8 @@ E2I Causal Analytics is a **pharmaceutical commercial operations** platform (NOT
 
 **Tier Structure (V4)**:
 ```
-Tier 0: scope_definer, data_preparer, model_selector, model_trainer, 
-        feature_analyzer, model_deployer, observability_connector
+Tier 0: scope_definer, cohort_constructor, data_preparer, model_selector,
+        model_trainer, feature_analyzer, model_deployer, observability_connector
 Tier 1: orchestrator
 Tier 2: causal_impact, gap_analyzer, heterogeneous_optimizer
 Tier 3: experiment_designer, drift_monitor, health_score
@@ -130,8 +130,8 @@ Tier 5: explainer, feedback_learner
 - Deep: Extended reasoning, async capable (2 agents: Explainer, Feedback Learner)
 
 **Recent Changes (V4)**:
-- Added Tier 0 ML Foundation with 7 new agents
-- Total agents increased from 11 to 18
+- Added Tier 0 ML Foundation with 8 agents (including cohort_constructor)
+- Total agents increased from 11 to 21
 - Added 8 new ml_ database tables
 - Integrated 7 MLOps tools
 - Created CLAUDE.md files for all Tier 0 agents
@@ -170,7 +170,7 @@ Tier 5: explainer, feedback_learner
 - Patient-based split assignment (hash-based)
 - 6 tables in V3 for KPI coverage + **8 new ml_ tables in V4**
 - 8 KPI helper views
-- **18-agent enum** in agent_activity_type
+- **21-agent enum** in agent_activity_type
 
 **V4 New Tables (ML Foundation)**:
 - ml_experiments (scope_definer)
@@ -196,7 +196,7 @@ Tier 5: explainer, feedback_learner
 **Status**: Architecture Complete
 **Key Decisions**:
 - **Working Memory** (Redis): All 18 agents, active context (TTL: 24h)
-- **Episodic Memory** (Supabase/pgvector): 7 agents (6 Tier 0 + drift_monitor + feedback_learner)
+- **Episodic Memory** (Supabase/pgvector): 8 agents (7 Tier 0 + drift_monitor + feedback_learner)
 - **Procedural Memory** (Supabase/pgvector): 5 agents for successful patterns
 - **Semantic Memory** (FalkorDB/Graphity): feature_analyzer, causal_impact, explainer
 
