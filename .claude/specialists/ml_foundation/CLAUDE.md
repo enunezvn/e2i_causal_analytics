@@ -2,13 +2,14 @@
 
 ## Overview
 
-Tier 0 (ML Foundation) is the **base layer** of the E2I 18-agent architecture. All other tiers depend on models, features, and infrastructure established by these 7 agents. Tier 0 handles the complete ML lifecycle from problem definition to production deployment.
+Tier 0 (ML Foundation) is the **base layer** of the E2I 21-agent architecture. All other tiers depend on models, features, and infrastructure established by these 8 agents. Tier 0 handles the complete ML lifecycle from problem definition to production deployment.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │  TIER 0: ML FOUNDATION (This Tier)                                      │
 │                                                                         │
-│  scope_definer ──▶ data_preparer ──▶ model_selector ──▶ model_trainer  │
+│  scope_definer ──▶ cohort_constructor ──▶ data_preparer ──▶             │
+│  model_selector ──▶ model_trainer                                       │
 │                                                              │          │
 │                                                              ▼          │
 │  observability_connector ◀── model_deployer ◀── feature_analyzer       │
@@ -30,6 +31,7 @@ Tier 0 (ML Foundation) is the **base layer** of the E2I 18-agent architecture. A
 | Agent | Type | SLA | Primary Output |
 |-------|------|-----|----------------|
 | `scope_definer` | Standard | <5s | ScopeSpec, SuccessCriteria |
+| `cohort_constructor` | Standard | <120s | CohortDefinition, EligibilityLog |
 | `data_preparer` | Standard | <60s | QCReport, BaselineMetrics |
 | `model_selector` | Standard | <120s | ModelCandidate, SelectionRationale |
 | `model_trainer` | Standard | varies | TrainedModel, ValidationMetrics |

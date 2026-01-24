@@ -8,7 +8,7 @@
 
 ## Project Overview
 
-**E2I Causal Analytics** is a Natural Language Visualization platform with Self-Improving Agentic RAG for pharmaceutical commercial operations. It features an 18-agent tiered architecture (6 tiers) with 100% KPI coverage and ML-compliant schema.
+**E2I Causal Analytics** is a Natural Language Visualization platform with Self-Improving Agentic RAG for pharmaceutical commercial operations. It features a 21-agent tiered architecture (6 tiers) with 100% KPI coverage and ML-compliant schema.
 
 **Domain**: Pharmaceutical commercial analytics (NOT clinical/medical)
 **Brands**: Remibrutinib (CSU), Fabhalta (PNH), Kisqali (HR+/HER2- breast cancer)
@@ -110,11 +110,12 @@ Testing             → .claude/specialists/system/testing.md
 DevOps              → .claude/specialists/system/devops.md
 ```
 
-**Agent Specialists** (18 agents in 6 tiers):
+**Agent Specialists** (21 agents in 6 tiers):
 ```
 Tier 0 (Foundation) → .claude/specialists/Agent_Specialists_Tier 0/
-                    → 7 agents: scope_definer, data_preparer, feature_analyzer,
-                      model_selector, model_trainer, model_deployer, observability_connector
+                    → 8 agents: scope_definer, cohort_constructor, data_preparer,
+                      feature_analyzer, model_selector, model_trainer, model_deployer,
+                      observability_connector
 Tier 1 (Orchestrator) → .claude/specialists/Agent_Specialists_Tiers 1-5/orchestrator-agent.md
                       → 2 agents: orchestrator, tool_composer
 Tier 2 (Causal)     → .claude/specialists/Agent_Specialists_Tiers 1-5/causal-impact.md
@@ -191,13 +192,13 @@ e2i_causal_analytics/
 │   ├── context/                   # E2I project context
 │   ├── PRPs/                      # Product Requirements Plans
 │   └── scripts/                   # Framework utility scripts
-├── config/                         # YAML configurations (18 agents, 46 KPIs)
+├── config/                         # YAML configurations (21 agents, 46 KPIs)
 ├── src/
 │   ├── nlp/                       # Layer 1: Query processing (NO medical NER)
 │   ├── causal_engine/             # Layer 2: DoWhy/EconML causal inference
 │   ├── rag/                       # Layer 2: CausalRAG (operational insights only)
-│   ├── agents/                    # Layer 3: 18 agents in 6 tiers
-│   │   ├── tier_0/                # Tier 0: ML Foundation (7 agents)
+│   ├── agents/                    # Layer 3: 21 agents in 6 tiers
+│   │   ├── tier_0/                # Tier 0: ML Foundation (8 agents)
 │   │   ├── orchestrator/          # Tier 1: Coordination (2 agents)
 │   │   ├── tool_composer/         # Tier 1: Tool orchestration
 │   │   ├── causal_impact/         # Tier 2: Causal Analytics (3 agents)
@@ -238,6 +239,7 @@ e2i_causal_analytics/
 | Tier | Agent | Responsibility | Specialist File |
 |------|-------|----------------|-----------------|
 | 0 | Scope Definer | Define ML problem scope | See Agent_Specialists_Tier 0/ |
+| 0 | Cohort Constructor | Patient cohort construction with audit trails | See Agent_Specialists_Tier 0/ |
 | 0 | Data Preparer | Data preparation & validation | See Agent_Specialists_Tier 0/ |
 | 0 | Feature Analyzer | Feature engineering & selection | See Agent_Specialists_Tier 0/ |
 | 0 | Model Selector | Model selection & benchmarking | See Agent_Specialists_Tier 0/ |
