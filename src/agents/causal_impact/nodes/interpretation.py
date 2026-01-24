@@ -1,8 +1,12 @@
 """Interpretation Node - Natural language interpretation of causal results.
 
 Deep Reasoning node that converts technical results into user-friendly narratives.
+
+Additionally handles:
+- DSPy training signal collection and routing
 """
 
+import logging
 import time
 from typing import Dict
 
@@ -10,6 +14,8 @@ from src.agents.causal_impact.state import (
     CausalImpactState,
     NaturalLanguageInterpretation,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class InterpretationNode:
@@ -75,6 +81,9 @@ class InterpretationNode:
                 raise ValueError(f"Unknown interpretation depth: {depth}")
 
             latency_ms = (time.time() - start_time) * 1000
+
+            # Collect and route DSPy training signal (non-blocking)
+            await self._collect_dspy_signal(state, interpretation, latency_ms)
 
             return {
                 **state,
@@ -376,6 +385,128 @@ class InterpretationNode:
         }
 
         return interpretation
+
+    async def _collect_dspy_signal(
+        self,
+        state: CausalImpactState,
+        interpretation: NaturalLanguageInterpretation,
+        interpretation_latency_ms: float,
+    ) -> None:
+        """Collect and route DSPy training signal to feedback_learner.
+
+        Non-blocking: failures are logged but don't affect workflow.
+
+        Args:
+            state: Complete workflow state with all phase results
+            interpretation: Generated interpretation
+            interpretation_latency_ms: Interpretation node latency
+        """
+        try:
+            from src.agents.causal_impact.dspy_integration import (
+                get_causal_impact_signal_collector,
+            )
+            from src.agents.tier2_signal_router import route_causal_impact_signal
+
+            collector = get_causal_impact_signal_collector()
+
+            # Initialize signal with input context
+            signal = collector.collect_analysis_signal(
+                session_id=state.get("session_id", ""),
+                query=state.get("query", ""),
+                treatment_var=state.get("treatment_var", ""),
+                outcome_var=state.get("outcome_var", ""),
+                confounders_count=len(state.get("confounders", [])),
+            )
+
+            # Update with graph building phase
+            causal_graph = state.get("causal_graph", {})
+            collector.update_graph_building(
+                signal=signal,
+                dag_nodes_count=len(causal_graph.get("nodes", [])),
+                dag_edges_count=len(causal_graph.get("edges", [])),
+                adjustment_sets_found=len(causal_graph.get("adjustment_sets", [])),
+                graph_confidence=causal_graph.get("confidence", 0.0),
+            )
+
+            # Update with estimation phase
+            estimation = state.get("estimation_result", {})
+            collector.update_estimation(
+                signal=signal,
+                method=estimation.get("method", "unknown"),
+                ate_estimate=estimation.get("ate", 0.0),
+                ate_ci_lower=estimation.get("ate_ci_lower", 0.0),
+                ate_ci_upper=estimation.get("ate_ci_upper", 0.0),
+                statistical_significance=estimation.get("statistical_significance", False),
+                effect_size=estimation.get("effect_size", "unknown"),
+                sample_size=estimation.get("sample_size", 0),
+            )
+
+            # Update with energy score (V4.2)
+            collector.update_energy_score(
+                signal=signal,
+                energy_score_enabled=state.get("energy_score_enabled", False),
+                selection_strategy=estimation.get("selection_strategy", ""),
+                selected_estimator=estimation.get("selected_estimator", ""),
+                energy_score=estimation.get("energy_score", 0.0),
+                energy_score_gap=estimation.get("energy_score_gap", 0.0),
+                n_estimators_evaluated=estimation.get("n_estimators_evaluated", 0),
+                n_estimators_succeeded=estimation.get("n_estimators_succeeded", 0),
+            )
+
+            # Update with refutation phase
+            refutation = state.get("refutation_results", {})
+            collector.update_refutation(
+                signal=signal,
+                tests_passed=refutation.get("tests_passed", 0),
+                tests_failed=refutation.get("total_tests", 0) - refutation.get("tests_passed", 0),
+                overall_robust=refutation.get("overall_robust", False),
+            )
+
+            # Update with sensitivity phase
+            sensitivity = state.get("sensitivity_analysis", {})
+            collector.update_sensitivity(
+                signal=signal,
+                e_value=sensitivity.get("e_value", 0.0),
+                robust_to_confounding=sensitivity.get("robust_to_confounding", False),
+            )
+
+            # Calculate total latency
+            total_latency_ms = (
+                state.get("graph_builder_latency_ms", 0)
+                + state.get("estimation_latency_ms", 0)
+                + state.get("refutation_latency_ms", 0)
+                + state.get("sensitivity_latency_ms", 0)
+                + interpretation_latency_ms
+            )
+
+            # Update with interpretation phase (final)
+            collector.update_interpretation(
+                signal=signal,
+                interpretation_depth=interpretation.get("depth_level", "standard"),
+                narrative_length=len(interpretation.get("narrative", "")),
+                key_findings_count=len(interpretation.get("key_findings", [])),
+                recommendations_count=len(interpretation.get("recommendations", [])),
+                total_latency_ms=total_latency_ms,
+                confidence_score=self._confidence_to_score(
+                    interpretation.get("causal_confidence", "medium")
+                ),
+            )
+
+            # Route to feedback_learner
+            await route_causal_impact_signal(signal.to_dict())
+
+            logger.debug(
+                f"DSPy signal collected: reward={signal.compute_reward():.3f}, "
+                f"robust={refutation.get('overall_robust', False)}"
+            )
+
+        except Exception as e:
+            logger.warning(f"DSPy signal collection failed (non-fatal): {e}")
+
+    def _confidence_to_score(self, confidence: str) -> float:
+        """Convert confidence level string to numeric score."""
+        confidence_map = {"low": 0.33, "medium": 0.66, "high": 1.0}
+        return confidence_map.get(confidence.lower(), 0.5)
 
 
 # Standalone function for LangGraph integration
