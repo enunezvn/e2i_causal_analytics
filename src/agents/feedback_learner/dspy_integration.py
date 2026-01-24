@@ -433,7 +433,157 @@ except ImportError:
 
 
 # =============================================================================
-# 5. DSPy OPTIMIZATION HELPERS (MIPROv2 + GEPA)
+# 5. GEPA OPTIMIZATION TRIGGER
+# =============================================================================
+
+
+@dataclass
+class GEPAOptimizationTrigger:
+    """
+    Determines when to trigger GEPA optimization based on accumulated signals.
+
+    The trigger evaluates multiple conditions:
+    1. Minimum signal count: Enough training data for optimization
+    2. Reward delta: Significant change in performance
+    3. Cooldown period: Prevent excessive optimization runs
+    4. Pattern severity: Critical patterns may force optimization
+
+    Usage:
+        trigger = GEPAOptimizationTrigger()
+        should_trigger, reason = trigger.should_trigger(
+            signal_count=150,
+            current_reward=0.72,
+            baseline_reward=0.65,
+            last_optimization=datetime(2025, 1, 1),
+            has_critical_patterns=False,
+        )
+    """
+
+    # Minimum signals required for optimization
+    min_signals: int = 100
+
+    # Minimum reward improvement delta to trigger
+    min_reward_delta: float = 0.05
+
+    # Minimum hours between optimization runs
+    cooldown_hours: int = 24
+
+    # Maximum hours before forcing optimization (regardless of delta)
+    max_hours_without_optimization: int = 168  # 7 days
+
+    # Critical pattern severity forces immediate optimization
+    critical_pattern_triggers: bool = True
+
+    def should_trigger(
+        self,
+        signal_count: int,
+        current_reward: float,
+        baseline_reward: float = 0.0,
+        last_optimization: Optional[datetime] = None,
+        has_critical_patterns: bool = False,
+    ) -> tuple[bool, str]:
+        """
+        Determine if GEPA optimization should be triggered.
+
+        Args:
+            signal_count: Number of accumulated training signals
+            current_reward: Average reward from recent learning cycles
+            baseline_reward: Reward from last optimization baseline
+            last_optimization: Timestamp of last optimization run
+            has_critical_patterns: Whether critical patterns were detected
+
+        Returns:
+            Tuple of (should_trigger, reason)
+        """
+        now = datetime.now(timezone.utc)
+
+        # Check cooldown period
+        if last_optimization is not None:
+            hours_since = (now - last_optimization).total_seconds() / 3600
+            if hours_since < self.cooldown_hours:
+                return (
+                    False,
+                    f"Cooldown active: {hours_since:.1f}h < {self.cooldown_hours}h",
+                )
+        else:
+            hours_since = float("inf")
+
+        # Critical patterns override other checks
+        if has_critical_patterns and self.critical_pattern_triggers:
+            if signal_count >= self.min_signals // 2:  # Require half the signals
+                return (
+                    True,
+                    f"Critical patterns detected with {signal_count} signals",
+                )
+
+        # Check minimum signal count
+        if signal_count < self.min_signals:
+            return (
+                False,
+                f"Insufficient signals: {signal_count} < {self.min_signals}",
+            )
+
+        # Force optimization if too long since last run
+        if hours_since > self.max_hours_without_optimization:
+            return (
+                True,
+                f"Forced: {hours_since:.1f}h since last optimization",
+            )
+
+        # Check reward delta
+        reward_delta = current_reward - baseline_reward
+        if reward_delta >= self.min_reward_delta:
+            return (
+                True,
+                f"Reward improved: {reward_delta:.3f} >= {self.min_reward_delta}",
+            )
+        elif reward_delta <= -self.min_reward_delta:
+            return (
+                True,
+                f"Reward degraded: {reward_delta:.3f} (needs recovery)",
+            )
+
+        return (
+            False,
+            f"No trigger: delta={reward_delta:.3f}, signals={signal_count}",
+        )
+
+    def get_recommended_budget(
+        self,
+        signal_count: int,
+        hours_since_last: float,
+        has_critical_patterns: bool = False,
+    ) -> str:
+        """
+        Get recommended GEPA budget based on context.
+
+        Args:
+            signal_count: Number of accumulated signals
+            hours_since_last: Hours since last optimization
+            has_critical_patterns: Whether critical patterns exist
+
+        Returns:
+            Budget preset: "light", "medium", or "heavy"
+        """
+        # Critical patterns need thorough optimization
+        if has_critical_patterns:
+            return "heavy"
+
+        # Long time since optimization - be thorough
+        if hours_since_last > self.max_hours_without_optimization:
+            return "heavy"
+
+        # Many signals available - use them
+        if signal_count > self.min_signals * 3:
+            return "heavy"
+        elif signal_count > self.min_signals * 2:
+            return "medium"
+        else:
+            return "light"
+
+
+# =============================================================================
+# 6. DSPy OPTIMIZATION HELPERS (MIPROv2 + GEPA)
 # =============================================================================
 
 
@@ -881,6 +1031,7 @@ __all__ = [
     "LearningSummarySignature",
     # Optimization
     "FeedbackLearnerOptimizer",
+    "GEPAOptimizationTrigger",
     "DSPY_AVAILABLE",
     "GEPA_AVAILABLE",
     "OptimizerType",
