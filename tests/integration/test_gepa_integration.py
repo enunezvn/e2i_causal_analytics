@@ -599,3 +599,198 @@ class TestGEPAOpikIntegration:
         )
 
         assert callable(decorator)
+
+
+class TestRAGASGEPAOpikIntegration:
+    """Test RAGAS -> GEPA -> Opik integration pipeline.
+
+    These tests verify that:
+    1. get_ragas_evaluator() factory function works
+    2. RAGASFeedbackProvider uses real RAGAS evaluation
+    3. create_ragas_metric() works with correct parameters
+    4. CognitiveRAGOptimizer can use RAGAS metrics
+    """
+
+    def test_get_ragas_evaluator_factory_exists(self):
+        """Test get_ragas_evaluator factory can be imported."""
+        from src.rag.evaluation import get_ragas_evaluator
+
+        evaluator = get_ragas_evaluator()
+
+        assert evaluator is not None
+        assert hasattr(evaluator, "evaluate_sample")
+
+    def test_get_ragas_evaluator_returns_singleton(self):
+        """Test get_ragas_evaluator returns same instance."""
+        from src.rag.evaluation import get_ragas_evaluator
+
+        evaluator1 = get_ragas_evaluator()
+        evaluator2 = get_ragas_evaluator()
+
+        assert evaluator1 is evaluator2
+
+    def test_get_ragas_evaluator_reset(self):
+        """Test get_ragas_evaluator can reset instance."""
+        from src.rag.evaluation import get_ragas_evaluator
+
+        evaluator1 = get_ragas_evaluator()
+        evaluator2 = get_ragas_evaluator(reset=True)
+
+        assert evaluator1 is not evaluator2
+
+    def test_ragas_feedback_provider_uses_evaluator(self):
+        """Test RAGASFeedbackProvider initializes with evaluator."""
+        from src.optimization.gepa.integration.ragas_feedback import (
+            RAGASFeedbackProvider,
+        )
+
+        provider = RAGASFeedbackProvider()
+
+        # Provider should have evaluator initialized
+        assert provider._ragas_evaluator is not None
+        assert provider._evaluation_sample_class is not None
+        assert provider.enabled is True
+
+    @pytest.mark.asyncio
+    async def test_ragas_feedback_provider_evaluate(self):
+        """Test RAGASFeedbackProvider.evaluate() returns proper structure."""
+        from src.optimization.gepa.integration.ragas_feedback import (
+            RAGASFeedbackProvider,
+        )
+
+        provider = RAGASFeedbackProvider()
+
+        # Evaluate a sample
+        result = await provider.evaluate(
+            question="What is the TRx trend for Kisqali?",
+            answer="Kisqali TRx increased 15% in Q4.",
+            contexts=["Q4 report shows 15% TRx growth for Kisqali."],
+            ground_truth="Kisqali TRx grew 15% in Q4.",
+        )
+
+        # Check result structure
+        assert "score" in result
+        assert "feedback" in result
+        assert isinstance(result["score"], float)
+        assert 0.0 <= result["score"] <= 1.0
+        assert isinstance(result["feedback"], str)
+
+    @pytest.mark.asyncio
+    async def test_ragas_feedback_provider_evaluate_with_run_id(self):
+        """Test RAGASFeedbackProvider.evaluate() accepts run_id for tracing."""
+        from src.optimization.gepa.integration.ragas_feedback import (
+            RAGASFeedbackProvider,
+        )
+
+        provider = RAGASFeedbackProvider()
+
+        # Evaluate with run_id (for Opik tracing)
+        result = await provider.evaluate(
+            question="What is the TRx trend for Kisqali?",
+            answer="Kisqali TRx increased 15% in Q4.",
+            contexts=["Q4 report shows 15% TRx growth."],
+            ground_truth="Kisqali TRx grew 15%.",
+            run_id="test_ragas_opik_integration_001",
+        )
+
+        assert "score" in result
+        assert "feedback" in result
+
+    def test_create_ragas_metric_with_agent_name(self):
+        """Test create_ragas_metric with correct parameters."""
+        from src.optimization.gepa.integration.ragas_feedback import (
+            create_ragas_metric,
+        )
+
+        # Use correct signature: agent_name and optional weights
+        metric = create_ragas_metric(
+            agent_name="cognitive_rag_summarizer",
+            weights={
+                "faithfulness": 0.2,
+                "answer_relevancy": 0.4,
+                "context_precision": 0.2,
+                "context_recall": 0.2,
+            },
+        )
+
+        assert metric is not None
+        assert callable(metric)
+        assert "cognitive_rag_summarizer" in metric.__name__
+
+    def test_cognitive_rag_optimizer_has_phase_weights(self):
+        """Test CognitiveRAGOptimizer has _get_phase_weights method."""
+        from src.rag.cognitive_rag_dspy import CognitiveRAGOptimizer
+
+        optimizer = CognitiveRAGOptimizer(feedback_learner=MagicMock())
+
+        assert hasattr(optimizer, "_get_phase_weights")
+
+        # Test all phases have weights
+        for phase in ["summarizer", "investigator", "agent"]:
+            weights = optimizer._get_phase_weights(phase)
+            assert weights is not None, f"No weights for {phase}"
+            assert sum(weights.values()) == pytest.approx(1.0)
+            assert all(
+                k in weights
+                for k in [
+                    "faithfulness",
+                    "answer_relevancy",
+                    "context_precision",
+                    "context_recall",
+                ]
+            )
+
+    def test_cognitive_rag_optimizer_gepa_imports(self):
+        """Test CognitiveRAGOptimizer GEPA imports work correctly."""
+        from src.rag.cognitive_rag_dspy import (
+            GEPA_AVAILABLE,
+            CognitiveRAGOptimizer,
+            create_ragas_metric,
+        )
+
+        assert CognitiveRAGOptimizer is not None
+
+        if GEPA_AVAILABLE:
+            assert create_ragas_metric is not None
+
+    @pytest.mark.asyncio
+    async def test_ragas_metric_function_call(self):
+        """Test RAGAS metric function can be called with example/pred."""
+        from src.optimization.gepa.integration.ragas_feedback import (
+            create_ragas_metric,
+        )
+
+        metric = create_ragas_metric(agent_name="test_agent")
+
+        # Create mock example and prediction
+        example = MagicMock()
+        example.question = "What is the TRx trend?"
+
+        pred = MagicMock()
+        pred.answer = "TRx increased by 15%."
+        pred.contexts = ["Q4 report: TRx up 15%."]
+
+        # Call the metric
+        result = await metric(example, pred, trace=None)
+
+        assert "score" in result
+        assert "feedback" in result
+        assert isinstance(result["score"], float)
+
+    def test_evaluation_sample_creation(self):
+        """Test EvaluationSample can be created for RAGAS."""
+        from src.rag.evaluation import EvaluationSample
+
+        sample = EvaluationSample(
+            query="What is the TRx trend?",
+            ground_truth="TRx increased by 15%.",
+            answer="TRx showed 15% growth.",
+            retrieved_contexts=["Q4 report shows TRx up."],
+            metadata={"brand": "Kisqali"},
+        )
+
+        assert sample.query == "What is the TRx trend?"
+        assert sample.ground_truth == "TRx increased by 15%."
+        assert sample.answer == "TRx showed 15% growth."
+        assert len(sample.retrieved_contexts) == 1
+        assert sample.metadata["brand"] == "Kisqali"
