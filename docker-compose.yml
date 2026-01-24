@@ -141,11 +141,12 @@ services:
       retries: 3
 
   # Prometheus Metrics Collection
+  # Note: Host port 9091 used because Opik MinIO uses 9090
   prometheus:
     image: prom/prometheus:v2.45.0
     container_name: e2i-prometheus
     ports:
-      - "9090:9090"
+      - "9091:9090"
     volumes:
       - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
@@ -153,6 +154,8 @@ services:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
       - '--web.enable-lifecycle'
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - backend-network
     restart: unless-stopped
