@@ -21,6 +21,7 @@ from src.agents.experiment_designer import (
 # Note: These tests may occasionally show "worker crashed" in parallel execution (pytest-xdist).
 # This is memory pressure from heavy ML imports, not actual test failures.
 # pytest-xdist auto-recovers by replacing workers. All tests pass when run sequentially (-n 0).
+pytestmark = pytest.mark.xdist_group(name="experiment_designer_integration")
 
 
 class TestExperimentDesignerAgent:
