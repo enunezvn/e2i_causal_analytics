@@ -2,9 +2,10 @@
 
 Implements request rate limiting to protect the API from abuse.
 Supports both in-memory (single instance) and Redis (distributed) backends.
+Integrated with security audit logging for compliance.
 
 Author: E2I Causal Analytics Team
-Version: 4.2.0
+Version: 4.2.1
 """
 
 import logging
@@ -16,6 +17,14 @@ from typing import Callable
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
+
+# Security audit logging
+try:
+    from src.utils.security_audit import get_security_audit_service
+
+    _AUDIT_ENABLED = True
+except ImportError:
+    _AUDIT_ENABLED = False
 
 logger = logging.getLogger(__name__)
 
@@ -252,6 +261,23 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         if is_limited:
             logger.warning(f"Rate limit exceeded for {client_key} on {path}")
+
+            # Log security audit event for rate limit exceeded
+            if _AUDIT_ENABLED:
+                # Extract IP from client_key
+                client_ip = client_key.split(":")[-1] if ":" in client_key else client_key
+                request_id = getattr(request.state, "request_id", None)
+                user_id = getattr(request.state, "user_id", None)
+
+                audit = get_security_audit_service()
+                audit.log_rate_limit_blocked(
+                    client_ip=client_ip,
+                    endpoint=path,
+                    block_duration_seconds=window,
+                    user_id=user_id,
+                    request_id=request_id,
+                )
+
             return JSONResponse(
                 status_code=429,
                 content={

@@ -1,0 +1,388 @@
+name: Security Scanning
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  schedule:
+    # Run daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:  # Allow manual triggers
+
+env:
+  PYTHON_VERSION: '3.11'
+  NODE_VERSION: '20'
+
+jobs:
+  # =============================================================================
+  # Secrets Scanning - Detect hardcoded secrets and credentials
+  # =============================================================================
+  secrets-scan:
+    name: Secrets Scanning (Gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for secret scanning
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}  # Optional for full features
+
+      - name: Upload Gitleaks results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gitleaks-report
+          path: results.sarif
+          retention-days: 30
+
+  # =============================================================================
+  # SAST - Static Application Security Testing for Python
+  # =============================================================================
+  sast-python:
+    name: Python SAST (Bandit)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Bandit
+        run: pip install bandit[toml]
+
+      - name: Run Bandit security scan
+        run: |
+          bandit -r src/ \
+            -f json \
+            -o bandit-results.json \
+            --severity-level medium \
+            --confidence-level medium \
+            -x '**/test_*.py,**/*_test.py,**/tests/**' \
+            || true  # Don't fail CI, just report
+
+      - name: Run Bandit for SARIF output
+        run: |
+          bandit -r src/ \
+            -f sarif \
+            -o bandit-results.sarif \
+            --severity-level low \
+            -x '**/test_*.py,**/*_test.py,**/tests/**' \
+            || true
+
+      - name: Upload Bandit SARIF results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: bandit-results.sarif
+          category: bandit
+
+      - name: Upload Bandit JSON results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bandit-results
+          path: |
+            bandit-results.json
+            bandit-results.sarif
+          retention-days: 30
+
+      - name: Display Bandit summary
+        if: always()
+        run: |
+          echo "## Bandit Security Scan Results" >> $GITHUB_STEP_SUMMARY
+          if [ -f bandit-results.json ]; then
+            echo '```json' >> $GITHUB_STEP_SUMMARY
+            cat bandit-results.json | python -m json.tool | head -100 >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # =============================================================================
+  # SAST - Semgrep for comprehensive pattern matching
+  # =============================================================================
+  sast-semgrep:
+    name: Multi-language SAST (Semgrep)
+    runs-on: ubuntu-latest
+    container:
+      image: returntocorp/semgrep
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run Semgrep
+        run: |
+          semgrep scan \
+            --config auto \
+            --config p/python \
+            --config p/security-audit \
+            --config p/secrets \
+            --config p/owasp-top-ten \
+            --sarif \
+            --sarif-output=semgrep-results.sarif \
+            --json \
+            --json-output=semgrep-results.json \
+            --exclude='**/test_*.py' \
+            --exclude='**/*_test.py' \
+            --exclude='**/tests/**' \
+            --exclude='**/.venv/**' \
+            --exclude='**/node_modules/**' \
+            --exclude='**/.worktrees/**' \
+            || true
+
+      - name: Upload Semgrep SARIF results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: semgrep-results.sarif
+          category: semgrep
+
+      - name: Upload Semgrep artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: semgrep-results
+          path: |
+            semgrep-results.json
+            semgrep-results.sarif
+          retention-days: 30
+
+  # =============================================================================
+  # Dependency Scanning - Check for vulnerable Python packages
+  # =============================================================================
+  dependency-scan:
+    name: Dependency Scanning (pip-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Run pip-audit
+        run: |
+          pip-audit \
+            --requirement requirements.txt \
+            --format json \
+            --output pip-audit-results.json \
+            --desc on \
+            || true  # Don't fail CI, just report
+
+      - name: Upload pip-audit results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pip-audit-results
+          path: pip-audit-results.json
+          retention-days: 30
+
+      - name: Display vulnerability summary
+        if: always()
+        run: |
+          echo "## Dependency Vulnerability Scan Results" >> $GITHUB_STEP_SUMMARY
+          if [ -f pip-audit-results.json ]; then
+            VULN_COUNT=$(cat pip-audit-results.json | python -c "import sys, json; d=json.load(sys.stdin); print(len(d.get('dependencies', [])))" 2>/dev/null || echo "0")
+            echo "Found $VULN_COUNT packages with potential vulnerabilities" >> $GITHUB_STEP_SUMMARY
+            echo '```json' >> $GITHUB_STEP_SUMMARY
+            cat pip-audit-results.json | python -m json.tool | head -50 >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # =============================================================================
+  # Frontend Dependency Scanning
+  # =============================================================================
+  frontend-audit:
+    name: Frontend Security Audit (npm audit)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Run npm audit
+        working-directory: frontend
+        run: |
+          npm audit --json > npm-audit-results.json || true
+
+      - name: Upload npm audit results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: npm-audit-results
+          path: frontend/npm-audit-results.json
+          retention-days: 30
+
+      - name: Display npm audit summary
+        if: always()
+        working-directory: frontend
+        run: |
+          echo "## NPM Audit Results" >> $GITHUB_STEP_SUMMARY
+          npm audit --audit-level=moderate || true >> $GITHUB_STEP_SUMMARY
+
+  # =============================================================================
+  # Container Scanning - Scan Docker images for vulnerabilities
+  # =============================================================================
+  container-scan:
+    name: Container Scanning (Trivy)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image for scanning
+        run: |
+          docker build \
+            -t e2i-api:scan \
+            -f docker/fastapi/Dockerfile \
+            .
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'e2i-api:scan'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          vuln-type: 'os,library'
+
+      - name: Upload Trivy SARIF results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy
+
+      - name: Run Trivy for JSON output
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'e2i-api:scan'
+          format: 'json'
+          output: 'trivy-results.json'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          vuln-type: 'os,library'
+
+      - name: Upload Trivy artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trivy-results
+          path: |
+            trivy-results.json
+            trivy-results.sarif
+          retention-days: 30
+
+      - name: Display Trivy summary
+        if: always()
+        run: |
+          echo "## Container Vulnerability Scan Results" >> $GITHUB_STEP_SUMMARY
+          if [ -f trivy-results.json ]; then
+            echo '```json' >> $GITHUB_STEP_SUMMARY
+            cat trivy-results.json | python -m json.tool | head -100 >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # =============================================================================
+  # Dockerfile Security - Lint Dockerfiles for best practices
+  # =============================================================================
+  dockerfile-lint:
+    name: Dockerfile Security (Hadolint)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run Hadolint on all Dockerfiles
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: docker/fastapi/Dockerfile
+          failure-threshold: warning
+          format: sarif
+          output-file: hadolint-results.sarif
+
+      - name: Upload Hadolint SARIF results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: hadolint-results.sarif
+          category: hadolint
+
+      - name: Lint all Dockerfiles
+        run: |
+          echo "## Dockerfile Lint Results" >> $GITHUB_STEP_SUMMARY
+          for dockerfile in docker/*/Dockerfile docker/Dockerfile*; do
+            if [ -f "$dockerfile" ]; then
+              echo "### $dockerfile" >> $GITHUB_STEP_SUMMARY
+              docker run --rm -i hadolint/hadolint < "$dockerfile" >> $GITHUB_STEP_SUMMARY 2>&1 || true
+              echo "" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+
+  # =============================================================================
+  # Security Summary - Aggregate results
+  # =============================================================================
+  security-summary:
+    name: Security Summary
+    runs-on: ubuntu-latest
+    needs:
+      - secrets-scan
+      - sast-python
+      - sast-semgrep
+      - dependency-scan
+      - frontend-audit
+      - container-scan
+      - dockerfile-lint
+    if: always()
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: security-reports
+
+      - name: Generate security summary
+        run: |
+          echo "# Security Scan Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Scan | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Secrets Scan | ${{ needs.secrets-scan.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Python SAST (Bandit) | ${{ needs.sast-python.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Multi-language SAST (Semgrep) | ${{ needs.sast-semgrep.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Dependency Scan (pip-audit) | ${{ needs.dependency-scan.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Frontend Audit (npm) | ${{ needs.frontend-audit.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Container Scan (Trivy) | ${{ needs.container-scan.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Dockerfile Lint (Hadolint) | ${{ needs.dockerfile-lint.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Security reports are available as artifacts." >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload combined security reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports-combined
+          path: security-reports/
+          retention-days: 90

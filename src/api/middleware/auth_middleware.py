@@ -2,9 +2,10 @@
 
 Protects API routes by validating Supabase JWT tokens.
 Configurable public paths that bypass authentication.
+Integrated with security audit logging for compliance.
 
 Author: E2I Causal Analytics Team
-Version: 4.2.2
+Version: 4.2.3
 """
 
 import logging
@@ -17,6 +18,14 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from src.api.dependencies.auth import is_auth_enabled, verify_supabase_token
+
+# Security audit logging
+try:
+    from src.utils.security_audit import get_security_audit_service
+
+    _AUDIT_ENABLED = True
+except ImportError:
+    _AUDIT_ENABLED = False
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +114,33 @@ def _is_public_path(method: str, path: str) -> bool:
     return False
 
 
+def _get_client_info(request: Request) -> tuple[str, str]:
+    """
+    Extract client IP and user agent from request.
+
+    Args:
+        request: The incoming request
+
+    Returns:
+        Tuple of (client_ip, user_agent)
+    """
+    # Get client IP (check X-Forwarded-For for proxied requests)
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        client_ip = forwarded.split(",")[0].strip()
+    else:
+        client_ip = request.client.host if request.client else "unknown"
+
+    user_agent = request.headers.get("User-Agent", "unknown")
+
+    return client_ip, user_agent
+
+
+def _get_request_id(request: Request) -> str | None:
+    """Get request ID from request state if available."""
+    return getattr(request.state, "request_id", None)
+
+
 def _get_cors_headers(request: Request) -> dict:
     """
     Get CORS headers for error responses.
@@ -182,6 +218,17 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
         auth_header = request.headers.get("Authorization", "")
 
         if not auth_header:
+            # Log security audit event for missing auth header
+            if _AUDIT_ENABLED:
+                client_ip, user_agent = _get_client_info(request)
+                audit = get_security_audit_service()
+                audit.log_auth_failure(
+                    client_ip=client_ip,
+                    user_agent=user_agent,
+                    reason="Missing Authorization header",
+                    request_id=_get_request_id(request),
+                    metadata={"endpoint": path, "method": method},
+                )
             return JSONResponse(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 content={
@@ -195,6 +242,17 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
         # Parse Bearer token
         parts = auth_header.split()
         if len(parts) != 2 or parts[0].lower() != "bearer":
+            # Log security audit event for invalid header format
+            if _AUDIT_ENABLED:
+                client_ip, user_agent = _get_client_info(request)
+                audit = get_security_audit_service()
+                audit.log_auth_failure(
+                    client_ip=client_ip,
+                    user_agent=user_agent,
+                    reason="Invalid Authorization header format",
+                    request_id=_get_request_id(request),
+                    metadata={"endpoint": path, "method": method},
+                )
             return JSONResponse(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 content={
@@ -211,6 +269,16 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
         user = await verify_supabase_token(token)
 
         if user is None:
+            # Log security audit event for invalid/expired token
+            if _AUDIT_ENABLED:
+                client_ip, user_agent = _get_client_info(request)
+                audit = get_security_audit_service()
+                audit.log_token_invalid(
+                    client_ip=client_ip,
+                    endpoint=path,
+                    reason="Invalid or expired token",
+                    request_id=_get_request_id(request),
+                )
             return JSONResponse(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 content={
@@ -226,6 +294,10 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
 
         # Log authenticated request
         logger.debug(f"Authenticated request: {method} {path} by {user.get('email')}")
+
+        # Log successful authentication (only for first request after login, not every request)
+        # We skip logging for every authenticated request to reduce noise
+        # Login success is logged at the auth endpoint level, not middleware
 
         return await call_next(request)
 
