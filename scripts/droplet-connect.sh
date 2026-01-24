@@ -13,9 +13,9 @@
 set -e
 
 # Configuration
-DROPLET_IP="159.89.180.27"
+DROPLET_IP="138.197.4.36"
 SSH_KEY="$HOME/.ssh/replit"
-SSH_USER="root"
+SSH_USER="enunez"
 SSH_OPTS="-o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new"
 
 # Colors for output
@@ -336,7 +336,7 @@ main() {
     echo -e "${BLUE}"
     echo "  ╔═══════════════════════════════════════════════════════╗"
     echo "  ║     E2I Droplet Connection Manager                    ║"
-    echo "  ║     Droplet: $DROPLET_IP                       ║"
+    echo "  ║     Droplet: $DROPLET_IP                        ║"
     echo "  ╚═══════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 
