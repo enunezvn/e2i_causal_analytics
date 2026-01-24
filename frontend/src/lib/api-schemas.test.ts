@@ -404,12 +404,13 @@ describe('Validation Utilities', () => {
   describe('ApiValidationError', () => {
     it('should have correct properties', () => {
       const issues = [
-        { code: 'invalid_type' as const, expected: 'string', received: 'undefined', path: ['label'], message: 'Required' },
+        { code: 'invalid_type', expected: 'string', received: 'undefined', path: ['label'], message: 'Required' } as const,
       ];
 
       const error = new ApiValidationError(
         'Validation failed',
-        issues,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        issues as any,
         '/test/endpoint',
         { id: 'test' }
       );

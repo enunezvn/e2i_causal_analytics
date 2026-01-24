@@ -13,7 +13,9 @@
     "test:run": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
-    "test:e2e:ui": "playwright test --ui"
+    "test:e2e:ui": "playwright test --ui",
+    "generate:types": "openapi-typescript http://localhost:8000/api/openapi.json -o src/types/generated/api.ts",
+    "generate:types:prod": "openapi-typescript http://138.197.4.36:8000/api/openapi.json -o src/types/generated/api.ts"
   },
   "dependencies": {
     "@copilotkit/react-core": "1.51.2",
@@ -54,6 +56,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",
+    "openapi-typescript": "^7.6.1",
     "@playwright/test": "^1.57.0",
     "@tailwindcss/postcss": "^4.1.18",
     "@testing-library/jest-dom": "^6.9.1",

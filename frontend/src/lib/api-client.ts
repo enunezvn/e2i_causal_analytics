@@ -19,7 +19,7 @@ import axios, {
 import type { ZodTypeAny } from 'zod';
 import { env, buildApiUrl } from '@/config/env';
 import { useAuthStore } from '@/stores/auth-store';
-import { validateApiResponse, ApiValidationError } from './api-schemas';
+import { validateApiResponse } from './api-schemas';
 
 /**
  * Generate a UUID v4 with fallback for non-secure contexts (HTTP)

@@ -64,3 +64,9 @@ export * from './monitoring';
 
 // Predictions types (Phase 3 - Type Safety)
 export * from './predictions';
+
+// Auto-generated types from OpenAPI spec (Phase 4 - Type Generation)
+// Run `npm run generate:types` to regenerate from backend API
+// Note: Use namespace import to avoid conflicts with hand-crafted types
+// import type { Generated } from '@/types' then access Generated.components['schemas']['...']
+export * as Generated from './generated';
