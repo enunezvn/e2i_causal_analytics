@@ -636,39 +636,39 @@ All tests MUST be run in batches with max 4 workers. Use these commands:
 
 ```bash
 # Run from local machine via SSH (recommended)
-ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/venv/bin/pytest <tests> -v -n 4 --dist=loadscope"
+ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/.venv/bin/pytest <tests> -v -n 4 --dist=loadscope"
 ```
 
 ### Batch Test Commands by Area
 
 **Batch 1: Security Tests** (~110 tests)
 ```bash
-ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/venv/bin/pytest tests/unit/api/dependencies/test_auth_roles.py tests/integration/api/test_rbac_endpoints.py tests/unit/security/test_data_masking.py -v -n 4 --dist=loadscope"
+ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/.venv/bin/pytest tests/unit/api/dependencies/test_auth_roles.py tests/integration/api/test_rbac_endpoints.py tests/unit/security/test_data_masking.py -v -n 4 --dist=loadscope"
 ```
 
 **Batch 2: Error Handling Tests** (~40 tests)
 ```bash
-ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/venv/bin/pytest tests/unit/api/test_errors.py -v -n 4 --dist=loadscope"
+ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/.venv/bin/pytest tests/unit/api/test_errors.py -v -n 4 --dist=loadscope"
 ```
 
 **Batch 3: Real-Time/Graph Tests** (~40 tests)
 ```bash
-ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/venv/bin/pytest tests/unit/test_api/test_routes/test_chatbot_graph.py tests/unit/test_api/test_routes/test_graph.py tests/integration/test_chatbot_graph.py -v -n 4 --dist=loadscope"
+ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/.venv/bin/pytest tests/unit/test_api/test_routes/test_chatbot_graph.py tests/unit/test_api/test_routes/test_graph.py tests/integration/test_chatbot_graph.py -v -n 4 --dist=loadscope"
 ```
 
 **Batch 4: Type Safety & API Tests** (~60 tests)
 ```bash
-ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/venv/bin/pytest tests/unit/test_api/test_routes/ -v -n 4 --dist=loadscope"
+ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/.venv/bin/pytest tests/unit/test_api/test_routes/ -v -n 4 --dist=loadscope"
 ```
 
 **Batch 5: Observability Tests** (~30 tests)
 ```bash
-ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/venv/bin/pytest tests/unit/observability/ tests/integration/test_observability_integration.py -v -n 4 --dist=loadscope"
+ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/.venv/bin/pytest tests/unit/observability/ tests/integration/test_observability_integration.py -v -n 4 --dist=loadscope"
 ```
 
 **Batch 6: Agent Tests** (~100 tests, run sequentially to avoid DSPy conflicts)
 ```bash
-ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/venv/bin/pytest tests/unit/test_agents/ -v -n 1 --dist=loadscope"
+ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/.venv/bin/pytest tests/unit/test_agents/ -v -n 1 --dist=loadscope"
 ```
 
 ### Quick Validation Command
@@ -677,16 +677,16 @@ To verify the key implementations from this plan, run:
 
 ```bash
 # Security - RBAC auth roles (38 tests)
-ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/venv/bin/pytest tests/unit/api/dependencies/test_auth_roles.py -v -n 2"
+ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/.venv/bin/pytest tests/unit/api/dependencies/test_auth_roles.py -v -n 2"
 
 # Error handling - typed errors (40 tests)
-ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/venv/bin/pytest tests/unit/api/test_errors.py -v -n 2"
+ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/.venv/bin/pytest tests/unit/api/test_errors.py -v -n 2"
 
 # RBAC - integration tests (29 tests)
-ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/venv/bin/pytest tests/integration/api/test_rbac_endpoints.py -v -n 2"
+ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/.venv/bin/pytest tests/integration/api/test_rbac_endpoints.py -v -n 2"
 
 # PII masking - data protection (42 tests)
-ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/venv/bin/pytest tests/unit/security/test_data_masking.py -v -n 2"
+ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/.venv/bin/pytest tests/unit/security/test_data_masking.py -v -n 2"
 ```
 
 ### Sync Changes Before Testing
@@ -788,13 +788,13 @@ npm run test -- src/hooks/api/use-predictions.test.ts
 
 ```bash
 # E2E Security Audit (requires running API service)
-ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/venv/bin/pytest tests/e2e/test_security_audit.py -v -n 2"
+ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/.venv/bin/pytest tests/e2e/test_security_audit.py -v -n 2"
 
 # E2E Error Recovery
-ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/venv/bin/pytest tests/e2e/test_error_recovery.py -v -n 2"
+ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/.venv/bin/pytest tests/e2e/test_error_recovery.py -v -n 2"
 
 # E2E Observability
-ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/venv/bin/pytest tests/e2e/test_observability.py -v -n 2"
+ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/.venv/bin/pytest tests/e2e/test_observability.py -v -n 2"
 ```
 
 ---
@@ -973,7 +973,7 @@ ssh -i ~/.ssh/replit enunez@138.197.4.36 "grep -n 'class.*Error.*BaseModel\|clas
 ssh -i ~/.ssh/replit enunez@138.197.4.36 "ls -la /opt/e2i_causal_analytics/src/api/utils/data_masking.py 2>/dev/null && echo 'PASS: PII masking exists'"
 
 # 7. Run key test batches
-ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/venv/bin/pytest tests/unit/api/test_auth_roles.py tests/unit/api/test_errors.py -v -n 2 --tb=short 2>/dev/null | tail -20"
+ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/.venv/bin/pytest tests/unit/api/test_auth_roles.py tests/unit/api/test_errors.py -v -n 2 --tb=short 2>/dev/null | tail -20"
 ```
 
 ### Stream Execution Progress Implementation (2026-01-23)

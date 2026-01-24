@@ -9,7 +9,9 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from typing import Any
 
-from loguru import logger
+import logging
+
+logger = logging.getLogger(__name__)
 
 from src.kpi.cache import KPICache
 from src.kpi.models import (

@@ -7,7 +7,9 @@ based on the KPI Framework documentation's library selection matrix.
 
 from typing import Any, Protocol
 
-from loguru import logger
+import logging
+
+logger = logging.getLogger(__name__)
 
 from src.kpi.models import CausalLibrary, KPIMetadata
 

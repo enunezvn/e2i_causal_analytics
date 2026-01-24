@@ -10,19 +10,25 @@ G12 from observability audit remediation plan:
 Version: 1.0.0
 """
 
+from __future__ import annotations
+
 import logging
 import os
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, Optional
 
 from celery import Celery
 from celery.events import EventReceiver
 from celery.events.state import State
 
 logger = logging.getLogger(__name__)
+
+# Type hints for prometheus_client types (only for type checking)
+if TYPE_CHECKING:
+    from prometheus_client import Counter, Gauge, Histogram
 
 # =============================================================================
 # Prometheus Metrics Integration

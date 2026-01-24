@@ -19,7 +19,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import networkx as nx
 import numpy as np
-from loguru import logger
+import logging
+
+logger = logging.getLogger(__name__)
 from numpy.typing import NDArray
 
 from .base import DiscoveryResult

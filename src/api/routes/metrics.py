@@ -11,12 +11,16 @@ Version: 1.0.0
 """
 
 import logging
-from typing import Any, Dict
+from typing import TYPE_CHECKING, Any, Dict
 
 from fastapi import APIRouter
 from fastapi.responses import Response
 
 logger = logging.getLogger(__name__)
+
+# Type hints for prometheus_client types (only for type checking)
+if TYPE_CHECKING:
+    from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram
 
 # Try to import prometheus_client
 try:
@@ -45,16 +49,16 @@ router = APIRouter(tags=["Metrics"])
 # =============================================================================
 
 # Use a separate registry to avoid conflicts with default registry
-_metrics_registry: CollectorRegistry | None = None
+_metrics_registry: "CollectorRegistry | None" = None
 _metrics_initialized = False
 
 # Metric instances
-_request_counter: Counter | None = None
-_request_latency: Histogram | None = None
-_active_requests: Gauge | None = None
-_error_counter: Counter | None = None
-_agent_invocations: Counter | None = None
-_health_gauge: Gauge | None = None
+_request_counter: "Counter | None" = None
+_request_latency: "Histogram | None" = None
+_active_requests: "Gauge | None" = None
+_error_counter: "Counter | None" = None
+_agent_invocations: "Counter | None" = None
+_health_gauge: "Gauge | None" = None
 
 
 def _init_metrics() -> None:
@@ -119,7 +123,7 @@ def _init_metrics() -> None:
     logger.info("Prometheus metrics initialized")
 
 
-def get_metrics_registry() -> CollectorRegistry | None:
+def get_metrics_registry() -> "CollectorRegistry | None":
     """Get the metrics registry, initializing if needed."""
     if not _metrics_initialized:
         _init_metrics()
