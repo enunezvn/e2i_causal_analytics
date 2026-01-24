@@ -1,9 +1,10 @@
 # Comprehensive System Evaluation Plan
 
-**Date:** 2026-01-19 (Updated: 2026-01-23)
+**Date:** 2026-01-19 (Updated: 2026-01-23, Verified: 2026-01-23)
 **Branch:** `claude/audit-api-frontend-routing-OhAkA`
 **Scope:** Beyond API-Frontend Routing - Full System Health Evaluation
 **Status:** Phase 1-4 Complete (6/7 items), 1 Low-Priority Enhancement Remaining
+**Last Verification:** 149 tests passing on droplet (2026-01-23)
 
 > **IMPORTANT:** All testing MUST be performed on the droplet in batches (max 4 workers).
 > See [Droplet Testing Protocol](#droplet-testing-protocol) section below.
@@ -586,7 +587,7 @@ merged += f"\n\n*Note: Unable to get results from: {', '.join(failed_agents)}*"
 | Decision rationale in response | Observability | 0.5d | Backend | ✅ Done (2026-01-23) |
 | Tab visibility polling pause | Real-Time | 0.5d | Frontend | ✅ Done (2026-01-23) |
 | Cache invalidation sync | Real-Time | 2d | Full-stack | ✅ Done (2026-01-23) |
-| Stream execution progress | Observability | 2d | Backend | ✅ Done (2026-01-24) |
+| Stream execution progress | Observability | 2d | Backend | ✅ Done (2026-01-23) |
 | OpenAPI → TypeScript generation | Type Safety | 1d | DevOps | Pending (Low Priority) |
 
 **Total: 9 days** | **Completed: 6/7 items**
@@ -634,24 +635,24 @@ ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e
 ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/venv/bin/pytest tests/unit/api/test_errors.py -v -n 4 --dist=loadscope"
 ```
 
-**Batch 3: Real-Time/WebSocket Tests** (~40 tests)
+**Batch 3: Real-Time/Graph Tests** (~40 tests)
 ```bash
-ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/venv/bin/pytest tests/unit/api/test_websocket*.py tests/unit/api/routes/test_graph*.py -v -n 4 --dist=loadscope"
+ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/venv/bin/pytest tests/unit/test_api/test_routes/test_chatbot_graph.py tests/unit/test_api/test_routes/test_graph.py tests/integration/test_chatbot_graph.py -v -n 4 --dist=loadscope"
 ```
 
 **Batch 4: Type Safety & API Tests** (~60 tests)
 ```bash
-ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/venv/bin/pytest tests/unit/api/routes/ -v -n 4 --dist=loadscope"
+ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/venv/bin/pytest tests/unit/test_api/test_routes/ -v -n 4 --dist=loadscope"
 ```
 
 **Batch 5: Observability Tests** (~30 tests)
 ```bash
-ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/venv/bin/pytest tests/unit/test_observability*.py tests/integration/test_agent_observ*.py -v -n 4 --dist=loadscope"
+ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/venv/bin/pytest tests/unit/observability/ tests/integration/test_observability_integration.py -v -n 4 --dist=loadscope"
 ```
 
 **Batch 6: Agent Tests** (~100 tests, run sequentially to avoid DSPy conflicts)
 ```bash
-ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/venv/bin/pytest tests/unit/agents/ -v -n 1 --dist=loadscope"
+ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/venv/bin/pytest tests/unit/test_agents/ -v -n 1 --dist=loadscope"
 ```
 
 ### Quick Validation Command
@@ -678,7 +679,7 @@ Before running tests, sync code changes to droplet:
 
 ```bash
 # Sync entire project (excludes venv, node_modules)
-rsync -avz --exclude 'venv' --exclude 'node_modules' --exclude '.git' --exclude '__pycache__' \
+rsync -avz -e "ssh -i ~/.ssh/replit" --exclude 'venv' --exclude 'node_modules' --exclude '.git' --exclude '__pycache__' \
   /home/enunez/Projects/e2i_causal_analytics/ \
   enunez@138.197.4.36:/opt/e2i_causal_analytics/
 ```
@@ -813,7 +814,7 @@ ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e
 - [x] Partial failures return successful agent results
 - [x] Error responses include agent name, error type, suggested action
 - [x] Decision rationale exposed in ChatResponse (routing_rationale field added 2026-01-23)
-- [x] Execution progress streamable for long operations (progress tracking added 2026-01-24)
+- [x] Execution progress streamable for long operations (progress tracking added 2026-01-23)
 
 ---
 
@@ -862,7 +863,7 @@ This evaluation identified **32 specific issues** across 6 areas. **Phases 1-3 a
 | Decision rationale in response | Observability | 0.5d | ✅ Done (2026-01-23) |
 | Tab visibility polling pause | Real-Time | 0.5d | ✅ Done (2026-01-23) |
 | Cache invalidation sync | Real-Time | 2d | ✅ Done (2026-01-23) |
-| Stream execution progress | Observability | 2d | ✅ Done (2026-01-24) |
+| Stream execution progress | Observability | 2d | ✅ Done (2026-01-23) |
 | OpenAPI → TypeScript generation | Type Safety | 1d | Pending (Low Priority) |
 
 **Remaining Effort:** ~1 day for remaining Phase 4 feature (1 low-priority item)
@@ -873,9 +874,10 @@ The system has progressed from **49/100** to **87/100** (A- grade) with strong f
 
 ---
 
-**Document Version:** 2.1
+**Document Version:** 2.2
 **Last Updated:** 2026-01-23
 **Status:** Phases 1-4 Near Complete (6/7 items), 1 Low-Priority Enhancement Remaining
+**Verification:** 149 tests passing on droplet (RBAC: 38, Errors: 40, PII: 42, Integration: 29)
 
 ### Implementation Summary
 - **Phase 1:** 5/5 items complete (security, stability, observability)
@@ -892,7 +894,7 @@ The system has progressed from **49/100** to **87/100** (A- grade) with strong f
 - ~~Decision Rationale in ChatResponse~~ (0.5d) - Done 2026-01-23
 - ~~Tab Visibility Polling Pause~~ (0.5d) - Done 2026-01-23
 - ~~Cache Invalidation Sync with WebSocket~~ (2d) - Done 2026-01-23
-- ~~Stream Execution Progress~~ (2d) - Done 2026-01-24
+- ~~Stream Execution Progress~~ (2d) - Done 2026-01-23
 
 ### Remaining Items (Low Priority)
 
@@ -929,7 +931,7 @@ ssh -i ~/.ssh/replit enunez@138.197.4.36 "ls -la /opt/e2i_causal_analytics/src/a
 ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/venv/bin/pytest tests/unit/api/test_auth_roles.py tests/unit/api/test_errors.py -v -n 2 --tb=short 2>/dev/null | tail -20"
 ```
 
-### Stream Execution Progress Implementation (2026-01-24)
+### Stream Execution Progress Implementation (2026-01-23)
 
 Added real-time progress tracking to LangGraph workflow for long-running queries:
 
@@ -985,3 +987,25 @@ Added real-time progress tracking to LangGraph workflow for long-running queries
 - **Cache Sync:** ✅ Done - Created `frontend/src/hooks/use-websocket-cache-sync.ts` with event-to-query-key mapping, debounced invalidation, 27 tests
 - **Stream Progress:** ✅ Done - Added progress tracking to all LangGraph nodes (5-100%), state fields, helper function
 - **OpenAPI Codegen:** ❌ Not setup - No TypeScript codegen configuration found (Low Priority, manual sync working well)
+
+### Droplet Test Verification (2026-01-23)
+
+Executed on production droplet (138.197.4.36) with verified results:
+
+| Test Suite | Path | Result | Duration |
+|------------|------|--------|----------|
+| RBAC Auth Roles | `tests/unit/api/dependencies/test_auth_roles.py` | ✅ 38 passed | 7.77s |
+| Error Handling | `tests/unit/api/test_errors.py` | ✅ 40 passed | 7.58s |
+| PII Data Masking | `tests/unit/security/test_data_masking.py` | ✅ 42 passed | 7.74s |
+| RBAC Integration | `tests/integration/api/test_rbac_endpoints.py` | ✅ 29 passed | 23.48s |
+
+**Total: 149 tests passing**
+
+All Phase 1-4 implementations verified present on droplet:
+- ✅ `routing_rationale` field in ChatResponse (copilotkit.py:2774)
+- ✅ `WORKFLOW_PROGRESS` constant in chatbot_graph.py (line 106)
+- ✅ `UserRole` enum in auth.py (line 45)
+- ✅ `data_masking.py` utility exists (8136 bytes)
+- ✅ `E2IError`, `AgentTimeoutError`, `TimeoutError` classes in errors.py
+- ✅ `initTabVisibilityListener` in query-client.ts (line 171)
+- ✅ `use-websocket-cache-sync.ts` hook exists (11136 bytes)
