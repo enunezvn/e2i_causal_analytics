@@ -160,6 +160,7 @@ class PhaseSpanContext:
         retry_count: int = 0,
         parallel_executions: int = 0,
         step_durations_ms: Optional[List[int]] = None,
+        circuit_breaker_summary: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ) -> None:
         """Log execution phase metrics.
@@ -170,6 +171,7 @@ class PhaseSpanContext:
             retry_count: Total retries across all steps
             parallel_executions: Number of parallel tool calls
             step_durations_ms: Duration of each step
+            circuit_breaker_summary: Circuit breaker state summary (V4.3)
             **kwargs: Additional metrics
         """
         success_rate = tools_succeeded / tools_executed if tools_executed > 0 else 0.0
@@ -184,23 +186,90 @@ class PhaseSpanContext:
             **kwargs,
         })
 
+        # Add circuit breaker metrics (V4.3)
+        if circuit_breaker_summary:
+            self.metadata["circuit_breaker"] = circuit_breaker_summary
+
         if self._opik_span:
             self._opik_span.set_attribute("tools_executed", tools_executed)
             self._opik_span.set_attribute("tools_succeeded", tools_succeeded)
             self._opik_span.set_attribute("success_rate", success_rate)
             self._opik_span.set_attribute("parallel_executions", parallel_executions)
+
+            # Log circuit breaker attributes (V4.3)
+            if circuit_breaker_summary:
+                self._opik_span.set_attribute(
+                    "circuit_breaker.trips", circuit_breaker_summary.get("total_trips", 0)
+                )
+                self._opik_span.set_attribute(
+                    "circuit_breaker.open_circuits",
+                    circuit_breaker_summary.get("open_circuits", 0),
+                )
+
             self._opik_span.add_event(
                 "execution_complete",
                 {
                     "tools_executed": tools_executed,
                     "tools_succeeded": tools_succeeded,
                     "retry_count": retry_count,
+                    "circuit_trips": (
+                        circuit_breaker_summary.get("total_trips", 0)
+                        if circuit_breaker_summary else 0
+                    ),
                 },
             )
 
         logger.debug(
             f"[EXECUTE] {tools_succeeded}/{tools_executed} succeeded, "
             f"{retry_count} retries, {parallel_executions} parallel"
+        )
+
+    def log_circuit_breaker_event(
+        self,
+        tool_name: str,
+        event_type: str,
+        state: str,
+        failure_count: int = 0,
+        success_count: int = 0,
+        **kwargs: Any,
+    ) -> None:
+        """Log circuit breaker state change event (V4.3).
+
+        Args:
+            tool_name: Name of the tool whose circuit changed
+            event_type: Type of event (trip, close, half_open)
+            state: New circuit state (CLOSED, OPEN, HALF_OPEN)
+            failure_count: Current failure count
+            success_count: Current success count
+            **kwargs: Additional metadata
+        """
+        event_data = {
+            "tool": tool_name,
+            "event_type": event_type,
+            "state": state,
+            "failure_count": failure_count,
+            "success_count": success_count,
+            **kwargs,
+        }
+
+        # Track in metadata
+        if "circuit_breaker_events" not in self.metadata:
+            self.metadata["circuit_breaker_events"] = []
+        self.metadata["circuit_breaker_events"].append(event_data)
+
+        if self._opik_span:
+            self._opik_span.add_event(
+                f"circuit_breaker_{event_type}",
+                {
+                    "tool": tool_name,
+                    "new_state": state,
+                    "failure_count": failure_count,
+                },
+            )
+
+        logger.info(
+            f"[CIRCUIT_BREAKER] {tool_name}: {event_type} -> {state} "
+            f"(failures={failure_count}, successes={success_count})"
         )
 
     def log_synthesis(

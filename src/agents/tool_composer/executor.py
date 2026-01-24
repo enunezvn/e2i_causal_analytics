@@ -318,6 +318,42 @@ class ToolFailureTracker:
         else:
             self._stats.clear()
 
+    def get_circuit_breaker_summary(self) -> Dict[str, Any]:
+        """Get circuit breaker summary for observability (V4.3).
+
+        Returns a summary suitable for Opik tracing with:
+        - Total circuit trips across all tools
+        - Number of currently open circuits
+        - List of open/half-open circuits
+        - Per-tool circuit state
+        """
+        total_trips = 0
+        open_circuits = []
+        half_open_circuits = []
+        per_tool_state = {}
+
+        for tool_name, stats in self._stats.items():
+            cb = stats.circuit_breaker
+            state_info = cb.get_state_info()
+            per_tool_state[tool_name] = state_info
+
+            # Count trips (approximated by failure count when opened)
+            if state_info["state"] in ("open", "half_open"):
+                total_trips += 1
+                if state_info["state"] == "open":
+                    open_circuits.append(tool_name)
+                else:
+                    half_open_circuits.append(tool_name)
+
+        return {
+            "total_trips": total_trips,
+            "open_circuits": len(open_circuits),
+            "half_open_circuits": len(half_open_circuits),
+            "open_circuit_tools": open_circuits,
+            "half_open_circuit_tools": half_open_circuits,
+            "per_tool_state": per_tool_state,
+        }
+
 
 # ============================================================================
 # EXECUTOR CLASS
