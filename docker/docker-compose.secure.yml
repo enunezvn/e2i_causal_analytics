@@ -1,0 +1,703 @@
+# =============================================================================
+# E2I Causal Analytics - Secure Production Docker Compose
+# =============================================================================
+# Network-isolated configuration with proper security segmentation
+#
+# Network Architecture:
+#   ┌─────────────────────────────────────────────────────────────────────────┐
+#   │                           EXTERNAL                                       │
+#   │                              │                                           │
+#   │                       ┌──────▼──────┐                                   │
+#   │                       │   nginx     │ ← public-network (exposed)         │
+#   │                       └──────┬──────┘                                   │
+#   │                              │                                           │
+#   │              ┌───────────────┼───────────────┐                          │
+#   │              │               │               │                          │
+#   │       ┌──────▼──────┐ ┌──────▼──────┐ ┌──────▼──────┐                   │
+#   │       │  frontend   │ │     api     │ │   workers   │ ← app-network     │
+#   │       └─────────────┘ └──────┬──────┘ └──────┬──────┘                   │
+#   │                              │               │                          │
+#   │              ┌───────────────┴───────────────┘                          │
+#   │              │                                                          │
+#   │    ┌─────────┴─────────┐                ┌─────────────────┐            │
+#   │    │                   │                │                  │            │
+#   │  ┌─▼─────────┐ ┌───────▼─────┐    ┌────▼────┐ ┌──────────▼──┐         │
+#   │  │  redis    │ │  falkordb   │    │  mlflow │ │    opik     │         │
+#   │  └───────────┘ └─────────────┘    └─────────┘ └─────────────┘         │
+#   │        └─── data-network (internal) ──┘  └─ monitoring-network ─┘      │
+#   └─────────────────────────────────────────────────────────────────────────┘
+#
+# Usage:
+#   docker compose -f docker/docker-compose.secure.yml up -d
+# =============================================================================
+
+name: e2i-secure
+
+# =============================================================================
+# NETWORKS - Security-Segmented Architecture
+# =============================================================================
+networks:
+  # ---------------------------------------------------------------------------
+  # PUBLIC NETWORK - External-facing only (nginx)
+  # Only nginx should be on this network
+  # ---------------------------------------------------------------------------
+  public-network:
+    driver: bridge
+    name: e2i-public
+    driver_opts:
+      com.docker.network.bridge.enable_icc: "false"  # Disable inter-container communication
+    labels:
+      - "e2i.network.type=public"
+      - "e2i.network.exposure=external"
+
+  # ---------------------------------------------------------------------------
+  # APP NETWORK - Application tier (API, frontend, workers)
+  # Bridges public to internal services
+  # ---------------------------------------------------------------------------
+  app-network:
+    driver: bridge
+    name: e2i-app
+    labels:
+      - "e2i.network.type=application"
+      - "e2i.network.exposure=internal"
+
+  # ---------------------------------------------------------------------------
+  # DATA NETWORK - Data stores (Redis, FalkorDB)
+  # Internal only - no external access
+  # ---------------------------------------------------------------------------
+  data-network:
+    driver: bridge
+    name: e2i-data
+    internal: true  # No external connectivity
+    labels:
+      - "e2i.network.type=data"
+      - "e2i.network.exposure=internal-only"
+
+  # ---------------------------------------------------------------------------
+  # MONITORING NETWORK - MLOps services (MLflow, Opik, BentoML)
+  # Internal with limited external access for UIs
+  # ---------------------------------------------------------------------------
+  monitoring-network:
+    driver: bridge
+    name: e2i-monitoring
+    labels:
+      - "e2i.network.type=monitoring"
+      - "e2i.network.exposure=internal"
+
+  # ---------------------------------------------------------------------------
+  # CELERY NETWORK - Worker-specific communication
+  # Isolated for Celery broker/result backend
+  # ---------------------------------------------------------------------------
+  celery-network:
+    driver: bridge
+    name: e2i-celery
+    internal: true  # Workers communicate internally only
+    labels:
+      - "e2i.network.type=celery"
+      - "e2i.network.exposure=internal-only"
+
+# =============================================================================
+# VOLUMES
+# =============================================================================
+volumes:
+  redis_data:
+    driver: local
+    name: e2i_redis_data
+
+  falkordb_data:
+    driver: local
+    name: e2i_falkordb_data
+
+  mlflow_db:
+    driver: local
+    name: e2i_mlflow_db
+
+  mlflow_artifacts:
+    driver: local
+    name: e2i_mlflow_artifacts
+
+  opik_data:
+    driver: local
+    name: e2i_opik_data
+
+  nginx_logs:
+    driver: local
+    name: e2i_nginx_logs
+
+  # Shared volumes
+  ml_artifacts:
+    driver: local
+    name: e2i_ml_artifacts
+
+  causal_outputs:
+    driver: local
+    name: e2i_causal_outputs
+
+  agent_outputs:
+    driver: local
+    name: e2i_agent_outputs
+
+# =============================================================================
+# SERVICES
+# =============================================================================
+services:
+  # ===========================================================================
+  # TIER 0: REVERSE PROXY (Public Network Only)
+  # ===========================================================================
+
+  nginx:
+    image: nginx:alpine
+    container_name: e2i-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - nginx_logs:/var/log/nginx
+    networks:
+      - public-network
+      - app-network  # Can reach frontend and API
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx:size=10M
+      - /var/run:size=5M
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+    depends_on:
+      api:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+    labels:
+      - "e2i.tier=0"
+      - "e2i.component=proxy"
+      - "e2i.network.access=public,app"
+
+  # ===========================================================================
+  # TIER 1: DATA STORES (Data Network - Internal Only)
+  # ===========================================================================
+
+  redis:
+    image: redis:7-alpine
+    container_name: e2i-redis
+    restart: unless-stopped
+    # NO PORTS EXPOSED - Internal network only
+    volumes:
+      - redis_data:/data
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --requirepass ${REDIS_PASSWORD:-changeme}
+      --protected-mode yes
+      --bind 0.0.0.0
+    networks:
+      - data-network  # Data access
+      - celery-network  # Celery broker
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-changeme}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    labels:
+      - "e2i.tier=1"
+      - "e2i.component=cache"
+      - "e2i.network.access=data,celery"
+
+  falkordb:
+    image: falkordb/falkordb:latest
+    container_name: e2i-falkordb
+    restart: unless-stopped
+    # NO PORTS EXPOSED - Internal network only
+    volumes:
+      - falkordb_data:/data
+    environment:
+      - FALKORDB_ARGS=--maxmemory 1gb --protected-mode yes
+    networks:
+      - data-network  # Data access only
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "6379", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+    labels:
+      - "e2i.tier=1"
+      - "e2i.component=graph"
+      - "e2i.network.access=data"
+
+  # ===========================================================================
+  # TIER 2: MONITORING SERVICES (Monitoring Network)
+  # ===========================================================================
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.16.0
+    container_name: e2i-mlflow
+    restart: unless-stopped
+    # Port exposed through nginx proxy only
+    expose:
+      - "5000"
+    volumes:
+      - mlflow_db:/mlflow/db
+      - mlflow_artifacts:/mlflow/artifacts
+      - ml_artifacts:/mlflow/ml_artifacts:ro
+    environment:
+      - MLFLOW_TRACKING_URI=sqlite:///mlflow/db/mlflow.db
+      - MLFLOW_ARTIFACT_ROOT=/mlflow/artifacts
+    command: >
+      mlflow server
+      --backend-store-uri sqlite:///mlflow/db/mlflow.db
+      --default-artifact-root /mlflow/artifacts
+      --host 0.0.0.0
+      --port 5000
+    networks:
+      - monitoring-network
+      - app-network  # API access only
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+    labels:
+      - "e2i.tier=2"
+      - "e2i.component=mlflow"
+      - "e2i.network.access=monitoring,app"
+
+  opik:
+    image: comet-ml/opik:latest
+    container_name: e2i-opik
+    restart: unless-stopped
+    # Port exposed through nginx proxy only
+    expose:
+      - "5173"
+      - "5174"
+    volumes:
+      - opik_data:/app/data
+    environment:
+      - OPIK_BASE_URL=http://localhost:5173
+      - OPIK_BACKEND_URL=http://localhost:5174
+    networks:
+      - monitoring-network
+      - app-network  # API access only
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5173/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+    labels:
+      - "e2i.tier=2"
+      - "e2i.component=opik"
+      - "e2i.network.access=monitoring,app"
+
+  # ===========================================================================
+  # TIER 3: APPLICATION SERVICES (App Network)
+  # ===========================================================================
+
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: production
+    container_name: e2i-api
+    restart: unless-stopped
+    # No direct port exposure - through nginx only
+    expose:
+      - "8000"
+    volumes:
+      - ml_artifacts:/app/data/ml_artifacts
+      - causal_outputs:/app/data/causal_outputs
+      - agent_outputs:/app/data/agent_outputs
+    environment:
+      # Supabase Cloud Connection
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_KEY=${SUPABASE_KEY}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+
+      # Internal service URLs (container names on internal networks)
+      - REDIS_URL=redis://redis:6379/0
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-changeme}
+      - FALKORDB_URL=redis://falkordb:6379/0
+
+      # MLOps Services
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - OPIK_URL=http://opik:5174
+
+      # Claude API
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+
+      # Application Settings
+      - ENVIRONMENT=production
+      - LOG_LEVEL=INFO
+      - WORKERS=4
+
+      # Security
+      - CORS_ORIGINS=${CORS_ORIGINS}
+      - ENABLE_HSTS=true
+    command: >
+      gunicorn src.api.main:app
+      --workers 4
+      --worker-class uvicorn.workers.UvicornWorker
+      --bind 0.0.0.0:8000
+      --timeout 120
+      --keep-alive 5
+      --access-logfile -
+      --error-logfile -
+    networks:
+      - app-network  # Receives requests from nginx
+      - data-network  # Connects to Redis, FalkorDB
+      - monitoring-network  # Connects to MLflow, Opik
+      - celery-network  # Sends tasks to workers
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 2G
+    depends_on:
+      redis:
+        condition: service_healthy
+      falkordb:
+        condition: service_healthy
+      mlflow:
+        condition: service_healthy
+    labels:
+      - "e2i.tier=3"
+      - "e2i.component=api"
+      - "e2i.network.access=app,data,monitoring,celery"
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: ../docker/frontend/Dockerfile
+      target: production
+    container_name: e2i-frontend
+    restart: unless-stopped
+    # No direct port exposure - through nginx only
+    expose:
+      - "80"
+    environment:
+      - VITE_API_URL=/api  # Relative URL through nginx
+      - VITE_WS_URL=/ws
+    networks:
+      - app-network  # Only app network, communicates via nginx
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx:size=10M
+      - /var/run:size=5M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    depends_on:
+      api:
+        condition: service_healthy
+    labels:
+      - "e2i.tier=3"
+      - "e2i.component=frontend"
+      - "e2i.network.access=app"
+
+  # ===========================================================================
+  # TIER 4: CELERY WORKERS (Celery + Data + Monitoring Networks)
+  # ===========================================================================
+
+  worker-light:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: production
+    restart: unless-stopped
+    volumes:
+      - ml_artifacts:/app/data/ml_artifacts
+      - causal_outputs:/app/data/causal_outputs
+      - agent_outputs:/app/data/agent_outputs
+    environment:
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_KEY=${SUPABASE_KEY}
+      - REDIS_URL=redis://redis:6379/0
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-changeme}
+      - FALKORDB_URL=redis://falkordb:6379/0
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - OPIK_URL=http://opik:5174
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-changeme}@redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-changeme}@redis:6379/2
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - ENVIRONMENT=production
+      - LOG_LEVEL=INFO
+      - WORKER_TYPE=light
+    command: >
+      celery -A src.workers.celery_app worker
+      --loglevel=INFO
+      --concurrency=4
+      --queues=default,quick,api
+      --prefetch-multiplier=2
+      --max-tasks-per-child=100
+      --hostname=worker_light@%h
+    networks:
+      - celery-network  # Celery broker communication
+      - data-network  # Access to data stores
+      - monitoring-network  # Access to MLOps
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "celery", "-A", "src.workers.celery_app", "inspect", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '1'
+          memory: 1G
+      replicas: 2
+    depends_on:
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    labels:
+      - "e2i.tier=4"
+      - "e2i.component=worker"
+      - "e2i.worker.tier=light"
+      - "e2i.network.access=celery,data,monitoring"
+
+  worker-heavy:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: production
+    restart: unless-stopped
+    volumes:
+      - ml_artifacts:/app/data/ml_artifacts
+      - causal_outputs:/app/data/causal_outputs
+      - agent_outputs:/app/data/agent_outputs
+    tmpfs:
+      - /app/tmp:size=8G,mode=1777
+    environment:
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_KEY=${SUPABASE_KEY}
+      - REDIS_URL=redis://redis:6379/0
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-changeme}
+      - FALKORDB_URL=redis://falkordb:6379/0
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - OPIK_URL=http://opik:5174
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-changeme}@redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-changeme}@redis:6379/2
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - ENVIRONMENT=production
+      - LOG_LEVEL=INFO
+      - WORKER_TYPE=heavy
+      - OMP_NUM_THREADS=8
+      - OPENBLAS_NUM_THREADS=8
+    command: >
+      celery -A src.workers.celery_app worker
+      --loglevel=INFO
+      --concurrency=2
+      --queues=shap,causal,ml,twins
+      --prefetch-multiplier=1
+      --max-tasks-per-child=10
+      --time-limit=3600
+      --soft-time-limit=3300
+      --hostname=worker_heavy@%h
+    networks:
+      - celery-network
+      - data-network
+      - monitoring-network
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "celery", "-A", "src.workers.celery_app", "inspect", "ping"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: '8'
+          memory: 16G
+        reservations:
+          cpus: '4'
+          memory: 8G
+      replicas: 0  # Scale on-demand
+    depends_on:
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    labels:
+      - "e2i.tier=4"
+      - "e2i.component=worker"
+      - "e2i.worker.tier=heavy"
+      - "e2i.network.access=celery,data,monitoring"
+      - "e2i.autoscale=true"
+
+  scheduler:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: production
+    container_name: e2i-scheduler
+    restart: unless-stopped
+    volumes:
+      - causal_outputs:/app/data/causal_outputs:ro
+    environment:
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-changeme}@redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-changeme}@redis:6379/2
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_KEY=${SUPABASE_KEY}
+    command: >
+      celery -A src.workers.celery_app beat
+      --loglevel=INFO
+      --scheduler=celery.beat:PersistentScheduler
+    networks:
+      - celery-network  # Only needs Celery broker access
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    depends_on:
+      redis:
+        condition: service_healthy
+      worker-light:
+        condition: service_healthy
+    labels:
+      - "e2i.tier=4"
+      - "e2i.component=scheduler"
+      - "e2i.network.access=celery"
+
+  # ===========================================================================
+  # TIER 5: DEBUG TOOLS (Optional - profiles)
+  # ===========================================================================
+
+  falkordb-browser:
+    image: falkordb/falkordb-browser:latest
+    container_name: e2i-falkordb-browser
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3030:3000"  # Localhost only
+    environment:
+      - FALKORDB_HOST=falkordb
+      - FALKORDB_PORT=6379
+    networks:
+      - data-network
+    profiles:
+      - debug
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      falkordb:
+        condition: service_healthy
+    labels:
+      - "e2i.tier=5"
+      - "e2i.component=debug"
+      - "e2i.network.access=data"
+
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: e2i-redis-commander
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8081:8081"  # Localhost only
+    environment:
+      - REDIS_HOSTS=e2i:redis:6379:0:${REDIS_PASSWORD:-changeme}
+    networks:
+      - data-network
+    profiles:
+      - debug
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      redis:
+        condition: service_healthy
+    labels:
+      - "e2i.tier=5"
+      - "e2i.component=debug"
+      - "e2i.network.access=data"
