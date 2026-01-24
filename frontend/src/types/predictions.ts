@@ -117,9 +117,10 @@ export interface BatchPredictionResponse {
 }
 
 /**
- * Response schema for model health check
+ * Response schema for single model endpoint health check
+ * Note: Named ModelEndpointHealth to avoid conflict with aggregate ModelHealthResponse in health-score.ts
  */
-export interface ModelHealthResponse {
+export interface ModelEndpointHealth {
   /** Name of the model */
   model_name: string;
   /** Health status: healthy, unhealthy, unknown */
@@ -143,7 +144,7 @@ export interface ModelsStatusResponse {
   /** Number of unhealthy models */
   unhealthy_count: number;
   /** Individual model statuses */
-  models: ModelHealthResponse[];
+  models: ModelEndpointHealth[];
   /** Status check timestamp (ISO 8601) */
   timestamp: string;
 }

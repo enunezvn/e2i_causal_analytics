@@ -17,7 +17,7 @@ import { get, post } from '@/lib/api-client';
 import type {
   BatchPredictionRequest,
   BatchPredictionResponse,
-  ModelHealthResponse,
+  ModelEndpointHealth,
   ModelInfoResponse,
   ModelsStatusResponse,
   PredictionRequest,
@@ -112,8 +112,8 @@ export async function predictBatch(
  */
 export async function getModelHealth(
   modelName: string
-): Promise<ModelHealthResponse> {
-  return get<ModelHealthResponse>(
+): Promise<ModelEndpointHealth> {
+  return get<ModelEndpointHealth>(
     `${MODELS_BASE}/${encodeURIComponent(modelName)}/health`
   );
 }

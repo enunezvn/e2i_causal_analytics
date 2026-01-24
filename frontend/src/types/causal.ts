@@ -26,6 +26,7 @@ export enum CausalLibrary {
   ECONML = 'econml',
   CAUSALML = 'causalml',
   NETWORKX = 'networkx',
+  NONE = 'none',
 }
 
 /**
