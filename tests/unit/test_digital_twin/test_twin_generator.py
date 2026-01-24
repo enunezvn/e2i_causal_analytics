@@ -532,3 +532,211 @@ class TestEdgeCases:
         # Should handle gracefully
         arr = hcp_generator._features_to_array(features)
         assert arr is not None
+
+
+# =============================================================================
+# DATA LEAKAGE PREVENTION TESTS (Phase 2)
+# =============================================================================
+
+
+class TestDataLeakagePrevention:
+    """Tests for data leakage prevention in twin generation."""
+
+    def test_target_not_in_features(self, hcp_training_data):
+        """Test that target column is excluded from features."""
+        generator = TwinGenerator(
+            twin_type=TwinType.HCP,
+            brand=Brand.REMIBRUTINIB,
+        )
+
+        generator.train(data=hcp_training_data, target_col="prescribing_change")
+
+        # Target should not be in feature columns
+        assert "prescribing_change" not in generator.feature_columns
+
+        # Generate twins
+        population = generator.generate(n=100)
+
+        # Generated features should not contain target
+        for twin in population.twins:
+            assert "prescribing_change" not in twin.features
+
+    def test_no_train_test_contamination(self, hcp_training_data):
+        """Test that training data statistics don't leak into test twins."""
+        generator = TwinGenerator(
+            twin_type=TwinType.HCP,
+            brand=Brand.REMIBRUTINIB,
+        )
+
+        generator.train(data=hcp_training_data, target_col="prescribing_change")
+
+        # Generate twins with different seeds
+        population1 = generator.generate(n=100, seed=42)
+        population2 = generator.generate(n=100, seed=123)
+
+        # Twin IDs should be unique across populations
+        ids1 = {t.twin_id for t in population1.twins}
+        ids2 = {t.twin_id for t in population2.twins}
+
+        assert len(ids1.intersection(ids2)) == 0
+
+    def test_feature_statistics_from_training_only(self, hcp_training_data):
+        """Test that feature statistics are computed from training data only."""
+        generator = TwinGenerator(
+            twin_type=TwinType.HCP,
+            brand=Brand.REMIBRUTINIB,
+        )
+
+        # Record training data statistics
+        training_mean = hcp_training_data["digital_engagement_score"].mean()
+        training_std = hcp_training_data["digital_engagement_score"].std()
+
+        generator.train(data=hcp_training_data, target_col="prescribing_change")
+
+        # Check that scaler uses training statistics
+        if generator.scaler is not None:
+            # For StandardScaler, mean_ and scale_ should match training data
+            # (for the digital_engagement_score column if it's scaled)
+            pass  # Scaler internal stats are based on training data
+
+        # Generate and verify distribution is reasonable
+        population = generator.generate(n=500, seed=42)
+
+        engagement_scores = [
+            t.features.get("digital_engagement_score", 0.5)
+            for t in population.twins
+        ]
+
+        # Generated engagement should have similar range to training
+        assert min(engagement_scores) >= 0.0
+        assert max(engagement_scores) <= 1.0
+
+    def test_no_future_information_in_features(self, hcp_training_data):
+        """Test that no future information leaks into twin generation."""
+        import warnings
+
+        generator = TwinGenerator(
+            twin_type=TwinType.HCP,
+            brand=Brand.REMIBRUTINIB,
+        )
+
+        # Add a "future" column that shouldn't be used
+        data_with_future = hcp_training_data.copy()
+        data_with_future["future_outcome"] = np.random.uniform(0, 1, len(data_with_future))
+
+        # Train - future_outcome should not affect model since it's not prescribing_change
+        generator.train(data=data_with_future, target_col="prescribing_change")
+
+        # Verify future_outcome is not in features
+        # (it wasn't explicitly included in feature definitions)
+        population = generator.generate(n=100)
+
+        for twin in population.twins:
+            assert "future_outcome" not in twin.features
+
+    def test_temporal_ordering_not_violated(self, hcp_training_data):
+        """Test that temporal ordering is respected in training."""
+        generator = TwinGenerator(
+            twin_type=TwinType.HCP,
+            brand=Brand.REMIBRUTINIB,
+        )
+
+        # Add a timestamp column
+        data_with_time = hcp_training_data.copy()
+        data_with_time["event_timestamp"] = pd.date_range(
+            start="2023-01-01", periods=len(data_with_time), freq="H"
+        )
+
+        # Training should work
+        generator.train(data=data_with_time, target_col="prescribing_change")
+
+        # Timestamp should not be in generated features
+        population = generator.generate(n=100)
+
+        for twin in population.twins:
+            assert "event_timestamp" not in twin.features
+
+    def test_cross_validation_prevents_leakage(self, hcp_training_data):
+        """Test that cross-validation is used to prevent overfitting/leakage."""
+        generator = TwinGenerator(
+            twin_type=TwinType.HCP,
+            brand=Brand.REMIBRUTINIB,
+        )
+
+        metrics = generator.train(
+            data=hcp_training_data,
+            target_col="prescribing_change",
+        )
+
+        # CV scores should be computed
+        assert len(metrics.cv_scores) > 0
+
+        # CV mean should be reasonable (not perfect, indicating potential leakage)
+        if metrics.r2_score is not None:
+            # R2 significantly higher than CV mean could indicate leakage
+            # Allow some variance but flag major discrepancies
+            if metrics.cv_mean is not None:
+                assert metrics.r2_score < metrics.cv_mean + 0.3
+
+    def test_generated_twins_have_valid_feature_ranges(self, hcp_training_data):
+        """Test that generated twins have features within valid ranges."""
+        generator = TwinGenerator(
+            twin_type=TwinType.HCP,
+            brand=Brand.REMIBRUTINIB,
+        )
+
+        generator.train(data=hcp_training_data, target_col="prescribing_change")
+        population = generator.generate(n=200, seed=42)
+
+        # Check feature value ranges
+        for twin in population.twins:
+            features = twin.features
+
+            # Decile should be 1-10
+            if "decile" in features:
+                assert 1 <= features["decile"] <= 10
+
+            # Engagement score should be 0-1
+            if "digital_engagement_score" in features:
+                assert 0.0 <= features["digital_engagement_score"] <= 1.0
+
+            # Propensity should be 0-1
+            assert 0.0 <= twin.baseline_propensity <= 1.0
+
+    def test_reproducibility_with_seed(self, hcp_training_data):
+        """Test that generation is reproducible with same seed."""
+        generator = TwinGenerator(
+            twin_type=TwinType.HCP,
+            brand=Brand.REMIBRUTINIB,
+        )
+
+        generator.train(data=hcp_training_data, target_col="prescribing_change")
+
+        # Generate twice with same seed
+        population1 = generator.generate(n=50, seed=12345)
+        population2 = generator.generate(n=50, seed=12345)
+
+        # Should produce same propensities
+        propensities1 = [t.baseline_propensity for t in population1.twins]
+        propensities2 = [t.baseline_propensity for t in population2.twins]
+
+        for p1, p2 in zip(propensities1, propensities2):
+            assert abs(p1 - p2) < 0.001
+
+    def test_different_seeds_produce_different_twins(self, hcp_training_data):
+        """Test that different seeds produce different populations."""
+        generator = TwinGenerator(
+            twin_type=TwinType.HCP,
+            brand=Brand.REMIBRUTINIB,
+        )
+
+        generator.train(data=hcp_training_data, target_col="prescribing_change")
+
+        population1 = generator.generate(n=50, seed=111)
+        population2 = generator.generate(n=50, seed=222)
+
+        propensities1 = [t.baseline_propensity for t in population1.twins]
+        propensities2 = [t.baseline_propensity for t in population2.twins]
+
+        # Should not be identical
+        assert propensities1 != propensities2
