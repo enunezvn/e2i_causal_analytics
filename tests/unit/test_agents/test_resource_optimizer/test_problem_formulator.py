@@ -144,3 +144,115 @@ class TestProblemFormulatorNode:
         # Should have 2 inequality constraints
         assert len(problem["a_ub"]) == 2
         assert len(problem["b_ub"]) == 2
+
+
+class TestProblemFormulatorMILP:
+    """Tests for MILP problem formulation."""
+
+    @pytest.mark.asyncio
+    async def test_formulate_integer_variables(self, base_state, integer_targets, integer_constraint):
+        """Test formulation with integer variables."""
+        base_state["allocation_targets"] = integer_targets
+        base_state["constraints"] = integer_constraint
+
+        node = ProblemFormulatorNode()
+        result = await node.execute(base_state)
+
+        assert result["status"] == "optimizing"
+        problem = result["_problem"]
+
+        # Check var_types
+        assert "var_types" in problem
+        assert all(vt == "integer" for vt in problem["var_types"])
+        assert problem["has_integer_vars"] is True
+
+    @pytest.mark.asyncio
+    async def test_formulate_binary_variables(self, base_state, binary_targets, binary_constraint):
+        """Test formulation with binary variables."""
+        base_state["allocation_targets"] = binary_targets
+        base_state["constraints"] = binary_constraint
+
+        node = ProblemFormulatorNode()
+        result = await node.execute(base_state)
+
+        assert result["status"] == "optimizing"
+        problem = result["_problem"]
+
+        # Check var_types
+        assert "var_types" in problem
+        assert all(vt == "binary" for vt in problem["var_types"])
+        assert problem["has_integer_vars"] is True
+
+        # Check fixed costs
+        assert "fixed_costs" in problem
+        assert problem["fixed_costs"] == [200.0, 150.0, 100.0, 50.0]
+
+    @pytest.mark.asyncio
+    async def test_formulate_cardinality_constraint(self, base_state, cardinality_constraint):
+        """Test formulation with cardinality constraint."""
+        base_state["constraints"] = cardinality_constraint
+
+        node = ProblemFormulatorNode()
+        result = await node.execute(base_state)
+
+        assert result["status"] == "optimizing"
+        problem = result["_problem"]
+
+        # Check cardinality
+        assert problem["max_entities"] == 2
+        assert problem["min_entities"] is None
+
+    @pytest.mark.asyncio
+    async def test_formulate_selects_milp_for_integer(self, base_state, integer_targets, integer_constraint):
+        """Test that MILP solver is auto-selected for integer variables."""
+        base_state["allocation_targets"] = integer_targets
+        base_state["constraints"] = integer_constraint
+        base_state["solver_type"] = None  # No explicit solver
+
+        node = ProblemFormulatorNode()
+        result = await node.execute(base_state)
+
+        assert result["solver_type"] == "milp"
+
+    @pytest.mark.asyncio
+    async def test_formulate_selects_milp_for_cardinality(self, base_state, cardinality_constraint):
+        """Test that MILP solver is auto-selected for cardinality constraints."""
+        base_state["constraints"] = cardinality_constraint
+        base_state["solver_type"] = None  # No explicit solver
+
+        node = ProblemFormulatorNode()
+        result = await node.execute(base_state)
+
+        assert result["solver_type"] == "milp"
+
+    @pytest.mark.asyncio
+    async def test_formulate_mixed_variable_types(self, base_state, mixed_targets, budget_constraint):
+        """Test formulation with mixed continuous and integer variables."""
+        base_state["allocation_targets"] = mixed_targets
+        base_state["constraints"] = budget_constraint
+
+        node = ProblemFormulatorNode()
+        result = await node.execute(base_state)
+
+        assert result["status"] == "optimizing"
+        problem = result["_problem"]
+
+        # Check var_types
+        assert problem["var_types"] == ["continuous", "integer"]
+        assert problem["has_integer_vars"] is True
+        assert result["solver_type"] == "milp"
+
+    @pytest.mark.asyncio
+    async def test_formulate_allocation_units(self, base_state, integer_targets, integer_constraint):
+        """Test allocation units are captured in problem."""
+        # Add allocation unit to first target
+        integer_targets[0]["allocation_unit"] = 5.0
+        base_state["allocation_targets"] = integer_targets
+        base_state["constraints"] = integer_constraint
+
+        node = ProblemFormulatorNode()
+        result = await node.execute(base_state)
+
+        problem = result["_problem"]
+        assert problem["allocation_units"][0] == 5.0
+        assert problem["allocation_units"][1] is None
