@@ -9,11 +9,11 @@ Multi-Agent Causal Analytics for Pharmaceutical Drug Adoption Analysis
 
 ## Overview
 
-E2I Causal Analytics is a sophisticated 18-agent, 6-tier agentic system designed for pharmaceutical companies to understand and optimize drug adoption through causal inference and natural language querying.
+E2I Causal Analytics is a sophisticated 21-agent, 6-tier agentic system designed for pharmaceutical companies to understand and optimize drug adoption through causal inference and natural language querying.
 
 ### Key Features
 
-- **18 AI Agents** across 6 tiers (ML Foundation, Coordination, Causal Analytics, Monitoring, Predictions, Self-Improvement)
+- **21 AI Agents** across 6 tiers (ML Foundation, Coordination, Causal Analytics, Monitoring, Predictions, Self-Improvement)
 - **Tri-Memory Architecture** (Working, Episodic, Procedural, Semantic)
 - **Causal Validation** with 5 DoWhy refutation tests
 - **MLOps Integration** (MLflow, Opik, Feast, Great Expectations, Optuna, SHAP, BentoML)
@@ -34,8 +34,8 @@ E2I Causal Analytics is a sophisticated 18-agent, 6-tier agentic system designed
 
 ### 6-Tier Agent System
 
-**TIER 0: ML FOUNDATION** (7 agents)
-- scope_definer, data_preparer, feature_analyzer, model_selector, model_trainer, model_deployer, observability_connector
+**TIER 0: ML FOUNDATION** (8 agents)
+- scope_definer, cohort_constructor, data_preparer, feature_analyzer, model_selector, model_trainer, model_deployer, observability_connector
 
 **TIER 1: COORDINATION** (2 agents) ⭐ Enhanced v4.2
 - orchestrator (multi-agent routing & synthesis with 4-stage classifier)
@@ -60,7 +60,7 @@ E2I Causal Analytics is a sophisticated 18-agent, 6-tier agentic system designed
 ```
 e2i_causal_analytics/
 ├── config/                    # YAML configurations (8 files)
-│   ├── agent_config.yaml      # 18-agent definitions
+│   ├── agent_config.yaml      # 21-agent definitions
 │   ├── domain_vocabulary_v3.1.0.yaml
 │   ├── kpi_definitions.yaml   # 46+ KPIs
 │   └── ...
@@ -78,7 +78,7 @@ e2i_causal_analytics/
 │
 ├── src/                       # Main source code ⭐ Enhanced v4.2
 │   ├── nlp/                   # Query processing, entity extraction
-│   ├── agents/                # 18 agent implementations
+│   ├── agents/                # 21 agent implementations
 │   │   ├── orchestrator/      # Tier 1 coordination agent
 │   │   │   ├── classifier/    # ⭐ NEW v4.2: 4-stage query classification
 │   │   │   ├── router.py      # ⭐ NEW v4.2: Enhanced routing logic

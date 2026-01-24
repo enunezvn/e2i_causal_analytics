@@ -1,4 +1,4 @@
-# E2I Causal Analytics: 18-Agent Implementation Plan
+# E2I Causal Analytics: 21-Agent Implementation Plan
 
 **Version**: 1.0
 **Date**: December 18, 2024
@@ -9,12 +9,12 @@
 
 ## Executive Summary
 
-This document provides the complete implementation plan for building the 18-agent, 6-tier architecture of the E2I Causal Analytics platform using the Claude Code Development Framework.
+This document provides the complete implementation plan for building the 21-agent, 6-tier architecture of the E2I Causal Analytics platform using the Claude Code Development Framework.
 
 **Implementation Approach**: Bottom-up, tier-by-tier implementation
-**Total Agents**: 18 (7 Tier 0, 2 Tier 1, 3 Tier 2, 3 Tier 3, 2 Tier 4, 2 Tier 5)
+**Total Agents**: 21 (8 Tier 0, 2 Tier 1, 3 Tier 2, 4 Tier 3, 2 Tier 4, 2 Tier 5)
 **Estimated Timeline**: 6 phases
-**Current Status**: 3/18 agents partially implemented
+**Current Status**: 3/21 agents partially implemented
 
 ---
 
@@ -28,9 +28,9 @@ This document provides the complete implementation plan for building the 18-agen
 | tool_composer | 1 | Partial | composer.py, decomposer.py, executor.py |
 | experiment_designer | 3 | Partial | tools/simulate_intervention_tool.py, validate_twin_fidelity_tool.py |
 
-### ❌ Not Started (15 agents)
+### ❌ Not Started (18 agents)
 
-**Tier 0 (7 agents)**: scope_definer, data_preparer, model_selector, model_trainer, feature_analyzer, model_deployer, observability_connector
+**Tier 0 (8 agents)**: scope_definer, cohort_constructor, data_preparer, model_selector, model_trainer, feature_analyzer, model_deployer, observability_connector
 
 **Tier 2 (3 agents)**: causal_impact, gap_analyzer, heterogeneous_optimizer
 
@@ -47,7 +47,7 @@ This document provides the complete implementation plan for building the 18-agen
 ### Specialist Documentation
 Location: `.claude/specialists/`
 
-- **Tier 0**: `.claude/specialists/Agent_Specialists_Tier 0/` (7 CLAUDE.md files)
+- **Tier 0**: `.claude/specialists/Agent_Specialists_Tier 0/` (8 CLAUDE.md files)
 - **Tier 1-5**: `.claude/specialists/Agent_Specialists_Tiers 1-5/` (11 .md files)
 - **System Specialists**: `.claude/specialists/system/` (NLP, Causal, RAG, API, Frontend, Database, Testing, DevOps)
 - **ML Foundation**: `.claude/specialists/ml_foundation/`

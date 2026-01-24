@@ -1,6 +1,6 @@
 # E2I Causal Analytics - Project Structure V4.1
 ## Natural Language Visualization + Self-Improving Agentic RAG
-### 18-Agent 6-Tier Architecture • Tier 0 ML Foundation • Tri-Memory System • Causal Validation
+### 21-Agent 6-Tier Architecture • Tier 0 ML Foundation • Tri-Memory System • Causal Validation
 
 ---
 
@@ -23,7 +23,7 @@ This revision adds:
 3. **Table Count Update** - 26 → 28 tables (added causal_validations, expert_reviews)
 
 4. **Previous V4.0 Features Retained**:
-   - 18-Agent 6-Tier Architecture (Tier 0 ML Foundation)
+   - 21-Agent 6-Tier Architecture (Tier 0 ML Foundation with 8 agents)
    - MLOps Integration (MLflow, Opik, Great Expectations, Feast, Optuna, SHAP, BentoML)
    - 8 ML Tables from V4.0
    - Tri-Memory Architecture (Working, Episodic, Procedural, Semantic)
@@ -51,7 +51,7 @@ e2i-causal-analytics/
 ├── config/
 │   ├── __init__.py
 │   ├── settings.py                     # Pydantic settings (env-based config)
-│   ├── agent_config.yaml               # Agent behavior configuration (18 agents)
+│   ├── agent_config.yaml               # Agent behavior configuration (21 agents)
 │   ├── causal_config.yaml              # Causal inference settings
 │   ├── thresholds.yaml                 # KPI and trigger thresholds
 │   ├── kpi_definitions.yaml            # KPI metadata and calculations (46+ KPIs)
@@ -62,7 +62,7 @@ e2i-causal-analytics/
 │   │  V4.1: Domain vocabulary with validation ENUMs
 │   │  ═══════════════════════════════════════════════════════════════════
 │   ├── domain_vocabulary.yaml          # Fixed entity vocabularies (V3.1.0)
-│   │   # agents: 18 agents in 6 tiers
+│   │   # agents: 21 agents in 6 tiers
 │   │   # brands: [Remibrutinib, Fabhalta, Kisqali]
 │   │   # regions: [northeast, south, midwest, west]
 │   │   # model_stages: [development, staging, shadow, production, ...]
@@ -93,7 +93,7 @@ e2i-causal-analytics/
 │   │   ├── __init__.py
 │   │   ├── query_processor.py          # Main NL query processing pipeline
 │   │   ├── intent_classifier.py        # Query intent detection → agent routing
-│   │   │   # V4: Routes to 18 agents across 6 tiers
+│   │   │   # V4: Routes to 21 agents across 6 tiers
 │   │   │   # V4.1 NEW: VALIDATION intent for refutation queries
 │   │   ├── entity_extractor.py         # Domain entity extraction (NO medical NER)
 │   │   │   # V4.1 NEW: validation_id, review_id extraction
@@ -173,7 +173,7 @@ e2i-causal-analytics/
 │   │   ├── registry.py                 # Agent registry with tier management
 │   │   │
 │   │   │  ─────────────────────────────────────────────────────────────
-│   │   │  TIER 0: ML FOUNDATION (7 agents)
+│   │   │  TIER 0: ML FOUNDATION (8 agents)
 │   │   │  ─────────────────────────────────────────────────────────────
 │   │   ├── ml_foundation/
 │   │   │   ├── __init__.py
