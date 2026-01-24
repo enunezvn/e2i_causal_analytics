@@ -1,4 +1,4 @@
-.PHONY: help install dev-install test test-fast test-seq lint format clean docker-up docker-down db-init data-generate
+.PHONY: help install dev-install test test-fast test-seq test-cov lint format clean docker-up docker-down db-init data-generate
 
 help:
 	@echo "E2I Causal Analytics - Available Commands"
@@ -8,9 +8,10 @@ help:
 	@echo "  make dev-install   Install development dependencies"
 	@echo ""
 	@echo "Development:"
-	@echo "  make test          Run tests (4 workers, memory-safe)"
+	@echo "  make test          Run tests (4 workers, memory-safe, terminal report)"
 	@echo "  make test-fast     Run tests (no coverage, faster)"
 	@echo "  make test-seq      Run tests sequentially (low memory systems)"
+	@echo "  make test-cov      Run tests with full coverage (HTML + XML reports)"
 	@echo "  make lint          Run linting checks"
 	@echo "  make format        Format code with black"
 	@echo "  make clean         Clean build artifacts"
@@ -33,8 +34,9 @@ dev-install:
 
 # Memory-safe test run: 4 workers, scope-based distribution, coverage
 # System: 7.5GB RAM, heavy ML imports (~500MB/worker)
+# Coverage config from pyproject.toml [tool.coverage.*]
 test:
-	pytest tests/ --cov=src --cov-report=term-missing
+	pytest tests/ --cov --cov-report=term-missing
 
 # Fast test run without coverage (lower memory footprint)
 test-fast:
@@ -42,7 +44,17 @@ test-fast:
 
 # Sequential run for very low memory systems (--cov adds overhead)
 test-seq:
-	pytest tests/ -n 0 --cov=src --cov-report=term-missing
+	pytest tests/ -n 0 --cov --cov-report=term-missing
+
+# Full coverage run with all reports (HTML + XML for CI/CD)
+# Creates: htmlcov/ directory and coverage.xml
+test-cov:
+	pytest tests/ --cov --cov-report=term-missing --cov-report=html --cov-report=xml
+	@echo ""
+	@echo "Coverage reports generated:"
+	@echo "  - Terminal: above"
+	@echo "  - HTML: htmlcov/index.html"
+	@echo "  - XML: coverage.xml (for CI/CD)"
 
 lint:
 	ruff check src/ tests/

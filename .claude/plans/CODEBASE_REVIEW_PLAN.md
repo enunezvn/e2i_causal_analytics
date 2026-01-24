@@ -556,9 +556,9 @@ Both methods translate to PostgreSQL's `@>` operator for JSONB containment queri
 | Test causal pipeline (6 files) | HIGH | 4 hrs | None | ✅ Done (195 tests) |
 | Test causal energy score (3 files) | HIGH | 4 hrs | None | ✅ Done (122 tests) |
 | Test API routes (7/7 routes) | HIGH | 8 hrs | None | ✅ Done (611 tests) |
-| DSPy test markers | HIGH | 2 hrs | None | Pending |
-| Centralized fixture library | MEDIUM | 6 hrs | None | Pending |
-| Coverage tracking | MEDIUM | 2 hrs | None | Pending |
+| DSPy test markers | HIGH | 2 hrs | None | ✅ Done |
+| Centralized fixture library | MEDIUM | 6 hrs | None | ✅ Done |
+| Coverage tracking | MEDIUM | 2 hrs | None | ✅ Done |
 
 **New Tests Added (2026-01-17)**: 1,312 tests
 - `tests/unit/test_utils/` - test_audit_chain.py (44 tests), test_llm_factory.py (35 tests)
@@ -583,6 +583,11 @@ Both methods translate to PostgreSQL's `@>` operator for JSONB containment queri
 - ✅ `src/api/routes/chatbot_graph/` - 88 tests
 - ✅ `src/api/routes/chatbot_state/` - 65 tests
 - ✅ `src/api/routes/chatbot_tracer/` - 78 tests
+
+**Test Infrastructure Improvements (2026-01-24)**:
+- ✅ **DSPy test markers** - Added `@pytest.mark.xdist_group(name="dspy_integration")` to all DSPy tests (3 files), registered marker in pyproject.toml
+- ✅ **Centralized fixture library** - Created `tests/fixtures/` with mocks (MockLLMClient, MockSupabaseClient, MockRedisClient, MockFalkorDBClient), agent state helpers (StateProgression, create_base_state), and helpers (make_decomposition_response, etc.)
+- ✅ **Coverage tracking** - Added pytest-cov configuration in pyproject.toml with 50% threshold, HTML/XML reports, and `make test-cov` target
 
 **Total Effort**: ~34 hours (completed)
 

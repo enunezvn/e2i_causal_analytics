@@ -47,7 +47,9 @@ ENV/
 # Testing
 .pytest_cache/
 .coverage
+.coverage.*
 coverage/
+coverage.xml
 htmlcov/
 .tox/
 playwright-report/

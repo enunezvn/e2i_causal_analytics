@@ -175,6 +175,7 @@ markers = [
     "requires_falkordb: Test requires FalkorDB connection",
     "requires_supabase: Test requires Supabase connection",
     "heavy_ml: Tests with heavy ML imports (dspy, econml, dowhy) - grouped on single worker",
+    "xdist_group(name): Group tests to run on same worker (prevents DSPy import race conditions)",
 ]
 # Filter warnings
 filterwarnings = [
@@ -190,3 +191,59 @@ addopts = "-v --tb=short -n 4 --dist=loadscope"
 env = [
     "E2I_TESTING_MODE=true",
 ]
+
+# =============================================================================
+# COVERAGE CONFIGURATION
+# =============================================================================
+[tool.coverage.run]
+# Source directories to measure coverage for
+source = ["src"]
+# Branch coverage (track if/else branches)
+branch = true
+# Parallel mode for xdist workers
+parallel = true
+# Omit patterns from coverage measurement
+omit = [
+    "src/*/__init__.py",
+    "src/*/migrations/*",
+    "src/api/routes/__init__.py",
+    "src/agents/*/__init__.py",
+]
+
+[tool.coverage.report]
+# Minimum coverage threshold (fail if below)
+# Target: 70% once all testing gaps are addressed
+# Current: 50% due to documented gaps in CODEBASE_REVIEW_PLAN.md
+fail_under = 50
+# Show missing line numbers in report
+show_missing = true
+# Skip files with 100% coverage in report (reduces noise)
+skip_covered = false
+# Exclude patterns from coverage report
+exclude_lines = [
+    # Standard exclusions
+    "pragma: no cover",
+    "def __repr__",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "raise AssertionError",
+    # Debug-only code
+    "if __name__ == .__main__.:",
+    "if settings.DEBUG:",
+    # Abstract methods
+    "@abstractmethod",
+    # Defensive assertions
+    "assert False",
+]
+# Precision for coverage percentages
+precision = 2
+
+[tool.coverage.html]
+# HTML report output directory
+directory = "htmlcov"
+# Show contexts in HTML report
+show_contexts = true
+
+[tool.coverage.xml]
+# XML report output for CI/CD integration
+output = "coverage.xml"

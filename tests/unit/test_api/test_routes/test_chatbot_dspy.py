@@ -15,6 +15,11 @@ Covers:
 - Async functions with mocked DSPy
 """
 
+import pytest
+
+# Group all DSPy tests on same worker to prevent import race conditions
+pytestmark = pytest.mark.xdist_group(name="dspy_integration")
+
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
