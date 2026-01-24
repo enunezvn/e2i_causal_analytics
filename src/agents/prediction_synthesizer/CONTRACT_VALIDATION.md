@@ -687,3 +687,73 @@ class PredictionSynthesisTrainingSignal:
 2. After ensemble combination (input: predictions → output: ensemble, intervals)
 3. After context enrichment (input: prediction → output: similar_cases, trends)
 4. Quality score = (model_success * 0.25) + (ensemble_quality * 0.25) + (efficiency * 0.15) + (context * 0.15) + (accuracy * 0.20)
+
+---
+
+## 17. Opik Distributed Tracing Contract (COMPLETE)
+
+**Reference**: `resource_optimizer/opik_tracer.py`, Opik documentation
+
+**Purpose**: Distributed tracing for observability parity with Resource Optimizer
+
+| Requirement | Contract | Implementation | Status | Notes |
+|-------------|----------|----------------|--------|-------|
+| `opik_tracer.py` | Required file | 475 lines | ✅ COMPLETE | Full implementation |
+| Tracer Class | Singleton pattern | `PredictionSynthesizerOpikTracer` | ✅ COMPLETE | Lazy-loaded client |
+| Trace Context | Async context manager | `SynthesisTraceContext` | ✅ COMPLETE | Full pipeline tracing |
+| Node Spans | Per-node spans | `NodeSpanContext` | ✅ COMPLETE | orchestrate, combine, enrich |
+| Agent Integration | `enable_opik` flag | `agent.py` | ✅ COMPLETE | Lazy-loaded, graceful degradation |
+| UUID v7 Trace IDs | Opik compatible | `_generate_trace_id()` | ✅ COMPLETE | Time-sortable UUIDs |
+
+**Tracer Class** (`opik_tracer.py:290-420`):
+```python
+class PredictionSynthesizerOpikTracer:
+    """Opik distributed tracer for Prediction Synthesizer agent."""
+
+    _instance: Optional["PredictionSynthesizerOpikTracer"] = None
+    _initialized: bool = False
+
+    def __init__(
+        self,
+        project_name: str = "e2i-prediction-synthesizer",
+        sampling_rate: float = 1.0,
+        enabled: bool = True,
+    ):
+        ...
+
+    @asynccontextmanager
+    async def trace_synthesis(
+        self,
+        entity_type: str = "hcp",
+        prediction_target: str = "churn",
+        ensemble_method: str = "weighted",
+        synthesis_id: Optional[str] = None,
+        query: Optional[str] = None,
+    ):
+        """Async context manager for tracing a prediction synthesis."""
+```
+
+**Trace Context Methods** (`opik_tracer.py:85-280`):
+- `log_synthesis_started()`: Log entity, target, models, method
+- `log_model_orchestration()`: Log models requested/succeeded/failed, latency
+- `log_ensemble_combination()`: Log method, point estimate, intervals, agreement
+- `log_context_enrichment()`: Log similar cases, feature importance, trends
+- `log_synthesis_complete()`: Log status, success, duration, final metrics
+
+**Pipeline Nodes Traced**:
+- `orchestrate`: Parallel model predictions
+- `combine`: Ensemble aggregation (weighted/average/voting/stacking)
+- `enrich`: Context enrichment (similar cases, trends, accuracy)
+
+**Agent Integration** (`agent.py`):
+- `enable_opik` flag in `__init__()` (default: True)
+- `tracer` property with lazy loading
+- Full tracing in `synthesize()` method
+- Graceful degradation if Opik unavailable
+
+**Trace Metadata**:
+- Entity: entity_id, entity_type, prediction_target
+- Models: models_requested, models_succeeded, models_failed, success_rate
+- Ensemble: method, point_estimate, intervals, confidence, model_agreement
+- Context: similar_cases_found, feature_importance, historical_accuracy, trend
+- Performance: orchestration_latency, ensemble_latency, total_duration
