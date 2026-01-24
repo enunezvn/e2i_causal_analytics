@@ -34,7 +34,7 @@ import logging
 import os
 from abc import ABC, abstractmethod
 from functools import lru_cache
-from typing import Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 logger = logging.getLogger(__name__)
 
