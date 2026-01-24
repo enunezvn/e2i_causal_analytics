@@ -606,7 +606,7 @@ Both methods translate to PostgreSQL's `@>` operator for JSONB containment queri
 | SAST integration | HIGH | 2 hrs | None | ✅ Done (Bandit + Semgrep) |
 | Container scanning | HIGH | 2 hrs | None | ✅ Done (Trivy + Hadolint) |
 | Audit logging implementation | HIGH | 6 hrs | Phase 1 | ✅ Done |
-| Docker network policies | MEDIUM | 4 hrs | None | ⏳ Pending |
+| Docker network policies | MEDIUM | 4 hrs | None | ✅ Done (2026-01-24) |
 | Request correlation IDs | MEDIUM | 3 hrs | None | ✅ Done (already implemented) |
 
 **Implemented Files**:
