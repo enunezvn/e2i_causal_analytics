@@ -1,6 +1,6 @@
 """
 E2I Prediction Synthesizer Agent - Main Agent Class
-Version: 4.2
+Version: 4.3
 Purpose: Multi-model prediction aggregation and ensemble synthesis
 """
 
@@ -8,10 +8,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, TYPE_CHECKING
 
 from pydantic import BaseModel, Field
+
+if TYPE_CHECKING:
+    from .memory_hooks import PredictionSynthesizerMemoryHooks
 
 from .graph import build_prediction_synthesizer_graph, build_simple_prediction_graph
 from .state import (
@@ -82,6 +86,7 @@ class PredictionSynthesizerAgent:
         model_clients: Optional[Dict[str, Any]] = None,
         context_store: Optional[Any] = None,
         feature_store: Optional[Any] = None,
+        enable_memory: bool = True,
     ):
         """
         Initialize Prediction Synthesizer agent.
@@ -91,14 +96,30 @@ class PredictionSynthesizerAgent:
             model_clients: Dict mapping model_id to prediction client
             context_store: Store for historical context
             feature_store: Store for feature metadata
+            enable_memory: Whether to enable memory integration (default: True)
         """
         self.model_registry = model_registry
         self.model_clients = model_clients or {}
         self.context_store = context_store
         self.feature_store = feature_store
+        self.enable_memory = enable_memory
 
         self._full_graph = None
         self._simple_graph = None
+        self._memory_hooks: Optional["PredictionSynthesizerMemoryHooks"] = None
+
+    @property
+    def memory_hooks(self) -> Optional["PredictionSynthesizerMemoryHooks"]:
+        """Lazy-load memory hooks."""
+        if self._memory_hooks is None and self.enable_memory:
+            try:
+                from .memory_hooks import get_prediction_synthesizer_memory_hooks
+
+                self._memory_hooks = get_prediction_synthesizer_memory_hooks()
+            except ImportError:
+                logger.warning("Memory hooks not available")
+                return None
+        return self._memory_hooks
 
     @property
     def full_graph(self):
@@ -132,6 +153,7 @@ class PredictionSynthesizerAgent:
         ensemble_method: str = "weighted",
         include_context: bool = True,
         query: str = "",
+        session_id: Optional[str] = None,
     ) -> PredictionSynthesizerOutput:
         """
         Synthesize predictions from multiple models.
@@ -146,10 +168,35 @@ class PredictionSynthesizerAgent:
             ensemble_method: How to combine predictions
             include_context: Whether to add context enrichment
             query: Original query text
+            session_id: Optional session identifier for memory context
 
         Returns:
             PredictionSynthesizerOutput with ensemble prediction
         """
+        # Generate session ID if not provided
+        if session_id is None:
+            session_id = str(uuid.uuid4())
+
+        # Retrieve memory context if enabled
+        memory_context = None
+        if self.enable_memory and self.memory_hooks:
+            try:
+                memory_context = await self.memory_hooks.get_context(
+                    session_id=session_id,
+                    entity_id=entity_id,
+                    entity_type=entity_type,
+                    prediction_target=prediction_target,
+                    time_horizon=time_horizon,
+                )
+                logger.debug(
+                    f"Retrieved memory context: "
+                    f"cached={len(memory_context.cached_predictions)}, "
+                    f"episodic={len(memory_context.episodic_context)}, "
+                    f"models={len(memory_context.model_performance)}"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to retrieve memory context: {e}")
+
         initial_state: PredictionSynthesizerState = {
             "query": query,
             "entity_id": entity_id,
@@ -186,7 +233,7 @@ class PredictionSynthesizerAgent:
 
         result = await graph.ainvoke(initial_state)
 
-        return PredictionSynthesizerOutput(
+        output = PredictionSynthesizerOutput(
             ensemble_prediction=result.get("ensemble_prediction"),
             individual_predictions=result.get("individual_predictions") or [],
             prediction_context=result.get("prediction_context"),
@@ -199,6 +246,22 @@ class PredictionSynthesizerAgent:
             errors=result.get("errors") or [],
             warnings=result.get("warnings") or [],
         )
+
+        # Contribute to memory after successful prediction
+        if self.enable_memory and self.memory_hooks and output.status != "failed":
+            try:
+                from .memory_hooks import contribute_to_memory
+
+                await contribute_to_memory(
+                    result=output.model_dump(),
+                    state=result,
+                    memory_hooks=self.memory_hooks,
+                    session_id=session_id,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to contribute to memory: {e}")
+
+        return output
 
     async def quick_predict(
         self,
