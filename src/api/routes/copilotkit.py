@@ -2766,6 +2766,8 @@ class ChatResponse(BaseModel):
     execution_time_ms: Optional[float] = None
     intent: Optional[str] = None
     intent_confidence: Optional[float] = None
+    # Phase 4: Decision rationale for agent routing transparency
+    routing_rationale: Optional[str] = None
 
 
 async def _stream_chat_response(request: ChatRequest) -> AsyncGenerator[str, None]:
@@ -2799,7 +2801,7 @@ async def _stream_chat_response(request: ChatRequest) -> AsyncGenerator[str, Non
         response_text = ""
         conversation_title = None
 
-        # Track dispatch observability (Phase 1 System Evaluation)
+        # Track dispatch observability (Phase 1 System Evaluation + Phase 4 rationale)
         dispatch_info = {
             "orchestrator_used": False,
             "agents_dispatched": [],
@@ -2807,6 +2809,7 @@ async def _stream_chat_response(request: ChatRequest) -> AsyncGenerator[str, Non
             "response_confidence": None,
             "intent": None,
             "intent_confidence": None,
+            "routing_rationale": None,
         }
 
         # Stream through chatbot workflow
@@ -2863,6 +2866,9 @@ async def _stream_chat_response(request: ChatRequest) -> AsyncGenerator[str, Non
                             dispatch_info["intent"] = node_output["intent"]
                         if "intent_confidence" in node_output:
                             dispatch_info["intent_confidence"] = node_output["intent_confidence"]
+                        # Phase 4: Decision rationale for transparency
+                        if "routing_rationale" in node_output:
+                            dispatch_info["routing_rationale"] = node_output["routing_rationale"]
 
         # Generate title if not set
         if not conversation_title and response_text:
@@ -2962,6 +2968,7 @@ async def chat(chat_request: ChatRequest, request: Request) -> ChatResponse:
         - execution_time_ms: Total execution time in milliseconds
         - intent: Classified intent type
         - intent_confidence: Intent classification confidence (0.0-1.0)
+        - routing_rationale: Explanation for why this agent was selected (Phase 4)
 
     Note: request_id is optional. If not provided, it's extracted from the
     X-Request-ID header via TracingMiddleware (Phase 1 G08).
@@ -3000,13 +3007,15 @@ async def chat(chat_request: ChatRequest, request: Request) -> ChatResponse:
         session_id = result.get("session_id", "")
         agent_name = result.get("agent_name")
 
-        # Extract dispatch observability fields (Phase 1 System Evaluation)
+        # Extract dispatch observability fields (Phase 1 System Evaluation + Phase 4)
         orchestrator_used = result.get("orchestrator_used", False)
         agents_dispatched = result.get("agents_dispatched", [])
         routed_agent = result.get("routed_agent")
         response_confidence = result.get("response_confidence")
         intent = result.get("intent")
         intent_confidence = result.get("intent_confidence")
+        # Phase 4: Decision rationale for transparency
+        routing_rationale = result.get("routing_rationale")
 
         # Generate title from query
         title = chat_request.query[:50] + "..." if len(chat_request.query) > 50 else chat_request.query
@@ -3014,6 +3023,7 @@ async def chat(chat_request: ChatRequest, request: Request) -> ChatResponse:
         logger.info(
             f"[Chatbot] Response: orchestrator={orchestrator_used}, "
             f"agents={agents_dispatched}, intent={intent}, "
+            f"rationale={routing_rationale[:50] if routing_rationale else None}..., "
             f"time_ms={execution_time_ms:.1f}"
         )
 
@@ -3031,6 +3041,8 @@ async def chat(chat_request: ChatRequest, request: Request) -> ChatResponse:
             execution_time_ms=round(execution_time_ms, 2),
             intent=intent,
             intent_confidence=intent_confidence,
+            # Phase 4: Decision rationale
+            routing_rationale=routing_rationale,
         )
 
     except Exception as e:
