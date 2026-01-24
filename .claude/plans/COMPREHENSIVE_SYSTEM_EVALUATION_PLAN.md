@@ -579,14 +579,14 @@ merged += f"\n\n*Note: Unable to get results from: {', '.join(failed_agents)}*"
 | Item | Area | Effort | Owner | Status |
 |------|------|--------|-------|--------|
 | RBAC implementation | Security | 3d | Backend | ✅ Done |
+| Timeout-specific error messages | Error Handling | 1d | Backend | ✅ Done |
 | OpenAPI → TypeScript generation | Type Safety | 1d | DevOps | Pending |
 | Stream execution progress | Observability | 2d | Backend | Pending |
 | Decision rationale in response | Observability | 1d | Backend | Pending |
 | Cache invalidation sync | Real-Time | 2d | Full-stack | Pending |
 | Tab visibility polling pause | Real-Time | 0.5d | Frontend | Pending |
-| Timeout-specific error messages | Error Handling | 1d | Backend | Pending |
 
-**Total: 10.5 days** | **Completed: 1/7 items (RBAC)**
+**Total: 10.5 days** | **Completed: 2/7 items (RBAC, Timeout Errors)**
 
 **Note:** All Phase 4 items are enhancements, not critical gaps. The system is production-ready after Phase 3 completion.
 
@@ -742,16 +742,16 @@ The system has progressed from **49/100** to **80/100** (B grade) with strong fo
 
 ---
 
-**Document Version:** 1.5
-**Last Updated:** 2026-01-21
-**Status:** Phases 1-3 Complete, Phase 4 In Progress (RBAC Complete)
+**Document Version:** 1.7
+**Last Updated:** 2026-01-23
+**Status:** Phases 1-3 Complete, Phase 4 In Progress (2/7 items complete)
 
 ### Implementation Summary
 - **Phase 1:** 5/5 items complete (security, stability, observability)
 - **Phase 2:** 5/5 items complete (UX & reliability)
 - **Phase 3:** 5/5 items complete (type safety, detailed errors, partial failures, PII masking)
-- **Phase 4:** 1/7 items complete (RBAC with 4-role hierarchy: ADMIN > OPERATOR > ANALYST > VIEWER)
-- **Progress:** 16/22 total items complete, 17/21 acceptance criteria met
+- **Phase 4:** 2/7 items complete (RBAC, Timeout Errors)
+- **Progress:** 17/22 total items complete, 17/21 acceptance criteria met
 
 ### Verification Notes (2026-01-21 Review)
 - **Testing Mode:** Verified E2I_TESTING_MODE is NOT set in production .env - security mitigated
@@ -767,10 +767,14 @@ The system has progressed from **49/100** to **80/100** (B grade) with strong fo
 - **PII Masking:** Created `src/api/utils/data_masking.py` to mask patient_id/hcp_id in responses (42 tests)
 
 ### Phase 4 Implementation Details (In Progress)
-- **RBAC (2026-01-21):** Implemented 4-role hierarchical access control:
+- **RBAC (2026-01-21, verified 2026-01-23):** Implemented 4-role hierarchical access control:
   - Roles: `viewer` < `analyst` < `operator` < `admin`
   - Database: Added `user_role` enum and `role` column to `chatbot_user_profiles`
   - Backend: `src/api/dependencies/auth.py` with `UserRole` enum, `require_viewer/analyst/operator/admin` dependencies
   - Protected endpoints: 8 admin (monitoring), 10 operator (experiments, feedback, digital_twin), 7 analyst (causal, gaps, segments)
-  - Tests: 38 unit tests (`test_auth_roles.py`), integration tests (`test_rbac_endpoints.py`)
+  - Tests: 38 unit tests (`test_auth_roles.py`), 29 integration tests (`test_rbac_endpoints.py`) - all passing on droplet
   - Migration: `database/chat/036_user_roles.sql` with helper functions `role_level()` and `has_role()`
+  - Test fix (2026-01-23): Refactored integration tests to use FastAPI `app.dependency_overrides` pattern instead of `patch()` for proper auth mocking
+- **Timeout-specific error messages (2026-01-21):** Verified in `src/api/errors.py`:
+  - `TimeoutError` class (lines 638-662) with context-aware messages
+  - `AgentTimeoutError` class (lines 447-479) with SLA information and suggested actions
