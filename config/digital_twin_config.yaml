@@ -164,6 +164,47 @@ api:
   include_heterogeneity_in_list: false
   include_full_config_in_list: false
 
+# Simulation Result Caching (Phase 5)
+simulation_cache:
+  # Enable caching of simulation results
+  enabled: true
+
+  # Time to live for cached results (seconds)
+  ttl_seconds: 1800  # 30 minutes
+
+  # Maximum number of cached results (LRU eviction)
+  max_cached_results: 1000
+
+  # Redis key prefix
+  key_prefix: "twin_sim:"
+
+# Automatic Retraining (Phase 6)
+auto_retraining:
+  # Enable automatic retraining triggers
+  enabled: false  # Opt-in for safety
+
+  # Fidelity score threshold to trigger retraining
+  fidelity_threshold: 0.70
+
+  # Minimum validations required before triggering
+  min_validations: 5
+
+  # Cooldown period between retraining attempts (hours)
+  cooldown_hours: 24
+
+  # Maximum retraining attempts before manual intervention
+  max_attempts: 3
+
+  # Auto-approve retraining if fidelity drops below this threshold
+  auto_approve_threshold: 0.50
+
+  # Error thresholds
+  max_mean_absolute_error: 0.25  # 25% mean error triggers retraining
+  min_ci_coverage_rate: 0.80    # 80% CI coverage required
+
+  # Notification settings
+  notification_webhook: null
+
 # Logging & Observability
 observability:
   # Log simulation executions to MLflow
@@ -171,6 +212,9 @@ observability:
 
   # Track fidelity metrics
   track_fidelity_metrics: true
+
+  # Enable DEBUG logging for effect modifiers (Phase 1)
+  debug_effect_modifiers: false
 
   # Alert channels for degradation
   alerts:
