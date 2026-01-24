@@ -2675,11 +2675,14 @@ def add_copilotkit_routes(app: FastAPI, prefix: str = "/api/copilotkit") -> None
     # Add base path route (WITHOUT trailing slash) to prevent 307 redirect
     # The frontend sends requests to /api/copilotkit (no trailing slash),
     # and FastAPI's redirect_slashes=True would cause a 307 redirect that breaks streaming
+    # Note: include_in_schema=False excludes dynamic CopilotKit routes from OpenAPI
+    # to avoid duplicate operation ID errors during TypeScript type generation
     app.add_api_route(
         normalized_prefix,
         make_handler,
         methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         name="copilotkit_handler_base",
+        include_in_schema=False,
     )
 
     # Add catch-all route for all CopilotKit sub-paths
@@ -2689,6 +2692,7 @@ def add_copilotkit_routes(app: FastAPI, prefix: str = "/api/copilotkit") -> None
         make_handler,
         methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         name="copilotkit_handler",
+        include_in_schema=False,
     )
 
     logger.info(f"[CopilotKit] Routes added at {normalized_prefix} and {normalized_prefix}/{{path}} (custom handler with info transformation)")
