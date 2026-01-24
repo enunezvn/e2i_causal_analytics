@@ -48,6 +48,9 @@ PUBLIC_PATHS: List[Tuple[str, str]] = [
     ("*", "/healthz"),
     ("*", "/ready"),
     ("*", "/health/bentoml"),
+    # Prometheus metrics - must be public for scraping
+    ("GET", "/metrics"),
+    ("GET", "/metrics/health"),
     # Documentation - always public
     ("*", "/api/docs"),
     ("*", "/api/docs/oauth2-redirect"),
