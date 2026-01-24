@@ -82,7 +82,6 @@ dependencies = [
     "httpx>=0.27.0",
     "tenacity>=9.0.0",  # Note: conflicts with feast<9 requirement - see requirements-synthetic.txt
     "tqdm>=4.66.0",
-    "loguru>=0.7.0",
     "python-json-logger>=2.0.7",
 
     # Dependency version pins to resolve conflicts
