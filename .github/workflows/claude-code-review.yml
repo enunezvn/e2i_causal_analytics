@@ -53,7 +53,7 @@ jobs:
 
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
-          allowed_tools: |
+          additional_permissions: |
             Bash(gh issue view:*)
             Bash(gh search:*)
             Bash(gh issue list:*)
