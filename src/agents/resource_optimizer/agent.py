@@ -1,6 +1,6 @@
 """
 E2I Resource Optimizer Agent - Main Agent Class
-Version: 4.2
+Version: 4.3
 Purpose: Resource allocation optimization for pharmaceutical operations
 """
 
@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional, TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
+    from .memory_hooks import ResourceOptimizerMemoryHooks
     from .opik_tracer import ResourceOptimizerOpikTracer
 
 from .graph import build_resource_optimizer_graph, build_simple_optimizer_graph
@@ -84,17 +86,20 @@ class ResourceOptimizerAgent:
     - Project allocation impact
     """
 
-    def __init__(self, enable_opik: bool = True):
+    def __init__(self, enable_opik: bool = True, enable_memory: bool = True):
         """
         Initialize Resource Optimizer agent.
 
         Args:
             enable_opik: Whether to enable Opik distributed tracing (default: True)
+            enable_memory: Whether to enable memory integration (default: True)
         """
         self._full_graph = None
         self._simple_graph = None
         self.enable_opik = enable_opik
+        self.enable_memory = enable_memory
         self._opik_tracer: Optional["ResourceOptimizerOpikTracer"] = None
+        self._memory_hooks: Optional["ResourceOptimizerMemoryHooks"] = None
 
     @property
     def full_graph(self):
@@ -126,6 +131,19 @@ class ResourceOptimizerAgent:
 
         return self._opik_tracer
 
+    @property
+    def memory_hooks(self) -> Optional["ResourceOptimizerMemoryHooks"]:
+        """Lazy-load memory hooks."""
+        if self._memory_hooks is None and self.enable_memory:
+            try:
+                from .memory_hooks import get_resource_optimizer_memory_hooks
+
+                self._memory_hooks = get_resource_optimizer_memory_hooks()
+            except ImportError:
+                logger.warning("Memory hooks not available")
+                return None
+        return self._memory_hooks
+
     async def optimize(
         self,
         allocation_targets: List[AllocationTarget],
@@ -136,6 +154,7 @@ class ResourceOptimizerAgent:
         run_scenarios: bool = False,
         scenario_count: int = 3,
         query: str = "",
+        session_id: Optional[str] = None,
     ) -> ResourceOptimizerOutput:
         """
         Optimize resource allocation.
@@ -149,11 +168,35 @@ class ResourceOptimizerAgent:
             run_scenarios: Whether to run scenario analysis
             scenario_count: Number of scenarios to generate
             query: Original query text
+            session_id: Optional session identifier for memory context
 
         Returns:
             ResourceOptimizerOutput with optimal allocations
         """
         start_time = time.time()
+
+        # Generate session ID if not provided
+        if session_id is None:
+            session_id = str(uuid.uuid4())
+
+        # Retrieve memory context if enabled
+        memory_context = None
+        if self.enable_memory and self.memory_hooks:
+            try:
+                memory_context = await self.memory_hooks.get_context(
+                    session_id=session_id,
+                    resource_type=resource_type,
+                    objective=objective,
+                    constraints=constraints,
+                )
+                logger.debug(
+                    f"Retrieved memory context: "
+                    f"cached={memory_context.cached_optimization is not None}, "
+                    f"similar={len(memory_context.similar_optimizations)}, "
+                    f"patterns={len(memory_context.learned_patterns)}"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to retrieve memory context: {e}")
 
         initial_state: ResourceOptimizerState = {
             "query": query,
@@ -198,12 +241,12 @@ class ResourceOptimizerAgent:
         # Get Opik tracer
         opik_tracer = self._get_opik_tracer()
 
-        async def execute_and_build_output() -> ResourceOptimizerOutput:
+        async def execute_and_build_output() -> tuple[ResourceOptimizerOutput, Dict[str, Any]]:
             """Execute workflow and build output."""
             result = await graph.ainvoke(initial_state)
 
             allocations = result.get("optimal_allocations") or []
-            return ResourceOptimizerOutput(
+            output = ResourceOptimizerOutput(
                 optimal_allocations=allocations,
                 objective_value=result.get("objective_value"),
                 solver_status=result.get("solver_status"),
@@ -220,6 +263,22 @@ class ResourceOptimizerAgent:
                 errors=result.get("errors") or [],
                 warnings=result.get("warnings") or [],
             )
+            return output, result
+
+        async def contribute_memory(output: ResourceOptimizerOutput, final_state: Dict[str, Any]) -> None:
+            """Contribute optimization results to memory systems."""
+            if self.enable_memory and self.memory_hooks and output.status != "failed":
+                try:
+                    from .memory_hooks import contribute_to_memory
+
+                    await contribute_to_memory(
+                        result=output.model_dump(),
+                        state=final_state,
+                        memory_hooks=self.memory_hooks,
+                        session_id=session_id,
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to contribute to memory: {e}")
 
         if opik_tracer:
             async with opik_tracer.trace_optimization(
@@ -237,7 +296,10 @@ class ResourceOptimizerAgent:
                     run_scenarios=run_scenarios,
                 )
 
-                output = await execute_and_build_output()
+                output, final_state = await execute_and_build_output()
+
+                # Contribute to memory
+                await contribute_memory(output, final_state)
 
                 # Count allocation changes
                 allocations = output.optimal_allocations or []
@@ -270,7 +332,10 @@ class ResourceOptimizerAgent:
                 return output
         else:
             # Execute without Opik tracing
-            output = await execute_and_build_output()
+            output, final_state = await execute_and_build_output()
+
+            # Contribute to memory
+            await contribute_memory(output, final_state)
 
             elapsed_ms = int((time.time() - start_time) * 1000)
             logger.info(
