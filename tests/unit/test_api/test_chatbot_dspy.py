@@ -12,6 +12,9 @@ Tests the DSPy-based classifier and router including:
 """
 
 import pytest
+
+# Group all DSPy tests on same worker to prevent import race conditions
+pytestmark = pytest.mark.xdist_group(name="dspy_integration")
 from unittest.mock import patch, MagicMock, AsyncMock
 
 from src.api.routes.chatbot_dspy import (
