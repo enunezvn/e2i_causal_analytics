@@ -698,3 +698,345 @@ class TestConfidenceLevelParameter:
 
         # 90% CI should be narrower than 95% CI
         assert ci_width_90 < ci_width_95
+
+
+# =============================================================================
+# EDGE CASE TESTS FOR EFFECT MODIFIERS (Phase 2)
+# =============================================================================
+
+
+class TestEffectModifierEdgeCases:
+    """Tests for edge cases in effect modifier calculations."""
+
+    @pytest.fixture
+    def edge_case_population(self):
+        """Create population with edge case feature values."""
+        twins = []
+        for i in range(200):
+            twin = DigitalTwin(
+                twin_type=TwinType.HCP,
+                brand=Brand.REMIBRUTINIB,
+                features={
+                    "specialty": "rheumatology",
+                    "decile": 5,
+                    "digital_engagement_score": 0.5,
+                    "adoption_stage": "early_majority",
+                },
+                baseline_outcome=0.1,
+                baseline_propensity=0.5,
+            )
+            twins.append(twin)
+
+        return TwinPopulation(
+            twin_type=TwinType.HCP,
+            brand=Brand.REMIBRUTINIB,
+            twins=twins,
+            size=200,
+            model_id=uuid4(),
+        )
+
+    def test_extreme_low_decile(self, edge_case_population, email_campaign_config):
+        """Test handling of decile = 0 (below valid range)."""
+        for twin in edge_case_population.twins:
+            twin.features["decile"] = 0  # Invalid low value
+
+        engine = SimulationEngine(edge_case_population)
+        result = engine.simulate(email_campaign_config)
+
+        # Should complete with clamped decile value
+        assert result.status == SimulationStatus.COMPLETED
+
+    def test_extreme_high_decile(self, edge_case_population, email_campaign_config):
+        """Test handling of decile = 11 (above valid range)."""
+        for twin in edge_case_population.twins:
+            twin.features["decile"] = 11  # Invalid high value
+
+        engine = SimulationEngine(edge_case_population)
+        result = engine.simulate(email_campaign_config)
+
+        # Should complete with clamped decile value
+        assert result.status == SimulationStatus.COMPLETED
+
+    def test_zero_engagement_score(self, edge_case_population, email_campaign_config):
+        """Test handling of zero engagement score."""
+        for twin in edge_case_population.twins:
+            twin.features["digital_engagement_score"] = 0.0
+
+        engine = SimulationEngine(edge_case_population)
+        result = engine.simulate(email_campaign_config)
+
+        # Should apply minimum multiplier (0.8)
+        assert result.status == SimulationStatus.COMPLETED
+        assert result.simulated_ate != 0
+
+    def test_max_engagement_score(self, edge_case_population, email_campaign_config):
+        """Test handling of maximum engagement score."""
+        for twin in edge_case_population.twins:
+            twin.features["digital_engagement_score"] = 1.0
+
+        engine = SimulationEngine(edge_case_population)
+        result = engine.simulate(email_campaign_config)
+
+        # Should apply maximum multiplier (1.2)
+        assert result.status == SimulationStatus.COMPLETED
+
+    def test_negative_engagement_score(self, edge_case_population, email_campaign_config):
+        """Test handling of negative engagement score."""
+        for twin in edge_case_population.twins:
+            twin.features["digital_engagement_score"] = -0.5
+
+        engine = SimulationEngine(edge_case_population)
+        result = engine.simulate(email_campaign_config)
+
+        # Should clamp to 0 and complete
+        assert result.status == SimulationStatus.COMPLETED
+
+    def test_engagement_above_one(self, edge_case_population, email_campaign_config):
+        """Test handling of engagement score above 1.0."""
+        for twin in edge_case_population.twins:
+            twin.features["digital_engagement_score"] = 1.5
+
+        engine = SimulationEngine(edge_case_population)
+        result = engine.simulate(email_campaign_config)
+
+        # Should clamp to 1.0 and complete
+        assert result.status == SimulationStatus.COMPLETED
+
+    def test_invalid_adoption_stage(self, edge_case_population, email_campaign_config):
+        """Test handling of unknown adoption stage."""
+        for twin in edge_case_population.twins:
+            twin.features["adoption_stage"] = "unknown_stage"
+
+        engine = SimulationEngine(edge_case_population)
+        result = engine.simulate(email_campaign_config)
+
+        # Should fall back to default multiplier (1.0)
+        assert result.status == SimulationStatus.COMPLETED
+
+    def test_zero_intensity_multiplier(self, edge_case_population):
+        """Test handling of zero intensity multiplier."""
+        engine = SimulationEngine(edge_case_population)
+        config = InterventionConfig(
+            intervention_type="email_campaign",
+            duration_weeks=8,
+            intensity_multiplier=0.0,
+        )
+
+        result = engine.simulate(config)
+
+        # Effect should be near zero
+        assert result.status == SimulationStatus.COMPLETED
+        assert abs(result.simulated_ate) < 0.01
+
+    def test_extreme_intensity_multiplier(self, edge_case_population):
+        """Test handling of extreme intensity multiplier."""
+        engine = SimulationEngine(edge_case_population)
+        config = InterventionConfig(
+            intervention_type="email_campaign",
+            duration_weeks=8,
+            intensity_multiplier=10.0,
+        )
+
+        result = engine.simulate(config)
+
+        # Should be clamped and complete
+        assert result.status == SimulationStatus.COMPLETED
+
+    def test_zero_duration_weeks(self, edge_case_population):
+        """Test handling of zero duration weeks."""
+        engine = SimulationEngine(edge_case_population)
+        config = InterventionConfig(
+            intervention_type="email_campaign",
+            duration_weeks=0,
+            intensity_multiplier=1.0,
+        )
+
+        result = engine.simulate(config)
+
+        # Should handle gracefully (clamped to minimum)
+        assert result.status == SimulationStatus.COMPLETED
+
+    def test_combined_extreme_modifiers(self, edge_case_population):
+        """Test combined extreme modifier values don't cause overflow."""
+        for twin in edge_case_population.twins:
+            twin.features["decile"] = 1  # Maximum decile multiplier
+            twin.features["digital_engagement_score"] = 1.0  # Max engagement
+            twin.features["adoption_stage"] = "laggard"  # Max adoption multiplier
+            twin.baseline_propensity = 1.0  # Max propensity
+
+        engine = SimulationEngine(edge_case_population)
+        config = InterventionConfig(
+            intervention_type="speaker_program_invitation",  # Highest base effect
+            duration_weeks=52,  # Long duration
+            intensity_multiplier=10.0,  # Max intensity
+        )
+
+        result = engine.simulate(config)
+
+        # Should complete without overflow
+        assert result.status == SimulationStatus.COMPLETED
+        assert not np.isnan(result.simulated_ate)
+        assert not np.isinf(result.simulated_ate)
+
+
+class TestBoundaryConditions:
+    """Tests for boundary conditions in simulation."""
+
+    def test_exactly_100_twins(self, email_campaign_config):
+        """Test minimum viable population (exactly 100 twins)."""
+        twins = [
+            DigitalTwin(
+                twin_type=TwinType.HCP,
+                brand=Brand.REMIBRUTINIB,
+                features={"specialty": "rheumatology", "decile": i % 10 + 1},
+                baseline_outcome=0.1,
+                baseline_propensity=0.5,
+            )
+            for i in range(100)
+        ]
+
+        population = TwinPopulation(
+            twin_type=TwinType.HCP,
+            brand=Brand.REMIBRUTINIB,
+            twins=twins,
+            size=100,
+            model_id=uuid4(),
+        )
+
+        engine = SimulationEngine(population)
+        result = engine.simulate(email_campaign_config)
+
+        assert result.status == SimulationStatus.COMPLETED
+        assert result.twin_count == 100
+
+    def test_99_twins_fails(self, email_campaign_config):
+        """Test below minimum threshold (99 twins) fails gracefully."""
+        twins = [
+            DigitalTwin(
+                twin_type=TwinType.HCP,
+                brand=Brand.REMIBRUTINIB,
+                features={"specialty": "rheumatology", "decile": i % 10 + 1},
+                baseline_outcome=0.1,
+                baseline_propensity=0.5,
+            )
+            for i in range(99)
+        ]
+
+        population = TwinPopulation(
+            twin_type=TwinType.HCP,
+            brand=Brand.REMIBRUTINIB,
+            twins=twins,
+            size=99,
+            model_id=uuid4(),
+        )
+
+        engine = SimulationEngine(population)
+        result = engine.simulate(email_campaign_config)
+
+        assert result.status == SimulationStatus.FAILED
+        assert "Insufficient" in result.error_message
+
+    def test_empty_population(self, email_campaign_config):
+        """Test handling of empty population."""
+        population = TwinPopulation(
+            twin_type=TwinType.HCP,
+            brand=Brand.REMIBRUTINIB,
+            twins=[],
+            size=0,
+            model_id=uuid4(),
+        )
+
+        engine = SimulationEngine(population)
+        result = engine.simulate(email_campaign_config)
+
+        assert result.status == SimulationStatus.FAILED
+
+    def test_ci_bounds_with_uniform_population(self, email_campaign_config):
+        """Test CI calculation with very uniform population."""
+        # All twins identical
+        twins = [
+            DigitalTwin(
+                twin_type=TwinType.HCP,
+                brand=Brand.REMIBRUTINIB,
+                features={
+                    "specialty": "rheumatology",
+                    "decile": 5,
+                    "digital_engagement_score": 0.5,
+                    "adoption_stage": "early_majority",
+                },
+                baseline_outcome=0.1,
+                baseline_propensity=0.5,
+            )
+            for _ in range(200)
+        ]
+
+        population = TwinPopulation(
+            twin_type=TwinType.HCP,
+            brand=Brand.REMIBRUTINIB,
+            twins=twins,
+            size=200,
+            model_id=uuid4(),
+        )
+
+        engine = SimulationEngine(population)
+        result = engine.simulate(email_campaign_config)
+
+        assert result.status == SimulationStatus.COMPLETED
+        # CI should still have some width due to noise
+        assert result.simulated_ci_lower < result.simulated_ci_upper
+
+    def test_negative_ate_possible(self):
+        """Test that negative treatment effects are handled correctly."""
+        # Create population that might produce negative effect
+        twins = [
+            DigitalTwin(
+                twin_type=TwinType.HCP,
+                brand=Brand.REMIBRUTINIB,
+                features={
+                    "specialty": "rheumatology",
+                    "decile": 1,  # High decile effect
+                    "digital_engagement_score": 0.1,  # Low engagement
+                    "adoption_stage": "innovator",  # Already adopted
+                },
+                baseline_outcome=0.3,  # Already high
+                baseline_propensity=0.2,  # Low propensity
+            )
+            for _ in range(200)
+        ]
+
+        population = TwinPopulation(
+            twin_type=TwinType.HCP,
+            brand=Brand.REMIBRUTINIB,
+            twins=twins,
+            size=200,
+            model_id=uuid4(),
+        )
+
+        # Very low intensity
+        config = InterventionConfig(
+            intervention_type="sample_distribution",
+            duration_weeks=1,
+            intensity_multiplier=0.1,
+        )
+
+        engine = SimulationEngine(population)
+        result = engine.simulate(config)
+
+        # Should complete regardless of effect direction
+        assert result.status == SimulationStatus.COMPLETED
+
+    def test_confidence_level_extremes_80(self, sample_population, email_campaign_config):
+        """Test 80% confidence level."""
+        engine = SimulationEngine(sample_population)
+        result = engine.simulate(email_campaign_config, confidence_level=0.80)
+
+        assert result.status == SimulationStatus.COMPLETED
+        assert result.simulated_ci_lower < result.simulated_ci_upper
+
+    def test_confidence_level_extremes_99(self, sample_population, email_campaign_config):
+        """Test 99% confidence level."""
+        engine = SimulationEngine(sample_population)
+        result = engine.simulate(email_campaign_config, confidence_level=0.99)
+
+        assert result.status == SimulationStatus.COMPLETED
+        assert result.simulated_ci_lower < result.simulated_ci_upper
