@@ -255,6 +255,7 @@ class Test50kTwinsSimulation:
 # =============================================================================
 
 
+@pytest.mark.timeout(300)  # 5 minute timeout for stress tests (hardware needs >120s)
 class Test100kTwinsGeneration:
     """Performance tests for 100,000 twin generation."""
 
