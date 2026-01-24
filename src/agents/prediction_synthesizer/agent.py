@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
     from .memory_hooks import PredictionSynthesizerMemoryHooks
+    from .opik_tracer import PredictionSynthesizerOpikTracer
 
 from .graph import build_prediction_synthesizer_graph, build_simple_prediction_graph
 from .state import (
@@ -88,6 +89,7 @@ class PredictionSynthesizerAgent:
         feature_store: Optional[Any] = None,
         enable_memory: bool = True,
         enable_dspy: bool = True,
+        enable_opik: bool = True,
     ):
         """
         Initialize Prediction Synthesizer agent.
@@ -99,6 +101,7 @@ class PredictionSynthesizerAgent:
             feature_store: Store for feature metadata
             enable_memory: Whether to enable memory integration (default: True)
             enable_dspy: Whether to enable DSPy signal emission (default: True)
+            enable_opik: Whether to enable Opik distributed tracing (default: True)
         """
         self.model_registry = model_registry
         self.model_clients = model_clients or {}
@@ -106,10 +109,12 @@ class PredictionSynthesizerAgent:
         self.feature_store = feature_store
         self.enable_memory = enable_memory
         self.enable_dspy = enable_dspy
+        self.enable_opik = enable_opik
 
         self._full_graph = None
         self._simple_graph = None
         self._memory_hooks: Optional["PredictionSynthesizerMemoryHooks"] = None
+        self._tracer: Optional["PredictionSynthesizerOpikTracer"] = None
 
     @property
     def memory_hooks(self) -> Optional["PredictionSynthesizerMemoryHooks"]:
@@ -123,6 +128,19 @@ class PredictionSynthesizerAgent:
                 logger.warning("Memory hooks not available")
                 return None
         return self._memory_hooks
+
+    @property
+    def tracer(self) -> Optional["PredictionSynthesizerOpikTracer"]:
+        """Lazy-load Opik tracer."""
+        if self._tracer is None and self.enable_opik:
+            try:
+                from .opik_tracer import get_prediction_synthesizer_tracer
+
+                self._tracer = get_prediction_synthesizer_tracer()
+            except ImportError:
+                logger.warning("Opik tracer not available")
+                return None
+        return self._tracer
 
     @property
     def full_graph(self):
@@ -234,21 +252,115 @@ class PredictionSynthesizerAgent:
             f"target={prediction_target}, method={ensemble_method}"
         )
 
-        result = await graph.ainvoke(initial_state)
+        # Execute with optional Opik tracing
+        result = None
+        output = None
 
-        output = PredictionSynthesizerOutput(
-            ensemble_prediction=result.get("ensemble_prediction"),
-            individual_predictions=result.get("individual_predictions") or [],
-            prediction_context=result.get("prediction_context"),
-            prediction_summary=result.get("prediction_summary", ""),
-            models_succeeded=result.get("models_succeeded", 0),
-            models_failed=result.get("models_failed", 0),
-            total_latency_ms=result.get("total_latency_ms", 0),
-            timestamp=result.get("timestamp", datetime.now(timezone.utc).isoformat()),
-            status=result.get("status", "failed"),
-            errors=result.get("errors") or [],
-            warnings=result.get("warnings") or [],
-        )
+        if self.enable_opik and self.tracer:
+            async with self.tracer.trace_synthesis(
+                entity_type=entity_type,
+                prediction_target=prediction_target,
+                ensemble_method=ensemble_method,
+                synthesis_id=session_id,
+                query=query,
+            ) as trace_ctx:
+                # Log synthesis started
+                models_requested = len(models_to_use) if models_to_use else 3
+                trace_ctx.log_synthesis_started(
+                    entity_id=entity_id,
+                    entity_type=entity_type,
+                    prediction_target=prediction_target,
+                    time_horizon=time_horizon,
+                    models_requested=models_requested,
+                    ensemble_method=ensemble_method,
+                    include_context=include_context,
+                )
+
+                # Execute graph
+                result = await graph.ainvoke(initial_state)
+
+                # Log model orchestration
+                trace_ctx.log_model_orchestration(
+                    models_requested=models_requested,
+                    models_succeeded=result.get("models_succeeded", 0),
+                    models_failed=result.get("models_failed", 0),
+                    orchestration_latency_ms=result.get("orchestration_latency_ms", 0),
+                )
+
+                # Log ensemble combination
+                ensemble = result.get("ensemble_prediction") or {}
+                trace_ctx.log_ensemble_combination(
+                    ensemble_method=ensemble.get("ensemble_method", ensemble_method),
+                    point_estimate=ensemble.get("point_estimate", 0.0),
+                    prediction_interval_lower=ensemble.get("prediction_interval_lower", 0.0),
+                    prediction_interval_upper=ensemble.get("prediction_interval_upper", 0.0),
+                    confidence=ensemble.get("confidence", 0.0),
+                    model_agreement=ensemble.get("model_agreement", 0.0),
+                    ensemble_latency_ms=result.get("ensemble_latency_ms", 0),
+                )
+
+                # Log context enrichment if applicable
+                context = result.get("prediction_context") or {}
+                if include_context and context:
+                    enrichment_latency = (
+                        result.get("total_latency_ms", 0)
+                        - result.get("orchestration_latency_ms", 0)
+                        - result.get("ensemble_latency_ms", 0)
+                    )
+                    trace_ctx.log_context_enrichment(
+                        similar_cases_found=len(context.get("similar_cases", [])),
+                        feature_importance_calculated=bool(context.get("feature_importance")),
+                        historical_accuracy=context.get("historical_accuracy", 0.0),
+                        trend_direction=context.get("trend_direction", ""),
+                        enrichment_latency_ms=max(0, enrichment_latency),
+                    )
+
+                # Build output
+                output = PredictionSynthesizerOutput(
+                    ensemble_prediction=result.get("ensemble_prediction"),
+                    individual_predictions=result.get("individual_predictions") or [],
+                    prediction_context=result.get("prediction_context"),
+                    prediction_summary=result.get("prediction_summary", ""),
+                    models_succeeded=result.get("models_succeeded", 0),
+                    models_failed=result.get("models_failed", 0),
+                    total_latency_ms=result.get("total_latency_ms", 0),
+                    timestamp=result.get("timestamp", datetime.now(timezone.utc).isoformat()),
+                    status=result.get("status", "failed"),
+                    errors=result.get("errors") or [],
+                    warnings=result.get("warnings") or [],
+                )
+
+                # Log synthesis complete
+                trace_ctx.log_synthesis_complete(
+                    status=output.status,
+                    success=output.status != "failed",
+                    total_duration_ms=output.total_latency_ms,
+                    point_estimate=ensemble.get("point_estimate"),
+                    confidence=ensemble.get("confidence"),
+                    model_agreement=ensemble.get("model_agreement"),
+                    models_succeeded=output.models_succeeded,
+                    models_failed=output.models_failed,
+                    prediction_summary=output.prediction_summary,
+                    errors=output.errors,
+                    warnings=output.warnings,
+                )
+        else:
+            # Execute without tracing
+            result = await graph.ainvoke(initial_state)
+
+            output = PredictionSynthesizerOutput(
+                ensemble_prediction=result.get("ensemble_prediction"),
+                individual_predictions=result.get("individual_predictions") or [],
+                prediction_context=result.get("prediction_context"),
+                prediction_summary=result.get("prediction_summary", ""),
+                models_succeeded=result.get("models_succeeded", 0),
+                models_failed=result.get("models_failed", 0),
+                total_latency_ms=result.get("total_latency_ms", 0),
+                timestamp=result.get("timestamp", datetime.now(timezone.utc).isoformat()),
+                status=result.get("status", "failed"),
+                errors=result.get("errors") or [],
+                warnings=result.get("warnings") or [],
+            )
 
         # Contribute to memory after successful prediction
         if self.enable_memory and self.memory_hooks and output.status != "failed":
