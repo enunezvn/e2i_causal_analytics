@@ -2,14 +2,14 @@
 
 ## Architecture Overview
 
-The E2I Causal Analytics platform uses an **18-agent, 6-tier architecture** with 100% KPI coverage. This document serves as the master index for all agent specialist files.
+The E2I Causal Analytics platform uses a **21-agent, 6-tier architecture** with 100% KPI coverage. This document serves as the master index for all agent specialist files.
 
-**V4 Changes**: Added Tier 0 (ML Foundation) with 7 new agents, 8 new database tables, and MLOps tool integrations.
+**V4 Changes**: Added Tier 0 (ML Foundation) with 8 agents (including cohort_constructor), 8 new database tables, and MLOps tool integrations.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                          E2I AGENT ARCHITECTURE V4                           │
-│                          18 Agents, 6 Tiers                                  │
+│                          21 Agents, 6 Tiers                                  │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
 │  TIER 0: ML FOUNDATION (NEW)                                                 │
@@ -79,19 +79,20 @@ The E2I Causal Analytics platform uses an **18-agent, 6-tier architecture** with
 
 | Tier | Name | Agents | Types | Primary Purpose |
 |------|------|--------|-------|-----------------|
-| 0 | ML Foundation | 7 | 6 Standard, 1 Hybrid | ML lifecycle, MLOps |
-| 1 | Orchestration | 1 | 1 Standard (Fast) | Routing, dispatch |
+| 0 | ML Foundation | 8 | 7 Standard, 1 Hybrid | ML lifecycle, MLOps |
+| 1 | Orchestration | 2 | 2 Standard (Fast) | Routing, dispatch, composition |
 | 2 | Causal Inference | 3 | 1 Hybrid, 2 Standard | Causal analytics |
-| 3 | Design & Monitoring | 3 | 1 Hybrid, 2 Standard | Experiments, health |
+| 3 | Design & Monitoring | 4 | 1 Hybrid, 3 Standard | Experiments, health |
 | 4 | ML Predictions | 2 | 2 Standard | Forecasting, optimization |
 | 5 | Self-Improvement | 2 | 2 Deep | Explanation, learning |
-| **Total** | | **18** | **13 Std, 3 Hybrid, 2 Deep** | |
+| **Total** | | **21** | **16 Std, 3 Hybrid, 2 Deep** | |
 
 ### Full Classification Matrix
 
 | Agent | Tier | Type | Model Tier | Latency | Critical Path |
 |-------|------|------|------------|---------|---------------|
 | **Scope Definer** | 0 | Standard | None | <5s | Yes (ML) |
+| **Cohort Constructor** | 0 | Standard | None | <120s | Yes (ML) |
 | **Data Preparer** | 0 | Standard | None | <60s | Yes (QC Gate) |
 | **Model Selector** | 0 | Standard | None | <120s | Yes (ML) |
 | **Model Trainer** | 0 | Standard | None | Variable | Yes (ML) |

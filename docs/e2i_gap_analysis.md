@@ -155,8 +155,8 @@ agent_viz_mapping:
 7. Health Score Agent
 8. Resource Optimizer Agent
 
-**Architecture Has 18 Agents (Missing from Dashboard):**
-- Tier 0: scope_definer, data_preparer, model_selector, model_trainer, feature_analyzer, model_deployer, observability_connector (7 agents)
+**Architecture Has 21 Agents (Missing from Dashboard):**
+- Tier 0: scope_definer, cohort_constructor, data_preparer, model_selector, model_trainer, feature_analyzer, model_deployer, observability_connector (8 agents)
 - Tier 5: explainer, feedback_learner (2 agents)
 - prediction_synthesizer (shown indirectly)
 

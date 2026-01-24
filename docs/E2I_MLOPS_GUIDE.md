@@ -23,7 +23,7 @@ A comprehensive guide to the Machine Learning Operations (MLOps) pipeline in E2I
 
 ## Overview
 
-The E2I MLOps pipeline is built on a **Tier 0 (ML Foundation) Agent Architecture** with 7 specialized agents that work together to ensure reproducible, validated, and production-ready machine learning models.
+The E2I MLOps pipeline is built on a **Tier 0 (ML Foundation) Agent Architecture** with 8 specialized agents that work together to ensure reproducible, validated, and production-ready machine learning models.
 
 ### Tier 0 Agents
 
