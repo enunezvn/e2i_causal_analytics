@@ -19,7 +19,7 @@ Usage:
         ...
 
     # For memory-heavy tests (dspy, econml, etc.):
-    @pytest.mark.xdist_group(name="heavy_ml")
+    @pytest.mark.xdist_group(name="dspy_integration")
     def test_heavy_ml_operation():
         import dspy  # Heavy import grouped on single worker
         ...

@@ -26,8 +26,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-# Mark all tests in this module as integration tests
-pytestmark = pytest.mark.integration
+# Mark all tests in this module as integration tests and group DSPy tests together
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.xdist_group(name="dspy_integration"),
+]
 
 
 # =============================================================================
