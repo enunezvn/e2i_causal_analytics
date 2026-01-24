@@ -1,8 +1,9 @@
 # RAGAS-GEPA-Opik Integration Fix Plan
 
 **Created**: 2026-01-24
-**Status**: In Progress
+**Status**: Complete
 **Branch**: `claude/check-ragas-opik-integration-3ryR7`
+**Commit**: `8140eb2`
 
 ---
 
@@ -292,7 +293,7 @@ make test-fast
 | Phase 3 | ✅ Complete | Fixed create_ragas_metric() call, added _get_phase_weights() |
 | Phase 4 | ✅ Complete | Added run_id parameter for Opik tracing |
 | Phase 5 | ✅ Complete | Added TestRAGASGEPAOpikIntegration class |
-| Phase 6 | 🔄 In Progress | Running tests, will commit and push |
+| Phase 6 | ✅ Complete | Committed (8140eb2) and pushed |
 
 ---
 
