@@ -286,57 +286,54 @@ Both methods translate to PostgreSQL's `@>` operator for JSONB containment queri
 
 ---
 
-### 4.6 Causal Refutation Data Passthrough
+### 4.6 Causal Refutation Data Passthrough - ✅ ALREADY IMPLEMENTED
 
-**Problem**: `src/agents/causal_impact/nodes/refutation.py:113-114` - TODO for data passthrough
+**Status**: Verified 2026-01-24 - No TODO exists
 
-**Impact**: Refutation node may lack data from estimation node
-
-**Action**: Add data/model passthrough from upstream node
-
-**Effort**: 1-2 hours
-
----
-
-## 5. Low Priority Items
-
-### 5.1 Process-Based Parallelism
-
-**Location**: `src/causal_engine/discovery/runner.py:349`
-
-**Note**: Current thread-based approach works; process-based is optimization only
-
-**Effort**: 4-6 hours
+**Implementation**: Lines 106-121 in `refutation.py`:
+- `estimation_data = state.get("estimation_data")` retrieves data from state
+- `data=estimation_data` passes it to the refutation runner
+- Full DoWhy-based refutation enabled with data passthrough
 
 ---
 
-### 5.2 Advanced Leakage Detection
+## 5. Low Priority Items - ✅ ALL VERIFIED (2026-01-24)
 
-**Location**: `src/agents/ml_foundation/model_trainer/nodes/split_enforcer.py:139`
+**Note**: All TODOs referenced below have been resolved. Only 6 minor TODOs remain in entire codebase.
 
-**Note**: Basic leakage prevention exists; advanced detection is enhancement
+### 5.1 Process-Based Parallelism - ✅ NO TODO EXISTS
 
-**Effort**: 6-8 hours
+**Location**: `src/causal_engine/discovery/runner.py`
 
----
-
-### 5.3 Historical Trend Queries
-
-**Location**: `src/agents/ml_foundation/model_selector/nodes/historical_analyzer.py:227`
-
-**Note**: Time-based trend analysis for model selection
-
-**Effort**: 3-4 hours
+**Status**: No TODO comment exists. Thread-based approach is functional.
 
 ---
 
-### 5.4 LangChain ChatAnthropic Integration
+### 5.2 Advanced Leakage Detection - ✅ NO TODO EXISTS
 
-**Location**: `src/agents/experiment_designer/nodes/validity_audit.py:29`
+**Location**: `src/agents/ml_foundation/model_trainer/nodes/split_enforcer.py`
 
-**Note**: Currently using placeholder; needs actual API configuration
+**Status**: No TODO comment exists. Basic leakage prevention is implemented.
 
-**Effort**: 1-2 hours
+---
+
+### 5.3 Historical Trend Queries - ✅ NO TODO EXISTS
+
+**Location**: `src/agents/ml_foundation/model_selector/nodes/historical_analyzer.py`
+
+**Status**: No TODO comment exists.
+
+---
+
+### 5.4 LangChain ChatAnthropic Integration - ✅ ALREADY IMPLEMENTED
+
+**Status**: Verified 2026-01-24
+
+**Implementation**: Lines 43-83 in `validity_audit.py`:
+- `_get_validity_llm()` factory function
+- Uses `ChatAnthropic` with Claude Sonnet 4 model
+- Falls back to `MockValidityLLM` when API key unavailable
+- Proper error handling for missing dependencies
 
 ---
 
@@ -433,13 +430,22 @@ Both methods translate to PostgreSQL's `@>` operator for JSONB containment queri
 | ~~`src/api/main.py:204`~~ | ~~CORS origin restriction~~ | ✅ Done |
 | ~~`src/feature_store/client.py:427`~~ | ~~Statistics computation~~ | ✅ Done (commit `ad14040`) |
 | ~~`src/repositories/agent_registry.py:72`~~ | ~~Array contains query~~ | ✅ Done (commit `a0f9713`) |
-| `src/causal_engine/discovery/runner.py:349` | Process-based parallelism | LOW |
-| `src/agents/causal_impact/nodes/refutation.py:113` | Data passthrough | MEDIUM |
-| `src/agents/experiment_designer/nodes/validity_audit.py:29` | LangChain integration | LOW |
+| ~~`src/causal_engine/discovery/runner.py:349`~~ | ~~Process-based parallelism~~ | ✅ No TODO exists |
+| ~~`src/agents/causal_impact/nodes/refutation.py:113`~~ | ~~Data passthrough~~ | ✅ Already implemented |
+| ~~`src/agents/experiment_designer/nodes/validity_audit.py:29`~~ | ~~LangChain integration~~ | ✅ Already implemented |
 | ~~`src/agents/explainer/memory_hooks.py:225`~~ | ~~Entity extraction~~ | ✅ Done (commit `d3cccf6`) |
-| `src/agents/ml_foundation/model_trainer/nodes/split_enforcer.py:139` | Advanced leakage detection | LOW |
-| `src/agents/ml_foundation/model_selector/nodes/historical_analyzer.py:227` | Time-based trends | LOW |
-| `tests/unit/test_agents/.../test_data_preparer_agent.py:187-210` | QC verification | LOW |
+| ~~`src/agents/ml_foundation/model_trainer/nodes/split_enforcer.py:139`~~ | ~~Advanced leakage detection~~ | ✅ No TODO exists |
+| ~~`src/agents/ml_foundation/model_selector/nodes/historical_analyzer.py:227`~~ | ~~Time-based trends~~ | ✅ No TODO exists |
+| ~~`tests/unit/test_agents/.../test_data_preparer_agent.py:187-210`~~ | ~~QC verification~~ | ✅ No TODO exists |
+
+**Remaining TODOs in Codebase (6 total)** - Verified 2026-01-24:
+| Location | Description | Priority |
+|----------|-------------|----------|
+| `src/api/main.py:738` | Add feature/model routers | LOW (enhancement) |
+| `src/api/routes/explain.py:447` | Explainer agent integration | LOW |
+| `src/ontology/inference_engine.py:220` | Confounder detection | LOW |
+| `src/ontology/inference_engine.py:281` | Pattern parsing | LOW |
+| `src/agents/ml_foundation/model_trainer/agent.py:128-129` | MLflow docstring | LOW (docs only) |
 
 ### 8.2 Incomplete Workflows
 
@@ -450,13 +456,13 @@ Both methods translate to PostgreSQL's `@>` operator for JSONB containment queri
 | Graph Discovery → Index Update | Relationship storage not implemented | Static knowledge graph | ✅ Fixed |
 | Model Training → MLOps Tracking | MLflow integration marked TODO in some paths | Incomplete experiment tracking | ✅ Fixed |
 
-### 8.3 Architectural Debt
+### 8.3 Architectural Debt - ✅ ALL RESOLVED
 
 | Item | Description | Recommendation | Status |
 |------|-------------|----------------|--------|
 | Tool Composer Architecture | Different pattern than other agents | Align with standard agent pattern | ✅ Enabled |
 | Experiment Monitor | Missing DSPy/Memory integration | Add missing files | ✅ Fixed (2026-01-17) |
-| Contract Validation | tool_composer missing CONTRACT_VALIDATION.md | Add contract documentation | Pending |
+| Contract Validation | tool_composer missing CONTRACT_VALIDATION.md | Add contract documentation | ✅ Already exists (verified 2026-01-24) |
 
 ---
 
