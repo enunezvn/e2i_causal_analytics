@@ -325,25 +325,37 @@ class FalkorDBSemanticMemory:
     # NETWORK TRAVERSAL
     # ========================================================================
 
-    def get_patient_network(self, patient_id: str, max_depth: int = 2) -> Dict[str, Any]:
+    def get_patient_network(
+        self,
+        patient_id: str,
+        max_depth: int = 2,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
         """
-        Get the relationship network around a patient.
+        Get the relationship network around a patient with pagination.
 
         Args:
             patient_id: Patient entity ID
             max_depth: Maximum traversal depth (1-5, clamped for safety)
+            limit: Maximum nodes to return (default 100, max 500)
+            offset: Pagination offset for results
 
         Returns:
-            Dict with patient_id, hcps, treatments, triggers, causal_paths
+            Dict with patient_id, hcps, treatments, triggers, causal_paths, pagination
         """
-        # Sanitize max_depth to prevent injection and limit traversal
+        # Sanitize inputs to prevent injection and limit resource usage
         safe_depth = max(1, min(5, int(max_depth)))
+        safe_limit = max(1, min(500, int(limit)))
+        safe_offset = max(0, int(offset))
 
         # FalkorDB doesn't support parameterized variable-length bounds,
         # so we use string formatting with the sanitized value
         query = f"""
         MATCH (p:Patient {{id: $patient_id}})-[*1..{safe_depth}]-(connected)
         RETURN DISTINCT connected
+        SKIP {safe_offset}
+        LIMIT {safe_limit}
         """
 
         result = self.graph.query(query, {"patient_id": patient_id})
@@ -377,26 +389,47 @@ class FalkorDBSemanticMemory:
             elif "Brand" in labels:
                 network["brands"].append(node_data)
 
+        # Add pagination metadata
+        result_count = len(result.result_set)
+        network["pagination"] = {
+            "offset": safe_offset,
+            "limit": safe_limit,
+            "returned": result_count,
+            "has_more": result_count == safe_limit,
+        }
+
         return network
 
-    def get_hcp_influence_network(self, hcp_id: str, max_depth: int = 2) -> Dict[str, Any]:
+    def get_hcp_influence_network(
+        self,
+        hcp_id: str,
+        max_depth: int = 2,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
         """
-        Get the influence network around an HCP.
+        Get the influence network around an HCP with pagination.
 
         Args:
             hcp_id: HCP entity ID
             max_depth: Maximum traversal depth (1-5, clamped for safety)
+            limit: Maximum nodes to return (default 100, max 500)
+            offset: Pagination offset for results
 
         Returns:
-            Dict with hcp_id, influenced_hcps, patients, brands_prescribed
+            Dict with hcp_id, influenced_hcps, patients, brands_prescribed, pagination
         """
-        # Sanitize max_depth to prevent injection and limit traversal
+        # Sanitize inputs to prevent injection and limit resource usage
         safe_depth = max(1, min(5, int(max_depth)))
+        safe_limit = max(1, min(500, int(limit)))
+        safe_offset = max(0, int(offset))
 
         # FalkorDB doesn't support parameterized variable-length bounds
         query = f"""
         MATCH (h:HCP {{id: $hcp_id}})-[*1..{safe_depth}]-(connected)
         RETURN DISTINCT connected
+        SKIP {safe_offset}
+        LIMIT {safe_limit}
         """
 
         result = self.graph.query(query, {"hcp_id": hcp_id})
@@ -419,6 +452,15 @@ class FalkorDBSemanticMemory:
             elif "Brand" in labels:
                 network["brands_prescribed"].append(node_data)
 
+        # Add pagination metadata
+        result_count = len(result.result_set)
+        network["pagination"] = {
+            "offset": safe_offset,
+            "limit": safe_limit,
+            "returned": result_count,
+            "has_more": result_count == safe_limit,
+        }
+
         return network
 
     # ========================================================================
@@ -426,22 +468,27 @@ class FalkorDBSemanticMemory:
     # ========================================================================
 
     def traverse_causal_chain(
-        self, start_entity_id: str, max_depth: int = 3
+        self,
+        start_entity_id: str,
+        max_depth: int = 3,
+        limit: int = 50,
     ) -> List[Dict[str, Any]]:
         """
-        Traverse causal relationships from a starting entity.
+        Traverse causal relationships from a starting entity with result limit.
 
         Follows CAUSES and IMPACTS relationships.
 
         Args:
             start_entity_id: Starting entity ID
             max_depth: Maximum chain length (1-5, clamped for safety)
+            limit: Maximum number of chains to return (default 50, max 200)
 
         Returns:
-            List of causal chains with nodes and relationships
+            List of causal chains with nodes, relationships, and metadata
         """
-        # Sanitize max_depth to prevent injection and limit traversal
+        # Sanitize inputs to prevent injection and limit resource usage
         safe_depth = max(1, min(5, int(max_depth)))
+        safe_limit = max(1, min(200, int(limit)))
 
         # FalkorDB doesn't support parameterized variable-length bounds
         query = f"""
@@ -449,6 +496,7 @@ class FalkorDBSemanticMemory:
         RETURN
             [n IN nodes(path) | {{id: n.id, type: labels(n)[0]}}] as nodes,
             [r IN relationships(path) | {{type: type(r), conf: r.confidence}}] as rels
+        LIMIT {safe_limit}
         """
 
         result = self.graph.query(query, {"start_id": start_entity_id})
@@ -460,6 +508,79 @@ class FalkorDBSemanticMemory:
             )
 
         return chains
+
+    # ========================================================================
+    # NETWORK COUNT METHODS (for pagination)
+    # ========================================================================
+
+    def count_patient_network(self, patient_id: str, max_depth: int = 2) -> int:
+        """
+        Count total nodes in patient network.
+
+        Used for pagination to determine total pages.
+
+        Args:
+            patient_id: Patient entity ID
+            max_depth: Maximum traversal depth (1-5)
+
+        Returns:
+            Total count of connected nodes
+        """
+        safe_depth = max(1, min(5, int(max_depth)))
+
+        query = f"""
+        MATCH (p:Patient {{id: $patient_id}})-[*1..{safe_depth}]-(connected)
+        RETURN count(DISTINCT connected) as total
+        """
+
+        result = self.graph.query(query, {"patient_id": patient_id})
+        return result.result_set[0][0] if result.result_set else 0
+
+    def count_hcp_influence_network(self, hcp_id: str, max_depth: int = 2) -> int:
+        """
+        Count total nodes in HCP influence network.
+
+        Used for pagination to determine total pages.
+
+        Args:
+            hcp_id: HCP entity ID
+            max_depth: Maximum traversal depth (1-5)
+
+        Returns:
+            Total count of connected nodes
+        """
+        safe_depth = max(1, min(5, int(max_depth)))
+
+        query = f"""
+        MATCH (h:HCP {{id: $hcp_id}})-[*1..{safe_depth}]-(connected)
+        RETURN count(DISTINCT connected) as total
+        """
+
+        result = self.graph.query(query, {"hcp_id": hcp_id})
+        return result.result_set[0][0] if result.result_set else 0
+
+    def count_causal_chains(self, start_entity_id: str, max_depth: int = 3) -> int:
+        """
+        Count total causal chains from a starting entity.
+
+        Used to understand the size of the causal graph before traversal.
+
+        Args:
+            start_entity_id: Starting entity ID
+            max_depth: Maximum chain length (1-5)
+
+        Returns:
+            Total count of causal chains
+        """
+        safe_depth = max(1, min(5, int(max_depth)))
+
+        query = f"""
+        MATCH path = (s {{id: $start_id}})-[:CAUSES|IMPACTS*1..{safe_depth}]->(t)
+        RETURN count(path) as total
+        """
+
+        result = self.graph.query(query, {"start_id": start_entity_id})
+        return result.result_set[0][0] if result.result_set else 0
 
     def find_causal_paths_for_kpi(
         self, kpi_name: str, min_confidence: float = 0.5
