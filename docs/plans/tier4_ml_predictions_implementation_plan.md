@@ -233,42 +233,53 @@ This plan addresses the pending items from the Tier 4 ML Predictions agents eval
 
 ---
 
-## Phase 5: Resource Optimizer MILP Enhancement (Optional)
+## Phase 5: Resource Optimizer MILP Enhancement ✅ COMPLETE
 
 **Goal**: Replace MILP fallback with proper mixed-integer solver.
 
-**Files to Create/Modify**:
-- `src/agents/resource_optimizer/nodes/optimizer.py` (modify)
-- `requirements.txt` (add pulp or ortools)
-- `tests/unit/agents/test_resource_optimizer/test_optimizer.py` (extend)
+**Files Created/Modified**:
+- `src/agents/resource_optimizer/state.py` (modified - MILP extensions)
+- `src/agents/resource_optimizer/nodes/problem_formulator.py` (modified - MILP formulation)
+- `src/agents/resource_optimizer/nodes/optimizer.py` (modified - PuLP MILP solver)
+- `tests/unit/test_agents/test_resource_optimizer/conftest.py` (extended - MILP fixtures)
+- `tests/unit/test_agents/test_resource_optimizer/test_optimizer.py` (extended - MILP tests)
+- `tests/unit/test_agents/test_resource_optimizer/test_problem_formulator.py` (extended - MILP tests)
 
 ### Tasks
 
-- [ ] **5.1** Evaluate solver options
-  - [ ] PuLP (lightweight, CBC backend)
-  - [ ] OR-Tools (Google, more features)
-  - [ ] Choose based on dependency footprint
+- [x] **5.1** Evaluate solver options
+  - [x] PuLP (lightweight, CBC backend) - SELECTED
+  - [x] OR-Tools (Google, more features) - Not needed, PuLP sufficient
+  - [x] Decision: PuLP chosen for lightweight footprint and pure Python
 
-- [ ] **5.2** Implement MILP solver
-  - [ ] Add `_solve_milp_proper()` method
-  - [ ] Handle integer variable constraints
-  - [ ] Support binary allocation decisions
+- [x] **5.2** Implement MILP solver
+  - [x] Implemented `_solve_milp()` method with PuLP
+  - [x] Handle integer variable constraints via `cat="Integer"`
+  - [x] Support binary allocation decisions via `cat="Binary"`
 
-- [ ] **5.3** Add discrete allocation support
-  - [ ] Integer allocation amounts
-  - [ ] Binary include/exclude decisions
-  - [ ] Cardinality constraints (max N entities)
+- [x] **5.3** Add discrete allocation support
+  - [x] Integer allocation amounts (`is_integer` flag)
+  - [x] Binary include/exclude decisions (`is_binary` flag)
+  - [x] Fixed costs for binary selection (`fixed_cost` field)
+  - [x] Cardinality constraints (`min_entities`, `max_entities`)
+  - [x] Big-M constraints for linking allocation to selection
+  - [x] Automatic MILP solver selection when integer/cardinality detected
 
-- [ ] **5.4** Write tests
-  - [ ] Test integer solutions
-  - [ ] Test binary decisions
-  - [ ] Test cardinality constraints
+- [x] **5.4** Write tests
+  - [x] TestMILPInteger (3 tests) - Integer variable constraints
+  - [x] TestMILPBinary (3 tests) - Binary selection decisions
+  - [x] TestMILPCardinality (2 tests) - Max entities constraints
+  - [x] TestMILPSolverDirect (4 tests) - Direct solver method tests
+  - [x] TestProblemFormulatorMILP (7 tests) - Problem formulation tests
+  - [x] 19 new MILP tests total
 
 ### Acceptance Criteria
-- [ ] True MILP solver working
-- [ ] Discrete allocation supported
-- [ ] Performance within 20s target
-- [ ] All tests passing
+- [x] True MILP solver working (PuLP with CBC backend)
+- [x] Discrete allocation supported (integer, binary, cardinality)
+- [x] Performance within 20s target
+- [x] All tests passing
+
+### Completion Date: 2026-01-24
 
 ---
 
@@ -334,10 +345,10 @@ curl -s localhost:5000/health
 - Notes: Created opik_tracer.py (475 lines) with PredictionSynthesizerOpikTracer class, SynthesisTraceContext async context manager, NodeSpanContext. Added enable_opik flag and tracer property to agent.py. Wrapped synthesize() method with full tracing. Created comprehensive test suite.
 
 ### Phase 5: Resource Optimizer MILP Enhancement
-- Start Date: ___________
-- Completion Date: ___________
-- Tests Passing: ___/___
-- Notes:
+- Start Date: 2026-01-24
+- Completion Date: 2026-01-24
+- Tests Passing: All MILP tests (19 new) + existing 62 core tests
+- Notes: Extended state.py with MILP fields (is_integer, is_binary, fixed_cost, allocation_unit for AllocationTarget; min_entities, max_entities for Constraint). Updated problem_formulator.py to detect integer/binary variables and cardinality constraints, auto-select MILP solver. Implemented proper _solve_milp() in optimizer.py using PuLP with CBC backend. Added Big-M constraints for cardinality. Created comprehensive test suite (19 MILP tests).
 
 ---
 
@@ -354,7 +365,8 @@ curl -s localhost:5000/health
 - `supabase` - Episodic/procedural memory
 - `opik` - Distributed tracing
 - `dspy-ai` - Training signals
-- `scipy` - Optimization solvers
+- `scipy` - Linear/nonlinear optimization solvers
+- `pulp` - MILP solver (CBC backend)
 
 ---
 

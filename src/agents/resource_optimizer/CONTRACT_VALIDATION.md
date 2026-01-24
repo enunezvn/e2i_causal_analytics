@@ -215,16 +215,16 @@ class ScenarioResult(TypedDict):
 | Capability | Requirement | Implemented | Status |
 |------------|-------------|-------------|--------|
 | Linear solver | scipy.linprog (HiGHS) | Lines 91-139 | ✅ |
-| MILP solver | Fallback to linear | Lines 141-144 | ✅ |
-| Nonlinear solver | scipy.minimize (SLSQP) | Lines 146-193 | ✅ |
-| Proportional fallback | Simple allocation | Lines 195-233 | ✅ |
-| Allocation building | AllocationResult list | Lines 235-264 | ✅ |
-| Change calculation | Current vs optimized | Lines 247-256 | ✅ |
-| Impact calculation | Response × allocation | Line 257 | ✅ |
+| MILP solver | PuLP with CBC | Lines 141-250 | ✅ |
+| Nonlinear solver | scipy.minimize (SLSQP) | Lines 252-299 | ✅ |
+| Proportional fallback | Simple allocation | Lines 301-339 | ✅ |
+| Allocation building | AllocationResult list | Lines 341-370 | ✅ |
+| Change calculation | Current vs optimized | Lines 353-362 | ✅ |
+| Impact calculation | Response × allocation | Line 363 | ✅ |
 
 **Solver Types**:
 - `linear`: scipy.optimize.linprog with HiGHS method
-- `milp`: Falls back to linear (future: PuLP/OR-Tools)
+- `milp`: PuLP with CBC solver (integer, binary, cardinality constraints)
 - `nonlinear`: scipy.optimize.minimize with SLSQP method
 - Proportional fallback if scipy unavailable
 
@@ -396,12 +396,12 @@ def get_handoff(self, output: ResourceOptimizerOutput) -> Dict[str, Any]:
 
 | File | Tests | Status |
 |------|-------|--------|
-| `test_problem_formulator.py` | 13 tests | ✅ Passing |
-| `test_optimizer.py` | 13 tests | ✅ Passing |
+| `test_problem_formulator.py` | 20 tests | ✅ Passing |
+| `test_optimizer.py` | 25 tests | ✅ Passing |
 | `test_scenario_analyzer.py` | 9 tests | ✅ Passing |
 | `test_impact_projector.py` | 11 tests | ✅ Passing |
 | `test_integration.py` | 16 tests | ✅ Passing |
-| **Total** | **62 tests** | ✅ All passing |
+| **Total** | **81 tests** | ✅ All passing |
 
 ### 7.2 Test Categories
 
@@ -560,11 +560,12 @@ All nodes implement structured logging:
 - [x] All state fields from contract implemented
 - [x] All 4 nodes implemented per specialist
 - [x] Both graph variants (full, simple) implemented
-- [x] All 3 solver types implemented (linear, MILP fallback, nonlinear)
+- [x] All 3 solver types implemented (linear, MILP with PuLP, nonlinear)
+- [x] MILP integer/binary/cardinality constraints
 - [x] All 4 objectives implemented
 - [x] Error handling with state accumulation
 - [x] Latency tracking across all phases
-- [x] 62 tests passing
+- [x] 81 tests passing (core + memory hooks + MILP)
 - [x] Handoff protocol matches contract
 - [x] <20s latency target achievable
 
@@ -576,8 +577,8 @@ This document certifies that the **Resource Optimizer Agent** implementation at 
 
 **Validated By**: Claude Code Audit
 **Validation Date**: 2026-01-24
-**Test Execution**: 62/62 tests passing + memory hooks tests
-**Contract Compliance**: 100% (Memory hooks implemented)
+**Test Execution**: 81/81 tests passing (core + memory hooks + MILP)
+**Contract Compliance**: 100% (Memory hooks + MILP enhancement implemented)
 
 ---
 
@@ -646,3 +647,113 @@ class ResourceOptimizerMemoryHooks:
 3. **Episodic Memory (Supabase)**: Store all completed optimizations for similarity search
 
 **DSPy Role**: Recipient (consumes optimized prompts, no signal generation)
+
+---
+
+## 16. MILP Enhancement Contract (COMPLETE)
+
+**Reference**: Phase 5 of Tier 4 ML Predictions Implementation Plan
+
+### 16.1 Problem Formulation Extensions
+
+**File**: `nodes/problem_formulator.py` (updated)
+
+| Feature | Implementation | Status |
+|---------|----------------|--------|
+| Integer variable detection | `is_integer` flag in AllocationTarget | ✅ COMPLETE |
+| Binary variable detection | `is_binary` flag in AllocationTarget | ✅ COMPLETE |
+| Fixed cost support | `fixed_cost` field for binary selection | ✅ COMPLETE |
+| Allocation units | `allocation_unit` for discrete steps | ✅ COMPLETE |
+| Cardinality constraints | `min_entities`, `max_entities` | ✅ COMPLETE |
+| Automatic solver selection | MILP auto-selected for integer/cardinality | ✅ COMPLETE |
+
+### 16.2 AllocationTarget MILP Extensions
+
+**File**: `state.py:14-27`
+
+```python
+class AllocationTarget(TypedDict, total=False):
+    # Required fields
+    entity_id: str
+    entity_type: str
+    current_allocation: float
+    expected_response: float
+
+    # Bounds
+    min_allocation: Optional[float]
+    max_allocation: Optional[float]
+
+    # MILP extensions
+    is_integer: bool      # Allocation must be integer (e.g., rep visits)
+    is_binary: bool       # Include/exclude decision (0/1)
+    allocation_unit: Optional[float]  # Discrete step size
+    fixed_cost: Optional[float]       # Fixed cost if selected
+```
+
+### 16.3 Constraint MILP Extensions
+
+**File**: `state.py:30-41`
+
+```python
+class Constraint(TypedDict, total=False):
+    # Required fields
+    constraint_type: str  # "budget", "cardinality", etc.
+    value: float
+
+    # Optional fields
+    scope: str
+
+    # MILP extensions
+    min_entities: Optional[int]   # Min entities to select
+    max_entities: Optional[int]   # Max entities to select
+    entity_ids: Optional[List[str]]  # Specific entities for constraint
+```
+
+### 16.4 MILP Solver Implementation
+
+**File**: `nodes/optimizer.py:141-250` (updated)
+
+| Feature | Requirement | Implementation | Status |
+|---------|-------------|----------------|--------|
+| PuLP integration | Use lightweight CBC solver | `from pulp import *` | ✅ COMPLETE |
+| Continuous variables | Standard LP | `LpVariable(..., cat="Continuous")` | ✅ COMPLETE |
+| Integer variables | Rep visits, call counts | `LpVariable(..., cat="Integer")` | ✅ COMPLETE |
+| Binary variables | Project selection | `LpVariable(..., cat="Binary")` | ✅ COMPLETE |
+| Big-M constraints | Link allocation to selection | `x[i] <= M * y[i]` | ✅ COMPLETE |
+| Cardinality constraints | Max entities to select | `sum(y[i]) <= max_entities` | ✅ COMPLETE |
+| Fixed costs | Selection costs | Subtracted from objective | ✅ COMPLETE |
+| Graceful degradation | Fallback to linear if PuLP unavailable | Lines 145-147 | ✅ COMPLETE |
+
+### 16.5 Use Cases Supported
+
+| Use Case | Variables | Constraints | Example |
+|----------|-----------|-------------|---------|
+| Budget allocation | Continuous | Budget | Allocate $150K across territories |
+| Rep visit planning | Integer | Call budget | Allocate 20 visits across 10 HCPs |
+| Project selection | Binary | Max projects | Select 3 of 10 projects to fund |
+| Territory selection | Continuous + Binary | Budget + Cardinality | Allocate to max 5 territories |
+| Mixed planning | Continuous + Integer | Budget | Budget + visits across entities |
+
+### 16.6 Test Coverage
+
+| Test Class | Tests | Description |
+|------------|-------|-------------|
+| `TestMILPInteger` | 3 | Integer variable constraints |
+| `TestMILPBinary` | 3 | Binary selection decisions |
+| `TestMILPCardinality` | 2 | Max entities constraints |
+| `TestMILPSolverDirect` | 4 | Direct solver method tests |
+| `TestProblemFormulatorMILP` | 7 | Problem formulation tests |
+| **Total** | **19 tests** | MILP functionality |
+
+### 16.7 MILP Solver Characteristics
+
+| Characteristic | Value | Notes |
+|----------------|-------|-------|
+| Solver | PuLP with CBC | COIN-OR Branch and Cut |
+| Time limit | Configurable | `time_limit_seconds` in state |
+| Gap tolerance | Configurable | `gap_tolerance` in state |
+| Fallback | Linear solver | If PuLP unavailable |
+| Output | Rounded integers | Binary/integer values rounded |
+
+**Validation Date**: 2026-01-24
+**Status**: ✅ COMPLETE
