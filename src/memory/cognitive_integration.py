@@ -10,15 +10,18 @@ This module provides:
 2. Memory integration with production backends
 3. Session management via Redis working memory
 4. Learning signal routing to Feedback Learner
+5. ReflectorTaskManager - Async task tracking with timeout and monitoring
 
 Author: E2I Causal Analytics Team
-Version: 1.0.0
+Version: 1.1.0
 """
 
 import asyncio
 import logging
+import os
+import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Coroutine, Dict, List, Optional, Set
 
 from pydantic import BaseModel, Field
 
@@ -82,6 +85,194 @@ class PhaseResult(BaseModel):
 
 
 # =============================================================================
+# REFLECTOR TASK MANAGER
+# =============================================================================
+
+
+class ReflectorTaskManager:
+    """
+    Manages async reflector tasks with timeout, error tracking, and graceful shutdown.
+
+    The reflector phase runs asynchronously after the response is sent to avoid
+    blocking user responses. This manager provides:
+
+    1. Task tracking - Prevents garbage collection of pending tasks
+    2. Timeout handling - Prevents runaway tasks from consuming resources
+    3. Error monitoring - Logs failures without affecting user responses
+    4. Graceful shutdown - Waits for pending tasks during service shutdown
+    5. Statistics - Exposes success/failure counts for observability
+
+    Configuration via environment:
+        E2I_REFLECTOR_TIMEOUT: Timeout in seconds (default: 30)
+
+    Usage:
+        manager = ReflectorTaskManager()
+        await manager.submit(self._run_reflector(...), cycle_id="abc123")
+
+        # At shutdown
+        await manager.wait_all(timeout=60.0)
+    """
+
+    def __init__(self, timeout_seconds: Optional[float] = None):
+        """
+        Initialize the reflector task manager.
+
+        Args:
+            timeout_seconds: Timeout for each reflector task.
+                            Defaults to E2I_REFLECTOR_TIMEOUT env var or 30.0.
+        """
+        if timeout_seconds is None:
+            timeout_seconds = float(os.environ.get("E2I_REFLECTOR_TIMEOUT", "30.0"))
+
+        self._timeout = timeout_seconds
+        self._pending_tasks: Set[asyncio.Task] = set()
+        self._success_count = 0
+        self._failed_count = 0
+        self._timeout_count = 0
+        self._lock = asyncio.Lock()
+
+    async def submit(
+        self,
+        coro: Coroutine[Any, Any, None],
+        cycle_id: str,
+    ) -> None:
+        """
+        Submit a reflector coroutine for async execution with tracking.
+
+        The coroutine will be wrapped with:
+        - Timeout handling (default 30s)
+        - Error logging
+        - Automatic cleanup on completion
+
+        Args:
+            coro: The reflector coroutine to execute
+            cycle_id: Identifier for logging and tracking
+        """
+
+        async def wrapped_reflector():
+            """Wrapper that handles timeout, errors, and cleanup."""
+            try:
+                await asyncio.wait_for(coro, timeout=self._timeout)
+
+                async with self._lock:
+                    self._success_count += 1
+
+                logger.debug(f"Reflector completed successfully for cycle {cycle_id}")
+
+            except asyncio.TimeoutError:
+                async with self._lock:
+                    self._timeout_count += 1
+                    self._failed_count += 1
+
+                logger.warning(
+                    f"Reflector timeout after {self._timeout}s for cycle {cycle_id}"
+                )
+
+            except asyncio.CancelledError:
+                logger.debug(f"Reflector cancelled for cycle {cycle_id}")
+                raise  # Re-raise to properly handle cancellation
+
+            except Exception as e:
+                async with self._lock:
+                    self._failed_count += 1
+
+                logger.error(
+                    f"Reflector failed for cycle {cycle_id}: {e}",
+                    exc_info=True,
+                )
+
+            finally:
+                # Remove from pending set
+                current_task = asyncio.current_task()
+                async with self._lock:
+                    self._pending_tasks.discard(current_task)
+
+        # Create and track the task
+        task = asyncio.create_task(wrapped_reflector())
+
+        async with self._lock:
+            self._pending_tasks.add(task)
+
+        # Add done callback as backup cleanup (in case finally doesn't run)
+        def cleanup_callback(t: asyncio.Task):
+            # Use non-blocking discard since we can't await in callback
+            self._pending_tasks.discard(t)
+
+        task.add_done_callback(cleanup_callback)
+
+    async def wait_all(self, timeout: float = 60.0) -> Dict[str, int]:
+        """
+        Wait for all pending reflector tasks to complete.
+
+        Used during graceful shutdown to ensure learning signals are persisted.
+
+        Args:
+            timeout: Maximum time to wait for all tasks
+
+        Returns:
+            Dict with counts of completed, cancelled, and still pending tasks
+        """
+        async with self._lock:
+            pending = set(self._pending_tasks)
+
+        if not pending:
+            return {"completed": 0, "cancelled": 0, "pending": 0}
+
+        logger.info(f"Waiting for {len(pending)} pending reflector tasks...")
+
+        done, still_pending = await asyncio.wait(
+            pending,
+            timeout=timeout,
+            return_when=asyncio.ALL_COMPLETED,
+        )
+
+        # Cancel any tasks that didn't complete
+        cancelled_count = 0
+        for task in still_pending:
+            task.cancel()
+            cancelled_count += 1
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        result = {
+            "completed": len(done),
+            "cancelled": cancelled_count,
+            "pending": 0,
+        }
+
+        logger.info(
+            f"Reflector shutdown complete: {result['completed']} completed, "
+            f"{result['cancelled']} cancelled"
+        )
+
+        return result
+
+    @property
+    def pending_count(self) -> int:
+        """Number of currently pending reflector tasks."""
+        return len(self._pending_tasks)
+
+    @property
+    def stats(self) -> Dict[str, Any]:
+        """
+        Get reflector task statistics.
+
+        Returns:
+            Dict with pending, succeeded, failed, and timeout counts
+        """
+        return {
+            "pending": len(self._pending_tasks),
+            "succeeded": self._success_count,
+            "failed": self._failed_count,
+            "timeouts": self._timeout_count,
+            "total_processed": self._success_count + self._failed_count,
+            "timeout_seconds": self._timeout,
+        }
+
+
+# =============================================================================
 # COGNITIVE SERVICE
 # =============================================================================
 
@@ -95,11 +286,13 @@ class CognitiveService:
     - Episodic memory (Supabase) for historical retrieval
     - Procedural memory for learned patterns
     - Semantic memory (FalkorDB) for graph traversal
+    - ReflectorTaskManager for async learning task management
     """
 
     def __init__(self):
         """Initialize the cognitive service."""
         self._working_memory: Optional[RedisWorkingMemory] = None
+        self._reflector_manager = ReflectorTaskManager()
 
     async def get_working_memory(self) -> RedisWorkingMemory:
         """Get or create working memory instance."""
@@ -197,9 +390,9 @@ class CognitiveService:
 
             phases_completed.append("agent_complete")
 
-            # === PHASE 4: REFLECTOR (async) ===
-            # Run reflector in background to not block response
-            asyncio.create_task(
+            # === PHASE 4: REFLECTOR (async with tracking) ===
+            # Run reflector in background with timeout and error tracking
+            await self._reflector_manager.submit(
                 self._run_reflector(
                     session_id=session_id,
                     cycle_id=cycle_id,
@@ -209,7 +402,8 @@ class CognitiveService:
                     confidence=phase3_result.get("confidence", 0.5),
                     evidence=phase2_result.get("evidence", []),
                     agent_used=phase3_result.get("agent_used", "orchestrator"),
-                )
+                ),
+                cycle_id=cycle_id,
             )
             phases_completed.append("reflector_started")
 
@@ -597,6 +791,42 @@ class CognitiveService:
         except Exception as e:
             # Don't fail the reflector if Graphiti fails
             logger.warning(f"Failed to store to Graphiti knowledge graph: {e}")
+
+    # =========================================================================
+    # SERVICE MANAGEMENT
+    # =========================================================================
+
+    async def shutdown(self, timeout: float = 60.0) -> Dict[str, Any]:
+        """
+        Gracefully shutdown the cognitive service.
+
+        Waits for pending reflector tasks to complete before shutdown.
+        This ensures learning signals are persisted.
+
+        Args:
+            timeout: Maximum time to wait for pending tasks
+
+        Returns:
+            Dict with shutdown statistics
+        """
+        logger.info("Initiating cognitive service shutdown...")
+
+        reflector_result = await self._reflector_manager.wait_all(timeout=timeout)
+
+        return {
+            "reflector_tasks": reflector_result,
+            "final_stats": self._reflector_manager.stats,
+        }
+
+    @property
+    def reflector_stats(self) -> Dict[str, Any]:
+        """
+        Get reflector task statistics for monitoring.
+
+        Returns:
+            Dict with pending, succeeded, failed, and timeout counts
+        """
+        return self._reflector_manager.stats
 
 
 # =============================================================================
