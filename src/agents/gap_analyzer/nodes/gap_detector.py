@@ -133,6 +133,9 @@ class GapDetectorNode:
         start_time = time.time()
 
         try:
+            # Retrieve memory context for informed gap detection
+            memory_context = await self._get_memory_context(state)
+
             # Fetch current performance data
             current_data = await self._fetch_performance_data(
                 brand=state["brand"],
@@ -189,6 +192,7 @@ class GapDetectorNode:
                 "total_gap_value": total_gap_value,
                 "segments_analyzed": len(state["segments"]),
                 "detection_latency_ms": detection_latency_ms,
+                "memory_context": memory_context,
                 "status": "calculating",
             }
 
@@ -393,6 +397,54 @@ class GapDetectorNode:
         }
 
         return gap
+
+    async def _get_memory_context(
+        self,
+        state: GapAnalyzerState,
+    ) -> Dict[str, Any]:
+        """Retrieve context from memory systems.
+
+        Fetches working memory (recent session) and episodic memory
+        (similar past analyses) to inform gap detection.
+
+        Non-blocking: failures are logged but don't affect workflow.
+
+        Args:
+            state: Current gap analyzer state
+
+        Returns:
+            Memory context dictionary with working_memory and episodic_context
+        """
+        try:
+            from ..memory_hooks import get_gap_analyzer_memory_hooks
+
+            memory_hooks = get_gap_analyzer_memory_hooks()
+            context = await memory_hooks.get_context(
+                session_id=state.get("session_id", ""),
+                query=state.get("query", ""),
+                brand=state.get("brand"),
+                metrics=state.get("metrics"),
+                segments=state.get("segments"),
+                max_episodic_results=5,
+            )
+
+            logger.info(
+                f"Memory context retrieved: working={len(context.working_memory)}, "
+                f"episodic={len(context.episodic_context)}"
+            )
+
+            return {
+                "working_memory_count": len(context.working_memory),
+                "episodic_context_count": len(context.episodic_context),
+                "has_context": len(context.working_memory) > 0 or len(context.episodic_context) > 0,
+            }
+        except Exception as e:
+            logger.warning(f"Memory context retrieval failed (non-fatal): {e}")
+            return {
+                "working_memory_count": 0,
+                "episodic_context_count": 0,
+                "has_context": False,
+            }
 
 
 class MockDataConnector:
