@@ -22,7 +22,9 @@ from uuid import UUID
 import networkx as nx
 import numpy as np
 import pandas as pd
-from loguru import logger
+import logging
+
+logger = logging.getLogger(__name__)
 from numpy.typing import NDArray
 
 from .algorithms import (

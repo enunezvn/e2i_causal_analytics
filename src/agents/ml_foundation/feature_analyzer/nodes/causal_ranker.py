@@ -11,7 +11,9 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
-from loguru import logger
+import logging
+
+logger = logging.getLogger(__name__)
 
 from src.causal_engine.discovery.base import DiscoveryConfig, DiscoveryAlgorithmType
 from src.causal_engine.discovery.driver_ranker import DriverRanker

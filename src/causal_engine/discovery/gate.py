@@ -21,7 +21,9 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
 
 import networkx as nx
 import numpy as np
-from loguru import logger
+import logging
+
+logger = logging.getLogger(__name__)
 
 from .base import DiscoveredEdge, DiscoveryResult, GateDecision
 

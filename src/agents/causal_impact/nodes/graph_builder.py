@@ -15,7 +15,9 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 import networkx as nx
 import pandas as pd
-from loguru import logger
+import logging
+
+logger = logging.getLogger(__name__)
 
 from src.agents.causal_impact.state import CausalGraph, CausalImpactState
 from src.causal_engine import compute_dag_hash

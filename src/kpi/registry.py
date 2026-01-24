@@ -10,7 +10,9 @@ from pathlib import Path
 from typing import Iterator
 
 import yaml
-from loguru import logger
+import logging
+
+logger = logging.getLogger(__name__)
 
 from src.kpi.models import (
     CalculationType,
