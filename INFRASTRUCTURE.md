@@ -293,7 +293,7 @@ cd /home/enunez/opik/deployment/docker-compose && docker compose down
 | Path | Description |
 |------|-------------|
 | `/opt/e2i_causal_analytics` | Application root |
-| `/opt/e2i_causal_analytics/venv` | Python virtual environment |
+| `/opt/e2i_causal_analytics/.venv` | Python virtual environment |
 | `/opt/e2i_causal_analytics/.env` | Environment variables |
 | `/home/enunez/opik` | Opik installation |
 | `/home/enunez/opik/deployment/docker-compose` | Opik Docker compose |
@@ -315,7 +315,7 @@ cd ~/Projects/e2i_causal_analytics
 git pull origin main
 
 # Activate virtual environment
-source venv/bin/activate
+source .venv/bin/activate
 
 # Install any new dependencies
 pip install -r requirements.txt
