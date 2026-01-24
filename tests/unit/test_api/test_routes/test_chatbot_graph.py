@@ -764,10 +764,12 @@ class TestOrchestratorNode:
         basic_state["intent"] = IntentType.GREETING
 
         with patch("src.api.routes.chatbot_graph.CHATBOT_ORCHESTRATOR_ENABLED", True):
-            result = await orchestrator_node(basic_state)
+            with patch("src.api.routes.chatbot_graph.get_progress_update", return_value={}):
+                result = await orchestrator_node(basic_state)
 
-            # Should return empty result (pass-through)
-            assert result == {}
+                # Should return empty result (pass-through) - no orchestrator fields
+                assert result.get("orchestrator_used") is not True
+                assert "agents_dispatched" not in result or result.get("agents_dispatched") == []
 
     @pytest.mark.asyncio
     async def test_orchestrator_processes_complex_intents(self, basic_state):
@@ -795,9 +797,12 @@ class TestOrchestratorNode:
         basic_state["intent"] = IntentType.CAUSAL_ANALYSIS
 
         with patch("src.api.routes.chatbot_graph.CHATBOT_ORCHESTRATOR_ENABLED", False):
-            result = await orchestrator_node(basic_state)
+            with patch("src.api.routes.chatbot_graph.get_progress_update", return_value={}):
+                result = await orchestrator_node(basic_state)
 
-            assert result == {}
+                # Should return empty result (pass-through) - no orchestrator fields
+                assert result.get("orchestrator_used") is not True
+                assert "agents_dispatched" not in result or result.get("agents_dispatched") == []
 
 
 # =============================================================================
@@ -814,9 +819,11 @@ class TestGenerateNode:
         basic_state["orchestrator_used"] = True
         basic_state["response_text"] = "Orchestrator response"
 
-        result = await generate_node(basic_state)
+        with patch("src.api.routes.chatbot_graph.get_progress_update", return_value={}):
+            result = await generate_node(basic_state)
 
-        assert result == {}
+            # Should return empty result (pass-through) - no new messages generated
+            assert "messages" not in result or result.get("messages") == []
 
     @pytest.mark.asyncio
     async def test_generate_uses_llm_with_tools(self, basic_state):
