@@ -417,8 +417,8 @@ class TestCacheInvalidation:
         """Test invalidating cache for specific model."""
         model_id = uuid4()
 
-        # Setup mock to return keys for this model
-        async def mock_scan():
+        # Setup mock to return keys for this model (accepts match kwarg)
+        async def mock_scan(match=None):
             yield "test_twin_sim:email_campaign:abc123:meta"
 
         mock_redis_client.scan_iter = mock_scan
@@ -437,7 +437,7 @@ class TestCacheInvalidation:
         """Test invalidation when no keys match model."""
         model_id = uuid4()
 
-        async def mock_scan():
+        async def mock_scan(match=None):
             return
             yield  # Empty iterator
 
@@ -451,7 +451,7 @@ class TestCacheInvalidation:
     @pytest.mark.asyncio
     async def test_invalidate_all(self, cache, mock_redis_client):
         """Test invalidating all cached results."""
-        async def mock_scan():
+        async def mock_scan(match=None):
             yield "test_twin_sim:key1"
             yield "test_twin_sim:key2"
             yield "test_twin_sim:key1:meta"
@@ -481,11 +481,12 @@ class TestCacheStatistics:
         cache._stats.misses = 5
         cache._stats.invalidations = 2
 
-        async def mock_scan():
+        async def mock_scan(match=None):
             return
             yield  # Empty
 
         mock_redis_client.scan_iter = mock_scan
+        mock_redis_client.ping = AsyncMock(return_value=True)
 
         stats = await cache.get_stats()
 
@@ -499,11 +500,12 @@ class TestCacheStatistics:
     @pytest.mark.asyncio
     async def test_get_stats_by_intervention(self, cache, mock_redis_client):
         """Test stats breakdown by intervention type."""
-        async def mock_scan():
+        async def mock_scan(match=None):
             yield "test_twin_sim:email:abc:meta"
             yield "test_twin_sim:call:def:meta"
 
         mock_redis_client.scan_iter = mock_scan
+        mock_redis_client.ping = AsyncMock(return_value=True)
         mock_redis_client.hgetall = AsyncMock(
             side_effect=[
                 {"intervention_type": "email_campaign", "hit_count": "5"},

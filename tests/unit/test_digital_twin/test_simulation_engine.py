@@ -17,6 +17,7 @@ from uuid import uuid4
 
 import numpy as np
 import pytest
+from pydantic import ValidationError
 
 from src.digital_twin.models.simulation_models import (
     EffectHeterogeneity,
@@ -813,20 +814,19 @@ class TestEffectModifierEdgeCases:
         # Should fall back to default multiplier (1.0)
         assert result.status == SimulationStatus.COMPLETED
 
-    def test_zero_intensity_multiplier(self, edge_case_population):
-        """Test handling of zero intensity multiplier."""
-        engine = SimulationEngine(edge_case_population)
-        config = InterventionConfig(
-            intervention_type="email_campaign",
-            duration_weeks=8,
-            intensity_multiplier=0.0,
-        )
+    def test_zero_intensity_multiplier(self):
+        """Test that zero intensity multiplier raises ValidationError.
 
-        result = engine.simulate(config)
+        intensity_multiplier has ge=0.1 constraint.
+        """
+        with pytest.raises(ValidationError) as exc_info:
+            InterventionConfig(
+                intervention_type="email_campaign",
+                duration_weeks=8,
+                intensity_multiplier=0.0,  # Below min of 0.1
+            )
 
-        # Effect should be near zero
-        assert result.status == SimulationStatus.COMPLETED
-        assert abs(result.simulated_ate) < 0.01
+        assert "intensity_multiplier" in str(exc_info.value)
 
     def test_extreme_intensity_multiplier(self, edge_case_population):
         """Test handling of extreme intensity multiplier."""
@@ -842,19 +842,19 @@ class TestEffectModifierEdgeCases:
         # Should be clamped and complete
         assert result.status == SimulationStatus.COMPLETED
 
-    def test_zero_duration_weeks(self, edge_case_population):
-        """Test handling of zero duration weeks."""
-        engine = SimulationEngine(edge_case_population)
-        config = InterventionConfig(
-            intervention_type="email_campaign",
-            duration_weeks=0,
-            intensity_multiplier=1.0,
-        )
+    def test_zero_duration_weeks(self):
+        """Test that zero duration weeks raises ValidationError.
 
-        result = engine.simulate(config)
+        duration_weeks has ge=1 constraint.
+        """
+        with pytest.raises(ValidationError) as exc_info:
+            InterventionConfig(
+                intervention_type="email_campaign",
+                duration_weeks=0,  # Below min of 1
+                intensity_multiplier=1.0,
+            )
 
-        # Should handle gracefully (clamped to minimum)
-        assert result.status == SimulationStatus.COMPLETED
+        assert "duration_weeks" in str(exc_info.value)
 
     def test_combined_extreme_modifiers(self, edge_case_population):
         """Test combined extreme modifier values don't cause overflow."""
