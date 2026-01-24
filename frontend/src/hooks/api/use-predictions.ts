@@ -27,7 +27,7 @@ import { queryKeys, queryClient as globalQueryClient } from '@/lib/query-client'
 import type {
   BatchPredictionRequest,
   BatchPredictionResponse,
-  ModelHealthResponse,
+  ModelEndpointHealth,
   ModelInfoResponse,
   ModelsStatusResponse,
   PredictionRequest,
@@ -59,7 +59,7 @@ import type {
  */
 export function useModelHealth(
   modelName: string,
-  options?: Omit<UseQueryOptions<ModelHealthResponse, Error>, 'queryKey' | 'queryFn'>
+  options?: Omit<UseQueryOptions<ModelEndpointHealth, Error>, 'queryKey' | 'queryFn'>
 ) {
   return useQuery({
     queryKey: queryKeys.predictions.modelHealth(modelName),

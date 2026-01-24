@@ -84,14 +84,14 @@ function createWrapper() {
 // =============================================================================
 
 import type {
-  ModelHealthResponse,
+  ModelEndpointHealth,
   ModelInfoResponse,
   ModelsStatusResponse,
   PredictionResponse,
   BatchPredictionResponse,
 } from '@/types/predictions';
 
-const mockModelHealthResponse: ModelHealthResponse = {
+const mockModelHealthResponse: ModelEndpointHealth = {
   model_name: 'churn_model',
   status: 'healthy',
   endpoint: 'http://localhost:8080/predictions/churn_model',

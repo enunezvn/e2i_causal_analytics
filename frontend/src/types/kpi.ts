@@ -8,20 +8,14 @@
  * @module types/kpi
  */
 
+import { CausalLibrary } from './causal';
+
+// Re-export for consumers that import from kpi
+export { CausalLibrary };
+
 // =============================================================================
 // ENUMS
 // =============================================================================
-
-/**
- * Causal inference libraries available for KPI calculation
- */
-export enum CausalLibrary {
-  DOWHY = 'dowhy',
-  ECONML = 'econml',
-  CAUSALML = 'causalml',
-  NETWORKX = 'networkx',
-  NONE = 'none',
-}
 
 /**
  * KPI workstreams
