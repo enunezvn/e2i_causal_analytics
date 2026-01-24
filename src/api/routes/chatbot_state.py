@@ -111,6 +111,14 @@ class ChatbotState(TypedDict, total=False):
     # Extensible metadata
     metadata: Dict[str, Any]
 
+    # Execution progress tracking (Phase 4: Stream Execution Progress)
+    # These fields are synced to frontend via copilotkit_emit_state()
+    agent_status: Optional[str]  # 'idle' | 'processing' | 'waiting' | 'complete' | 'error'
+    progress_percent: int  # 0-100 progress indicator
+    progress_steps: List[str]  # Completed step descriptions
+    tools_executing: List[str]  # Currently executing tool names
+    current_node: Optional[str]  # Current LangGraph node name
+
 
 class AgentRequest(TypedDict):
     """
@@ -229,4 +237,10 @@ def create_initial_state(
         agent_tier=None,
         error=None,
         metadata={},
+        # Execution progress tracking (Phase 4)
+        agent_status="idle",
+        progress_percent=0,
+        progress_steps=[],
+        tools_executing=[],
+        current_node=None,
     )
