@@ -96,6 +96,63 @@ _active_trace_context: contextvars.ContextVar[Optional[ChatbotTraceContext]] = c
     "chatbot_trace_context", default=None
 )
 
+
+# =============================================================================
+# PROGRESS TRACKING (Phase 4: Stream Execution Progress)
+# =============================================================================
+
+# Progress definitions for each workflow node
+# Format: (percent, step_description, status)
+WORKFLOW_PROGRESS = {
+    "init": (5, "Initializing conversation...", "processing"),
+    "load_context": (15, "Loading conversation context...", "processing"),
+    "classify_intent": (25, "Analyzing intent...", "processing"),
+    "retrieve_rag": (40, "Retrieving relevant knowledge...", "processing"),
+    "orchestrator": (60, "Routing to specialized agents...", "processing"),
+    "generate": (80, "Generating response...", "processing"),
+    "tools": (70, "Executing tools...", "processing"),
+    "finalize": (100, "Complete", "complete"),
+}
+
+
+def get_progress_update(
+    node_name: str,
+    current_steps: List[str] = None,
+    tools_executing: List[str] = None,
+    custom_step: str = None,
+) -> Dict[str, Any]:
+    """
+    Generate progress state update for a workflow node.
+
+    Args:
+        node_name: Current node in the workflow
+        current_steps: Accumulated step descriptions
+        tools_executing: List of currently executing tool names
+        custom_step: Custom step description (overrides default)
+
+    Returns:
+        Dict with progress fields to merge into state
+    """
+    progress_info = WORKFLOW_PROGRESS.get(node_name, (50, f"Processing {node_name}...", "processing"))
+    percent, default_step, status = progress_info
+
+    # Build step description
+    step_description = custom_step if custom_step else default_step
+
+    # Accumulate steps (add new step if not already present)
+    steps = list(current_steps) if current_steps else []
+    if step_description and step_description not in steps:
+        steps.append(step_description)
+
+    return {
+        "agent_status": status,
+        "progress_percent": percent,
+        "progress_steps": steps,
+        "tools_executing": tools_executing or [],
+        "current_node": node_name,
+    }
+
+
 # MLflow connector singleton (lazy initialization)
 _mlflow_connector: Optional[MLflowConnector] = None
 _mlflow_experiment_id: Optional[str] = None
@@ -386,12 +443,16 @@ async def init_node(state: ChatbotState) -> Dict[str, Any]:
     # Add human message to state
     human_msg = HumanMessage(content=query)
 
+    # Include progress update in return
+    progress = get_progress_update("init")
+
     return {
         "messages": [human_msg],
         "metadata": {
             "init_timestamp": str(datetime.now(timezone.utc)),
             "is_new_conversation": is_new_conversation,
         },
+        **progress,
     }
 
 
@@ -462,6 +523,12 @@ async def load_context_node(state: ChatbotState) -> Dict[str, Any]:
         elif role == "assistant":
             history_messages.append(AIMessage(content=content))
 
+    # Include progress update
+    progress = get_progress_update(
+        "load_context",
+        current_steps=state.get("progress_steps", []),
+    )
+
     return {
         "messages": history_messages,  # Prepend history
         "conversation_title": conversation_title,
@@ -472,6 +539,7 @@ async def load_context_node(state: ChatbotState) -> Dict[str, Any]:
             "context_loaded": True,
             "previous_message_count": len(previous_messages),
         },
+        **progress,
     }
 
 
@@ -640,11 +708,22 @@ async def retrieve_rag_node(state: ChatbotState) -> Dict[str, Any]:
     else:
         await _execute_rag()
 
+    # Build progress update
+    custom_step = f"Retrieved {len(rag_context)} documents" if rag_context else "Retrieving knowledge..."
+    progress = get_progress_update(
+        "retrieve_rag",
+        current_steps=state.get("progress_steps", []),
+        custom_step=custom_step,
+    )
+
     if error:
+        # Set error status on failure
+        progress["agent_status"] = "error"
         return {
             "rag_context": [],
             "rag_sources": [],
             "error": error,
+            **progress,
         }
 
     return {
@@ -652,6 +731,7 @@ async def retrieve_rag_node(state: ChatbotState) -> Dict[str, Any]:
         "rag_sources": rag_sources,
         "rag_rewritten_query": rewritten_query,
         "rag_retrieval_method": retrieval_method,
+        **progress,
     }
 
 
@@ -731,6 +811,14 @@ async def classify_intent_node(state: ChatbotState) -> Dict[str, Any]:
     else:
         await _execute_classify()
 
+    # Build progress update with custom step showing detected intent
+    custom_step = f"Intent: {intent}" if intent else None
+    progress = get_progress_update(
+        "classify_intent",
+        current_steps=state.get("progress_steps", []),
+        custom_step=custom_step,
+    )
+
     return {
         "intent": intent,
         "intent_confidence": confidence,
@@ -740,6 +828,7 @@ async def classify_intent_node(state: ChatbotState) -> Dict[str, Any]:
         "secondary_agents": secondary_agents,
         "routing_confidence": routing_confidence,
         "routing_rationale": routing_rationale,
+        **progress,
     }
 
 
@@ -945,6 +1034,18 @@ async def orchestrator_node(state: ChatbotState) -> Dict[str, Any]:
             f"or feature disabled (enabled={CHATBOT_ORCHESTRATOR_ENABLED})"
         )
 
+    # Build progress update with dispatched agents info
+    custom_step = None
+    if orchestrator_used and agents_dispatched:
+        custom_step = f"Dispatched to {', '.join(agents_dispatched[:2])}{'...' if len(agents_dispatched) > 2 else ''}"
+    progress = get_progress_update(
+        "orchestrator",
+        current_steps=state.get("progress_steps", []),
+        custom_step=custom_step,
+    )
+
+    # Merge progress into result
+    result.update(progress)
     return result
 
 
@@ -962,8 +1063,13 @@ async def generate_node(state: ChatbotState) -> Dict[str, Any]:
     # Check if orchestrator already handled this query
     if state.get("orchestrator_used") and state.get("response_text"):
         logger.debug("Skipping generate_node: orchestrator already produced response")
-        # Pass through the orchestrator's response - no further generation needed
-        return {}
+        # Pass through - orchestrator already set progress, just move forward
+        progress = get_progress_update(
+            "generate",
+            current_steps=state.get("progress_steps", []),
+            custom_step="Using orchestrator response...",
+        )
+        return {**progress}
 
     messages = list(state.get("messages", []))
     rag_context = state.get("rag_context", [])
@@ -1167,6 +1273,17 @@ async def generate_node(state: ChatbotState) -> Dict[str, Any]:
                 })
     else:
         await _execute_generate()
+
+    # Add progress tracking to result
+    progress = get_progress_update(
+        "generate",
+        current_steps=state.get("progress_steps", []),
+        custom_step="Generated response",
+    )
+    if result:
+        result.update(progress)
+    else:
+        result = progress
 
     return result
 
@@ -1643,9 +1760,17 @@ async def finalize_node(state: ChatbotState) -> Dict[str, Any]:
     else:
         await _execute_finalize()
 
+    # Build final progress update (complete)
+    progress = get_progress_update(
+        "finalize",
+        current_steps=state.get("progress_steps", []),
+        custom_step="Complete",
+    )
+
     return {
         "response_text": response_text,
         "streaming_complete": True,
+        **progress,
     }
 
 
