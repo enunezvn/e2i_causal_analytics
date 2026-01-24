@@ -8,17 +8,181 @@ This module implements the 4-phase cognitive cycle:
 3. Agent Node - Synthesis and response generation
 4. Reflector Node - Asynchronous learning and memory updates
 
-Version: 1.0
+Version: 1.1
 """
 
+import hashlib
+import logging
 import operator
+import os
+import time
 import uuid
 from datetime import datetime, timezone
-from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
+from typing import Annotated, Any, Dict, List, Literal, Optional, Tuple, TypedDict
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# EVIDENCE EVALUATION CACHE
+# ============================================================================
+
+
+class EvidenceEvaluationCache:
+    """
+    Cache for LLM-based evidence evaluation results.
+
+    Reduces redundant LLM calls during multi-hop investigation by caching
+    evaluation results based on goal + evidence content. Uses a TTL-based
+    expiration and LRU eviction strategy.
+
+    Configuration via environment:
+        E2I_EVIDENCE_CACHE: "true" (default) to enable caching
+        E2I_EVIDENCE_CACHE_TTL: TTL in seconds (default: 3600)
+        E2I_EVIDENCE_CACHE_SIZE: Max entries (default: 1000)
+
+    Usage:
+        cache = EvidenceEvaluationCache()
+
+        # Check cache before LLM call
+        cached = cache.get(goal, evidence_summary)
+        if cached:
+            return cached
+
+        # After LLM call, store result
+        result = await llm.complete(prompt)
+        cache.set(goal, evidence_summary, result)
+    """
+
+    def __init__(
+        self,
+        max_size: Optional[int] = None,
+        ttl_seconds: Optional[float] = None,
+    ):
+        """
+        Initialize the evidence evaluation cache.
+
+        Args:
+            max_size: Maximum cache entries. Defaults to E2I_EVIDENCE_CACHE_SIZE or 1000.
+            ttl_seconds: Entry TTL in seconds. Defaults to E2I_EVIDENCE_CACHE_TTL or 3600.
+        """
+        if max_size is None:
+            max_size = int(os.environ.get("E2I_EVIDENCE_CACHE_SIZE", "1000"))
+        if ttl_seconds is None:
+            ttl_seconds = float(os.environ.get("E2I_EVIDENCE_CACHE_TTL", "3600"))
+
+        self._max_size = max_size
+        self._ttl = ttl_seconds
+        self._cache: Dict[str, Tuple[str, float]] = {}  # key -> (result, timestamp)
+        self._hits = 0
+        self._misses = 0
+
+    def _make_key(self, goal: str, evidence_summary: str) -> str:
+        """
+        Create a cache key from goal and evidence summary.
+
+        Uses SHA-256 hash for consistent key length and collision resistance.
+        """
+        content = f"{goal.strip().lower()}|{evidence_summary.strip()}"
+        return hashlib.sha256(content.encode()).hexdigest()[:32]
+
+    def get(self, goal: str, evidence_summary: str) -> Optional[str]:
+        """
+        Get cached evaluation result.
+
+        Args:
+            goal: The investigation goal
+            evidence_summary: Summary of evidence collected
+
+        Returns:
+            Cached result string or None if not found/expired
+        """
+        key = self._make_key(goal, evidence_summary)
+
+        if key in self._cache:
+            result, timestamp = self._cache[key]
+
+            # Check TTL
+            if time.time() - timestamp < self._ttl:
+                self._hits += 1
+                logger.debug(f"Evidence cache hit (hits={self._hits})")
+                return result
+
+            # Expired - remove entry
+            del self._cache[key]
+
+        self._misses += 1
+        return None
+
+    def set(self, goal: str, evidence_summary: str, result: str) -> None:
+        """
+        Cache an evaluation result.
+
+        Args:
+            goal: The investigation goal
+            evidence_summary: Summary of evidence collected
+            result: The evaluation result to cache
+        """
+        # Evict oldest entries if at capacity
+        if len(self._cache) >= self._max_size:
+            self._evict_oldest(count=self._max_size // 10)  # Evict 10%
+
+        key = self._make_key(goal, evidence_summary)
+        self._cache[key] = (result, time.time())
+
+    def _evict_oldest(self, count: int) -> None:
+        """Evict the oldest entries from cache."""
+        if not self._cache or count <= 0:
+            return
+
+        # Sort by timestamp and remove oldest
+        sorted_keys = sorted(
+            self._cache.keys(),
+            key=lambda k: self._cache[k][1],
+        )
+
+        for key in sorted_keys[: min(count, len(sorted_keys))]:
+            del self._cache[key]
+
+    def clear(self) -> None:
+        """Clear all cached entries."""
+        self._cache.clear()
+        logger.info("Evidence evaluation cache cleared")
+
+    @property
+    def stats(self) -> Dict[str, Any]:
+        """Get cache statistics."""
+        total = self._hits + self._misses
+        return {
+            "size": len(self._cache),
+            "max_size": self._max_size,
+            "hits": self._hits,
+            "misses": self._misses,
+            "hit_rate": self._hits / total if total > 0 else 0.0,
+            "ttl_seconds": self._ttl,
+        }
+
+
+# Module-level cache singleton
+_evidence_cache: Optional[EvidenceEvaluationCache] = None
+
+
+def get_evidence_cache() -> EvidenceEvaluationCache:
+    """Get or create the evidence evaluation cache singleton."""
+    global _evidence_cache
+    if _evidence_cache is None:
+        _evidence_cache = EvidenceEvaluationCache()
+    return _evidence_cache
+
+
+def is_evidence_cache_enabled() -> bool:
+    """Check if evidence caching is enabled."""
+    return os.environ.get("E2I_EVIDENCE_CACHE", "true").lower() == "true"
+
 
 # ============================================================================
 # STATE DEFINITIONS
@@ -388,7 +552,15 @@ async def build_graph_query(state: CognitiveState) -> Dict[str, Any]:
 
 
 async def evaluate_evidence(state: CognitiveState, new_evidence: List[EvidenceItem]) -> str:
-    """Evaluate if current evidence is sufficient to answer the query."""
+    """
+    Evaluate if current evidence is sufficient to answer the query.
+
+    Uses a multi-tier evaluation strategy:
+    1. Empty evidence check - fast path for no new evidence
+    2. Heuristic check - if 3+ high-relevance items, consider sufficient
+    3. Cache check - avoid redundant LLM calls for similar evaluations
+    4. LLM judgment - final arbiter when heuristics are inconclusive
+    """
     from .memory_backends import get_llm_service
 
     if not new_evidence:
@@ -399,17 +571,27 @@ async def evaluate_evidence(state: CognitiveState, new_evidence: List[EvidenceIt
     if len(high_relevance) >= 3:
         return "sufficient"
 
-    # Otherwise, use LLM to judge
-    llm = get_llm_service()
-
+    # Build evidence summary for cache lookup and LLM prompt
     evidence_summary = "\n".join(
         [
-            f"- [{e.source}] {e.content} (relevance: {e.relevance_score:.2f})"
+            f"- [{e.source}] {e.content[:100]} (relevance: {e.relevance_score:.2f})"
             for e in state["evidence_trail"][-10:]  # Last 10 pieces
         ]
     )
 
-    judge_prompt = f"""Goal: {state['investigation_goal']}
+    investigation_goal = state.get("investigation_goal", state["user_query"])
+
+    # Check cache before making LLM call
+    if is_evidence_cache_enabled():
+        cache = get_evidence_cache()
+        cached_result = cache.get(investigation_goal, evidence_summary)
+        if cached_result:
+            return cached_result
+
+    # Otherwise, use LLM to judge
+    llm = get_llm_service()
+
+    judge_prompt = f"""Goal: {investigation_goal}
 
     Evidence collected so far:
     {evidence_summary}
@@ -420,11 +602,20 @@ async def evaluate_evidence(state: CognitiveState, new_evidence: List[EvidenceIt
 
     judgment = await llm.complete(judge_prompt)
 
+    # Parse result
     if "SUFFICIENT" in judgment.upper():
-        return "sufficient"
+        result = "sufficient"
     elif "NO_RELEVANT" in judgment.upper():
-        return "no_more_relevant"
-    return "need_more"
+        result = "no_more_relevant"
+    else:
+        result = "need_more"
+
+    # Cache the result for future similar evaluations
+    if is_evidence_cache_enabled():
+        cache = get_evidence_cache()
+        cache.set(investigation_goal, evidence_summary, result)
+
+    return result
 
 
 def select_top_evidence(evidence_trail: List[EvidenceItem], top_k: int = 10) -> List[EvidenceItem]:
