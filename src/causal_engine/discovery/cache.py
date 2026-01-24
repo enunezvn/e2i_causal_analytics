@@ -35,7 +35,9 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional, TYPE_CHECKING
 
 import pandas as pd
-from loguru import logger
+import logging
+
+logger = logging.getLogger(__name__)
 
 from .hasher import hash_dataframe, hash_config, make_cache_key
 

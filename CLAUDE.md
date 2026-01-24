@@ -17,12 +17,16 @@
 
 ## 🚨 CRITICAL DROPLET RULES (READ FIRST)
 
-**NEVER install or update Python dependencies on the droplet.** The production venv uses **forked repositories** (feast, tenacity) that resolve version conflicts. Running `pip install -r requirements.txt` will fail and potentially corrupt the environment.
+**Avoid installing dependencies on the droplet** unless necessary. The production venv has:
+- Dependencies pre-installed and working
+- Local patches for `ag-ui-langgraph` and `copilotkit` (in `./patches/` directory)
+- Pinned versions to avoid conflicts (e.g., multiprocess==0.70.17 for dill compatibility)
 
-- ❌ `pip install` - NEVER run this on the droplet
-- ❌ `pip install -r requirements.txt` - Will fail with dependency conflicts
-- ❌ Updating individual packages - May break forked dependency resolution
-- ✅ The venv at `/opt/e2i_causal_analytics/venv/` is pre-configured and working
+For local development, `pip install -r requirements.txt` works normally.
+
+- ⚠️ `pip install` - Avoid unless necessary
+- ⚠️ `pip install -r requirements.txt` - May cause version conflicts
+- ✅ The venv at `/opt/e2i_causal_analytics/.venv/` is pre-configured and working
 - ✅ Just restart services: `sudo systemctl restart e2i-api`
 
 ---
@@ -342,14 +346,14 @@ The production environment uses a Python virtual environment. **Always activate 
 
 ```bash
 # Venv location
-/opt/e2i_causal_analytics/venv/
+/opt/e2i_causal_analytics/.venv/
 
 # Activate venv on droplet
-source /opt/e2i_causal_analytics/venv/bin/activate
+source /opt/e2i_causal_analytics/.venv/bin/activate
 
 # Or run commands directly with venv Python
-/opt/e2i_causal_analytics/venv/bin/python <script.py>
-/opt/e2i_causal_analytics/venv/bin/pytest <tests/>
+/opt/e2i_causal_analytics/.venv/bin/python <script.py>
+/opt/e2i_causal_analytics/.venv/bin/pytest <tests/>
 ```
 
 ### Common doctl Commands
@@ -377,10 +381,10 @@ Run commands on the droplet from your local machine using the production venv:
 
 ```bash
 # Run tests on droplet
-ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/venv/bin/pytest tests/unit/test_utils/ -v -n 4"
+ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/.venv/bin/pytest tests/unit/test_utils/ -v -n 4"
 
 # Run Python commands
-ssh -i ~/.ssh/replit enunez@138.197.4.36 "/opt/e2i_causal_analytics/venv/bin/python -c 'import src; print(src)'"
+ssh -i ~/.ssh/replit enunez@138.197.4.36 "/opt/e2i_causal_analytics/.venv/bin/python -c 'import src; print(src)'"
 ```
 
 **Note**: `~/Projects/e2i_causal_analytics/` is for code syncing only. Always use `/opt/e2i_causal_analytics/` for execution.
@@ -411,7 +415,7 @@ ssh -i ~/.ssh/replit enunez@138.197.4.36 "curl -s -X POST localhost:8000/api/exp
 | FalkorDB | 6381 | Graph database |
 
 **Do NOT**:
-- ❌ **Install dependencies** (`pip install`) - See "CRITICAL DROPLET RULES" section above. The venv uses forked repositories that resolve conflicts.
+- ⚠️ **Install dependencies** (`pip install`) - See "CRITICAL DROPLET RULES" section above. Avoid unless necessary.
 - ❌ Import agents directly in Python when testing - use the API endpoints
 - ❌ Rebuild Docker containers unless specifically requested
 

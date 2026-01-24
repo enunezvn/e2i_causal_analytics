@@ -9,7 +9,9 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from loguru import logger
+import logging
+
+logger = logging.getLogger(__name__)
 
 try:
     import redis

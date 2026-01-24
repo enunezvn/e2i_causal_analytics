@@ -13,9 +13,13 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, Generator, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, Generator, List, Optional
 
 logger = logging.getLogger(__name__)
+
+# Type hints for prometheus_client types (only for type checking)
+if TYPE_CHECKING:
+    from prometheus_client import Counter, Histogram, Summary
 
 # Try to import prometheus_client
 try:
@@ -38,15 +42,15 @@ except ImportError:
 # =============================================================================
 
 _fs_metrics_initialized = False
-_fs_cache_hits: Optional[Counter] = None
-_fs_cache_misses: Optional[Counter] = None
-_fs_retrieval_latency: Optional[Histogram] = None
-_fs_cache_latency: Optional[Histogram] = None
-_fs_db_latency: Optional[Histogram] = None
-_fs_batch_size: Optional[Histogram] = None
-_fs_feature_count: Optional[Summary] = None
-_fs_stale_features: Optional[Counter] = None
-_fs_errors: Optional[Counter] = None
+_fs_cache_hits: "Optional[Counter]" = None
+_fs_cache_misses: "Optional[Counter]" = None
+_fs_retrieval_latency: "Optional[Histogram]" = None
+_fs_cache_latency: "Optional[Histogram]" = None
+_fs_db_latency: "Optional[Histogram]" = None
+_fs_batch_size: "Optional[Histogram]" = None
+_fs_feature_count: "Optional[Summary]" = None
+_fs_stale_features: "Optional[Counter]" = None
+_fs_errors: "Optional[Counter]" = None
 
 
 def init_feature_store_metrics(registry: Optional[Any] = None) -> None:
