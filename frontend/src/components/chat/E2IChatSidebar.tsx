@@ -22,6 +22,8 @@ import {
   X,
   Bot,
   Sparkles,
+  Copy,
+  Check,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -70,12 +72,29 @@ export function E2IChatSidebar({
   const copilotEnabled = useCopilotEnabled();
   const { chatOpen, setChatOpen, agents, filters } = useE2ICopilot();
   const [showAgents, setShowAgents] = React.useState(false);
+  const [traceIdCopied, setTraceIdCopied] = React.useState(false);
   const { submitFeedback } = useChatFeedback();
 
-  // Generate a stable session ID for feedback tracking
+  // Generate a stable session ID for feedback tracking and support tickets
   const sessionIdRef = React.useRef<string>(
     `session_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`
   );
+
+  // Copy trace ID to clipboard for support ticket correlation
+  const copyTraceId = React.useCallback(() => {
+    navigator.clipboard.writeText(sessionIdRef.current).then(() => {
+      setTraceIdCopied(true);
+      setTimeout(() => setTraceIdCopied(false), 2000);
+    }).catch((err) => {
+      console.error('[E2IChatSidebar] Failed to copy trace ID:', err);
+    });
+  }, []);
+
+  // Shortened trace ID for display (show last 12 chars)
+  const shortTraceId = React.useMemo(() => {
+    const id = sessionIdRef.current;
+    return id.length > 16 ? `...${id.slice(-12)}` : id;
+  }, []);
 
   // Feedback handlers for CopilotKit thumbs up/down buttons
   // DEBUG: Log when handlers are created
@@ -302,11 +321,35 @@ Be concise and helpful. Focus on pharmaceutical commercial analytics (TRx, NRx, 
               />
             </div>
 
-            {/* Footer */}
+            {/* Footer with Trace ID for Support */}
             <div className="p-3 border-t bg-muted/30 text-xs text-muted-foreground">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between mb-1.5">
                 <span>Press ⌘/ to toggle</span>
                 <span>{filters.brand}</span>
+              </div>
+              {/* Trace ID for support ticket correlation */}
+              <div className="flex items-center justify-between pt-1.5 border-t border-border/50">
+                <span className="text-[10px] text-muted-foreground/70">
+                  Trace ID: <code className="font-mono">{shortTraceId}</code>
+                </span>
+                <button
+                  onClick={copyTraceId}
+                  className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] hover:bg-muted transition-colors"
+                  title="Copy full trace ID for support"
+                  aria-label="Copy trace ID"
+                >
+                  {traceIdCopied ? (
+                    <>
+                      <Check className="h-3 w-3 text-emerald-500" />
+                      <span className="text-emerald-500">Copied!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="h-3 w-3" />
+                      <span>Copy</span>
+                    </>
+                  )}
+                </button>
               </div>
             </div>
           </motion.div>

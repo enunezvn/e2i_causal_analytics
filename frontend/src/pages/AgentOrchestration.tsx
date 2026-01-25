@@ -18,6 +18,8 @@ import { Progress } from '@/components/ui/progress';
 import { useE2ICopilot } from '@/providers/E2ICopilotProvider';
 import { TierOverview, type AgentTier } from '@/components/visualizations/agents/AgentTierBadge';
 import { AgentStatusPanel } from '@/components/chat/AgentStatusPanel';
+import { getValidated } from '@/lib/api-client';
+import { AgentStatusResponseSchema } from '@/lib/api-schemas';
 import {
   Activity,
   Bot,
@@ -298,13 +300,13 @@ export default function AgentOrchestration() {
   const [selectedTier, setSelectedTier] = React.useState<AgentTier | null>(null);
 
   // Fetch agent status from API (with fallback to context data)
+  // Uses apiClient for auth headers, correlation IDs, and response validation
   const { data: agentStatus, isLoading: _isLoading } = useQuery({
     queryKey: ['agent-status'],
-    queryFn: async () => {
-      const response = await fetch('/api/agents/status');
-      if (!response.ok) throw new Error('Failed to fetch agent status');
-      return response.json();
-    },
+    queryFn: () => getValidated(
+      AgentStatusResponseSchema,
+      '/agents/status'
+    ),
     refetchInterval: 30000, // Refresh every 30 seconds
     retry: false,
   });

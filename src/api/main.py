@@ -70,6 +70,7 @@ from src.api.dependencies.opentelemetry_config import (
 
 # Import routers
 from src.api.routes.agents import router as agents_router
+from src.api.routes.analytics import router as analytics_router
 from src.api.routes.audit import router as audit_router
 from src.api.routes.causal import router as causal_router
 from src.api.routes.cognitive import router as cognitive_router
@@ -722,6 +723,9 @@ app.include_router(causal_router, prefix="/api")
 
 # Audit chain endpoints (/api/audit/*)
 app.include_router(audit_router, prefix="/api")
+
+# Analytics & metrics dashboard endpoints (/api/analytics/*)
+app.include_router(analytics_router, prefix="/api")
 
 # CopilotKit status endpoints (/api/copilotkit/*)
 app.include_router(copilotkit_router, prefix="/api")

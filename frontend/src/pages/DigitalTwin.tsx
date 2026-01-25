@@ -34,6 +34,9 @@ import {
   useSimulationHistory,
   useRunSimulation,
 } from '@/hooks/api/use-digital-twin';
+import { toast } from '@/hooks/use-toast';
+import { useDataFreshness } from '@/hooks/use-data-freshness';
+import { DataFreshnessIndicator } from '@/components/ui/data-freshness-indicator';
 import {
   InterventionType,
   RecommendationType,
@@ -317,12 +320,33 @@ export default function DigitalTwin() {
   const [activeTab, setActiveTab] = useState<'results' | 'history'>('results');
 
   const { data: healthData, isLoading: _healthLoading } = useDigitalTwinHealth();
-  const { data: historyData, refetch: refetchHistory } = useSimulationHistory({ limit: 10 });
+  const { data: historyData, refetch: refetchHistory, dataUpdatedAt: historyUpdatedAt, isFetching: isHistoryFetching } = useSimulationHistory({ limit: 10 });
+  const historyFreshness = useDataFreshness(historyUpdatedAt);
   const { mutate: runSim, isPending: isRunning } = useRunSimulation({
     onSuccess: () => {
       // Refetch history to show new simulation, switch to history tab
       refetchHistory();
       setActiveTab('history');
+      toast({
+        title: 'Simulation Complete',
+        description: 'Your simulation has been processed successfully.',
+      });
+    },
+    onError: (error) => {
+      // Provide user feedback on simulation failure
+      const errorMessage = error.message || 'An unexpected error occurred';
+      const isTimeout = errorMessage.toLowerCase().includes('timeout');
+      const isNetworkError = error.isNetworkError;
+
+      toast({
+        variant: 'destructive',
+        title: 'Simulation Failed',
+        description: isTimeout
+          ? 'The simulation took too long. Try reducing the sample size or duration, then try again.'
+          : isNetworkError
+            ? 'Unable to reach the server. Please check your connection and try again.'
+            : `${errorMessage}. Please try again or contact support if the issue persists.`,
+      });
     },
   });
 
@@ -521,6 +545,15 @@ export default function DigitalTwin() {
           {/* History Tab */}
           {activeTab === 'history' && (
             <div className="space-y-3">
+              {/* Freshness indicator header */}
+              <div className="flex items-center justify-end mb-2">
+                <DataFreshnessIndicator
+                  {...historyFreshness}
+                  showRefreshButton
+                  onRefresh={() => refetchHistory()}
+                  isRefreshing={isHistoryFetching}
+                />
+              </div>
               {history.map((sim) => (
                 <div
                   key={sim.simulation_id}

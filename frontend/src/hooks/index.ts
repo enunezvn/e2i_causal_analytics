@@ -75,3 +75,25 @@ export type {
   UseWebSocketCacheSyncOptions,
   UseWebSocketCacheSyncReturn,
 } from './use-websocket-cache-sync';
+
+// Data freshness hooks (Phase C: Stale data indicators)
+export {
+  useDataFreshness,
+  useQueryFreshness,
+  formatTimeAgo,
+  getFreshnessClassName,
+  getFreshnessIconName,
+} from './use-data-freshness';
+export type {
+  DataFreshnessOptions,
+  DataFreshnessResult,
+} from './use-data-freshness';
+
+// Analytics hooks (Phase C: Metrics dashboard)
+export {
+  analyticsKeys,
+  useAnalyticsDashboard,
+  useAgentMetrics,
+  useAgentTrend,
+  useMetricsSummary,
+} from './api/use-analytics';
