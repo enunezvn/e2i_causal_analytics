@@ -1,9 +1,13 @@
 """
 E2I Explainer Agent
-Version: 4.2
+Version: 4.3
 Tier: 5 (Self-Improvement)
 
 Natural language explanations for complex analyses.
+
+Smart LLM Mode Selection (v4.3):
+- Auto-detects complexity to decide LLM vs deterministic mode
+- Configurable threshold and scoring weights
 """
 
 from .agent import (
@@ -11,6 +15,14 @@ from .agent import (
     ExplainerInput,
     ExplainerOutput,
     explain_analysis,
+)
+from .config import (
+    ComplexityScorer,
+    ExplainerConfig,
+    compute_complexity,
+    get_default_config,
+    set_default_config,
+    should_use_llm,
 )
 from .graph import build_explainer_graph, build_simple_explainer_graph
 from .mlflow_tracker import (
@@ -32,6 +44,13 @@ __all__ = [
     "ExplainerInput",
     "ExplainerOutput",
     "explain_analysis",
+    # Configuration (v4.3)
+    "ExplainerConfig",
+    "ComplexityScorer",
+    "compute_complexity",
+    "should_use_llm",
+    "get_default_config",
+    "set_default_config",
     # Graph
     "build_explainer_graph",
     "build_simple_explainer_graph",

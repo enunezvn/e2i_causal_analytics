@@ -72,20 +72,48 @@ The Explainer requires extended thinking to:
 
 ```
 explainer/
-├── agent.py              # Main ExplainerAgent class
+├── agent.py              # Main ExplainerAgent class (v4.3: smart LLM selection)
+├── config.py             # Configuration and complexity scoring (v4.3)
 ├── state.py              # LangGraph state definitions
 ├── graph.py              # LangGraph assembly
+├── dspy_integration.py   # DSPy signal collection
+├── mlflow_tracker.py     # MLflow experiment tracking
+├── memory_hooks.py       # Tri-memory integration
 ├── nodes/
 │   ├── context_assembler.py  # Gather analysis context
-│   ├── deep_reasoner.py      # Extended reasoning node
-│   ├── narrative_generator.py # Generate explanations
-│   └── format_adapter.py     # Format for output type
-├── templates/
-│   ├── executive.py      # Executive summary templates
-│   ├── technical.py      # Technical explanation templates
-│   └── educational.py    # Educational content templates
+│   ├── deep_reasoner.py      # Extended reasoning node (LLM optional)
+│   └── narrative_generator.py # Generate explanations (4 formats)
 └── prompts.py            # LLM prompts for explanation
 ```
+
+## Smart LLM Mode Selection (v4.3)
+
+The Explainer agent now supports automatic LLM mode selection based on input complexity:
+
+```python
+from src.agents.explainer import ExplainerAgent, ExplainerConfig
+
+# Auto mode (default) - uses complexity scoring
+agent = ExplainerAgent(use_llm=None)  # Automatically decides
+
+# Explicit modes
+agent = ExplainerAgent(use_llm=True)   # Always use LLM
+agent = ExplainerAgent(use_llm=False)  # Always deterministic
+
+# Custom threshold
+config = ExplainerConfig(llm_threshold=0.7)  # Higher threshold
+agent = ExplainerAgent(use_llm=None, config=config)
+```
+
+### Complexity Scoring
+
+The agent evaluates input complexity based on:
+- **Result count** (25%): More results = higher complexity
+- **Query complexity** (30%): Keywords like "why", "explain", "compare"
+- **Causal discovery** (25%): Presence of DAG data triggers LLM
+- **Expertise level** (20%): Executive needs more synthesis
+
+Default threshold: 0.5 (scores above trigger LLM mode)
 
 ## LangGraph State Definition
 

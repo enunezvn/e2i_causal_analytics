@@ -99,6 +99,64 @@ class FeedbackSummary(TypedDict):
     rating_count: int
 
 
+# =============================================================================
+# DISCOVERY FEEDBACK TYPES (V4.4)
+# =============================================================================
+
+
+class DiscoveryFeedbackItem(TypedDict):
+    """Feedback specific to causal discovery results."""
+
+    feedback_id: str
+    timestamp: str
+    feedback_type: Literal[
+        "user_correction",  # User corrects discovered edges
+        "expert_review",  # Domain expert validates/rejects
+        "outcome_validation",  # Observed outcomes vs predicted
+        "gate_override",  # User overrides gate decision
+    ]
+    discovery_run_id: str
+    algorithm_used: str
+    # The DAG that was evaluated
+    dag_adjacency: Optional[Dict[str, List[str]]]
+    dag_nodes: Optional[List[str]]
+    # Gate decision that was made
+    original_gate_decision: Literal["accept", "review", "reject", "augment"]
+    # Feedback content
+    user_decision: Optional[Literal["accept", "reject", "modify"]]
+    edge_corrections: Optional[List[Dict[str, Any]]]  # Added/removed edges
+    comments: Optional[str]
+    # Validation metrics
+    accuracy_score: Optional[float]  # 0-1 if measured
+    metadata: Dict[str, Any]
+
+
+class DiscoveryAccuracyTracking(TypedDict):
+    """Tracking accuracy by discovery algorithm."""
+
+    algorithm: str
+    total_runs: int
+    accepted_runs: int
+    rejected_runs: int
+    modified_runs: int
+    average_accuracy: float
+    edge_precision: float  # Correct edges / predicted edges
+    edge_recall: float  # Correct edges / true edges
+
+
+class DiscoveryParameterRecommendation(TypedDict):
+    """Recommended parameter changes for discovery algorithms."""
+
+    recommendation_id: str
+    algorithm: str
+    parameter_name: str
+    current_value: Any
+    recommended_value: Any
+    justification: str
+    expected_accuracy_improvement: float
+    confidence: float
+
+
 class FeedbackLearnerState(TypedDict):
     """Complete state for Feedback Learner agent."""
 
@@ -117,6 +175,12 @@ class FeedbackLearnerState(TypedDict):
     # === FEEDBACK DATA ===
     feedback_items: Optional[List[FeedbackItem]]
     feedback_summary: Optional[FeedbackSummary]
+
+    # === DISCOVERY FEEDBACK (V4.4) ===
+    discovery_feedback_items: Optional[List[DiscoveryFeedbackItem]]
+    discovery_accuracy_tracking: Optional[Dict[str, DiscoveryAccuracyTracking]]
+    discovery_parameter_recommendations: Optional[List[DiscoveryParameterRecommendation]]
+    has_discovery_feedback: bool
 
     # === CAUSAL VALIDATION OUTCOMES (From Causal Impact Agent) ===
     validation_outcomes: Optional[List[ValidationOutcome]]
