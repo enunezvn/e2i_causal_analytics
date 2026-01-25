@@ -4303,10 +4303,10 @@ export interface components {
         AnalysisMethod: "itt" | "per_protocol";
         /**
          * AnalysisStatus
-         * @description Status of a gap analysis.
+         * @description Status of segment analysis.
          * @enum {string}
          */
-        AnalysisStatus: "pending" | "detecting" | "calculating" | "prioritizing" | "completed" | "failed";
+        AnalysisStatus: "pending" | "estimating" | "analyzing" | "optimizing" | "completed" | "failed";
         /**
          * AnalysisType
          * @description Analysis types.
@@ -4887,7 +4887,7 @@ export interface components {
              * Nodes
              * @description Graph nodes
              */
-            nodes: components["schemas"]["GraphNode"][];
+            nodes: components["schemas"]["src__api__routes__rag__GraphNode"][];
             /**
              * Edges
              * @description Graph edges
@@ -6971,7 +6971,7 @@ export interface components {
              */
             analysis_id: string;
             /** @description Analysis status */
-            status: components["schemas"]["AnalysisStatus"];
+            status: components["schemas"]["src__api__routes__gaps__AnalysisStatus"];
             /**
              * Brand
              * @description Brand analyzed
@@ -7134,24 +7134,32 @@ export interface components {
         };
         /**
          * GraphNode
-         * @description Node in the causal graph.
+         * @description A node in the knowledge graph.
+         * @example {
+         *       "created_at": "2025-01-15T10:30:00Z",
+         *       "id": "hcp_12345",
+         *       "name": "Dr. Smith",
+         *       "properties": {
+         *         "specialty": "Oncology",
+         *         "region": "Northeast",
+         *         "tier": "A"
+         *       },
+         *       "type": "HCP"
+         *     }
          */
         GraphNode: {
             /**
              * Id
-             * @description Node identifier
+             * @description Unique node identifier
              */
             id: string;
+            /** @description Node entity type */
+            type: components["schemas"]["EntityType"];
             /**
-             * Label
-             * @description Display label
+             * Name
+             * @description Node display name
              */
-            label: string;
-            /**
-             * Type
-             * @description Node type (brand/kpi/region/agent)
-             */
-            type: string;
+            name: string;
             /**
              * Properties
              * @description Node properties
@@ -7159,6 +7167,16 @@ export interface components {
             properties?: {
                 [key: string]: unknown;
             };
+            /**
+             * Created At
+             * @description Creation timestamp
+             */
+            created_at?: string | null;
+            /**
+             * Updated At
+             * @description Last update timestamp
+             */
+            updated_at?: string | null;
         };
         /**
          * GraphPath
@@ -7169,7 +7187,7 @@ export interface components {
              * Nodes
              * @description Nodes in the path
              */
-            nodes: components["schemas"]["src__api__models__graph__GraphNode"][];
+            nodes: components["schemas"]["GraphNode"][];
             /**
              * Relationships
              * @description Relationships connecting nodes
@@ -8379,7 +8397,7 @@ export interface components {
              * Nodes
              * @description List of nodes
              */
-            nodes: components["schemas"]["src__api__models__graph__GraphNode"][];
+            nodes: components["schemas"]["GraphNode"][];
             /**
              * Total Count
              * @description Total matching nodes
@@ -8666,34 +8684,44 @@ export interface components {
         };
         /**
          * ModelHealthResponse
-         * @description Response schema for model health check.
+         * @description Response for model health check.
          */
         ModelHealthResponse: {
             /**
-             * Model Name
-             * @description Name of the model
+             * Model Health Score
+             * @description Aggregate score (0-1)
              */
-            model_name: string;
+            model_health_score: number;
             /**
-             * Status
-             * @description Health status
+             * Total Models
+             * @description Total models checked
              */
-            status: string;
+            total_models: number;
             /**
-             * Endpoint
-             * @description Model endpoint URL
+             * Healthy Count
+             * @description Healthy model count
              */
-            endpoint: string;
+            healthy_count: number;
             /**
-             * Last Check
-             * @description Last health check timestamp
+             * Degraded Count
+             * @description Degraded model count
              */
-            last_check: string;
+            degraded_count: number;
             /**
-             * Error
-             * @description Error message if unhealthy
+             * Unhealthy Count
+             * @description Unhealthy model count
              */
-            error?: string | null;
+            unhealthy_count: number;
+            /**
+             * Models
+             * @description Model details
+             */
+            models: components["schemas"]["ModelHealth"][];
+            /**
+             * Check Latency Ms
+             * @description Check duration
+             */
+            check_latency_ms: number;
         };
         /**
          * ModelHealthSummary
@@ -8763,7 +8791,7 @@ export interface components {
              * Models
              * @description Individual model statuses
              */
-            models: components["schemas"]["ModelHealthResponse"][];
+            models: components["schemas"]["src__api__routes__predictions__ModelHealthResponse"][];
             /**
              * Timestamp
              * @description Status check timestamp
@@ -10035,10 +10063,10 @@ export interface components {
         QueryType: "causal" | "prediction" | "optimization" | "monitoring" | "explanation" | "general";
         /**
          * QuestionType
-         * @description Types of causal questions for routing.
+         * @description Type of analysis question for library routing.
          * @enum {string}
          */
-        QuestionType: "causal_effect" | "effect_heterogeneity" | "targeting" | "system_dependencies" | "comprehensive";
+        QuestionType: "effect_heterogeneity" | "targeting" | "segment_optimization" | "comprehensive";
         /**
          * QuestionType
          * @description Type of analysis question for library routing.
@@ -10457,7 +10485,7 @@ export interface components {
              */
             query: string;
             /** @description Classified question type */
-            question_type: components["schemas"]["QuestionType"];
+            question_type: components["schemas"]["src__api__schemas__causal__QuestionType"];
             /** @description Recommended primary library */
             primary_library: components["schemas"]["CausalLibrary"];
             /**
@@ -11141,9 +11169,9 @@ export interface components {
              */
             analysis_id: string;
             /** @description Analysis status */
-            status: components["schemas"]["src__api__routes__segments__AnalysisStatus"];
+            status: components["schemas"]["AnalysisStatus"];
             /** @description Question type used for routing */
-            question_type?: components["schemas"]["src__api__routes__segments__QuestionType"] | null;
+            question_type?: components["schemas"]["QuestionType"] | null;
             /**
              * Cate By Segment
              * @description CATE results grouped by segment variable
@@ -12103,7 +12131,7 @@ export interface components {
              * Nodes
              * @description All traversed nodes
              */
-            nodes: components["schemas"]["src__api__models__graph__GraphNode"][];
+            nodes: components["schemas"]["GraphNode"][];
             /**
              * Relationships
              * @description All traversed relationships
@@ -12592,33 +12620,62 @@ export interface components {
             total: number;
         };
         /**
-         * GraphNode
-         * @description A node in the knowledge graph.
-         * @example {
-         *       "created_at": "2025-01-15T10:30:00Z",
-         *       "id": "hcp_12345",
-         *       "name": "Dr. Smith",
-         *       "properties": {
-         *         "specialty": "Oncology",
-         *         "region": "Northeast",
-         *         "tier": "A"
-         *       },
-         *       "type": "HCP"
-         *     }
+         * AnalysisStatus
+         * @description Status of a gap analysis.
+         * @enum {string}
          */
-        src__api__models__graph__GraphNode: {
+        src__api__routes__gaps__AnalysisStatus: "pending" | "detecting" | "calculating" | "prioritizing" | "completed" | "failed";
+        /**
+         * ModelHealthResponse
+         * @description Response schema for model health check.
+         */
+        src__api__routes__predictions__ModelHealthResponse: {
+            /**
+             * Model Name
+             * @description Name of the model
+             */
+            model_name: string;
+            /**
+             * Status
+             * @description Health status
+             */
+            status: string;
+            /**
+             * Endpoint
+             * @description Model endpoint URL
+             */
+            endpoint: string;
+            /**
+             * Last Check
+             * @description Last health check timestamp
+             */
+            last_check: string;
+            /**
+             * Error
+             * @description Error message if unhealthy
+             */
+            error?: string | null;
+        };
+        /**
+         * GraphNode
+         * @description Node in the causal graph.
+         */
+        src__api__routes__rag__GraphNode: {
             /**
              * Id
-             * @description Unique node identifier
+             * @description Node identifier
              */
             id: string;
-            /** @description Node entity type */
-            type: components["schemas"]["EntityType"];
             /**
-             * Name
-             * @description Node display name
+             * Label
+             * @description Display label
              */
-            name: string;
+            label: string;
+            /**
+             * Type
+             * @description Node type (brand/kpi/region/agent)
+             */
+            type: string;
             /**
              * Properties
              * @description Node properties
@@ -12626,76 +12683,19 @@ export interface components {
             properties?: {
                 [key: string]: unknown;
             };
-            /**
-             * Created At
-             * @description Creation timestamp
-             */
-            created_at?: string | null;
-            /**
-             * Updated At
-             * @description Last update timestamp
-             */
-            updated_at?: string | null;
         };
-        /**
-         * ModelHealthResponse
-         * @description Response for model health check.
-         */
-        src__api__routes__health_score__ModelHealthResponse: {
-            /**
-             * Model Health Score
-             * @description Aggregate score (0-1)
-             */
-            model_health_score: number;
-            /**
-             * Total Models
-             * @description Total models checked
-             */
-            total_models: number;
-            /**
-             * Healthy Count
-             * @description Healthy model count
-             */
-            healthy_count: number;
-            /**
-             * Degraded Count
-             * @description Degraded model count
-             */
-            degraded_count: number;
-            /**
-             * Unhealthy Count
-             * @description Unhealthy model count
-             */
-            unhealthy_count: number;
-            /**
-             * Models
-             * @description Model details
-             */
-            models: components["schemas"]["ModelHealth"][];
-            /**
-             * Check Latency Ms
-             * @description Check duration
-             */
-            check_latency_ms: number;
-        };
-        /**
-         * AnalysisStatus
-         * @description Status of segment analysis.
-         * @enum {string}
-         */
-        src__api__routes__segments__AnalysisStatus: "pending" | "estimating" | "analyzing" | "optimizing" | "completed" | "failed";
-        /**
-         * QuestionType
-         * @description Type of analysis question for library routing.
-         * @enum {string}
-         */
-        src__api__routes__segments__QuestionType: "effect_heterogeneity" | "targeting" | "segment_optimization" | "comprehensive";
         /**
          * AnalysisStatus
          * @description Analysis status.
          * @enum {string}
          */
         src__api__schemas__causal__AnalysisStatus: "pending" | "running" | "completed" | "failed";
+        /**
+         * QuestionType
+         * @description Types of causal questions for routing.
+         * @enum {string}
+         */
+        src__api__schemas__causal__QuestionType: "causal_effect" | "effect_heterogeneity" | "targeting" | "system_dependencies" | "comprehensive";
     };
     responses: never;
     parameters: never;
@@ -13370,7 +13370,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["src__api__models__graph__GraphNode"];
+                    "application/json": components["schemas"]["GraphNode"];
                 };
             };
             /** @description Validation Error */
@@ -15972,7 +15972,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["src__api__routes__health_score__ModelHealthResponse"];
+                    "application/json": components["schemas"]["ModelHealthResponse"];
                 };
             };
         };
@@ -16476,7 +16476,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ModelHealthResponse"];
+                    "application/json": components["schemas"]["src__api__routes__predictions__ModelHealthResponse"];
                 };
             };
             /** @description Model not found */
