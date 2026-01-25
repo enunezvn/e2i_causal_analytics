@@ -463,3 +463,15 @@ The E2I Causal Analytics system is well-architected for MCP and Skills integrati
 5. **Route through tool_composer**: Make it the MCP orchestration hub
 
 This approach maximizes value while managing context costs and maintaining your existing tool registry architecture.
+
+---
+
+## Related Documents
+
+- **[Domain Skills Framework](../../skills/SKILL_INTEGRATION.md)**: Expanded guide on building pharma commercial analytics skills, including:
+  - Complete skill directory structure
+  - 10+ skill file templates (KPI calculation, brand analytics, causal inference, etc.)
+  - Agent-skill mapping patterns
+  - SkillLoader implementation
+  - Token efficiency strategies
+  - MCP + Skills integration patterns
