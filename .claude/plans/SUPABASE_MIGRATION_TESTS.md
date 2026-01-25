@@ -178,6 +178,11 @@ ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && \
 - [x] Commit and push
 - [x] Sync to droplet
 
+### Wave 8: Phase 6 - pgvector Extension (Added 2026-01-25)
+- [x] Create `test_phase6_pgvector.py`
+- [x] Apply RAG schema migration (`database/rag/001_rag_schema.sql`)
+- [x] Run on droplet, verify all pass (23/23 PASSED)
+
 ---
 
 ## Verification
@@ -186,7 +191,10 @@ After implementation, run:
 ```bash
 # Full validation (should take ~8 minutes)
 ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && \
+  source .env && SUPABASE_DB_HOST=172.22.0.4 \
   .venv/bin/pytest tests/integration/test_migration/ -v --tb=short"
 ```
 
-Expected output: **40 passed** ✅ (Verified 2026-01-25)
+Expected output: **63 passed** ✅ (Verified 2026-01-25)
+- Phase 1-5: 40 tests
+- Phase 6 (pgvector): 23 tests
