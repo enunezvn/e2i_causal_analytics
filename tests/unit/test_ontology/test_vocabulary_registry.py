@@ -173,14 +173,29 @@ class TestVocabularyRegistryAccessors:
         assert 'market_share' in kpi_names
 
     def test_get_journey_stages_returns_list(self, mock_vocabulary_file: Path):
-        """Test that get_journey_stages() returns journey stage list."""
+        """Test that get_journey_stages() returns patient engagement funnel stages (v5.1.0+)."""
         registry = VocabularyRegistry.load(str(mock_vocabulary_file))
         stages = registry.get_journey_stages()
 
         assert isinstance(stages, list)
+        # V5.1.0: get_journey_stages() returns engagement funnel stages
+        assert 'aware' in stages
+        assert 'considering' in stages
+        assert 'prescribed' in stages
+        assert 'first_fill' in stages
+        assert 'adherent' in stages
+
+    def test_get_treatment_line_stages_returns_list(self, mock_vocabulary_file: Path):
+        """Test that get_treatment_line_stages() returns clinical progression stages (v5.1.0+)."""
+        registry = VocabularyRegistry.load(str(mock_vocabulary_file))
+        stages = registry.get_treatment_line_stages()
+
+        assert isinstance(stages, list)
+        # V5.1.0: treatment line stages are separate from engagement stages
         assert 'diagnosis' in stages
         assert 'treatment_naive' in stages
         assert 'first_line' in stages
+        assert 'second_line' in stages
 
     def test_get_hcp_segments_returns_list(self, mock_vocabulary_file: Path):
         """Test that get_hcp_segments() returns HCP segment list."""
@@ -350,12 +365,14 @@ class TestVocabularyRegistryValidation:
         assert 'south' in regions
 
     def test_get_enum_values_journey_stage_type(self, mock_vocabulary_file: Path):
-        """Test get_enum_values for journey_stage_type enum."""
+        """Test get_enum_values for journey_stage_type enum (v5.1.0+: engagement stages)."""
         registry = VocabularyRegistry.load(str(mock_vocabulary_file))
         stages = registry.get_enum_values('journey_stage_type')
 
         assert isinstance(stages, list)
-        assert 'diagnosis' in stages
+        # V5.1.0: journey_stage_type returns engagement funnel stages
+        assert 'aware' in stages
+        assert 'prescribed' in stages
 
     def test_get_enum_values_unknown_enum(self, mock_vocabulary_file: Path):
         """Test get_enum_values returns empty list for unknown enum."""
