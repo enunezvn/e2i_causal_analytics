@@ -1,0 +1,133 @@
+# =============================================================================
+# E2I Supabase Self-Hosted Docker Compose Override
+# =============================================================================
+# This file extends the official Supabase docker-compose.yml to integrate
+# with E2I's existing infrastructure on the DigitalOcean droplet.
+#
+# Usage:
+#   1. Clone Supabase: git clone --depth 1 https://github.com/supabase/supabase /opt/supabase
+#   2. Copy this file to /opt/supabase/docker/ or reference it with -f flag
+#   3. Run: docker compose -f docker-compose.yml -f docker-compose.override.yml up -d
+#
+# Documentation: docs/SUPABASE_SELF_HOSTED_MIGRATION.md
+# =============================================================================
+
+version: '3.8'
+
+services:
+  # PostgreSQL Database - expose on port 5433 to avoid conflicts
+  db:
+    networks:
+      - default
+      - e2i-network
+    ports:
+      - "5433:5432"  # External:Internal - use 5433 to avoid conflict with any existing postgres
+    environment:
+      # Additional PostgreSQL configuration for E2I workloads
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=en_US.UTF-8"
+    command:
+      - postgres
+      - -c
+      - wal_level=logical  # Enable logical replication for migrations
+      - -c
+      - max_connections=200  # Increased for E2I agent workloads
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - effective_cache_size=768MB
+      - -c
+      - maintenance_work_mem=128MB
+      - -c
+      - work_mem=16MB
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Kong API Gateway - main entry point
+  kong:
+    networks:
+      - default
+      - e2i-network
+    ports:
+      - "8000:8000"   # HTTP API
+      - "8443:8443"   # HTTPS API
+    labels:
+      - "com.e2i.service=supabase-api"
+      - "com.e2i.component=gateway"
+
+  # GoTrue Authentication Service
+  auth:
+    networks:
+      - default
+      - e2i-network
+    environment:
+      # E2I-specific auth configuration
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
+      GOTRUE_MAILER_AUTOCONFIRM: "true"  # Auto-confirm for development; disable in production
+      GOTRUE_DISABLE_SIGNUP: "false"
+    labels:
+      - "com.e2i.service=supabase-auth"
+
+  # PostgREST - Auto-generated REST API
+  rest:
+    networks:
+      - default
+      - e2i-network
+    environment:
+      # Expose additional schemas for E2I
+      PGRST_DB_SCHEMAS: "public,storage,graphql_public"
+    labels:
+      - "com.e2i.service=supabase-rest"
+
+  # Realtime - WebSocket subscriptions
+  realtime:
+    networks:
+      - default
+      - e2i-network
+    labels:
+      - "com.e2i.service=supabase-realtime"
+
+  # Storage API - File storage
+  storage:
+    networks:
+      - default
+      - e2i-network
+    labels:
+      - "com.e2i.service=supabase-storage"
+
+  # Supabase Studio - Database management UI
+  studio:
+    networks:
+      - default
+      - e2i-network
+    ports:
+      - "3001:3000"  # Use 3001 to avoid conflict with E2I frontend on 3000
+    environment:
+      STUDIO_PG_META_URL: "http://meta:8080"
+      SUPABASE_URL: "http://kong:8000"
+      SUPABASE_PUBLIC_URL: "${SUPABASE_PUBLIC_URL:-http://138.197.4.36:8000}"
+    labels:
+      - "com.e2i.service=supabase-studio"
+
+  # Meta - Database metadata service for Studio
+  meta:
+    networks:
+      - default
+      - e2i-network
+
+  # Analytics (optional - can be disabled to save resources)
+  # Uncomment if you need Supabase Analytics
+  # analytics:
+  #   profiles: ["analytics"]
+
+networks:
+  # Connect to E2I's existing network
+  e2i-network:
+    external: true
+    name: e2i-backend-network
+
+  # Default Supabase internal network
+  default:
+    name: supabase-network
