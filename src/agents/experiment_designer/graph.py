@@ -50,13 +50,18 @@ def wrap_async_node(async_func: Callable) -> Callable:
     Returns:
         Sync function that runs the async function
     """
-    import nest_asyncio
-
+    # nest_asyncio is optional - only needed for nested event loop scenarios
     try:
-        nest_asyncio.apply()
-    except RuntimeError:
-        # Already applied or no event loop
-        pass
+        import nest_asyncio
+
+        try:
+            nest_asyncio.apply()
+        except RuntimeError:
+            # Already applied or no event loop
+            pass
+        _has_nest_asyncio = True
+    except ImportError:
+        _has_nest_asyncio = False
 
     def sync_wrapper(state: ExperimentDesignState) -> ExperimentDesignState:
         try:
@@ -65,8 +70,23 @@ def wrap_async_node(async_func: Callable) -> Callable:
             loop = None
 
         if loop and loop.is_running():
-            # Use nest_asyncio for nested event loops
-            return loop.run_until_complete(async_func(state))
+            if _has_nest_asyncio:
+                # Use nest_asyncio for nested event loops
+                return loop.run_until_complete(async_func(state))
+            else:
+                # Fallback: create new event loop (may cause issues in nested scenarios)
+                import warnings
+
+                warnings.warn(
+                    "nest_asyncio not installed. Nested event loop handling may fail.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                new_loop = asyncio.new_event_loop()
+                try:
+                    return new_loop.run_until_complete(async_func(state))
+                finally:
+                    new_loop.close()
         else:
             # No running loop, create a new one
             return asyncio.run(async_func(state))
