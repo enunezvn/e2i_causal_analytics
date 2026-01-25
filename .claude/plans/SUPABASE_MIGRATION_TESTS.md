@@ -174,9 +174,9 @@ ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && \
 - [x] Fixed: Accept 401 status for PostgREST and OpenAPI endpoints (Kong auth)
 
 ### Wave 7: Finalize
-- [x] Run full test suite on droplet (40/40 PASSED)
-- [ ] Commit and push
-- [ ] Sync to droplet
+- [x] Run full test suite on droplet (39 passed, 1 skipped)
+- [x] Commit and push (5aa7b47)
+- [x] Sync to droplet
 
 ---
 
@@ -189,4 +189,6 @@ ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && \
   .venv/bin/pytest tests/integration/test_migration/ -v --tb=short"
 ```
 
-Expected output: **40 tests passed** ✅ (Verified 2026-01-25)
+Expected output: **39 passed, 1 skipped** ✅ (Verified 2026-01-25)
+
+Note: The skipped test (`test_query_agent_registry_via_api`) requires SUPABASE_ANON_KEY or SUPABASE_SERVICE_KEY to be configured.
