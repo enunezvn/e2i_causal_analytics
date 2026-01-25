@@ -19,7 +19,14 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 
-import anthropic
+# anthropic is optional - graceful degradation when not available
+try:
+    import anthropic
+
+    _has_anthropic = True
+except ImportError:
+    anthropic = None  # type: ignore
+    _has_anthropic = False
 
 from src.agents.feedback_learner.evaluation.criteria import (
     DEFAULT_OVERRIDE_CONDITIONS,
@@ -161,13 +168,18 @@ class RubricEvaluator:
 
         # Initialize Anthropic client (uses ANTHROPIC_API_KEY env var)
         api_key = os.getenv("ANTHROPIC_API_KEY")
-        if api_key:
+        if _has_anthropic and api_key:
             self.client = anthropic.Anthropic(api_key=api_key)
         else:
             self.client = None
-            logger.warning(
-                "No ANTHROPIC_API_KEY found, RubricEvaluator will use fallback scoring"
-            )
+            if not _has_anthropic:
+                logger.warning(
+                    "anthropic package not installed, RubricEvaluator will use fallback scoring"
+                )
+            else:
+                logger.warning(
+                    "No ANTHROPIC_API_KEY found, RubricEvaluator will use fallback scoring"
+                )
 
     async def evaluate(self, context: EvaluationContext) -> RubricEvaluation:
         """
@@ -242,8 +254,12 @@ class RubricEvaluator:
             response_text = response.content[0].text
             return self._parse_evaluation_response(response_text)
 
-        except anthropic.APIError as e:
-            logger.error("Anthropic API error during evaluation: %s", e)
+        except Exception as e:
+            # Handle anthropic.APIError specifically when available
+            if _has_anthropic and isinstance(e, anthropic.APIError):
+                logger.error("Anthropic API error during evaluation: %s", e)
+            else:
+                logger.error("Error during AI evaluation: %s", e)
             return self._fallback_evaluation()
 
     def _build_evaluation_prompt(self, context: EvaluationContext) -> str:
@@ -453,8 +469,12 @@ Keep the improvement concise (2-3 sentences max)."""
             )
             return response.content[0].text.strip()
 
-        except anthropic.APIError as e:
-            logger.error("Failed to generate improvement suggestion: %s", e)
+        except Exception as e:
+            # Handle anthropic.APIError specifically when available
+            if _has_anthropic and isinstance(e, anthropic.APIError):
+                logger.error("Failed to generate improvement suggestion: %s", e)
+            else:
+                logger.error("Error generating improvement suggestion: %s", e)
             return None
 
     def _summarize_evaluation(self, scores: List[CriterionScore]) -> str:
