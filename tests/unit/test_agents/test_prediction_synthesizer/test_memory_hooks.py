@@ -178,18 +178,23 @@ class TestGetContext:
     @pytest.mark.asyncio
     async def test_get_context_graceful_degradation(self, memory_hooks):
         """Test that context retrieval handles missing memory gracefully."""
-        context = await memory_hooks.get_context(
-            session_id="test-session",
-            entity_id="hcp_123",
-            entity_type="hcp",
-            prediction_target="churn",
-        )
+        # Patch the lazy-loading import to fail, simulating unavailable memory
+        with patch(
+            "src.agents.prediction_synthesizer.memory_hooks.PredictionSynthesizerMemoryHooks.working_memory",
+            new_callable=lambda: property(lambda self: None),
+        ):
+            context = await memory_hooks.get_context(
+                session_id="test-session",
+                entity_id="hcp_123",
+                entity_type="hcp",
+                prediction_target="churn",
+            )
 
-        # Should return empty context, not raise
-        assert context.working_memory == []
-        assert context.cached_predictions == []
-        assert context.episodic_context == []
-        assert context.model_performance == {}
+            # Should return empty context, not raise
+            assert context.working_memory == []
+            assert context.cached_predictions == []
+            assert context.episodic_context == []
+            assert context.model_performance == {}
 
 
 class TestWorkingMemoryContext:
@@ -350,17 +355,20 @@ class TestCachePrediction:
         self, memory_hooks, sample_prediction_result
     ):
         """Test caching when working memory unavailable."""
-        memory_hooks._working_memory = None
+        # Patch the property to return None, simulating unavailable memory
+        with patch(
+            "src.agents.prediction_synthesizer.memory_hooks.PredictionSynthesizerMemoryHooks.working_memory",
+            new_callable=lambda: property(lambda self: None),
+        ):
+            result = await memory_hooks.cache_prediction(
+                session_id="test-session",
+                entity_id="hcp_123",
+                entity_type="hcp",
+                prediction_target="churn",
+                prediction_result=sample_prediction_result,
+            )
 
-        result = await memory_hooks.cache_prediction(
-            session_id="test-session",
-            entity_id="hcp_123",
-            entity_type="hcp",
-            prediction_target="churn",
-            prediction_result=sample_prediction_result,
-        )
-
-        assert result is False
+            assert result is False
 
 
 class TestUpdateModelPerformance:
@@ -623,35 +631,40 @@ class TestMemoryHooksIntegration:
         """Test full workflow when memory systems unavailable."""
         hooks = PredictionSynthesizerMemoryHooks()
 
-        # Get context
-        context = await hooks.get_context(
-            session_id="integration-test",
-            entity_id="hcp_123",
-            entity_type="hcp",
-            prediction_target="churn",
-        )
+        # Patch the property to return None, simulating unavailable memory
+        with patch(
+            "src.agents.prediction_synthesizer.memory_hooks.PredictionSynthesizerMemoryHooks.working_memory",
+            new_callable=lambda: property(lambda self: None),
+        ):
+            # Get context
+            context = await hooks.get_context(
+                session_id="integration-test",
+                entity_id="hcp_123",
+                entity_type="hcp",
+                prediction_target="churn",
+            )
 
-        assert context.session_id == "integration-test"
+            assert context.session_id == "integration-test"
 
-        # Cache prediction (should fail gracefully)
-        cached = await hooks.cache_prediction(
-            session_id="integration-test",
-            entity_id="hcp_123",
-            entity_type="hcp",
-            prediction_target="churn",
-            prediction_result={"point_estimate": 0.72},
-        )
+            # Cache prediction (should fail gracefully)
+            cached = await hooks.cache_prediction(
+                session_id="integration-test",
+                entity_id="hcp_123",
+                entity_type="hcp",
+                prediction_target="churn",
+                prediction_result={"point_estimate": 0.72},
+            )
 
-        assert cached is False  # No working memory available
+            assert cached is False  # No working memory available
 
-        # Store prediction (should fail gracefully)
-        memory_id = await hooks.store_prediction(
-            session_id="integration-test",
-            result={"ensemble_prediction": {"point_estimate": 0.72}},
-            state={"status": "completed", "entity_id": "hcp_123"},
-        )
+            # Store prediction (should fail gracefully)
+            memory_id = await hooks.store_prediction(
+                session_id="integration-test",
+                result={"ensemble_prediction": {"point_estimate": 0.72}},
+                state={"status": "completed", "entity_id": "hcp_123"},
+            )
 
-        assert memory_id is None
+            assert memory_id is None
 
     @pytest.mark.asyncio
     async def test_cache_key_patterns(self, memory_hooks, mock_working_memory, mock_redis):
