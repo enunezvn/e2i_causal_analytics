@@ -185,16 +185,21 @@ class TestChatbotWorkflow:
 
     @pytest.mark.asyncio
     @patch("src.api.routes.chatbot_graph.get_async_supabase_client", new_callable=AsyncMock)
-    async def test_handles_greeting_intent(self, mock_get_client):
+    @patch("src.api.routes.chatbot_graph.cognitive_rag_retrieve", new_callable=AsyncMock)
+    @patch("src.api.routes.chatbot_graph.get_chat_llm")
+    async def test_handles_greeting_intent(
+        self, mock_get_chat_llm, mock_cognitive_rag, mock_get_client
+    ):
         """Test that greeting queries get appropriate response."""
         mock_get_client.return_value = None  # No database
+        mock_cognitive_rag.return_value = None  # No RAG results for greeting
+        mock_get_chat_llm.side_effect = ValueError("ANTHROPIC_API_KEY not set")  # Force fallback
 
-        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": ""}):
-            result = await run_chatbot(
-                query="Hello!",
-                user_id="user-123",
-                request_id="req-456",
-            )
+        result = await run_chatbot(
+            query="Hello!",
+            user_id="user-123",
+            request_id="req-456",
+        )
 
         assert "response_text" in result
         # Fallback greeting response should mention pharmaceutical analytics or assistance
@@ -203,16 +208,21 @@ class TestChatbotWorkflow:
 
     @pytest.mark.asyncio
     @patch("src.api.routes.chatbot_graph.get_async_supabase_client", new_callable=AsyncMock)
-    async def test_handles_help_intent(self, mock_get_client):
+    @patch("src.api.routes.chatbot_graph.cognitive_rag_retrieve", new_callable=AsyncMock)
+    @patch("src.api.routes.chatbot_graph.get_chat_llm")
+    async def test_handles_help_intent(
+        self, mock_get_chat_llm, mock_cognitive_rag, mock_get_client
+    ):
         """Test that help queries get appropriate response."""
         mock_get_client.return_value = None
+        mock_cognitive_rag.return_value = None  # No RAG results for help
+        mock_get_chat_llm.side_effect = ValueError("ANTHROPIC_API_KEY not set")  # Force fallback
 
-        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": ""}):
-            result = await run_chatbot(
-                query="What can you do?",
-                user_id="user-123",
-                request_id="req-456",
-            )
+        result = await run_chatbot(
+            query="What can you do?",
+            user_id="user-123",
+            request_id="req-456",
+        )
 
         assert "response_text" in result
         # Help response should list capabilities
@@ -226,8 +236,10 @@ class TestMessagePersistence:
     @patch("src.api.routes.chatbot_graph.get_async_supabase_client", new_callable=AsyncMock)
     @patch("src.api.routes.chatbot_graph.get_chatbot_message_repository")
     @patch("src.api.routes.chatbot_graph.get_chatbot_conversation_repository")
+    @patch("src.api.routes.chatbot_graph.cognitive_rag_retrieve", new_callable=AsyncMock)
+    @patch("src.api.routes.chatbot_graph.get_chat_llm")
     async def test_persists_messages_on_completion(
-        self, mock_get_conv_repo, mock_get_msg_repo, mock_get_client
+        self, mock_get_chat_llm, mock_cognitive_rag, mock_get_conv_repo, mock_get_msg_repo, mock_get_client
     ):
         """Test that messages are persisted when workflow completes."""
         # Setup mocks
@@ -244,12 +256,15 @@ class TestMessagePersistence:
         mock_msg_repo.get_recent_messages = AsyncMock(return_value=[])
         mock_get_msg_repo.return_value = mock_msg_repo
 
-        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": ""}):
-            await run_chatbot(
-                query="Hello!",
-                user_id="user-123",
-                request_id="req-456",
-            )
+        # Mock RAG and LLM to avoid real API calls
+        mock_cognitive_rag.return_value = None
+        mock_get_chat_llm.side_effect = ValueError("ANTHROPIC_API_KEY not set")
+
+        await run_chatbot(
+            query="Hello!",
+            user_id="user-123",
+            request_id="req-456",
+        )
 
         # Verify add_message was called (once for user, once for assistant)
         assert mock_msg_repo.add_message.call_count >= 2

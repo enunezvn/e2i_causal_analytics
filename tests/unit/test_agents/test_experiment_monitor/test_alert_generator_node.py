@@ -208,7 +208,8 @@ class TestGenerateEnrollmentAlerts:
 
     @pytest.fixture
     def node(self):
-        return AlertGeneratorNode()
+        # Disable DSPy prompts to use deterministic fallback messages
+        return AlertGeneratorNode(use_dspy_prompts=False)
 
     def test_no_alerts_when_no_issues(self, node):
         """Test no alerts generated when no enrollment issues."""
@@ -332,7 +333,8 @@ class TestGenerateFidelityAlerts:
 
     @pytest.fixture
     def node(self):
-        return AlertGeneratorNode()
+        # Disable DSPy prompts to use deterministic fallback messages
+        return AlertGeneratorNode(use_dspy_prompts=False)
 
     def test_no_alerts_when_no_issues(self, node):
         """Test no alerts when no fidelity issues."""
