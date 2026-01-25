@@ -59,6 +59,7 @@ export interface ApiErrorResponse {
   message: string;
   details?: Record<string, unknown>;
   timestamp?: string;
+  suggested_action?: string;
 }
 
 /**

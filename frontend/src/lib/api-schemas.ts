@@ -468,7 +468,7 @@ export const AgentSchema = z.object({
   id: z.string(),
   name: z.string(),
   tier: z.number().int().min(0).max(5),
-  status: z.enum(['active', 'inactive', 'processing', 'error']),
+  status: z.enum(['idle', 'active', 'processing', 'complete', 'error']),
   capabilities: z.array(z.string()),
   lastActive: z.string().optional(),
   errorMessage: z.string().optional(),
