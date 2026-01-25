@@ -1,12 +1,17 @@
 """
 E2I Explainer Agent - Main Agent Class
-Version: 4.2
+Version: 4.3
 Purpose: Natural language explanations for complex analyses
 
 Memory Integration:
 - Working Memory (Redis): Session caching, conversation context
 - Episodic Memory (Supabase): Historical explanations with embeddings
 - Semantic Memory (FalkorDB): Entity relationships and knowledge graph
+
+Smart LLM Mode Selection (v4.3):
+- Auto-detects complexity to decide LLM vs deterministic mode
+- Configurable threshold and scoring weights
+- Considers: result count, query complexity, causal discovery, expertise level
 """
 
 from __future__ import annotations
@@ -18,6 +23,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from .config import ComplexityScorer, ExplainerConfig, get_default_config
 from .graph import build_explainer_graph
 from .state import ExplainerState, Insight, NarrativeSection
 
@@ -83,38 +89,105 @@ class ExplainerAgent:
     - Working Memory (Redis): Session caching with 24h TTL
     - Episodic Memory (Supabase): Historical explanations
     - Semantic Memory (FalkorDB): Entity relationships
+
+    Smart LLM Mode Selection (v4.3):
+    - use_llm=None: Auto-detect based on input complexity
+    - use_llm=True: Always use LLM reasoning
+    - use_llm=False: Always use deterministic mode
     """
 
     def __init__(
         self,
         conversation_store: Optional[Any] = None,
-        use_llm: bool = False,
+        use_llm: Optional[bool] = None,
         llm: Optional[Any] = None,
+        config: Optional[ExplainerConfig] = None,
     ):
         """
         Initialize Explainer agent.
 
         Args:
             conversation_store: Optional store for conversation history
-            use_llm: Whether to use LLM for enhanced reasoning
+            use_llm: LLM mode selection:
+                - None (default): Auto-detect based on complexity
+                - True: Always use LLM reasoning
+                - False: Always use deterministic mode
             llm: Optional LLM instance to use
+            config: Optional configuration for complexity scoring
         """
         self._conversation_store = conversation_store
-        self._use_llm = use_llm
+        self._use_llm = use_llm  # None = auto mode
         self._llm = llm
+        self._config = config or get_default_config()
+        self._complexity_scorer = ComplexityScorer(self._config)
         self._graph = None
+        self._graph_use_llm = False  # Track which mode graph was built with
         self._memory_hooks = None
+
+    def _get_graph(self, use_llm: bool):
+        """
+        Get or build the explanation graph for the specified LLM mode.
+
+        Args:
+            use_llm: Whether to use LLM mode
+
+        Returns:
+            The compiled LangGraph
+        """
+        # Rebuild graph if LLM mode changed
+        if self._graph is None or self._graph_use_llm != use_llm:
+            self._graph = build_explainer_graph(
+                conversation_store=self._conversation_store,
+                use_llm=use_llm,
+                llm=self._llm,
+            )
+            self._graph_use_llm = use_llm
+        return self._graph
 
     @property
     def graph(self):
-        """Lazy-load the explanation graph."""
-        if self._graph is None:
-            self._graph = build_explainer_graph(
-                conversation_store=self._conversation_store,
-                use_llm=self._use_llm,
-                llm=self._llm,
+        """Lazy-load the explanation graph with default LLM mode."""
+        # For backward compatibility, use False if use_llm is None
+        effective_use_llm = self._use_llm if self._use_llm is not None else False
+        return self._get_graph(effective_use_llm)
+
+    def _should_use_llm(
+        self,
+        analysis_results: List[Dict[str, Any]],
+        query: str,
+        user_expertise: str,
+    ) -> tuple[bool, float, str]:
+        """
+        Determine if LLM should be used based on input complexity.
+
+        Args:
+            analysis_results: Analysis results to explain
+            query: User's query
+            user_expertise: Target audience expertise level
+
+        Returns:
+            Tuple of (should_use_llm, complexity_score, reason)
+        """
+        # Check for causal discovery data in results
+        has_causal_discovery = any(
+            any(
+                key in result
+                for key in [
+                    "discovered_dag",
+                    "causal_graph",
+                    "dag_adjacency",
+                    "discovery_gate_decision",
+                ]
             )
-        return self._graph
+            for result in analysis_results
+        )
+
+        return self._complexity_scorer.should_use_llm(
+            analysis_results=analysis_results,
+            query=query,
+            user_expertise=user_expertise,
+            has_causal_discovery=has_causal_discovery,
+        )
 
     @property
     def memory_hooks(self) -> Optional["ExplanationMemoryHooks"]:
@@ -162,6 +235,22 @@ class ExplainerAgent:
         # Generate session ID if not provided
         effective_session_id = session_id or self._generate_session_id()
 
+        # Determine LLM mode
+        if self._use_llm is not None:
+            # Explicit mode set
+            effective_use_llm = self._use_llm
+            complexity_score = None
+            llm_reason = "explicit_setting"
+        else:
+            # Auto-detect based on complexity
+            effective_use_llm, complexity_score, llm_reason = self._should_use_llm(
+                analysis_results, query, user_expertise
+            )
+            logger.info(
+                f"Auto LLM selection: use_llm={effective_use_llm}, "
+                f"complexity={complexity_score:.2f}, reason={llm_reason}"
+            )
+
         initial_state: ExplainerState = {
             "query": query,
             "analysis_results": analysis_results,
@@ -200,12 +289,15 @@ class ExplainerAgent:
         logger.info(
             f"Starting explanation: {len(analysis_results)} results, "
             f"expertise={user_expertise}, format={output_format}, "
-            f"session={effective_session_id}"
+            f"use_llm={effective_use_llm}, session={effective_session_id}"
         )
+
+        # Get graph with appropriate LLM mode
+        graph = self._get_graph(effective_use_llm)
 
         # Provide config with thread_id for checkpointer (if enabled)
         config = {"configurable": {"thread_id": effective_session_id}}
-        result = await self.graph.ainvoke(initial_state, config=config)
+        result = await graph.ainvoke(initial_state, config=config)
 
         return ExplainerOutput(
             executive_summary=result.get("executive_summary", ""),
