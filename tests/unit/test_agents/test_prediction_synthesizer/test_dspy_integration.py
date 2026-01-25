@@ -662,3 +662,401 @@ class TestFullSignalLifecycle:
         # Lower reward due to failures
         reward = signal.compute_reward()
         assert reward < 0.7  # Should be lower due to failures
+
+
+class TestSignalEmission:
+    """Tests for signal emission to feedback learner."""
+
+    @pytest.mark.asyncio
+    async def test_emit_training_signal_below_threshold(self):
+        """Test that low-quality signals are not emitted."""
+        from src.agents.prediction_synthesizer.dspy_integration import (
+            PredictionSynthesisTrainingSignal,
+            emit_training_signal,
+        )
+
+        # Create a low-quality signal
+        signal = PredictionSynthesisTrainingSignal(
+            models_requested=3,
+            models_succeeded=1,
+            ensemble_confidence=0.3,
+            model_agreement=0.2,
+        )
+
+        result = await emit_training_signal(
+            signal=signal,
+            min_reward_threshold=0.7,
+        )
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_emit_training_signal_above_threshold(self):
+        """Test signal emission above threshold."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from src.agents.prediction_synthesizer.dspy_integration import (
+            PredictionSynthesisTrainingSignal,
+            emit_training_signal,
+        )
+
+        signal = PredictionSynthesisTrainingSignal(
+            signal_id="test_signal",
+            session_id="test_session",
+            models_requested=3,
+            models_succeeded=3,
+            ensemble_confidence=0.9,
+            model_agreement=0.95,
+            point_estimate=0.75,
+            prediction_interval_width=0.15,
+            total_latency_ms=1000,
+            similar_cases_found=5,
+            feature_importance_calculated=True,
+            trend_direction="stable",
+            prediction_accuracy=0.85,
+        )
+
+        with patch(
+            "src.agents.prediction_synthesizer.dspy_integration.get_feedback_learner_memory_hooks"
+        ) as mock_get_hooks:
+            mock_hooks = MagicMock()
+            mock_hooks.receive_signal = AsyncMock()
+            mock_get_hooks.return_value = mock_hooks
+
+            result = await emit_training_signal(
+                signal=signal,
+                min_reward_threshold=0.5,
+            )
+
+            assert result is True
+            mock_hooks.receive_signal.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_emit_training_signal_import_error(self):
+        """Test graceful handling when feedback learner not available."""
+        from unittest.mock import patch
+        from src.agents.prediction_synthesizer.dspy_integration import (
+            PredictionSynthesisTrainingSignal,
+            emit_training_signal,
+        )
+
+        signal = PredictionSynthesisTrainingSignal(
+            models_requested=3,
+            models_succeeded=3,
+            ensemble_confidence=0.9,
+            model_agreement=0.95,
+            prediction_accuracy=0.9,
+        )
+
+        with patch(
+            "src.agents.prediction_synthesizer.dspy_integration.get_feedback_learner_memory_hooks",
+            side_effect=ImportError("Module not found"),
+        ):
+            result = await emit_training_signal(
+                signal=signal,
+                min_reward_threshold=0.5,
+            )
+
+            assert result is False
+
+    @pytest.mark.asyncio
+    async def test_emit_training_signal_exception(self):
+        """Test graceful handling of exceptions."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from src.agents.prediction_synthesizer.dspy_integration import (
+            PredictionSynthesisTrainingSignal,
+            emit_training_signal,
+        )
+
+        signal = PredictionSynthesisTrainingSignal(
+            models_requested=3,
+            models_succeeded=3,
+            ensemble_confidence=0.9,
+            model_agreement=0.95,
+            prediction_accuracy=0.9,
+        )
+
+        with patch(
+            "src.agents.prediction_synthesizer.dspy_integration.get_feedback_learner_memory_hooks"
+        ) as mock_get_hooks:
+            mock_hooks = MagicMock()
+            mock_hooks.receive_signal = AsyncMock(side_effect=Exception("Connection error"))
+            mock_get_hooks.return_value = mock_hooks
+
+            result = await emit_training_signal(
+                signal=signal,
+                min_reward_threshold=0.5,
+            )
+
+            assert result is False
+
+
+class TestCreateSignalFromResult:
+    """Tests for create_signal_from_result function."""
+
+    def test_create_signal_basic(self):
+        """Test basic signal creation from result."""
+        from src.agents.prediction_synthesizer.dspy_integration import (
+            create_signal_from_result,
+        )
+
+        state = {
+            "query": "Predict churn for HCP-12345",
+            "entity_id": "HCP-12345",
+            "entity_type": "hcp",
+            "prediction_target": "churn",
+            "time_horizon": "30d",
+            "models_to_use": ["model_a", "model_b", "model_c"],
+            "ensemble_method": "weighted",
+            "orchestration_latency_ms": 800,
+            "ensemble_latency_ms": 400,
+        }
+
+        output = {
+            "status": "completed",
+            "models_succeeded": 3,
+            "models_failed": 0,
+            "total_latency_ms": 1200,
+            "ensemble_prediction": {
+                "point_estimate": 0.75,
+                "prediction_interval_lower": 0.65,
+                "prediction_interval_upper": 0.85,
+                "confidence": 0.85,
+                "model_agreement": 0.92,
+            },
+            "prediction_context": {
+                "similar_cases": [{"id": "1"}, {"id": "2"}],
+                "feature_importance": {"feature_a": 0.5},
+                "historical_accuracy": 0.82,
+                "trend_direction": "increasing",
+            },
+        }
+
+        signal = create_signal_from_result(
+            session_id="test_session",
+            state=state,
+            output=output,
+        )
+
+        assert signal.session_id == "test_session"
+        assert signal.entity_id == "HCP-12345"
+        assert signal.prediction_target == "churn"
+        assert signal.models_succeeded == 3
+        assert signal.point_estimate == 0.75
+        assert signal.prediction_interval_width == 0.20  # 0.85 - 0.65
+        assert signal.ensemble_confidence == 0.85
+        assert signal.model_agreement == 0.92
+        assert signal.similar_cases_found == 2
+        assert signal.feature_importance_calculated is True
+        assert signal.historical_accuracy == 0.82
+        assert signal.trend_direction == "increasing"
+
+    def test_create_signal_missing_data(self):
+        """Test signal creation with missing data."""
+        from src.agents.prediction_synthesizer.dspy_integration import (
+            create_signal_from_result,
+        )
+
+        state = {
+            "query": "Test query",
+            "entity_id": "E-1",
+            "entity_type": "hcp",
+            "prediction_target": "churn",
+        }
+
+        minimal_output = {
+            "status": "completed",
+            "models_succeeded": 1,
+        }
+
+        signal = create_signal_from_result(
+            session_id="test_session",
+            state=state,
+            output=minimal_output,
+        )
+
+        assert signal.models_succeeded == 1
+        assert signal.ensemble_confidence == 0.0
+        assert signal.similar_cases_found == 0
+
+
+class TestCollectAndEmitSignal:
+    """Tests for collect_and_emit_signal convenience function."""
+
+    @pytest.mark.asyncio
+    async def test_collect_and_emit_failed_status(self):
+        """Test that failed predictions don't emit signals."""
+        from src.agents.prediction_synthesizer.dspy_integration import (
+            collect_and_emit_signal,
+        )
+
+        state = {"entity_id": "E-1"}
+        failed_output = {"status": "failed"}
+
+        result = await collect_and_emit_signal(
+            session_id="test_session",
+            state=state,
+            output=failed_output,
+        )
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_collect_and_emit_success(self):
+        """Test successful signal collection and emission."""
+        from unittest.mock import AsyncMock, patch
+        from src.agents.prediction_synthesizer.dspy_integration import (
+            collect_and_emit_signal,
+            reset_dspy_integration,
+        )
+
+        reset_dspy_integration()
+
+        state = {
+            "query": "Test query",
+            "entity_id": "HCP-12345",
+            "entity_type": "hcp",
+            "prediction_target": "churn",
+            "time_horizon": "30d",
+            "models_to_use": ["model_a", "model_b"],
+            "ensemble_method": "weighted",
+            "orchestration_latency_ms": 500,
+            "ensemble_latency_ms": 200,
+        }
+
+        output = {
+            "status": "completed",
+            "models_succeeded": 2,
+            "models_failed": 0,
+            "total_latency_ms": 700,
+            "ensemble_prediction": {
+                "point_estimate": 0.75,
+                "prediction_interval_lower": 0.65,
+                "prediction_interval_upper": 0.85,
+                "confidence": 0.85,
+                "model_agreement": 0.9,
+            },
+            "prediction_context": {
+                "similar_cases": [{"id": "1"}],
+                "feature_importance": {"f1": 0.5},
+                "historical_accuracy": 0.8,
+                "trend_direction": "stable",
+            },
+        }
+
+        with patch(
+            "src.agents.prediction_synthesizer.dspy_integration.emit_training_signal",
+            new_callable=AsyncMock,
+        ) as mock_emit:
+            mock_emit.return_value = True
+
+            result = await collect_and_emit_signal(
+                session_id="test_session",
+                state=state,
+                output=output,
+                min_reward_threshold=0.5,
+            )
+
+            assert result is not None
+            assert result.entity_id == "HCP-12345"
+            mock_emit.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_collect_and_emit_adds_to_buffer(self):
+        """Test that signal is added to collector buffer."""
+        from unittest.mock import AsyncMock, patch
+        from src.agents.prediction_synthesizer.dspy_integration import (
+            collect_and_emit_signal,
+            get_prediction_synthesizer_signal_collector,
+            reset_dspy_integration,
+        )
+
+        reset_dspy_integration()
+
+        state = {
+            "entity_id": "HCP-1",
+            "entity_type": "hcp",
+            "prediction_target": "churn",
+        }
+
+        output = {
+            "status": "completed",
+            "models_succeeded": 2,
+            "total_latency_ms": 500,
+        }
+
+        with patch(
+            "src.agents.prediction_synthesizer.dspy_integration.emit_training_signal",
+            new_callable=AsyncMock,
+        ) as mock_emit:
+            mock_emit.return_value = False  # Not emitted but still buffered
+
+            await collect_and_emit_signal(
+                session_id="test_session",
+                state=state,
+                output=output,
+            )
+
+            collector = get_prediction_synthesizer_signal_collector()
+            assert len(collector._signals_buffer) == 1
+
+    @pytest.mark.asyncio
+    async def test_collect_and_emit_not_emitted_returns_none(self):
+        """Test return value when signal not emitted."""
+        from unittest.mock import AsyncMock, patch
+        from src.agents.prediction_synthesizer.dspy_integration import (
+            collect_and_emit_signal,
+            reset_dspy_integration,
+        )
+
+        reset_dspy_integration()
+
+        state = {"entity_id": "E-1"}
+        output = {"status": "completed", "models_succeeded": 1}
+
+        with patch(
+            "src.agents.prediction_synthesizer.dspy_integration.emit_training_signal",
+            new_callable=AsyncMock,
+        ) as mock_emit:
+            mock_emit.return_value = False
+
+            result = await collect_and_emit_signal(
+                session_id="test_session",
+                state=state,
+                output=output,
+            )
+
+            assert result is None
+
+
+class TestAgentDSPyIntegration:
+    """Tests for DSPy integration with PredictionSynthesizerAgent."""
+
+    def test_agent_enable_dspy_default(self):
+        """Test agent has enable_dspy flag defaulting to True."""
+        from src.agents.prediction_synthesizer.agent import PredictionSynthesizerAgent
+
+        agent = PredictionSynthesizerAgent()
+        assert agent.enable_dspy is True
+
+    def test_agent_enable_dspy_disabled(self):
+        """Test agent can be created with DSPy disabled."""
+        from src.agents.prediction_synthesizer.agent import PredictionSynthesizerAgent
+
+        agent = PredictionSynthesizerAgent(enable_dspy=False)
+        assert agent.enable_dspy is False
+
+    def test_agent_enable_memory_and_dspy(self):
+        """Test agent can have both memory and DSPy enabled."""
+        from src.agents.prediction_synthesizer.agent import PredictionSynthesizerAgent
+
+        agent = PredictionSynthesizerAgent(enable_memory=True, enable_dspy=True)
+        assert agent.enable_memory is True
+        assert agent.enable_dspy is True
+
+    def test_agent_all_flags_disabled(self):
+        """Test agent can have all integrations disabled."""
+        from src.agents.prediction_synthesizer.agent import PredictionSynthesizerAgent
+
+        agent = PredictionSynthesizerAgent(enable_memory=False, enable_dspy=False)
+        assert agent.enable_memory is False
+        assert agent.enable_dspy is False
