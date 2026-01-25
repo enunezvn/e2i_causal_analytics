@@ -274,7 +274,7 @@ class TestSynthesisTraceContext:
         assert ctx.trace_metadata.get("ensemble_method") == "weighted"
         assert ctx.trace_metadata.get("point_estimate") == 0.75
         assert ctx.trace_metadata.get("confidence") == 0.85
-        assert ctx.trace_metadata.get("prediction_interval_width") == 0.20
+        assert ctx.trace_metadata.get("prediction_interval_width") == pytest.approx(0.20)
         mock_trace.update.assert_called()
 
     def test_log_context_enrichment(self):
