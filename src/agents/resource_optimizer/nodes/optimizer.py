@@ -139,9 +139,162 @@ class OptimizerNode:
             return self._solve_proportional(problem)
 
     def _solve_milp(self, problem: Dict[str, Any]) -> Dict[str, Any]:
-        """Solve mixed-integer linear programming."""
-        # Fall back to linear for now
-        return self._solve_linear(problem)
+        """
+        Solve mixed-integer linear programming using PuLP.
+
+        Supports:
+        - Continuous, integer, and binary decision variables
+        - Budget and capacity constraints
+        - Cardinality constraints (min/max entities to select)
+        - Fixed costs for binary selection
+        - Discrete allocation units
+        """
+        start = time.time()
+
+        try:
+            from pulp import (
+                LpMaximize,
+                LpProblem,
+                LpStatus,
+                LpVariable,
+                lpSum,
+                value,
+                PULP_CBC_CMD,
+            )
+        except ImportError:
+            logger.warning("PuLP not available, falling back to linear solver")
+            return self._solve_linear(problem)
+
+        n = problem["n"]
+        c = problem["c"]
+        lb = problem["lb"]
+        ub = problem["ub"]
+        var_types = problem.get("var_types", ["continuous"] * n)
+        fixed_costs = problem.get("fixed_costs", [0.0] * n)
+        min_entities = problem.get("min_entities")
+        max_entities = problem.get("max_entities")
+
+        # Create the problem
+        prob = LpProblem("ResourceOptimization", LpMaximize)
+
+        # Create decision variables
+        x = []  # Allocation variables
+        y = []  # Binary selection variables (for cardinality constraints)
+
+        for i in range(n):
+            var_type = var_types[i]
+
+            if var_type == "binary":
+                # Binary variable: 0 or 1
+                var = LpVariable(f"x_{i}", cat="Binary")
+            elif var_type == "integer":
+                # Integer variable with bounds
+                var = LpVariable(
+                    f"x_{i}",
+                    lowBound=lb[i],
+                    upBound=ub[i] if ub[i] != float("inf") else None,
+                    cat="Integer",
+                )
+            else:
+                # Continuous variable with bounds
+                var = LpVariable(
+                    f"x_{i}",
+                    lowBound=lb[i],
+                    upBound=ub[i] if ub[i] != float("inf") else None,
+                    cat="Continuous",
+                )
+            x.append(var)
+
+            # Add binary selection indicator if cardinality constraints exist
+            if min_entities is not None or max_entities is not None:
+                y_var = LpVariable(f"y_{i}", cat="Binary")
+                y.append(y_var)
+
+        # Objective function: maximize total response minus fixed costs
+        if any(fc > 0 for fc in fixed_costs) and y:
+            # Include fixed costs in objective
+            prob += lpSum(c[i] * x[i] - fixed_costs[i] * y[i] for i in range(n))
+        else:
+            prob += lpSum(c[i] * x[i] for i in range(n))
+
+        # Add inequality constraints (A_ub @ x <= b_ub)
+        if problem.get("a_ub") and problem.get("b_ub"):
+            for j, (row, b) in enumerate(zip(problem["a_ub"], problem["b_ub"])):
+                prob += lpSum(row[i] * x[i] for i in range(n)) <= b, f"ineq_{j}"
+
+        # Add equality constraints (A_eq @ x == b_eq)
+        if problem.get("a_eq") and problem.get("b_eq"):
+            for j, (row, b) in enumerate(zip(problem["a_eq"], problem["b_eq"])):
+                prob += lpSum(row[i] * x[i] for i in range(n)) == b, f"eq_{j}"
+
+        # Add cardinality constraints (link allocation to selection)
+        if y:
+            for i in range(n):
+                # If entity is selected (y[i]=1), allocation can be positive
+                # If not selected (y[i]=0), allocation must be 0
+                big_m = ub[i] if ub[i] != float("inf") else 1e6
+                prob += x[i] <= big_m * y[i], f"link_upper_{i}"
+                # Ensure minimum allocation if selected
+                if lb[i] > 0:
+                    prob += x[i] >= lb[i] * y[i], f"link_lower_{i}"
+
+            # Min/max entities constraints
+            if min_entities is not None:
+                prob += lpSum(y[i] for i in range(n)) >= min_entities, "min_entities"
+            if max_entities is not None:
+                prob += lpSum(y[i] for i in range(n)) <= max_entities, "max_entities"
+
+        # Solve with CBC solver (no output)
+        try:
+            solver = PULP_CBC_CMD(msg=0)
+            prob.solve(solver)
+        except Exception:
+            # Fallback to default solver
+            prob.solve()
+
+        solve_time = int((time.time() - start) * 1000)
+
+        # Check solution status
+        status = LpStatus[prob.status]
+
+        if status == "Optimal":
+            # Extract solution values
+            solution = [value(x[i]) or 0.0 for i in range(n)]
+
+            # For binary variables, ensure they're exactly 0 or 1
+            for i in range(n):
+                if var_types[i] == "binary":
+                    solution[i] = round(solution[i])
+
+            # For integer variables, round to nearest integer
+            for i in range(n):
+                if var_types[i] == "integer":
+                    solution[i] = round(solution[i])
+
+            objective_value = value(prob.objective)
+
+            return {
+                "status": "optimal",
+                "x": solution,
+                "objective": objective_value,
+                "solve_time_ms": solve_time,
+                "solver": "pulp_cbc",
+            }
+        elif status == "Infeasible":
+            return {
+                "status": "infeasible",
+                "x": None,
+                "objective": None,
+                "solve_time_ms": solve_time,
+            }
+        else:
+            # Suboptimal, unbounded, or other status
+            return {
+                "status": status.lower(),
+                "x": None,
+                "objective": None,
+                "solve_time_ms": solve_time,
+            }
 
     def _solve_nonlinear(self, problem: Dict[str, Any]) -> Dict[str, Any]:
         """Solve nonlinear optimization."""
