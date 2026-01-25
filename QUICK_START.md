@@ -7,7 +7,7 @@
 ## Prerequisites
 
 ✅ Docker Desktop installed and running
-✅ Supabase account (or local PostgreSQL)
+✅ Self-hosted Supabase (via Docker Compose) or existing PostgreSQL
 ✅ Claude API key
 
 ---
@@ -21,10 +21,12 @@
 nano .env.dev
 
 # Fill in these 4 required values:
-# - DATABASE_URL (from Supabase)
-# - SUPABASE_URL (from Supabase)
-# - SUPABASE_ANON_KEY (from Supabase)
+# - DATABASE_URL (from self-hosted Supabase: postgresql://postgres:password@localhost:5433/postgres)
+# - SUPABASE_URL (from self-hosted Supabase: http://localhost:8000)
+# - SUPABASE_ANON_KEY (from self-hosted Supabase config)
 # - CLAUDE_API_KEY (from Anthropic Console)
+#
+# See config/supabase_self_hosted.example.env for reference
 ```
 
 ### 2. Run Pre-Flight Check
@@ -155,13 +157,33 @@ docker compose logs | grep -i error
 
 ## Where to Get Credentials
 
-### Supabase (Database)
-1. Go to https://app.supabase.com/
-2. Select your project
-3. Go to Settings → Database
-4. Copy **Connection String** (Pooling mode)
-5. Go to Settings → API
-6. Copy **URL** and **anon/public key**
+### Supabase (Self-Hosted Database)
+
+E2I uses self-hosted Supabase. The database runs via Docker Compose on the droplet.
+
+**For Local Development:**
+```bash
+# Start self-hosted Supabase
+docker compose -f docker/docker-compose.yml up -d supabase-db supabase-kong supabase-studio
+
+# Access Supabase Studio at http://localhost:3001
+```
+
+**Configure your `.env.dev`:**
+```bash
+# Self-hosted Supabase
+SUPABASE_URL=http://localhost:8000
+DATABASE_URL=postgresql://postgres:your-password@localhost:5433/postgres
+SUPABASE_ANON_KEY=your-anon-key-from-self-hosted
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key-from-self-hosted
+```
+
+**For Production (Droplet):**
+- Supabase API: http://138.197.4.36:8000
+- Supabase Studio: http://138.197.4.36:3001
+- PostgreSQL: 138.197.4.36:5433
+
+See `config/supabase_self_hosted.example.env` for complete configuration.
 
 ### Claude API
 1. Go to https://console.anthropic.com/settings/keys

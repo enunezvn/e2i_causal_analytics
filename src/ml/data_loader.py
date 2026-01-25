@@ -8,8 +8,11 @@ Loads all generated data into Supabase tables including:
 - ML split tracking tables
 
 Usage:
-    export SUPABASE_URL='https://your-project.supabase.co'
-    export SUPABASE_KEY='your-service-role-key'
+    # Self-hosted Supabase (local)
+    export SUPABASE_URL='http://localhost:8000'
+    # Self-hosted Supabase (droplet)
+    # export SUPABASE_URL='http://138.197.4.36:8000'
+    export SUPABASE_KEY='your-service-role-key-from-self-hosted'
     python e2i_ml_complete_v3_loader.py --data-dir /path/to/json/files
 
 Or for testing without Supabase:
@@ -351,10 +354,13 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-    # Load data into Supabase
-    export SUPABASE_URL='https://your-project.supabase.co'
-    export SUPABASE_KEY='your-service-role-key'
+    # Load data into self-hosted Supabase (local)
+    export SUPABASE_URL='http://localhost:8000'
+    export SUPABASE_KEY='your-service-role-key-from-self-hosted'
     python e2i_ml_complete_v3_loader.py --data-dir ./e2i_ml_complete_v3_data
+
+    # Or for production droplet
+    export SUPABASE_URL='http://138.197.4.36:8000'
 
     # Dry run to validate files
     python e2i_ml_complete_v3_loader.py --dry-run --data-dir ./e2i_ml_complete_v3_data

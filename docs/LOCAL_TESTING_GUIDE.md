@@ -40,19 +40,22 @@ vim .env.dev
 
 **Required Changes:**
 
-#### A. Database Configuration (Supabase)
+#### A. Database Configuration (Self-Hosted Supabase)
 
-Get these from your Supabase dashboard: https://app.supabase.com/project/_/settings/database
+E2I uses self-hosted Supabase running via Docker Compose. Access Supabase Studio at http://localhost:3001 (or http://138.197.4.36:3001 on droplet).
 
 ```bash
-DATABASE_URL=postgresql://postgres.[YOUR-PROJECT]:PASSWORD@aws-0-us-west-1.pooler.supabase.com:6543/postgres
+# Self-hosted Supabase (local development)
+DATABASE_URL=postgresql://postgres:your-password@localhost:5433/postgres
 
-SUPABASE_URL=https://[YOUR-PROJECT].supabase.co
+SUPABASE_URL=http://localhost:8000
 
-SUPABASE_ANON_KEY=eyJhbGci... (copy from Supabase dashboard)
+SUPABASE_ANON_KEY=your-anon-key-from-self-hosted
 
-SUPABASE_SERVICE_ROLE_KEY=eyJhbGci... (copy from Supabase dashboard)
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key-from-self-hosted
 ```
+
+See `config/supabase_self_hosted.example.env` for complete configuration reference.
 
 #### B. Claude API Configuration
 

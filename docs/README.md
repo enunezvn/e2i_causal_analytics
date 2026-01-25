@@ -153,9 +153,9 @@ REDIS_URL="redis://localhost:6379"
 FALKORDB_HOST="localhost"
 FALKORDB_PORT="6380"
 
-# Supabase (Episodic + Procedural Memory)
-SUPABASE_URL="https://your-project.supabase.co"
-SUPABASE_SERVICE_KEY="your-service-key"
+# Self-Hosted Supabase (Episodic + Procedural Memory)
+SUPABASE_URL="http://localhost:8000"  # or http://138.197.4.36:8000 on droplet
+SUPABASE_SERVICE_KEY="your-service-role-key-from-self-hosted"
 
 # LLM Services
 ANTHROPIC_API_KEY="your-anthropic-key"
