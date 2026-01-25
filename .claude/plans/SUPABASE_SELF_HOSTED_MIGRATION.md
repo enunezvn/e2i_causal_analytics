@@ -1,14 +1,41 @@
 # Supabase Cloud to Self-Hosted Migration Plan
 
+## Migration Status: ✅ COMPLETE
+
+| Milestone | Status | Date |
+|-----------|--------|------|
+| Phase 1: Preparation | ✅ Complete | 2025-01-24 |
+| Phase 2: Self-Hosted Setup | ✅ Complete | 2025-01-24 |
+| Phase 3: Data Migration | ✅ Complete | 2025-01-24 |
+| Phase 4: Application Configuration | ✅ Complete | 2025-01-24 |
+| Phase 5: Validation | ✅ Complete | 2026-01-25 |
+| Phase 6: Cutover | ✅ Complete | 2026-01-25 |
+| **Test Suite Validation** | **40/40 Passed** | **2026-01-25** |
+
+---
+
 ## Executive Summary
 
-This document provides a comprehensive plan for migrating E2I Causal Analytics from Supabase Cloud to a self-hosted Supabase instance using Docker. The migration is **fully feasible** and officially supported by Supabase.
+This document provides a comprehensive plan for migrating E2I Causal Analytics from Supabase Cloud to a self-hosted Supabase instance using Docker. The migration is **COMPLETE** and fully validated.
 
 ### Key Benefits of Self-Hosting
 - **Cost Control**: No per-project fees; predictable infrastructure costs
 - **Data Sovereignty**: Complete control over data location and security
 - **Customization**: Full access to PostgreSQL configuration and extensions
 - **Integration**: Direct network access for low-latency connections with ML services
+
+### Validation Test Results (2026-01-25)
+
+| Phase | Tests | Status |
+|-------|-------|--------|
+| Phase 1: Connectivity | 6/6 | ✅ PASSED |
+| Phase 2: Schema | 11/11 | ✅ PASSED |
+| Phase 3: Data | 9/9 | ✅ PASSED |
+| Phase 4: Auth | 7/7 | ✅ PASSED |
+| Phase 5: API | 7/7 | ✅ PASSED |
+| **Total** | **40/40** | **✅ ALL PASSED** |
+
+Test suite location: `tests/integration/test_migration/`
 
 ### Resources
 - [Supabase Self-Hosting with Docker](https://supabase.com/docs/guides/self-hosting/docker)
@@ -88,7 +115,7 @@ This document provides a comprehensive plan for migrating E2I Causal Analytics f
 
 ## Step-by-Step Migration Plan
 
-### Phase 1: Preparation (Pre-Migration)
+### Phase 1: Preparation (Pre-Migration) ✅ COMPLETE
 
 #### Step 1.1: Backup Current Cloud Database
 
@@ -136,12 +163,13 @@ pg_dump "postgresql://postgres:[PASSWORD]@db.[PROJECT-REF].supabase.co:5432/post
 
 #### Step 1.2: Inventory Supabase Features in Use
 
-Based on project analysis, E2I uses:
-- [x] PostgreSQL database (core tables, 50+ SQL files)
-- [x] Row Level Security (RLS) policies
-- [ ] Supabase Auth (GoTrue) - verify usage
-- [ ] Storage buckets - verify usage
-- [ ] Realtime subscriptions - verify usage
+Based on project analysis and validated during migration, E2I uses:
+- [x] PostgreSQL database (84 public tables, 20 auth tables)
+- [x] Row Level Security (RLS) policies (confirmed active)
+- [x] Supabase Auth (GoTrue) - 6 users migrated
+- [x] PostgREST API - used for data access
+- [ ] Storage buckets - not currently used
+- [ ] Realtime subscriptions - not currently used
 - [ ] Edge Functions - not used
 
 #### Step 1.3: Generate Required Secrets
@@ -161,7 +189,7 @@ openssl rand -base64 32
 
 ---
 
-### Phase 2: Self-Hosted Setup
+### Phase 2: Self-Hosted Setup ✅ COMPLETE
 
 #### Step 2.1: Clone Supabase Docker Configuration
 
@@ -263,7 +291,7 @@ docker compose ps
 
 ---
 
-### Phase 3: Data Migration
+### Phase 3: Data Migration ✅ COMPLETE
 
 #### Step 3.1: Restore Schema
 
@@ -321,7 +349,7 @@ EOF
 
 ---
 
-### Phase 4: Application Configuration
+### Phase 4: Application Configuration ✅ COMPLETE
 
 #### Step 4.1: Update Backend Environment
 
@@ -356,7 +384,7 @@ docker compose -f /opt/e2i_causal_analytics/docker-compose.prod.yml restart
 
 ---
 
-### Phase 5: Validation
+### Phase 5: Validation ✅ COMPLETE
 
 #### Step 5.1: API Health Checks
 
@@ -380,13 +408,13 @@ python scripts/validate_self_hosted_migration.py
 
 #### Step 5.3: Frontend Testing
 
-- [ ] Verify authentication flow
-- [ ] Test database queries via Supabase client
-- [ ] Verify real-time subscriptions (if used)
+- [x] Verify authentication flow
+- [x] Test database queries via Supabase client
+- [x] Verify real-time subscriptions (not used - N/A)
 
 ---
 
-### Phase 6: Cutover
+### Phase 6: Cutover ✅ COMPLETE
 
 #### Step 6.1: DNS/Network Configuration
 
@@ -412,14 +440,27 @@ doctl compute firewall update <firewall-id> \
 
 ## Migration Scripts
 
-The following scripts are provided to automate the migration:
+The following scripts were created and used during migration:
 
-| Script | Purpose |
-|--------|---------|
-| `scripts/supabase/export_cloud_db.sh` | Export from Supabase Cloud |
-| `scripts/supabase/setup_self_hosted.sh` | Setup self-hosted Supabase |
-| `scripts/supabase/import_data.sh` | Import data to self-hosted |
-| `scripts/supabase/validate_migration.py` | Validate migration success |
+| Script | Purpose | Status |
+|--------|---------|--------|
+| `scripts/supabase/export_cloud_db.sh` | Export from Supabase Cloud | ✅ Used |
+| `scripts/supabase/setup_self_hosted.sh` | Setup self-hosted Supabase | ✅ Used |
+| `scripts/supabase/import_data.sh` | Import data to self-hosted | ✅ Used |
+| `scripts/supabase/validate_migration.py` | Validate migration success | ✅ Used |
+| `scripts/supabase/README.md` | Documentation | ✅ Created |
+
+### Test Suite
+
+A comprehensive validation test suite was created:
+
+| Test File | Tests | Status |
+|-----------|-------|--------|
+| `tests/integration/test_migration/test_phase1_connectivity.py` | 6 | ✅ PASSED |
+| `tests/integration/test_migration/test_phase2_schema.py` | 11 | ✅ PASSED |
+| `tests/integration/test_migration/test_phase3_data.py` | 9 | ✅ PASSED |
+| `tests/integration/test_migration/test_phase4_auth.py` | 7 | ✅ PASSED |
+| `tests/integration/test_migration/test_phase5_api.py` | 7 | ✅ PASSED |
 
 ---
 
@@ -462,6 +503,38 @@ docker compose down && docker compose up -d
 
 ---
 
+## Pending Actions / Optional Improvements
+
+The migration is complete and fully operational. The following are **optional** improvements for future consideration:
+
+### Priority: Low (Nice to Have)
+
+| Item | Description | Effort |
+|------|-------------|--------|
+| Automated backups | Set up cron job for daily pg_dump backups | 30 min |
+| Monitoring dashboard | Add PostgreSQL metrics to Grafana/similar | 2-4 hours |
+| SSL/TLS for Kong | Configure HTTPS for Supabase API Gateway | 1-2 hours |
+| pgvector extension | Install for RAG embeddings (currently optional) | 30 min |
+
+### Priority: Future (When Needed)
+
+| Item | Description | When |
+|------|-------------|------|
+| Storage buckets | Configure if file upload needed | When required |
+| Realtime subscriptions | Enable if live updates needed | When required |
+| Edge Functions | Deploy if serverless functions needed | When required |
+| Multi-region backup | Replicate to another droplet/region | If high availability required |
+
+### No Action Required
+
+| Item | Reason |
+|------|--------|
+| Cloud instance decommission | Already paused/deleted |
+| DNS changes | Using direct IP, no DNS configured |
+| Rollback plan | Migration successful, cloud backup retained |
+
+---
+
 ## Risk Assessment
 
 | Risk | Likelihood | Impact | Mitigation |
@@ -489,17 +562,26 @@ docker compose down && docker compose up -d
 
 ## Appendix
 
-### A. Port Mapping
+### A. Port Mapping (Actual Deployment)
 
-| Service | Internal Port | External Port |
-|---------|---------------|---------------|
-| Kong (API Gateway) | 8000 | 8000 |
-| Kong (HTTPS) | 8443 | 8443 |
-| PostgreSQL | 5432 | 5432 (internal only) |
-| Supabase Studio | 3000 | 3000 |
-| GoTrue (Auth) | 9999 | Internal |
-| PostgREST | 3001 | Internal |
-| Realtime | 4000 | Internal |
+| Service | Internal Port | External Port | Docker IP |
+|---------|---------------|---------------|-----------|
+| Kong (API Gateway) | 8000 | 54321 | - |
+| Kong (HTTPS) | 8443 | 8443 | - |
+| PostgreSQL | 5432 | 5433 | 172.22.0.4 |
+| Supabase Studio | 3000 | 54323 | - |
+| GoTrue (Auth) | 9999 | Internal | - |
+| PostgREST | 3001 | Internal | - |
+| Realtime | 4000 | Internal | - |
+
+**Note**: To connect directly to PostgreSQL from within the droplet:
+```bash
+# Using Docker IP (from tests)
+SUPABASE_DB_HOST=172.22.0.4 SUPABASE_DB_PORT=5432
+
+# Using localhost with mapped port
+SUPABASE_DB_HOST=localhost SUPABASE_DB_PORT=5433
+```
 
 ### B. Required Extensions
 
@@ -524,6 +606,17 @@ These PostgreSQL extensions are required for E2I:
 
 ---
 
-*Document Version: 1.0*
+*Document Version: 2.0*
 *Created: 2025-01-24*
+*Updated: 2026-01-25*
+*Migration Completed: 2026-01-25*
 *Author: E2I Causal Analytics Team*
+
+---
+
+## Change Log
+
+| Version | Date | Changes |
+|---------|------|---------|
+| 1.0 | 2025-01-24 | Initial migration plan created |
+| 2.0 | 2026-01-25 | Migration complete - all 6 phases done, 40/40 tests passing |
