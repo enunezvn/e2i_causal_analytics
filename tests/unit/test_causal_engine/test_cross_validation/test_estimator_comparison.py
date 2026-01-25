@@ -227,14 +227,20 @@ def estimate_with_econml_drlearner(data: pd.DataFrame) -> Dict[str, float]:
         model.fit(Y, T, X=X)
 
         ate = model.ate(X)
-        ate_interval = model.ate_interval(X, alpha=0.05)
-
-        return {
+        result = {
             "ate": float(ate),
-            "ci_lower": float(ate_interval[0]),
-            "ci_upper": float(ate_interval[1]),
             "method": "econml_drlearner",
         }
+
+        # Try to get confidence intervals (may not be available for all final models)
+        try:
+            ate_interval = model.ate_interval(X, alpha=0.05)
+            result["ci_lower"] = float(ate_interval[0])
+            result["ci_upper"] = float(ate_interval[1])
+        except Exception:
+            pass  # CI not available for this model configuration
+
+        return result
     except Exception as e:
         return {"ate": None, "error": str(e), "method": "econml_drlearner"}
 
