@@ -49,11 +49,35 @@ from src.api.dependencies.bentoml_client import (
 # =============================================================================
 
 # Environment checks for live service testing
-HAS_BENTOML_SERVICE = bool(os.getenv("BENTOML_SERVICE_URL"))
+BENTOML_SERVICE_URL = os.getenv("BENTOML_SERVICE_URL", "")
+
+
+def _check_bentoml_service_available() -> bool:
+    """Check if BentoML service is actually reachable."""
+    if not BENTOML_SERVICE_URL:
+        return False
+    try:
+        # Quick sync check during test collection
+        import socket
+        from urllib.parse import urlparse
+
+        parsed = urlparse(BENTOML_SERVICE_URL)
+        host = parsed.hostname or "localhost"
+        port = parsed.port or 3000
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(1.0)
+        result = sock.connect_ex((host, port))
+        sock.close()
+        return result == 0
+    except Exception:
+        return False
+
+
+HAS_BENTOML_SERVICE = _check_bentoml_service_available()
 
 requires_bentoml = pytest.mark.skipif(
     not HAS_BENTOML_SERVICE,
-    reason="BENTOML_SERVICE_URL environment variable not set",
+    reason="BentoML service not available (URL not set or service unreachable)",
 )
 
 
