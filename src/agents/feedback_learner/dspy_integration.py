@@ -506,7 +506,8 @@ class GEPAOptimizationTrigger:
                     f"Cooldown active: {hours_since:.1f}h < {self.cooldown_hours}h",
                 )
         else:
-            hours_since = float("inf")
+            # No previous optimization - skip forced check, rely on reward delta
+            hours_since = 0.0
 
         # Critical patterns override other checks
         if has_critical_patterns and self.critical_pattern_triggers:
