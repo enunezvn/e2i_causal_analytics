@@ -11,23 +11,40 @@ from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
 from uuid import UUID
 
 
-class AllocationTarget(TypedDict):
+class AllocationTarget(TypedDict, total=False):
     """Target entity for resource allocation."""
 
+    # Required fields
     entity_id: str
     entity_type: str  # "hcp", "territory", "region"
     current_allocation: float
-    min_allocation: Optional[float]
-    max_allocation: Optional[float]
     expected_response: float  # Response coefficient
 
+    # Bounds
+    min_allocation: Optional[float]
+    max_allocation: Optional[float]
 
-class Constraint(TypedDict):
+    # MILP extensions (discrete allocation support)
+    is_integer: bool  # Whether allocation must be integer (e.g., rep visits)
+    is_binary: bool  # Whether to include/exclude entity (0/1 decision)
+    allocation_unit: Optional[float]  # Discrete step size (e.g., 1000 for $1K increments)
+    fixed_cost: Optional[float]  # Fixed cost if entity is selected (for binary)
+
+
+class Constraint(TypedDict, total=False):
     """Optimization constraint."""
 
-    constraint_type: str  # "budget", "capacity", "min_coverage", "max_frequency"
+    # Required fields
+    constraint_type: str  # "budget", "capacity", "min_coverage", "max_frequency", "cardinality"
     value: float
+
+    # Optional fields
     scope: str  # "global", "regional", "entity"
+
+    # MILP extensions
+    min_entities: Optional[int]  # Minimum entities to select (cardinality)
+    max_entities: Optional[int]  # Maximum entities to select (cardinality)
+    entity_ids: Optional[List[str]]  # Specific entities this constraint applies to
 
 
 class AllocationResult(TypedDict):
