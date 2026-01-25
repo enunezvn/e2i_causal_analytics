@@ -328,6 +328,10 @@ def get_memory_hooks() -> MemoryHooks:
     return _memory_hooks
 
 
+# Alias for more specific naming (used by prediction_synthesizer.dspy_integration)
+get_feedback_learner_memory_hooks = get_memory_hooks
+
+
 # =============================================================================
 # CONVENIENCE FUNCTIONS
 # =============================================================================
