@@ -40,12 +40,15 @@ Protected endpoints require a valid JWT token in the Authorization header.
 
 ### Step 1: Create Supabase Users
 
-1. Go to your [Supabase Dashboard](https://app.supabase.com)
-2. Select your project
-3. Navigate to **Authentication** → **Users**
-4. Click **Add User** → **Create New User**
-5. Enter email and password
-6. Click **Create User**
+**Using Self-Hosted Supabase Studio:**
+
+1. Go to Supabase Studio:
+   - Local: http://localhost:3001
+   - Droplet: http://138.197.4.36:3001
+2. Navigate to **Authentication** → **Users**
+3. Click **Add User** → **Create New User**
+4. Enter email and password
+5. Click **Create User**
 
 **For admin users**, after creating the user:
 1. Go to **Table Editor** → **auth.users**
@@ -57,16 +60,18 @@ Protected endpoints require a valid JWT token in the Authorization header.
 Add to your `.env` file on the droplet:
 
 ```bash
-# Required for JWT validation
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+# Required for JWT validation (self-hosted Supabase)
+SUPABASE_URL=http://138.197.4.36:8000
+SUPABASE_ANON_KEY=your-anon-key-from-self-hosted
 
 # Optional: For admin operations
-SUPABASE_SERVICE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+SUPABASE_SERVICE_KEY=your-service-role-key-from-self-hosted
 
 # Optional: Restrict CORS origins (comma-separated)
-ALLOWED_ORIGINS=https://your-frontend.com,http://localhost:3000
+ALLOWED_ORIGINS=http://138.197.4.36,http://localhost:3000
 ```
+
+See `config/supabase_self_hosted.example.env` for complete configuration reference.
 
 ### Step 3: Restart the API
 
@@ -153,16 +158,16 @@ const response = await fetch('http://api.example.com/memory/search', {
 ### From curl/CLI
 
 ```bash
-# 1. Get a token (via Supabase REST API)
+# 1. Get a token (via self-hosted Supabase REST API)
 TOKEN=$(curl -s -X POST \
-  'https://your-project.supabase.co/auth/v1/token?grant_type=password' \
+  'http://138.197.4.36:8000/auth/v1/token?grant_type=password' \
   -H 'apikey: YOUR_ANON_KEY' \
   -H 'Content-Type: application/json' \
   -d '{"email":"user@example.com","password":"password123"}' \
   | jq -r '.access_token')
 
 # 2. Use the token
-curl -X POST http://159.89.180.27:8001/memory/search \
+curl -X POST http://138.197.4.36:8000/memory/search \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"query": "market share"}'

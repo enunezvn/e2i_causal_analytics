@@ -39,10 +39,10 @@ class FeatureStoreClient:
         ```python
         from src.feature_store import FeatureStoreClient
 
-        # Initialize client
+        # Initialize client (self-hosted Supabase)
         fs = FeatureStoreClient(
-            supabase_url="https://your-project.supabase.co",
-            supabase_key="your-anon-key",
+            supabase_url="http://localhost:8000",  # or http://138.197.4.36:8000 on droplet
+            supabase_key="your-anon-key-from-self-hosted",
             redis_url="redis://localhost:6382"
         )
 

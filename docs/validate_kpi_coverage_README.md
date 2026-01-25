@@ -26,9 +26,9 @@ python validate_kpi_coverage.py --dry-run --verbose
 # Generate markdown report
 python validate_kpi_coverage.py --dry-run --output kpi_report.md
 
-# Live database validation
-export SUPABASE_URL="https://your-project.supabase.co"
-export SUPABASE_KEY="your-service-key"
+# Live database validation (self-hosted Supabase)
+export SUPABASE_URL="http://localhost:8000"  # or http://138.197.4.36:8000 on droplet
+export SUPABASE_KEY="your-service-role-key-from-self-hosted"
 python validate_kpi_coverage.py --verbose
 ```
 
@@ -282,8 +282,9 @@ pip install supabase
 ### "SUPABASE_URL/SUPABASE_KEY not set"
 
 ```bash
-export SUPABASE_URL="https://your-project.supabase.co"
-export SUPABASE_KEY="your-service-role-key"
+# Self-hosted Supabase
+export SUPABASE_URL="http://localhost:8000"  # or http://138.197.4.36:8000 on droplet
+export SUPABASE_KEY="your-service-role-key-from-self-hosted"
 ```
 
 ### View warnings in dry-run mode

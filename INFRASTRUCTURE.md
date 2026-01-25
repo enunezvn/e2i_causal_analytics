@@ -288,6 +288,67 @@ cd /opt/e2i_causal_analytics && docker compose -f docker/docker-compose.yml down
 cd /home/enunez/opik/deployment/docker-compose && docker compose down
 ```
 
+### Monitoring Stack
+
+**Prometheus & Grafana** for comprehensive system monitoring:
+
+| Service | URL | Description | Credentials |
+|---------|-----|-------------|-------------|
+| **Grafana** | http://138.197.4.36:3100 | Dashboards & visualization | admin / admin |
+| **Prometheus** | http://138.197.4.36:9091 | Metrics collection & queries | - |
+
+**Available Dashboards:**
+| Dashboard | Purpose |
+|-----------|---------|
+| E2I API Overview | API performance, request rates, error rates, latency percentiles |
+| System Resources | CPU, memory, disk, network metrics |
+| PostgreSQL Performance | Database connections, query performance, replication status |
+
+**Metrics Collected (391 total):**
+- API metrics: Request count, duration, status codes
+- System metrics: CPU, memory, disk I/O, network
+- PostgreSQL metrics: Connections, queries, locks, replication lag
+
+**Start/Stop Monitoring Stack:**
+```bash
+# Start Prometheus & Grafana
+cd /opt/e2i_causal_analytics && docker compose -f docker/docker-compose.yml up -d prometheus grafana
+
+# Check monitoring containers
+docker ps --filter "name=prometheus" --filter "name=grafana"
+
+# View Prometheus targets (should all be UP)
+curl -s http://localhost:9091/api/v1/targets | jq '.data.activeTargets[] | {job: .labels.job, health: .health}'
+```
+
+### Self-Hosted Supabase
+
+**Database Infrastructure** (migrated from Supabase Cloud to self-hosted):
+
+| Service | Port | URL | Description |
+|---------|------|-----|-------------|
+| Supabase API | 8000 | http://138.197.4.36:8000 | Kong API Gateway |
+| Supabase Studio | 3001 | http://138.197.4.36:3001 | Database management UI |
+| PostgreSQL | 5433 | - | Direct database access |
+
+**Connection Strings:**
+```bash
+# For application use (via Kong API)
+SUPABASE_URL=http://138.197.4.36:8000
+
+# For direct PostgreSQL (migrations, admin)
+DATABASE_URL=postgresql://postgres:YOUR_PASSWORD@138.197.4.36:5433/postgres
+```
+
+**Start/Stop Supabase:**
+```bash
+# Start Supabase stack
+cd /opt/e2i_causal_analytics && docker compose -f docker/docker-compose.yml up -d supabase-db supabase-kong supabase-studio
+
+# Check Supabase containers
+docker ps --filter "name=supabase"
+```
+
 ### Application Paths (on droplet)
 
 | Path | Description |

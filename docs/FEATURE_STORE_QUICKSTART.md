@@ -23,33 +23,40 @@ Before starting, ensure you have:
 
 ### 1.1 Get Supabase Credentials
 
-1. Go to your Supabase dashboard: https://app.supabase.com
-2. Select your project
-3. Navigate to **Settings** → **API**
-4. Copy the following values:
+**Using Self-Hosted Supabase:**
+
+E2I uses self-hosted Supabase running via Docker Compose. Access Supabase Studio at:
+- Local: http://localhost:3001
+- Droplet: http://138.197.4.36:3001
+
+Configure your environment:
 
    ```bash
-   # Project URL
-   SUPABASE_URL=https://your-project.supabase.co
+   # Self-hosted Supabase URL
+   SUPABASE_URL=http://localhost:8000  # or http://138.197.4.36:8000 on droplet
 
-   # API Keys
-   SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-   SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...  # Optional but recommended
+   # API Keys (from self-hosted Supabase config)
+   SUPABASE_ANON_KEY=your-anon-key-from-self-hosted
+   SUPABASE_SERVICE_ROLE_KEY=your-service-role-key-from-self-hosted  # Optional but recommended
    ```
+
+See `config/supabase_self_hosted.example.env` for complete configuration reference.
 
 ### 1.2 Get Database Connection String
 
-1. In Supabase dashboard, go to **Settings** → **Database**
-2. Scroll to **Connection string** section
-3. Select **URI** tab
-4. Copy the connection string and replace `[YOUR-PASSWORD]` with your database password
-5. The format should be:
+**For self-hosted Supabase:**
+
+The PostgreSQL database is accessible directly via port 5433:
 
    ```bash
-   DATABASE_URL=postgresql://postgres.xxxxxxxxxxxxx:[YOUR-PASSWORD]@aws-0-us-east-1.pooler.supabase.com:6543/postgres
+   # Self-hosted Supabase (local)
+   DATABASE_URL=postgresql://postgres:your-password@localhost:5433/postgres
+
+   # Self-hosted Supabase (droplet)
+   DATABASE_URL=postgresql://postgres:your-password@138.197.4.36:5433/postgres
    ```
 
-   **Note**: Use port **6543** (connection pooler) not **5432** for better performance.
+   **Note**: Port **5433** is the external mapping for the internal PostgreSQL port 5432.
 
 ### 1.3 Configure Redis and MLflow
 
@@ -66,11 +73,11 @@ MLFLOW_TRACKING_URI=http://localhost:5000
 Add all variables to your `.env` file:
 
 ```bash
-# Supabase
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_ANON_KEY=your-anon-key
-SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
-DATABASE_URL=postgresql://postgres.xxxxxxxxxxxxx:your-password@aws-0-us-east-1.pooler.supabase.com:6543/postgres
+# Self-Hosted Supabase
+SUPABASE_URL=http://localhost:8000  # or http://138.197.4.36:8000 on droplet
+SUPABASE_ANON_KEY=your-anon-key-from-self-hosted
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key-from-self-hosted
+DATABASE_URL=postgresql://postgres:your-password@localhost:5433/postgres
 
 # Redis
 REDIS_URL=redis://localhost:6379
@@ -78,6 +85,8 @@ REDIS_URL=redis://localhost:6379
 # MLflow
 MLFLOW_TRACKING_URI=http://localhost:5000
 ```
+
+See `config/supabase_self_hosted.example.env` for complete configuration reference.
 
 ---
 
@@ -132,7 +141,9 @@ Expected output:
 
 ### Verify in Supabase
 
-1. Go to Supabase dashboard → **Table Editor**
+1. Go to Supabase Studio → **Table Editor**
+   - Local: http://localhost:3001
+   - Droplet: http://138.197.4.36:3001
 2. You should see new tables:
    - `feature_groups`
    - `features`
@@ -213,7 +224,8 @@ After running the example script, verify:
 
 **Solution**: Make sure DATABASE_URL is in your `.env` file with the correct format:
 ```bash
-DATABASE_URL=postgresql://postgres.xxxxx:[PASSWORD]@aws-0-us-east-1.pooler.supabase.com:6543/postgres
+# Self-hosted Supabase
+DATABASE_URL=postgresql://postgres:your-password@localhost:5433/postgres
 ```
 
 ### Issue 2: "Redis connection failed"
@@ -370,7 +382,7 @@ ORDER BY fresh_percentage ASC;
 - **Python Client**: `src/feature_store/client.py`
 - **Example Script**: `scripts/feature_store_example.py`
 - **MLflow UI**: http://localhost:5000
-- **Supabase Dashboard**: https://app.supabase.com
+- **Supabase Studio**: http://localhost:3001 (local) or http://138.197.4.36:3001 (droplet)
 
 ---
 
