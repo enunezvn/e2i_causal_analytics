@@ -164,6 +164,7 @@ class FormatterNode:
         """
         try:
             from ..dspy_integration import get_gap_analyzer_signal_collector
+            from src.agents.tier2_signal_router import route_gap_analyzer_signal
 
             collector = get_gap_analyzer_signal_collector()
 
@@ -223,6 +224,9 @@ class FormatterNode:
                 actionable_recommendations=len(quick_wins) + len(strategic_bets),
                 total_latency_ms=total_latency_ms,
             )
+
+            # Route signal to feedback_learner
+            await route_gap_analyzer_signal(signal.to_dict())
 
             logger.debug(
                 f"DSPy signal collected: reward={signal.compute_reward():.3f}, "
