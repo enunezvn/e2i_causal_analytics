@@ -9,7 +9,8 @@
  */
 
 import { useState } from 'react';
-import { Play, Loader2, FlaskConical, Settings } from 'lucide-react';
+import { Play, Loader2, FlaskConical, Settings, AlertCircle } from 'lucide-react';
+import { z } from 'zod';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -22,6 +23,34 @@ import {
   type SimulationRequest,
   type SimulationFormValues,
 } from '@/types/digital-twin';
+
+// =============================================================================
+// VALIDATION SCHEMA
+// =============================================================================
+
+/**
+ * Budget validation constants
+ */
+const BUDGET_MIN = 0;
+const BUDGET_MAX = 999_999_999;
+
+/**
+ * Zod schema for simulation form validation
+ */
+const SimulationFormSchema = z.object({
+  interventionType: z.nativeEnum(InterventionType),
+  brand: z.string().min(1, 'Brand is required'),
+  sampleSize: z.number().int().min(100).max(10000),
+  durationDays: z.number().int().min(30).max(365),
+  targetRegions: z.array(z.string()),
+  targetSegments: z.array(z.string()),
+  budget: z.number()
+    .min(BUDGET_MIN, `Budget must be at least $${BUDGET_MIN.toLocaleString()}`)
+    .max(BUDGET_MAX, `Budget cannot exceed $${BUDGET_MAX.toLocaleString()}`)
+    .optional(),
+});
+
+type ValidationErrors = Partial<Record<keyof SimulationFormValues, string>>;
 
 // =============================================================================
 // TYPES
@@ -95,9 +124,38 @@ export function SimulationPanel({
   });
 
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [validationErrors, setValidationErrors] = useState<ValidationErrors>({});
+
+  /**
+   * Validate form values before submission
+   * Returns true if valid, false otherwise
+   */
+  const validateForm = (): boolean => {
+    const result = SimulationFormSchema.safeParse(formValues);
+
+    if (!result.success) {
+      const errors: ValidationErrors = {};
+      result.error.issues.forEach((issue) => {
+        const field = issue.path[0] as keyof SimulationFormValues;
+        if (!errors[field]) {
+          errors[field] = issue.message;
+        }
+      });
+      setValidationErrors(errors);
+      return false;
+    }
+
+    setValidationErrors({});
+    return true;
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+
+    // Validate form before submission
+    if (!validateForm()) {
+      return;
+    }
 
     const request: SimulationRequest = {
       intervention_type: formValues.interventionType,
@@ -254,17 +312,35 @@ export function SimulationPanel({
                   id="budget"
                   type="number"
                   placeholder="Enter budget in dollars"
+                  min={BUDGET_MIN}
+                  max={BUDGET_MAX}
+                  step={1}
                   value={formValues.budget ?? ''}
-                  onChange={(e) =>
+                  onChange={(e) => {
+                    const value = e.target.value;
                     setFormValues((prev) => ({
                       ...prev,
-                      budget: e.target.value ? Number(e.target.value) : undefined,
-                    }))
-                  }
+                      budget: value ? Number(value) : undefined,
+                    }));
+                    // Clear budget validation error on change
+                    if (validationErrors.budget) {
+                      setValidationErrors((prev) => ({ ...prev, budget: undefined }));
+                    }
+                  }}
+                  className={validationErrors.budget ? 'border-red-500 focus:ring-red-500' : ''}
+                  aria-invalid={!!validationErrors.budget}
+                  aria-describedby={validationErrors.budget ? 'budget-error' : undefined}
                 />
-                <p className="text-xs text-muted-foreground">
-                  Budget allocation for ROI calculations
-                </p>
+                {validationErrors.budget ? (
+                  <p id="budget-error" className="text-xs text-red-500 flex items-center gap-1">
+                    <AlertCircle className="h-3 w-3" />
+                    {validationErrors.budget}
+                  </p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    Budget allocation for ROI calculations (max ${BUDGET_MAX.toLocaleString()})
+                  </p>
+                )}
               </div>
 
               {/* Target Regions */}
@@ -306,6 +382,21 @@ export function SimulationPanel({
                   Leave empty for all segments
                 </p>
               </div>
+            </div>
+          )}
+
+          {/* Form-level validation error summary */}
+          {Object.keys(validationErrors).length > 0 && (
+            <div className="p-3 rounded-md bg-red-50 border border-red-200 dark:bg-red-900/20 dark:border-red-800">
+              <div className="flex items-center gap-2 text-red-700 dark:text-red-400">
+                <AlertCircle className="h-4 w-4 flex-shrink-0" />
+                <p className="text-sm font-medium">Please fix the following errors:</p>
+              </div>
+              <ul className="mt-2 ml-6 text-sm text-red-600 dark:text-red-400 list-disc">
+                {Object.entries(validationErrors).map(([field, error]) => (
+                  error && <li key={field}>{error}</li>
+                ))}
+              </ul>
             </div>
           )}
 

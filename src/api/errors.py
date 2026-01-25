@@ -573,7 +573,11 @@ class DependencyError(E2IError):
         super().__init__(
             message,
             details=details,
-            suggested_action="The service is experiencing issues. Please try again later.",
+            suggested_action=(
+                "The service is experiencing issues. "
+                "Please try again in 30 seconds. "
+                "If the problem persists, contact support with error ID."
+            ),
             **kwargs,
         )
 
@@ -767,6 +771,9 @@ def wrap_exception(
     return E2IError(
         f"An unexpected error occurred: {exc_type}",
         original_error=exc,
-        suggested_action="Please try again or contact support if the problem persists.",
+        suggested_action=(
+            "Please try again in a few moments. "
+            "If the issue continues, try simplifying your request or contact support with the error ID."
+        ),
         include_trace=include_trace,
     )

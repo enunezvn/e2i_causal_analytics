@@ -836,47 +836,70 @@ def _build_partial_failure_warning(
     failed_agents: List[str],
     failure_details: List[Dict[str, Any]],
 ) -> str:
-    """Build a user-friendly warning message about partial failures.
+    """Build a user-friendly warning message about partial failures with remediation guidance.
 
     Phase 3: Partial failure handling enhancement.
+    Phase 4: Added actionable remediation suggestions.
 
     Args:
         failed_agents: List of agent names that failed
         failure_details: List of failure detail dicts with agent_name and error
 
     Returns:
-        Warning message string, or empty string if no failures
+        Warning message string with remediation guidance, or empty string if no failures
     """
     if not failed_agents:
         return ""
 
-    # Build failure summary
+    # Build failure summary with specific remediation hints
     failure_lines = []
+    has_timeout = False
+    has_connection_issue = False
+
     for detail in failure_details:
         agent = detail.get("agent_name", "Unknown agent")
         error = detail.get("error", "Unknown error")
         # Simplify error messages for users
         if "timed out" in error.lower():
             failure_lines.append(f"• {agent}: Operation took too long")
+            has_timeout = True
         elif "connection" in error.lower() or "unavailable" in error.lower():
             failure_lines.append(f"• {agent}: Service temporarily unavailable")
+            has_connection_issue = True
         else:
             # Truncate long error messages
             error_summary = error[:100] + "..." if len(error) > 100 else error
             failure_lines.append(f"• {agent}: {error_summary}")
+
+    # Build remediation suggestions based on failure types
+    remediation_parts = []
+    if has_timeout:
+        remediation_parts.append("try simplifying your query or asking about fewer KPIs at once")
+    if has_connection_issue:
+        remediation_parts.append("try again in 30 seconds")
+    if not remediation_parts:
+        remediation_parts.append("try rephrasing your question or asking about a specific aspect")
+
+    remediation_text = (
+        "💡 **Suggestions**: You can "
+        + " or ".join(remediation_parts)
+        + " for a more complete analysis."
+    )
 
     # Build warning message
     if len(failed_agents) == 1:
         warning = (
             "⚠️ **Note**: One analysis component did not complete successfully:\n"
             + "\n".join(failure_lines)
-            + "\n\nThe results above are based on the analyses that completed successfully."
+            + "\n\nThe results above are based on the analyses that completed successfully.\n\n"
+            + remediation_text
         )
     else:
         warning = (
             f"⚠️ **Note**: {len(failed_agents)} analysis components did not complete successfully:\n"
             + "\n".join(failure_lines)
-            + "\n\nThe results above are based on the analyses that completed successfully."
+            + "\n\nThe results above are based on the analyses that completed successfully.\n\n"
+            + remediation_text
         )
 
     return warning

@@ -74,31 +74,42 @@ function getErrorTitle(error: Error | ApiError, context?: string): string {
 }
 
 /**
- * Get user-friendly error description based on error type
+ * Get user-friendly error description with actionable remediation guidance
  */
 function getErrorDescription(error: Error | ApiError): string {
   if (error instanceof ApiError) {
     if (error.isNetworkError) {
-      return 'Unable to connect to the server. Please check your connection.';
+      return 'Unable to connect to the server. Please check your internet connection and try again in a few seconds.';
     }
     if (error.isUnauthorized) {
-      return 'Your session has expired. Please sign in again.';
+      return 'Your session has expired. Please sign in again to continue.';
     }
     if (error.isForbidden) {
-      return 'You do not have permission for this action.';
+      return 'You do not have permission for this action. Contact your administrator if you need access.';
     }
     if (error.isNotFound) {
-      return 'The requested resource was not found.';
+      return 'The requested resource was not found. Verify the identifier or try refreshing the page.';
     }
     if (error.isServerError) {
-      return 'Server error. Please try again later.';
+      // Check for specific server error patterns
+      const errorMsg = error.data?.message?.toLowerCase() || '';
+      if (errorMsg.includes('timeout') || errorMsg.includes('timed out')) {
+        return 'The operation took too long. Try simplifying your request or breaking it into smaller parts.';
+      }
+      if (errorMsg.includes('unavailable') || errorMsg.includes('connection')) {
+        return 'A service is temporarily unavailable. Please try again in 30 seconds.';
+      }
+      return 'Server error. Please try again in a few moments. If the issue persists, try simplifying your request.';
     }
-    // Use API error message if available
+    // Use API error message if available, including suggested_action from backend
+    if (error.data?.suggested_action) {
+      return `${error.data.message} ${error.data.suggested_action}`;
+    }
     if (error.data?.message) {
       return error.data.message;
     }
   }
-  return error.message || 'An unexpected error occurred.';
+  return error.message || 'An unexpected error occurred. Please try again.';
 }
 
 /**

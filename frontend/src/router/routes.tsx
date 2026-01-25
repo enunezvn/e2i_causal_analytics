@@ -29,6 +29,7 @@ const ResourceOptimization = lazy(() => import('@/pages/ResourceOptimization'));
 const SegmentAnalysis = lazy(() => import('@/pages/SegmentAnalysis'));
 const AuditChain = lazy(() => import('@/pages/AuditChain'));
 const FeedbackLearning = lazy(() => import('@/pages/FeedbackLearning'));
+const Analytics = lazy(() => import('@/pages/Analytics'));
 
 // Loading fallback component for lazy-loaded routes
 function PageLoadingFallback() {
@@ -213,6 +214,13 @@ export const routeConfigs: RouteConfig[] = [
     title: 'Feedback Learning',
     description: 'Tier 5 self-improvement with pattern detection and knowledge updates',
     icon: 'sparkles',
+    showInNav: true,
+  },
+  {
+    path: '/analytics',
+    title: 'Analytics',
+    description: 'Agent performance metrics and query analytics dashboard',
+    icon: 'bar-chart',
     showInNav: true,
   },
 ];
@@ -463,6 +471,16 @@ export const routes: RouteObject[] = [
       <ProtectedRoute>
         <LazyPage>
           <FeedbackLearning />
+        </LazyPage>
+      </ProtectedRoute>
+    ),
+  },
+  {
+    path: '/analytics',
+    element: (
+      <ProtectedRoute>
+        <LazyPage>
+          <Analytics />
         </LazyPage>
       </ProtectedRoute>
     ),
