@@ -1,13 +1,14 @@
 # =============================================================================
 # E2I Causal Analytics - Domain Vocabulary
 # =============================================================================
-# Version: 5.0.0
-# Date: 2025-12-28
+# Version: 5.1.0
+# Date: 2026-01-24
 # Description: Consolidated vocabulary from 6 files into single source of truth.
 #              Fixed entity vocabularies for NLP processing, agent routing,
 #              and system-wide standardization. NO medical NER required.
 #
 # Changelog:
+#   v5.1.0 - Vocabulary gaps remediation (agent sync, journey stages, new sections)
 #   v5.0.0 - Consolidated 6 vocabulary files, eliminated duplicates
 #   v4.3.0 - Added GEPA Prompt Optimization vocabularies (Section 13)
 #   v4.2.2 - Added Energy Score Enhancement vocabularies (Section 12)
@@ -51,6 +52,21 @@ brands:
     - competitor     # Competitor brand placeholder
     - other          # Other/unspecified brand
 
+# Competitor Brands (v5.1.0)
+competitor_brands:
+  description: "Known competitor brands by therapeutic area"
+  note: "For competitive intelligence analysis"
+  by_therapeutic_area:
+    csu_btk_inhibitors:
+      - Xolair       # omalizumab (current CSU standard)
+      - fenebrutinib # competitor BTK inhibitor
+    pnh_complement:
+      - Soliris      # eculizumab
+      - Ultomiris    # ravulizumab
+    breast_cancer_cdk46:
+      - Ibrance      # palbociclib
+      - Verzenio     # abemaciclib
+
 regions:
   description: "US geographic regions for territory analysis"
   values:
@@ -58,6 +74,66 @@ regions:
     - south
     - midwest
     - west
+
+# State-to-Region Mapping (v5.1.0)
+state_to_region_mapping:
+  description: "US state to region mapping for territory analysis"
+  mapping:
+    northeast:
+      - CT   # Connecticut
+      - ME   # Maine
+      - MA   # Massachusetts
+      - NH   # New Hampshire
+      - NJ   # New Jersey
+      - NY   # New York
+      - PA   # Pennsylvania
+      - RI   # Rhode Island
+      - VT   # Vermont
+    south:
+      - AL   # Alabama
+      - AR   # Arkansas
+      - DE   # Delaware
+      - FL   # Florida
+      - GA   # Georgia
+      - KY   # Kentucky
+      - LA   # Louisiana
+      - MD   # Maryland
+      - MS   # Mississippi
+      - NC   # North Carolina
+      - OK   # Oklahoma
+      - SC   # South Carolina
+      - TN   # Tennessee
+      - TX   # Texas
+      - VA   # Virginia
+      - WV   # West Virginia
+      - DC   # District of Columbia
+    midwest:
+      - IL   # Illinois
+      - IN   # Indiana
+      - IA   # Iowa
+      - KS   # Kansas
+      - MI   # Michigan
+      - MN   # Minnesota
+      - MO   # Missouri
+      - NE   # Nebraska
+      - ND   # North Dakota
+      - OH   # Ohio
+      - SD   # South Dakota
+      - WI   # Wisconsin
+    west:
+      - AK   # Alaska
+      - AZ   # Arizona
+      - CA   # California
+      - CO   # Colorado
+      - HI   # Hawaii
+      - ID   # Idaho
+      - MT   # Montana
+      - NV   # Nevada
+      - NM   # New Mexico
+      - OR   # Oregon
+      - UT   # Utah
+      - WA   # Washington
+      - WY   # Wyoming
 
 territories:
   description: "Sales territory identifiers (pattern)"
@@ -88,16 +164,81 @@ hcp_segments:
     - community
     - key_opinion_leader
 
-patient_journey_stages:
-  description: "Patient journey milestones"
+# Treatment Line Stages (clinical cohort analysis, therapy progression)
+# Note: For patient engagement funnel stages (aware → maintained), see:
+#   - config/ontology/core_attributes.yaml (patient_journey_stages)
+#   - semantic_graph_entity_types.patient.engagement_stages below
+treatment_line_stages:
+  description: "Treatment line progression stages for clinical cohort analysis"
   values:
-    - diagnosis
-    - treatment_naive
-    - first_line
-    - second_line
-    - maintenance
-    - discontinuation
-    - switch
+    - diagnosis          # Initial diagnosis
+    - treatment_naive    # No prior therapy
+    - first_line         # 1L treatment
+    - second_line        # 2L treatment
+    - maintenance        # Maintenance therapy
+    - discontinuation    # Therapy stopped
+    - switch             # Switched brands
+
+# Patient Engagement Stages (funnel model, aligned with core_attributes.yaml)
+patient_engagement_stages:
+  description: "7-stage patient engagement funnel (awareness to maintenance)"
+  note: "Aligned with config/ontology/core_attributes.yaml and node_types.yaml"
+  values:
+    - aware              # Patient aware of brand/condition
+    - considering        # Considering treatment
+    - prescribed         # Has prescription
+    - first_fill         # First prescription filled
+    - adherent           # Actively adherent
+    - discontinued       # Discontinued treatment
+    - maintained         # Long-term maintenance
+
+# Marketing Channels (v5.1.0)
+marketing_channels:
+  description: "Marketing and engagement channels for HCP/patient outreach"
+  channels:
+    digital:
+      - email            # Email campaigns
+      - website          # Brand website
+      - social_media     # Social media platforms
+      - digital_ads      # Online advertising
+      - webinar          # Virtual presentations
+      - edetailing       # Electronic detailing
+    field:
+      - in_person        # Face-to-face meetings
+      - phone            # Phone calls
+      - lunch_and_learn  # Educational meals
+      - speaker_program  # Speaker bureaus
+    crm:
+      - crm_alert        # CRM system alerts
+      - mobile_app       # Mobile application
+      - portal           # HCP portal
+    print:
+      - direct_mail      # Physical mailings
+      - journal_ads      # Medical journal advertising
+      - samples          # Drug samples
+
+# Payer Categories (v5.1.0)
+payer_categories:
+  description: "Payer categories for formulary and access analysis"
+  categories:
+    commercial:
+      description: "Commercial/employer-sponsored plans"
+      subcategories:
+        - national_plans     # Large national payers
+        - regional_plans     # Regional payers
+        - pbm_managed        # PBM-managed plans
+    government:
+      description: "Government-funded programs"
+      subcategories:
+        - medicare_part_d    # Medicare Part D
+        - medicaid           # State Medicaid
+        - tricare            # Military/VA
+    specialty:
+      description: "Specialty pharmacy channels"
+      subcategories:
+        - specialty_pharmacy
+        - hub_services
+        - buy_and_bill
 
 
 # =============================================================================
@@ -567,14 +708,15 @@ semantic_graph_entity_types:
       - region
       - age_group
       - insurance_type
-    journey_stages:
-      - unaware
-      - aware
-      - considering
-      - trialing
-      - adopted
-      - adherent
-      - discontinued
+    # Engagement funnel stages (aligned with core_attributes.yaml)
+    engagement_stages:
+      - aware              # Patient aware of brand/condition
+      - considering        # Considering treatment
+      - prescribed         # Has prescription
+      - first_fill         # First prescription filled
+      - adherent           # Actively adherent
+      - discontinued       # Discontinued treatment
+      - maintained         # Long-term maintenance
 
   hcp:
     description: "Healthcare Professional (physician, NP, PA)"
@@ -2248,15 +2390,73 @@ rag_pipeline_terms:
 
 
 # =============================================================================
+# SECTION 16: CLINICAL DATA INTEGRATION (V5.1.0 NEW)
+# =============================================================================
+
+# ICD-10 Diagnosis Code Mappings
+brand_icd10_mappings:
+  description: "ICD-10 diagnosis codes for brand indications"
+  note: "For cohort construction and clinical data integration"
+  mappings:
+    Remibrutinib:
+      primary_indication: "Chronic Spontaneous Urticaria (CSU)"
+      icd10_codes:
+        - L50.1   # Idiopathic urticaria
+        - L50.8   # Other urticaria
+        - L50.9   # Urticaria, unspecified
+    Fabhalta:
+      primary_indication: "Paroxysmal Nocturnal Hemoglobinuria (PNH)"
+      icd10_codes:
+        - D59.5   # Paroxysmal nocturnal hemoglobinuria
+    Kisqali:
+      primary_indication: "HR+/HER2- advanced breast cancer"
+      icd10_codes:
+        - C50.9   # Breast cancer, unspecified
+        - C50.1   # Central portion of breast
+        - C50.2   # Upper-inner quadrant
+        - C50.3   # Lower-inner quadrant
+        - C50.4   # Upper-outer quadrant
+        - C50.5   # Lower-outer quadrant
+        - C50.6   # Axillary tail of breast
+        - C50.8   # Overlapping sites of breast
+
+# NDC Drug Code Mappings
+brand_ndc_codes:
+  description: "NDC drug codes for brand products"
+  note: "For pharmacy claims data integration"
+  format: "11-digit NDC (5-4-2 format)"
+  mappings:
+    Kisqali:
+      drug_name: "ribociclib"
+      ndc_codes:
+        - "00078-0903-51"  # 200mg tablets, 63-count
+        - "00078-0903-21"  # 200mg tablets, 21-count
+        - "00078-0903-42"  # 200mg tablets, 42-count
+    # Note: NDC codes for Remibrutinib and Fabhalta to be added when available
+
+
+# =============================================================================
 # METADATA
 # =============================================================================
 
 _metadata:
-  version: "5.0.0"
-  last_updated: "2025-12-28"
+  version: "5.1.0"
+  last_updated: "2026-01-24"
   maintainer: "E2I Platform Team"
 
   version_history:
+    - version: "5.1.0"
+      date: "2026-01-24"
+      changes:
+        - "Fixed agent name sync between domain_vocabulary and node_types.yaml (snake_case)"
+        - "Standardized journey stages: added patient_engagement_stages, renamed patient_journey_stages to treatment_line_stages"
+        - "Added state_to_region_mapping for 50 US states to 4 regions"
+        - "Added competitor_brands section by therapeutic area"
+        - "Added marketing_channels section (digital, field, crm, print)"
+        - "Added payer_categories section (commercial, government, specialty)"
+        - "Added SECTION 16: Clinical Data Integration with ICD-10 and NDC code mappings"
+        - "Updated semantic_graph_entity_types.patient.engagement_stages to align with core_attributes.yaml"
+
     - version: "5.0.0"
       date: "2025-12-28"
       changes:

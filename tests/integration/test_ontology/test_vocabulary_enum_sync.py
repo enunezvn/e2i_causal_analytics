@@ -494,3 +494,144 @@ class TestMigrationCompatibility:
         # Check tier group sizes are reasonable
         for tier, members in tier_groups.items():
             assert len(members) <= 10, f"Tier {tier} has unusually many agents: {len(members)}"
+
+
+# =============================================================================
+# NODE_TYPES.YAML SYNC TESTS (V5.1.0+)
+# =============================================================================
+
+
+class TestNodeTypesAgentSync:
+    """Test that node_types.yaml agent names match domain_vocabulary.yaml."""
+
+    @pytest.fixture
+    def node_types_agents(self):
+        """Load agent names from node_types.yaml."""
+        import yaml
+        from pathlib import Path
+
+        node_types_path = Path(__file__).parents[3] / "config" / "ontology" / "node_types.yaml"
+        if not node_types_path.exists():
+            pytest.skip("node_types.yaml not found")
+
+        with open(node_types_path) as f:
+            data = yaml.safe_load(f)
+
+        agent_def = data.get("node_types", {}).get("Agent", {})
+        properties = agent_def.get("properties", {})
+        agent_name_prop = properties.get("agent_name", {})
+        values = agent_name_prop.get("values", [])
+
+        return set(v.lower() for v in values)
+
+    def test_node_types_uses_snake_case(self, node_types_agents):
+        """Test that node_types.yaml uses snake_case agent names (not PascalCase)."""
+        for agent in node_types_agents:
+            # PascalCase would have uppercase letters after the first
+            assert agent == agent.lower(), \
+                f"Agent '{agent}' should be snake_case, not PascalCase"
+            # Should not have spaces
+            assert " " not in agent, \
+                f"Agent '{agent}' should use underscores, not spaces"
+
+    def test_node_types_agents_match_vocabulary(self, vocabulary_registry, node_types_agents):
+        """Test that node_types.yaml agent names match domain_vocabulary.yaml."""
+        vocab_agents = set(a.lower() for a in vocabulary_registry.get_agent_names())
+
+        # Every agent in node_types should be in vocabulary
+        missing_from_vocab = node_types_agents - vocab_agents
+        assert not missing_from_vocab, \
+            f"node_types.yaml has agents not in domain_vocabulary.yaml: {missing_from_vocab}"
+
+    def test_vocabulary_agents_in_node_types(self, vocabulary_registry, node_types_agents):
+        """Test that domain_vocabulary.yaml agents are in node_types.yaml."""
+        vocab_agents = set(a.lower() for a in vocabulary_registry.get_agent_names())
+
+        # Every vocabulary agent should be in node_types
+        missing_from_node_types = vocab_agents - node_types_agents
+        assert not missing_from_node_types, \
+            f"domain_vocabulary.yaml has agents not in node_types.yaml: {missing_from_node_types}"
+
+    def test_node_types_has_18_agents(self, node_types_agents):
+        """Test that node_types.yaml has the expected 18 agents."""
+        assert len(node_types_agents) >= 18, \
+            f"Expected at least 18 agents in node_types.yaml, found {len(node_types_agents)}"
+        assert len(node_types_agents) <= 25, \
+            f"Unexpectedly high agent count in node_types.yaml: {len(node_types_agents)}"
+
+
+# =============================================================================
+# JOURNEY STAGE CONSISTENCY TESTS (V5.1.0+)
+# =============================================================================
+
+
+class TestJourneyStageConsistency:
+    """Test journey stage consistency across files."""
+
+    @pytest.fixture
+    def core_attributes_stages(self):
+        """Load journey stages from core_attributes.yaml."""
+        import yaml
+        from pathlib import Path
+
+        core_attrs_path = Path(__file__).parents[3] / "config" / "ontology" / "core_attributes.yaml"
+        if not core_attrs_path.exists():
+            pytest.skip("core_attributes.yaml not found")
+
+        with open(core_attrs_path) as f:
+            data = yaml.safe_load(f)
+
+        stages = data.get("patient_journey_stages", {}).get("values", [])
+        return set(s.lower() for s in stages)
+
+    @pytest.fixture
+    def node_types_stages(self):
+        """Load journey stages from node_types.yaml."""
+        import yaml
+        from pathlib import Path
+
+        node_types_path = Path(__file__).parents[3] / "config" / "ontology" / "node_types.yaml"
+        if not node_types_path.exists():
+            pytest.skip("node_types.yaml not found")
+
+        with open(node_types_path) as f:
+            data = yaml.safe_load(f)
+
+        patient_def = data.get("node_types", {}).get("Patient", {})
+        properties = patient_def.get("properties", {})
+        journey_prop = properties.get("journey_stage", {})
+        values = journey_prop.get("values", [])
+
+        return set(v.lower() for v in values)
+
+    def test_engagement_stages_in_core_attributes(self, core_attributes_stages):
+        """Test that core_attributes.yaml has 7-stage engagement funnel."""
+        expected = {"aware", "considering", "prescribed", "first_fill", "adherent", "discontinued", "maintained"}
+        assert expected == core_attributes_stages, \
+            f"core_attributes.yaml stages mismatch. Expected: {expected}, Got: {core_attributes_stages}"
+
+    def test_node_types_matches_core_attributes(self, node_types_stages, core_attributes_stages):
+        """Test that node_types.yaml journey stages match core_attributes.yaml."""
+        assert node_types_stages == core_attributes_stages, \
+            f"node_types.yaml stages differ from core_attributes.yaml. " \
+            f"node_types: {node_types_stages}, core_attributes: {core_attributes_stages}"
+
+    def test_vocabulary_has_both_stage_types(self, vocabulary_registry):
+        """Test that vocabulary has both engagement and treatment line stages."""
+        engagement = vocabulary_registry.get_engagement_stages()
+        treatment = vocabulary_registry.get_treatment_line_stages()
+
+        assert len(engagement) == 7, f"Expected 7 engagement stages, got {len(engagement)}"
+        assert len(treatment) == 7, f"Expected 7 treatment line stages, got {len(treatment)}"
+
+        # They should be different stage types
+        assert set(engagement) != set(treatment), \
+            "Engagement and treatment line stages should be different"
+
+    def test_engagement_stages_match_core_attributes(self, vocabulary_registry, core_attributes_stages):
+        """Test that vocabulary engagement stages match core_attributes.yaml."""
+        vocab_engagement = set(s.lower() for s in vocabulary_registry.get_engagement_stages())
+
+        assert vocab_engagement == core_attributes_stages, \
+            f"Vocabulary engagement stages differ from core_attributes.yaml. " \
+            f"Vocabulary: {vocab_engagement}, core_attributes: {core_attributes_stages}"

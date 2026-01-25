@@ -208,12 +208,44 @@ class VocabularyRegistry:
 
     def get_journey_stages(self) -> list[str]:
         """
-        Get patient journey stages.
+        Get patient engagement journey stages (funnel model).
+
+        This returns the 7-stage engagement funnel: aware → maintained.
+        For treatment line progression, use get_treatment_line_stages().
 
         Returns:
-            List of journey stage names
+            List of engagement journey stage names
         """
+        # Try new location first (v5.1.0+)
+        stages = self._data.get('patient_engagement_stages', {}).get('values', [])
+        if stages:
+            return stages
+        # Fallback for backward compatibility
         return self._data.get('journey_stages', {}).get('values', [])
+
+    def get_engagement_stages(self) -> list[str]:
+        """
+        Get patient engagement journey stages (alias for get_journey_stages).
+
+        Returns the 7-stage engagement funnel:
+        aware → considering → prescribed → first_fill → adherent → discontinued → maintained
+
+        Returns:
+            List of engagement stage names
+        """
+        return self.get_journey_stages()
+
+    def get_treatment_line_stages(self) -> list[str]:
+        """
+        Get treatment line progression stages (clinical cohort analysis).
+
+        Returns the therapy progression stages:
+        diagnosis → treatment_naive → first_line → second_line → maintenance → discontinuation → switch
+
+        Returns:
+            List of treatment line stage names
+        """
+        return self._data.get('treatment_line_stages', {}).get('values', [])
 
     def get_hcp_segments(self) -> list[str]:
         """
@@ -232,6 +264,133 @@ class VocabularyRegistry:
             Dictionary of time reference patterns
         """
         return self._data.get('time_references', {})
+
+    def get_state_to_region_mapping(self) -> dict[str, list[str]]:
+        """
+        Get US state to region mapping.
+
+        Returns:
+            Dictionary mapping region names to list of state codes.
+            Example: {'northeast': ['CT', 'ME', 'MA', ...], ...}
+        """
+        mapping_data = self._data.get('state_to_region_mapping', {})
+        return mapping_data.get('mapping', {})
+
+    def get_region_for_state(self, state_code: str) -> Optional[str]:
+        """
+        Get the region for a given US state code.
+
+        Args:
+            state_code: Two-letter state code (e.g., 'NY', 'CA')
+
+        Returns:
+            Region name or None if state not found
+        """
+        state_upper = state_code.upper()
+        for region, states in self.get_state_to_region_mapping().items():
+            if state_upper in states:
+                return region
+        return None
+
+    def get_competitor_brands(self, therapeutic_area: Optional[str] = None) -> list[str]:
+        """
+        Get competitor brand names.
+
+        Args:
+            therapeutic_area: Optional filter by therapeutic area
+
+        Returns:
+            List of competitor brand names
+        """
+        competitor_data = self._data.get('competitor_brands', {})
+        by_area = competitor_data.get('by_therapeutic_area', {})
+
+        if therapeutic_area:
+            return by_area.get(therapeutic_area, [])
+
+        # Return all competitors across all areas
+        all_competitors = []
+        for brands in by_area.values():
+            all_competitors.extend(brands)
+        return list(set(all_competitors))
+
+    def get_marketing_channels(self, channel_type: Optional[str] = None) -> list[str]:
+        """
+        Get marketing channel names.
+
+        Args:
+            channel_type: Optional filter ('digital', 'field', 'crm', 'print')
+
+        Returns:
+            List of channel names
+        """
+        channel_data = self._data.get('marketing_channels', {})
+        channels = channel_data.get('channels', {})
+
+        if channel_type:
+            return channels.get(channel_type, [])
+
+        # Return all channels across all types
+        all_channels = []
+        for channel_list in channels.values():
+            all_channels.extend(channel_list)
+        return all_channels
+
+    def get_payer_categories(self) -> dict[str, Any]:
+        """
+        Get payer category definitions.
+
+        Returns:
+            Dictionary of payer categories with subcategories
+        """
+        payer_data = self._data.get('payer_categories', {})
+        return payer_data.get('categories', {})
+
+    def get_icd10_codes(self, brand: Optional[str] = None) -> dict[str, list[str]]:
+        """
+        Get ICD-10 diagnosis codes for brand indications.
+
+        Args:
+            brand: Optional brand name to filter by
+
+        Returns:
+            Dictionary mapping brand names to ICD-10 code lists
+        """
+        icd_data = self._data.get('brand_icd10_mappings', {})
+        mappings = icd_data.get('mappings', {})
+
+        if brand:
+            brand_data = mappings.get(brand, {})
+            return {brand: brand_data.get('icd10_codes', [])}
+
+        # Return all mappings
+        result = {}
+        for brand_name, brand_info in mappings.items():
+            result[brand_name] = brand_info.get('icd10_codes', [])
+        return result
+
+    def get_ndc_codes(self, brand: Optional[str] = None) -> dict[str, list[str]]:
+        """
+        Get NDC drug codes for brand products.
+
+        Args:
+            brand: Optional brand name to filter by
+
+        Returns:
+            Dictionary mapping brand names to NDC code lists
+        """
+        ndc_data = self._data.get('brand_ndc_codes', {})
+        mappings = ndc_data.get('mappings', {})
+
+        if brand:
+            brand_data = mappings.get(brand, {})
+            return {brand: brand_data.get('ndc_codes', [])}
+
+        # Return all mappings
+        result = {}
+        for brand_name, brand_info in mappings.items():
+            result[brand_name] = brand_info.get('ndc_codes', [])
+        return result
 
     # ================================================================
     # ALIAS-AWARE ACCESSORS (for entity extraction)
