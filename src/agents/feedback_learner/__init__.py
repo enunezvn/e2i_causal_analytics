@@ -34,6 +34,14 @@ from .dspy_integration import (
     FeedbackLearnerTrainingSignal,
     create_memory_contribution,
 )
+from .dspy_receiver import (
+    TrainingSignalReceiver,
+    get_signal_receiver,
+    receive_training_signals,
+    get_pending_training_signals,
+    get_feedback_items_from_signals,
+    get_training_data,
+)
 
 # Evaluation exports
 from .evaluation import (
@@ -103,4 +111,11 @@ __all__ = [
     "load_self_improvement_config",
     # Convenience functions
     "process_feedback_batch",
+    # DSPy Receiver (Tier 2 signal reception)
+    "TrainingSignalReceiver",
+    "get_signal_receiver",
+    "receive_training_signals",
+    "get_pending_training_signals",
+    "get_feedback_items_from_signals",
+    "get_training_data",
 ]
