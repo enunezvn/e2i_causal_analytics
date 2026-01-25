@@ -716,7 +716,7 @@ class TestSignalEmission:
         )
 
         with patch(
-            "src.agents.prediction_synthesizer.dspy_integration.get_feedback_learner_memory_hooks"
+            "src.agents.feedback_learner.memory_hooks.get_feedback_learner_memory_hooks"
         ) as mock_get_hooks:
             mock_hooks = MagicMock()
             mock_hooks.receive_signal = AsyncMock()
@@ -748,7 +748,7 @@ class TestSignalEmission:
         )
 
         with patch(
-            "src.agents.prediction_synthesizer.dspy_integration.get_feedback_learner_memory_hooks",
+            "src.agents.feedback_learner.memory_hooks.get_feedback_learner_memory_hooks",
             side_effect=ImportError("Module not found"),
         ):
             result = await emit_training_signal(
@@ -776,7 +776,7 @@ class TestSignalEmission:
         )
 
         with patch(
-            "src.agents.prediction_synthesizer.dspy_integration.get_feedback_learner_memory_hooks"
+            "src.agents.feedback_learner.memory_hooks.get_feedback_learner_memory_hooks"
         ) as mock_get_hooks:
             mock_hooks = MagicMock()
             mock_hooks.receive_signal = AsyncMock(side_effect=Exception("Connection error"))
@@ -842,7 +842,7 @@ class TestCreateSignalFromResult:
         assert signal.prediction_target == "churn"
         assert signal.models_succeeded == 3
         assert signal.point_estimate == 0.75
-        assert signal.prediction_interval_width == 0.20  # 0.85 - 0.65
+        assert signal.prediction_interval_width == pytest.approx(0.20)  # 0.85 - 0.65
         assert signal.ensemble_confidence == 0.85
         assert signal.model_agreement == 0.92
         assert signal.similar_cases_found == 2
