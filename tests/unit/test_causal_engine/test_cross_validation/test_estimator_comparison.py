@@ -282,7 +282,6 @@ class TestDoWhyVsEconML:
 
     def test_ols_vs_linear_dml_medium_dataset(self, medium_dataset):
         """Compare DoWhy OLS vs EconML LinearDML on medium dataset."""
-        pytest.importorskip("dowhy")
         data, metadata = medium_dataset
         true_ate = metadata["true_ate"]
 
@@ -306,7 +305,6 @@ class TestDoWhyVsEconML:
 
     def test_ipw_vs_drlearner_medium_dataset(self, medium_dataset):
         """Compare DoWhy IPW vs EconML DRLearner on medium dataset."""
-        pytest.importorskip("dowhy")
         data, metadata = medium_dataset
         true_ate = metadata["true_ate"]
 
@@ -341,17 +339,18 @@ class TestDoWhyVsEconML:
             if result["ate"] is not None:
                 errors[name] = abs(result["ate"] - true_ate) / true_ate
 
-        # All datasets should produce reasonable estimates (within 15% relative error)
-        # Note: Statistical variance can cause individual estimates to vary, so we
-        # don't enforce monotonic improvement with sample size. We only verify
-        # that the estimator produces accurate results across all sample sizes.
-        if len(errors) >= 2:
-            for name, error in errors.items():
-                assert error < 0.15, f"{name} dataset error {error:.2%} exceeds 15% threshold"
-            # At least verify all estimates are in reasonable range
-            assert all(e < 0.15 for e in errors.values()), (
-                f"All estimates should be within 15% error: {errors}"
+        # Error should generally decrease with sample size, but statistical variance
+        # can cause non-monotonic behavior on specific random seeds.
+        # Use generous 5x margin to accommodate variance while still testing convergence.
+        if len(errors) == 3:
+            # Large dataset should outperform small dataset (5x margin for variance)
+            assert errors["large"] <= errors["small"] * 5.0, (
+                f"Large dataset error ({errors['large']:.4f}) should be better than "
+                f"small dataset ({errors['small']:.4f}) with 5x margin"
             )
+            # All estimates should meet the LinearDML accuracy threshold (10%)
+            for name, error in errors.items():
+                assert error < 0.10, f"{name} dataset error {error:.2%} exceeds 10% threshold"
 
 
 class TestEffectSizeRecovery:
