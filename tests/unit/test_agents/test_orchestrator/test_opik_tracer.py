@@ -402,18 +402,20 @@ class TestOrchestratorOpikTracer:
         assert tracer1 is tracer2
         assert tracer1.project_name == "first-project"
 
-    @patch("opik.Opik")
-    def test_get_client_lazy_init(self, mock_opik_class):
+    def test_get_client_lazy_init(self):
         """Test client is lazily initialized."""
-        mock_client = MagicMock()
-        mock_opik_class.return_value = mock_client
+        opik = pytest.importorskip("opik", reason="opik not installed")
 
-        tracer = OrchestratorOpikTracer()
-        assert tracer._client is None
+        with patch("opik.Opik") as mock_opik_class:
+            mock_client = MagicMock()
+            mock_opik_class.return_value = mock_client
 
-        client = tracer._get_client()
-        assert client is mock_client
-        mock_opik_class.assert_called_once_with(project_name="e2i-orchestrator")
+            tracer = OrchestratorOpikTracer()
+            assert tracer._client is None
+
+            client = tracer._get_client()
+            assert client is mock_client
+            mock_opik_class.assert_called_once_with(project_name="e2i-orchestrator")
 
     def test_get_client_disabled(self):
         """Test _get_client returns None when disabled."""
@@ -422,16 +424,18 @@ class TestOrchestratorOpikTracer:
         client = tracer._get_client()
         assert client is None
 
-    @patch("opik.Opik")
-    def test_get_client_handles_import_error(self, mock_opik_class):
+    def test_get_client_handles_import_error(self):
         """Test _get_client handles ImportError gracefully."""
-        mock_opik_class.side_effect = ImportError("opik not installed")
+        opik = pytest.importorskip("opik", reason="opik not installed")
 
-        tracer = OrchestratorOpikTracer()
-        client = tracer._get_client()
+        with patch("opik.Opik") as mock_opik_class:
+            mock_opik_class.side_effect = ImportError("opik not installed")
 
-        assert client is None
-        assert tracer.enabled is False  # Should be disabled after error
+            tracer = OrchestratorOpikTracer()
+            client = tracer._get_client()
+
+            assert client is None
+            assert tracer.enabled is False  # Should be disabled after error
 
     def test_should_sample_full_rate(self):
         """Test _should_sample with 1.0 sample rate."""
@@ -541,18 +545,20 @@ class TestOrchestratorOpikTracer:
         # Should not raise
         tracer.flush()
 
-    @patch("opik.Opik")
-    def test_flush_with_client(self, mock_opik_class):
+    def test_flush_with_client(self):
         """Test flush calls client flush."""
-        mock_client = MagicMock()
-        mock_opik_class.return_value = mock_client
+        opik = pytest.importorskip("opik", reason="opik not installed")
 
-        tracer = OrchestratorOpikTracer()
-        tracer._get_client()  # Initialize client
+        with patch("opik.Opik") as mock_opik_class:
+            mock_client = MagicMock()
+            mock_opik_class.return_value = mock_client
 
-        tracer.flush()
+            tracer = OrchestratorOpikTracer()
+            tracer._get_client()  # Initialize client
 
-        mock_client.flush.assert_called_once()
+            tracer.flush()
+
+            mock_client.flush.assert_called_once()
 
 
 # ============================================================================
@@ -606,42 +612,46 @@ class TestOpikIntegration:
     """Integration tests with mocked Opik."""
 
     @pytest.mark.asyncio
-    @patch("opik.Opik")
-    async def test_full_trace_with_opik(self, mock_opik_class):
+    async def test_full_trace_with_opik(self):
         """Test full trace with Opik client."""
-        mock_client = MagicMock()
-        mock_trace = MagicMock()
-        mock_span = MagicMock()
-        mock_client.trace.return_value = mock_trace
-        mock_trace.span.return_value = mock_span
-        mock_opik_class.return_value = mock_client
+        opik = pytest.importorskip("opik", reason="opik not installed")
 
-        tracer = OrchestratorOpikTracer(sampling_rate=1.0)
+        with patch("opik.Opik") as mock_opik_class:
+            mock_client = MagicMock()
+            mock_trace = MagicMock()
+            mock_span = MagicMock()
+            mock_client.trace.return_value = mock_trace
+            mock_trace.span.return_value = mock_span
+            mock_opik_class.return_value = mock_client
 
-        async with tracer.trace_orchestration(
-            query_id="q-123",
-            query="Test query",
-        ) as ctx:
-            node_ctx = ctx.start_node_span("classify")
-            ctx.end_node_span("classify")
+            tracer = OrchestratorOpikTracer(sampling_rate=1.0)
 
-        mock_client.trace.assert_called_once()
-        mock_trace.end.assert_called_once()
+            async with tracer.trace_orchestration(
+                query_id="q-123",
+                query="Test query",
+            ) as ctx:
+                node_ctx = ctx.start_node_span("classify")
+                ctx.end_node_span("classify")
+
+            mock_client.trace.assert_called_once()
+            mock_trace.end.assert_called_once()
 
     @pytest.mark.asyncio
-    @patch("opik.Opik")
-    async def test_graceful_degradation_on_trace_error(self, mock_opik_class):
+    async def test_graceful_degradation_on_trace_error(self):
         """Test graceful degradation when trace creation fails."""
-        mock_client = MagicMock()
-        mock_client.trace.side_effect = Exception("Trace creation failed")
-        mock_opik_class.return_value = mock_client
+        opik = pytest.importorskip("opik", reason="opik not installed")
 
-        tracer = OrchestratorOpikTracer(sampling_rate=1.0)
+        with patch("opik.Opik") as mock_opik_class:
+            mock_client = MagicMock()
+            mock_client.trace.side_effect = Exception("Trace creation failed")
+            mock_opik_class.return_value = mock_client
 
-        # Should not raise, should fall back gracefully
-        async with tracer.trace_orchestration(query_id="q-123") as ctx:
-            assert ctx.trace is None
+            tracer = OrchestratorOpikTracer(sampling_rate=1.0)
 
-            # Operations should still work
-            ctx.start_node_span("classify")
-            ctx.end_node_span("classify")
+            # Should not raise, should fall back gracefully
+            async with tracer.trace_orchestration(query_id="q-123") as ctx:
+                assert ctx.trace is None
+
+                # Operations should still work
+                ctx.start_node_span("classify")
+                ctx.end_node_span("classify")
