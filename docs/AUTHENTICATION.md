@@ -61,7 +61,7 @@ Add to your `.env` file on the droplet:
 
 ```bash
 # Required for JWT validation (self-hosted Supabase)
-SUPABASE_URL=http://138.197.4.36:8000
+SUPABASE_URL=http://138.197.4.36:54321
 SUPABASE_ANON_KEY=your-anon-key-from-self-hosted
 
 # Optional: For admin operations
@@ -160,7 +160,7 @@ const response = await fetch('http://api.example.com/memory/search', {
 ```bash
 # 1. Get a token (via self-hosted Supabase REST API)
 TOKEN=$(curl -s -X POST \
-  'http://138.197.4.36:8000/auth/v1/token?grant_type=password' \
+  'http://138.197.4.36:54321/auth/v1/token?grant_type=password' \
   -H 'apikey: YOUR_ANON_KEY' \
   -H 'Content-Type: application/json' \
   -d '{"email":"user@example.com","password":"password123"}' \

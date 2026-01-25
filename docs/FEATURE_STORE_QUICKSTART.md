@@ -33,7 +33,7 @@ Configure your environment:
 
    ```bash
    # Self-hosted Supabase URL
-   SUPABASE_URL=http://localhost:8000  # or http://138.197.4.36:8000 on droplet
+   SUPABASE_URL=http://localhost:54321  # or http://138.197.4.36:54321 on droplet
 
    # API Keys (from self-hosted Supabase config)
    SUPABASE_ANON_KEY=your-anon-key-from-self-hosted
@@ -74,7 +74,7 @@ Add all variables to your `.env` file:
 
 ```bash
 # Self-Hosted Supabase
-SUPABASE_URL=http://localhost:8000  # or http://138.197.4.36:8000 on droplet
+SUPABASE_URL=http://localhost:54321  # or http://138.197.4.36:54321 on droplet
 SUPABASE_ANON_KEY=your-anon-key-from-self-hosted
 SUPABASE_SERVICE_ROLE_KEY=your-service-role-key-from-self-hosted
 DATABASE_URL=postgresql://postgres:your-password@localhost:5433/postgres

@@ -327,14 +327,14 @@ curl -s http://localhost:9091/api/v1/targets | jq '.data.activeTargets[] | {job:
 
 | Service | Port | URL | Description |
 |---------|------|-----|-------------|
-| Supabase API | 8000 | http://138.197.4.36:8000 | Kong API Gateway |
+| Supabase API | 54321 | http://138.197.4.36:54321 | Kong API Gateway |
 | Supabase Studio | 3001 | http://138.197.4.36:3001 | Database management UI |
 | PostgreSQL | 5433 | - | Direct database access |
 
 **Connection Strings:**
 ```bash
 # For application use (via Kong API)
-SUPABASE_URL=http://138.197.4.36:8000
+SUPABASE_URL=http://138.197.4.36:54321
 
 # For direct PostgreSQL (migrations, admin)
 DATABASE_URL=postgresql://postgres:YOUR_PASSWORD@138.197.4.36:5433/postgres

@@ -341,7 +341,7 @@ class MigrationValidator:
         try:
             import requests
 
-            api_url = os.getenv("SUPABASE_URL", "http://localhost:8000")
+            api_url = os.getenv("SUPABASE_URL", "http://localhost:54321")
             anon_key = os.getenv("SUPABASE_ANON_KEY", "")
 
             if not anon_key:

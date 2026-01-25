@@ -211,7 +211,7 @@ services:
       - default
       - e2i-backend-network
     ports:
-      - "8000:8000"  # HTTP
+      - "54321:8000"  # HTTP - external 54321 maps to internal 8000
       - "8443:8443"  # HTTPS
 
   # Studio for database management
@@ -254,7 +254,7 @@ POSTGRES_PORT=5432
 ############
 # API Proxy - Kong Configuration
 ############
-KONG_HTTP_PORT=8000
+KONG_HTTP_PORT=54321
 KONG_HTTPS_PORT=8443
 
 ############
@@ -269,7 +269,7 @@ SITE_URL=http://138.197.4.36
 ADDITIONAL_REDIRECT_URLS=http://localhost:5174,http://localhost:3000
 JWT_EXPIRY=3600
 DISABLE_SIGNUP=false
-API_EXTERNAL_URL=http://138.197.4.36:8000
+API_EXTERNAL_URL=http://138.197.4.36:54321
 
 # Email settings (optional)
 GOTRUE_SMTP_HOST=
@@ -284,7 +284,7 @@ GOTRUE_SMTP_SENDER_NAME=E2I Analytics
 STUDIO_DEFAULT_ORGANIZATION=E2I Causal Analytics
 STUDIO_DEFAULT_PROJECT=E2I Production
 STUDIO_PORT=3000
-SUPABASE_PUBLIC_URL=http://138.197.4.36:8000
+SUPABASE_PUBLIC_URL=http://138.197.4.36:54321
 
 ############
 # Storage Configuration
@@ -336,7 +336,7 @@ docker compose \
 
 echo "Supabase services starting..."
 echo "Studio will be available at: http://localhost:3001"
-echo "API Gateway at: http://localhost:8000"
+echo "API Gateway at: http://localhost:54321"
 EOF
     chmod +x "$E2I_SUPABASE_CONFIG/start.sh"
 

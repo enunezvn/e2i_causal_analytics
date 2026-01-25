@@ -369,7 +369,7 @@ app = FastAPI(
 _DEFAULT_ORIGINS = [
     # Production
     "http://138.197.4.36",
-    "http://138.197.4.36:8000",
+    "http://138.197.4.36:54321",
     "https://138.197.4.36",
     # Development
     "http://localhost:3000",

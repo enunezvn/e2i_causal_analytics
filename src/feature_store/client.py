@@ -41,7 +41,7 @@ class FeatureStoreClient:
 
         # Initialize client (self-hosted Supabase)
         fs = FeatureStoreClient(
-            supabase_url="http://localhost:8000",  # or http://138.197.4.36:8000 on droplet
+            supabase_url="http://localhost:54321",  # or http://138.197.4.36:54321 on droplet
             supabase_key="your-anon-key-from-self-hosted",
             redis_url="redis://localhost:6382"
         )
