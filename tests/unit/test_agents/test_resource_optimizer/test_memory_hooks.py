@@ -180,18 +180,22 @@ class TestGetContext:
     @pytest.mark.asyncio
     async def test_get_context_graceful_degradation(self, memory_hooks):
         """Test that context retrieval handles missing memory gracefully."""
-        # Without mocking, memory systems are unavailable
-        context = await memory_hooks.get_context(
-            session_id="test-session",
-            resource_type="budget",
-            objective="maximize_outcome",
-        )
+        # Patch the working_memory property to return None (prevents lazy loading)
+        with patch(
+            "src.agents.resource_optimizer.memory_hooks.ResourceOptimizerMemoryHooks.working_memory",
+            new_callable=lambda: property(lambda self: None),
+        ):
+            context = await memory_hooks.get_context(
+                session_id="test-session",
+                resource_type="budget",
+                objective="maximize_outcome",
+            )
 
-        # Should return empty context, not raise
-        assert context.working_memory == []
-        assert context.cached_optimization is None
-        assert context.similar_optimizations == []
-        assert context.learned_patterns == []
+            # Should return empty context, not raise
+            assert context.working_memory == []
+            assert context.cached_optimization is None
+            assert context.similar_optimizations == []
+            assert context.learned_patterns == []
 
 
 class TestWorkingMemoryContext:
@@ -306,14 +310,17 @@ class TestCacheOptimization:
         self, memory_hooks, sample_optimization_result
     ):
         """Test caching when working memory unavailable."""
-        memory_hooks._working_memory = None
+        # Patch the working_memory property to return None (prevents lazy loading)
+        with patch(
+            "src.agents.resource_optimizer.memory_hooks.ResourceOptimizerMemoryHooks.working_memory",
+            new_callable=lambda: property(lambda self: None),
+        ):
+            result = await memory_hooks.cache_optimization(
+                session_id="test-session",
+                optimization_result=sample_optimization_result,
+            )
 
-        result = await memory_hooks.cache_optimization(
-            session_id="test-session",
-            optimization_result=sample_optimization_result,
-        )
-
-        assert result is False
+            assert result is False
 
 
 class TestScenarioComparison:
@@ -362,8 +369,9 @@ class TestStoreOptimizationPattern:
         self, memory_hooks, sample_optimization_result, sample_state
     ):
         """Test successful pattern storage."""
+        # Patch at the source module where the import happens
         with patch(
-            "src.agents.resource_optimizer.memory_hooks.insert_procedural_memory"
+            "src.memory.procedural_memory.insert_procedural_memory"
         ) as mock_insert:
             mock_insert.return_value = "pattern-123"
 
@@ -602,32 +610,37 @@ class TestMemoryHooksIntegration:
         """Test full workflow when memory systems unavailable."""
         hooks = ResourceOptimizerMemoryHooks()
 
-        # Get context
-        context = await hooks.get_context(
-            session_id="integration-test",
-            resource_type="budget",
-            objective="maximize_outcome",
-        )
+        # Patch the working_memory property to return None (prevents lazy loading)
+        with patch(
+            "src.agents.resource_optimizer.memory_hooks.ResourceOptimizerMemoryHooks.working_memory",
+            new_callable=lambda: property(lambda self: None),
+        ):
+            # Get context
+            context = await hooks.get_context(
+                session_id="integration-test",
+                resource_type="budget",
+                objective="maximize_outcome",
+            )
 
-        assert context.session_id == "integration-test"
+            assert context.session_id == "integration-test"
 
-        # Cache optimization (should fail gracefully)
-        cached = await hooks.cache_optimization(
-            session_id="integration-test",
-            optimization_result={"objective_value": 75000},
-        )
+            # Cache optimization (should fail gracefully)
+            cached = await hooks.cache_optimization(
+                session_id="integration-test",
+                optimization_result={"objective_value": 75000},
+            )
 
-        assert cached is False  # No working memory available
+            assert cached is False  # No working memory available
 
-        # Store pattern (should fail gracefully)
-        pattern_id = await hooks.store_optimization_pattern(
-            session_id="integration-test",
-            result={"solver_status": "optimal", "projected_roi": 1.5},
-            state={"status": "completed", "resource_type": "budget"},
-        )
+            # Store pattern (should fail gracefully)
+            pattern_id = await hooks.store_optimization_pattern(
+                session_id="integration-test",
+                result={"solver_status": "optimal", "projected_roi": 1.5},
+                state={"status": "completed", "resource_type": "budget"},
+            )
 
-        # Should return None, not raise
-        assert pattern_id is None
+            # Should return None, not raise
+            assert pattern_id is None
 
     @pytest.mark.asyncio
     async def test_ttl_values(self, memory_hooks):
