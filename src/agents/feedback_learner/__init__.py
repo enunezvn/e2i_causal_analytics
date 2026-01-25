@@ -1,6 +1,6 @@
 """
 E2I Feedback Learner Agent - Tier 5 Self-Improvement
-Version: 4.2
+Version: 4.3
 Purpose: Learn from user feedback to improve system performance
 
 DSPy Integration Support:
@@ -12,6 +12,11 @@ Self-Improvement Support:
 - RubricEvaluator for AI-as-judge response evaluation
 - Configuration loading from self_improvement.yaml
 - Pattern detection and improvement suggestions
+
+Scheduler Support (v4.3):
+- Async scheduler for periodic learning cycles
+- Configurable intervals and thresholds
+- Graceful shutdown with in-progress cycle completion
 """
 
 from .agent import (
@@ -26,12 +31,24 @@ from .config import (
     SelfImprovementConfig,
     load_self_improvement_config,
 )
+
+# Scheduler exports (v4.3)
+from .scheduler import (
+    CycleResult,
+    FeedbackLearnerScheduler,
+    SchedulerConfig,
+    SchedulerMetrics,
+    SchedulerState,
+    create_scheduler,
+)
 from .dspy_integration import (
     DSPY_AVAILABLE,
+    GEPA_AVAILABLE,
     AgentTrainingSignal,
     FeedbackLearnerCognitiveContext,
     FeedbackLearnerOptimizer,
     FeedbackLearnerTrainingSignal,
+    GEPAOptimizationTrigger,
     create_memory_contribution,
 )
 from .dspy_receiver import (
@@ -91,8 +108,10 @@ __all__ = [
     "FeedbackLearnerTrainingSignal",
     "AgentTrainingSignal",
     "FeedbackLearnerOptimizer",
+    "GEPAOptimizationTrigger",
     "create_memory_contribution",
     "DSPY_AVAILABLE",
+    "GEPA_AVAILABLE",
     # MLflow Tracking
     "FeedbackLearnerMLflowTracker",
     "FeedbackLearnerMetrics",
@@ -109,6 +128,13 @@ __all__ = [
     # Configuration
     "SelfImprovementConfig",
     "load_self_improvement_config",
+    # Scheduler (v4.3)
+    "FeedbackLearnerScheduler",
+    "SchedulerConfig",
+    "SchedulerMetrics",
+    "SchedulerState",
+    "CycleResult",
+    "create_scheduler",
     # Convenience functions
     "process_feedback_batch",
     # DSPy Receiver (Tier 2 signal reception)

@@ -81,15 +81,106 @@ The Feedback Learner operates asynchronously:
 ```
 feedback_learner/
 ├── agent.py              # Main FeedbackLearnerAgent class
-├── state.py              # LangGraph state definitions
+├── state.py              # LangGraph state definitions (v4.4: discovery feedback)
 ├── graph.py              # LangGraph assembly
+├── scheduler.py          # Async scheduler for learning cycles (v4.3)
+├── dspy_integration.py   # DSPy signals + GEPA trigger (v4.3)
+├── mlflow_tracker.py     # MLflow experiment tracking
+├── config/
+│   └── loader.py         # Configuration loading
+├── evaluation/
+│   ├── rubric_evaluator.py  # AI-as-judge evaluation
+│   └── criteria.py       # Evaluation criteria
 ├── nodes/
-│   ├── feedback_collector.py  # Gather feedback data
-│   ├── pattern_analyzer.py    # Deep pattern analysis
-│   ├── learning_extractor.py  # Generate improvements
-│   └── knowledge_updater.py   # Apply updates
-├── feedback_types.py     # Feedback type definitions
-└── knowledge_stores.py   # Knowledge base interfaces
+│   ├── feedback_collector.py     # Gather feedback data
+│   ├── pattern_analyzer.py       # Deep pattern analysis
+│   ├── learning_extractor.py     # Generate improvements
+│   ├── knowledge_updater.py      # Apply updates
+│   ├── rubric_node.py           # Rubric evaluation (v4.4)
+│   └── discovery_feedback_node.py # Discovery feedback loop (v4.4)
+└── feedback_types.py     # Feedback type definitions
+```
+
+## Async Scheduler (v4.3)
+
+The Feedback Learner now includes an async scheduler for periodic learning cycles:
+
+```python
+from src.agents.feedback_learner import (
+    FeedbackLearnerAgent,
+    FeedbackLearnerScheduler,
+    SchedulerConfig,
+    create_scheduler,
+)
+
+# Create agent and scheduler
+agent = FeedbackLearnerAgent()
+scheduler = create_scheduler(
+    agent,
+    interval_hours=6.0,        # Run every 6 hours
+    min_feedback_threshold=10,  # Minimum feedback to trigger
+)
+
+# Start scheduler (runs in background)
+await scheduler.start()
+
+# Run cycle manually
+result = await scheduler.run_cycle_now(force=True)
+
+# Stop gracefully
+await scheduler.stop()
+```
+
+### Scheduler Configuration
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `interval_hours` | 6.0 | Hours between learning cycles |
+| `min_feedback_threshold` | 10 | Minimum feedback items to trigger |
+| `cycle_timeout_seconds` | 300 | Timeout per cycle (5 min) |
+| `cooldown_hours` | - | Implicit via interval |
+
+## GEPA Optimization Trigger (v4.3)
+
+The agent includes explicit trigger conditions for GEPA prompt optimization:
+
+```python
+from src.agents.feedback_learner.dspy_integration import GEPAOptimizationTrigger
+
+trigger = GEPAOptimizationTrigger(
+    min_signals=100,           # Minimum training signals
+    min_reward_delta=0.05,     # Minimum reward change
+    cooldown_hours=24,         # Hours between optimizations
+)
+
+should_trigger, reason = trigger.should_trigger(
+    signal_count=150,
+    current_reward=0.75,
+    baseline_reward=0.65,
+    last_optimization=last_opt_time,
+    has_critical_patterns=False,
+)
+
+if should_trigger:
+    budget = trigger.get_recommended_budget(signal_count, hours_since)
+    # budget: "light", "medium", or "heavy"
+```
+
+## Discovery Feedback Loop (v4.4)
+
+Specialized feedback processing for causal discovery results:
+
+```python
+# Discovery feedback types
+- user_correction: User corrects discovered edges
+- expert_review: Domain expert validates/rejects DAG
+- outcome_validation: Observed outcomes vs predicted
+- gate_override: User overrides gate decision
+
+# Tracked metrics by algorithm
+- acceptance_rate, rejection_rate, modification_rate
+- edge_precision, edge_recall
+- average_accuracy
 ```
 
 ## LangGraph State Definition
