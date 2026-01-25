@@ -141,8 +141,8 @@ def _calculate_percentile(values: List[float], percentile: float) -> float:
 def _get_supabase_client():
     """Get Supabase client for analytics queries."""
     try:
-        from src.api.dependencies.supabase import get_supabase_client
-        return get_supabase_client()
+        from src.api.dependencies.supabase_client import get_supabase
+        return get_supabase()
     except Exception as e:
         logger.warning(f"Could not get Supabase client: {e}")
         return None
