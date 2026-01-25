@@ -1,5 +1,5 @@
 # Prometheus Configuration for E2I Causal Analytics
-# Scrapes metrics from the FastAPI application (running on host via systemd)
+# Comprehensive monitoring: API, System, PostgreSQL, RAG
 
 global:
   scrape_interval: 15s
@@ -7,7 +7,6 @@ global:
 
 scrape_configs:
   # E2I API metrics (running on host as systemd service)
-  # Use host.docker.internal to access host network from container
   - job_name: 'e2i-api'
     static_configs:
       - targets: ['host.docker.internal:8000']
@@ -20,10 +19,21 @@ scrape_configs:
     static_configs:
       - targets: ['localhost:9090']
 
+  # Node Exporter - System metrics (CPU, memory, disk, network)
+  - job_name: 'node'
+    static_configs:
+      - targets: ['node-exporter:9100']
+    scrape_interval: 15s
+
+  # PostgreSQL Exporter - Database metrics (connections, queries, locks)
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+    scrape_interval: 30s
+
   # BentoML model serving (disabled - not currently deployed)
   # - job_name: 'bentoml'
   #   static_configs:
   #     - targets: ['bentoml:3000']
   #   metrics_path: '/metrics'
   #   scrape_interval: 30s
-  #   scrape_timeout: 10s
