@@ -509,3 +509,222 @@ class TestVocabularyRegistryEdgeCases:
         assert 'agent_a' in names
         assert 'agent_b' in names
         assert 'agent_c' in names
+
+
+class TestVocabularyRegistryV510Enhancements:
+    """Tests for v5.1.0 vocabulary enhancements (journey stages, state mapping, etc.)."""
+
+    def test_get_engagement_stages_returns_funnel_stages(self, mock_vocabulary_file: Path):
+        """Test that get_engagement_stages returns 7-stage engagement funnel."""
+        registry = VocabularyRegistry.load(str(mock_vocabulary_file))
+        stages = registry.get_engagement_stages()
+
+        assert isinstance(stages, list)
+        assert 'aware' in stages
+        assert 'considering' in stages
+        assert 'prescribed' in stages
+        assert 'first_fill' in stages
+        assert 'adherent' in stages
+        assert 'discontinued' in stages
+        assert 'maintained' in stages
+        assert len(stages) == 7
+
+    def test_get_treatment_line_stages_returns_clinical_stages(self, mock_vocabulary_file: Path):
+        """Test that get_treatment_line_stages returns treatment progression stages."""
+        registry = VocabularyRegistry.load(str(mock_vocabulary_file))
+        stages = registry.get_treatment_line_stages()
+
+        assert isinstance(stages, list)
+        assert 'diagnosis' in stages
+        assert 'treatment_naive' in stages
+        assert 'first_line' in stages
+        assert 'second_line' in stages
+        assert 'maintenance' in stages
+        assert 'discontinuation' in stages
+        assert 'switch' in stages
+        assert len(stages) == 7
+
+    def test_get_journey_stages_returns_engagement_stages(self, mock_vocabulary_file: Path):
+        """Test that get_journey_stages returns engagement stages (v5.1.0+ behavior)."""
+        registry = VocabularyRegistry.load(str(mock_vocabulary_file))
+        stages = registry.get_journey_stages()
+
+        # In v5.1.0+, get_journey_stages returns engagement stages
+        assert isinstance(stages, list)
+        assert 'aware' in stages
+        assert 'maintained' in stages
+
+    def test_get_state_to_region_mapping_returns_dict(self, mock_vocabulary_file: Path):
+        """Test that get_state_to_region_mapping returns region to states mapping."""
+        registry = VocabularyRegistry.load(str(mock_vocabulary_file))
+        mapping = registry.get_state_to_region_mapping()
+
+        assert isinstance(mapping, dict)
+        assert 'northeast' in mapping
+        assert 'south' in mapping
+        assert 'midwest' in mapping
+        assert 'west' in mapping
+        assert 'NY' in mapping['northeast']
+        assert 'CA' in mapping['west']
+        assert 'TX' in mapping['south']
+
+    def test_get_region_for_state_returns_correct_region(self, mock_vocabulary_file: Path):
+        """Test that get_region_for_state returns correct region for state."""
+        registry = VocabularyRegistry.load(str(mock_vocabulary_file))
+
+        assert registry.get_region_for_state('NY') == 'northeast'
+        assert registry.get_region_for_state('CA') == 'west'
+        assert registry.get_region_for_state('TX') == 'south'
+        assert registry.get_region_for_state('IL') == 'midwest'
+
+    def test_get_region_for_state_case_insensitive(self, mock_vocabulary_file: Path):
+        """Test that get_region_for_state is case-insensitive."""
+        registry = VocabularyRegistry.load(str(mock_vocabulary_file))
+
+        assert registry.get_region_for_state('ny') == 'northeast'
+        assert registry.get_region_for_state('Ny') == 'northeast'
+        assert registry.get_region_for_state('NY') == 'northeast'
+
+    def test_get_region_for_state_unknown_returns_none(self, mock_vocabulary_file: Path):
+        """Test that get_region_for_state returns None for unknown state."""
+        registry = VocabularyRegistry.load(str(mock_vocabulary_file))
+
+        assert registry.get_region_for_state('XX') is None
+        assert registry.get_region_for_state('UNKNOWN') is None
+
+    def test_get_competitor_brands_all(self, mock_vocabulary_file: Path):
+        """Test that get_competitor_brands returns all competitor brands."""
+        registry = VocabularyRegistry.load(str(mock_vocabulary_file))
+        brands = registry.get_competitor_brands()
+
+        assert isinstance(brands, list)
+        assert 'Xolair' in brands
+        assert 'Soliris' in brands
+        assert 'Ibrance' in brands
+
+    def test_get_competitor_brands_by_therapeutic_area(self, mock_vocabulary_file: Path):
+        """Test that get_competitor_brands filters by therapeutic area."""
+        registry = VocabularyRegistry.load(str(mock_vocabulary_file))
+
+        csu_brands = registry.get_competitor_brands('csu_btk_inhibitors')
+        assert 'Xolair' in csu_brands
+        assert 'fenebrutinib' in csu_brands
+        assert 'Soliris' not in csu_brands
+
+        pnh_brands = registry.get_competitor_brands('pnh_complement')
+        assert 'Soliris' in pnh_brands
+        assert 'Ultomiris' in pnh_brands
+        assert 'Xolair' not in pnh_brands
+
+    def test_get_competitor_brands_unknown_area_returns_empty(self, mock_vocabulary_file: Path):
+        """Test that get_competitor_brands returns empty for unknown area."""
+        registry = VocabularyRegistry.load(str(mock_vocabulary_file))
+        brands = registry.get_competitor_brands('unknown_therapeutic_area')
+
+        assert isinstance(brands, list)
+        assert len(brands) == 0
+
+    def test_get_marketing_channels_all(self, mock_vocabulary_file: Path):
+        """Test that get_marketing_channels returns all channels."""
+        registry = VocabularyRegistry.load(str(mock_vocabulary_file))
+        channels = registry.get_marketing_channels()
+
+        assert isinstance(channels, list)
+        assert 'email' in channels
+        assert 'in_person' in channels
+        assert 'crm_alert' in channels
+        assert 'direct_mail' in channels
+
+    def test_get_marketing_channels_by_type(self, mock_vocabulary_file: Path):
+        """Test that get_marketing_channels filters by channel type."""
+        registry = VocabularyRegistry.load(str(mock_vocabulary_file))
+
+        digital = registry.get_marketing_channels('digital')
+        assert 'email' in digital
+        assert 'website' in digital
+        assert 'in_person' not in digital
+
+        field = registry.get_marketing_channels('field')
+        assert 'in_person' in field
+        assert 'phone' in field
+        assert 'email' not in field
+
+    def test_get_marketing_channels_unknown_type_returns_empty(self, mock_vocabulary_file: Path):
+        """Test that get_marketing_channels returns empty for unknown type."""
+        registry = VocabularyRegistry.load(str(mock_vocabulary_file))
+        channels = registry.get_marketing_channels('unknown_channel_type')
+
+        assert isinstance(channels, list)
+        assert len(channels) == 0
+
+    def test_get_payer_categories_returns_dict(self, mock_vocabulary_file: Path):
+        """Test that get_payer_categories returns payer category structure."""
+        registry = VocabularyRegistry.load(str(mock_vocabulary_file))
+        categories = registry.get_payer_categories()
+
+        assert isinstance(categories, dict)
+        assert 'commercial' in categories
+        assert 'government' in categories
+        assert 'subcategories' in categories['commercial']
+        assert 'national_plans' in categories['commercial']['subcategories']
+
+    def test_get_icd10_codes_all_brands(self, mock_vocabulary_file: Path):
+        """Test that get_icd10_codes returns codes for all brands."""
+        registry = VocabularyRegistry.load(str(mock_vocabulary_file))
+        codes = registry.get_icd10_codes()
+
+        assert isinstance(codes, dict)
+        assert 'TestBrand' in codes
+        assert 'OtherBrand' in codes
+        assert 'L50.1' in codes['TestBrand']
+        assert 'D59.5' in codes['OtherBrand']
+
+    def test_get_icd10_codes_by_brand(self, mock_vocabulary_file: Path):
+        """Test that get_icd10_codes filters by brand."""
+        registry = VocabularyRegistry.load(str(mock_vocabulary_file))
+        codes = registry.get_icd10_codes('TestBrand')
+
+        assert isinstance(codes, dict)
+        assert 'TestBrand' in codes
+        assert len(codes) == 1
+        assert 'L50.1' in codes['TestBrand']
+        assert 'L50.8' in codes['TestBrand']
+        assert 'L50.9' in codes['TestBrand']
+
+    def test_get_icd10_codes_unknown_brand_returns_empty(self, mock_vocabulary_file: Path):
+        """Test that get_icd10_codes returns empty for unknown brand."""
+        registry = VocabularyRegistry.load(str(mock_vocabulary_file))
+        codes = registry.get_icd10_codes('UnknownBrand')
+
+        assert isinstance(codes, dict)
+        assert 'UnknownBrand' in codes
+        assert len(codes['UnknownBrand']) == 0
+
+    def test_get_ndc_codes_all_brands(self, mock_vocabulary_file: Path):
+        """Test that get_ndc_codes returns codes for all brands."""
+        registry = VocabularyRegistry.load(str(mock_vocabulary_file))
+        codes = registry.get_ndc_codes()
+
+        assert isinstance(codes, dict)
+        assert 'TestBrand' in codes
+        assert '00078-0903-51' in codes['TestBrand']
+
+    def test_get_ndc_codes_by_brand(self, mock_vocabulary_file: Path):
+        """Test that get_ndc_codes filters by brand."""
+        registry = VocabularyRegistry.load(str(mock_vocabulary_file))
+        codes = registry.get_ndc_codes('TestBrand')
+
+        assert isinstance(codes, dict)
+        assert 'TestBrand' in codes
+        assert len(codes) == 1
+        assert '00078-0903-51' in codes['TestBrand']
+        assert '00078-0903-21' in codes['TestBrand']
+
+    def test_get_ndc_codes_unknown_brand_returns_empty(self, mock_vocabulary_file: Path):
+        """Test that get_ndc_codes returns empty for unknown brand."""
+        registry = VocabularyRegistry.load(str(mock_vocabulary_file))
+        codes = registry.get_ndc_codes('UnknownBrand')
+
+        assert isinstance(codes, dict)
+        assert 'UnknownBrand' in codes
+        assert len(codes['UnknownBrand']) == 0
