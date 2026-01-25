@@ -111,19 +111,19 @@ Create fixtures for:
 **Important**: Tests require environment variables. The supabase-db container is at Docker IP 172.22.0.4.
 
 ```bash
-# Environment variables required
-export SUPABASE_DB_HOST=172.22.0.4
-export POSTGRES_PASSWORD=<your-password>
-export SUPABASE_URL=http://localhost:54321
-
-# Run each phase individually (recommended for debugging)
+# Run all phases (uses .env from droplet for keys)
 ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && \
-  SUPABASE_DB_HOST=172.22.0.4 POSTGRES_PASSWORD=<pw> SUPABASE_URL=http://localhost:54321 \
-  .venv/bin/pytest tests/integration/test_migration/test_phase1_connectivity.py -v"
+  source .env && \
+  SUPABASE_DB_HOST=172.22.0.4 \
+  .venv/bin/pytest tests/integration/test_migration/ -v --tb=short"
 
-# Run all phases
+# Or with explicit environment variables:
 ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && \
-  SUPABASE_DB_HOST=172.22.0.4 POSTGRES_PASSWORD=<pw> SUPABASE_URL=http://localhost:54321 \
+  SUPABASE_DB_HOST=172.22.0.4 \
+  POSTGRES_PASSWORD=<pw> \
+  SUPABASE_URL=http://localhost:54321 \
+  SUPABASE_ANON_KEY=<anon_key> \
+  SUPABASE_SERVICE_KEY=<service_key> \
   .venv/bin/pytest tests/integration/test_migration/ -v --tb=short"
 ```
 
@@ -174,8 +174,8 @@ ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && \
 - [x] Fixed: Accept 401 status for PostgREST and OpenAPI endpoints (Kong auth)
 
 ### Wave 7: Finalize
-- [x] Run full test suite on droplet (39 passed, 1 skipped)
-- [x] Commit and push (5aa7b47)
+- [x] Run full test suite on droplet (40/40 PASSED)
+- [x] Commit and push
 - [x] Sync to droplet
 
 ---
@@ -189,6 +189,4 @@ ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && \
   .venv/bin/pytest tests/integration/test_migration/ -v --tb=short"
 ```
 
-Expected output: **39 passed, 1 skipped** ✅ (Verified 2026-01-25)
-
-Note: The skipped test (`test_query_agent_registry_via_api`) requires SUPABASE_ANON_KEY or SUPABASE_SERVICE_KEY to be configured.
+Expected output: **40 passed** ✅ (Verified 2026-01-25)
