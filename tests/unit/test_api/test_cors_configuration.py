@@ -28,7 +28,7 @@ class TestCORSConfiguration:
             importlib.reload(main)
 
             assert "http://138.197.4.36" in main._DEFAULT_ORIGINS
-            assert "http://138.197.4.36:8000" in main._DEFAULT_ORIGINS
+            assert "http://138.197.4.36:54321" in main._DEFAULT_ORIGINS
             assert "https://138.197.4.36" in main._DEFAULT_ORIGINS
 
     def test_default_origins_include_development(self):

@@ -51,7 +51,7 @@ services:
       - default
       - e2i-network
     ports:
-      - "8000:8000"   # HTTP API
+      - "54321:8000"  # HTTP API - external 54321 maps to internal 8000
       - "8443:8443"   # HTTPS API
     labels:
       - "com.e2i.service=supabase-api"
@@ -107,7 +107,7 @@ services:
     environment:
       STUDIO_PG_META_URL: "http://meta:8080"
       SUPABASE_URL: "http://kong:8000"
-      SUPABASE_PUBLIC_URL: "${SUPABASE_PUBLIC_URL:-http://138.197.4.36:8000}"
+      SUPABASE_PUBLIC_URL: "${SUPABASE_PUBLIC_URL:-http://138.197.4.36:54321}"
     labels:
       - "com.e2i.service=supabase-studio"
 
