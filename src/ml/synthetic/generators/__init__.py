@@ -9,6 +9,9 @@ Entity generators for synthetic data:
 - OutcomeGenerator: Generate business outcomes
 - PredictionGenerator: Generate ML predictions
 - TriggerGenerator: Generate triggers
+- BusinessMetricsGenerator: Generate business metrics time-series
+- FeatureStoreSeeder: Seed feature groups and features
+- FeatureValueGenerator: Generate feature values time-series
 """
 
 from .base import BaseGenerator, GeneratorConfig, GenerationResult
@@ -19,6 +22,9 @@ from .engagement_generator import EngagementGenerator
 from .outcome_generator import OutcomeGenerator
 from .prediction_generator import PredictionGenerator
 from .trigger_generator import TriggerGenerator
+from .business_metrics_generator import BusinessMetricsGenerator
+from .feature_store_seeder import FeatureStoreSeeder
+from .feature_value_generator import FeatureValueGenerator
 
 __all__ = [
     # Base classes
@@ -33,4 +39,8 @@ __all__ = [
     "OutcomeGenerator",
     "PredictionGenerator",
     "TriggerGenerator",
+    # Business & Feature generators
+    "BusinessMetricsGenerator",
+    "FeatureStoreSeeder",
+    "FeatureValueGenerator",
 ]

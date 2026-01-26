@@ -24,6 +24,10 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
+# Load environment variables from .env file
+from dotenv import load_dotenv
+load_dotenv(project_root / ".env")
+
 from src.ml.synthetic.config import DGPType
 from src.ml.synthetic.generators import (
     GeneratorConfig,
@@ -34,6 +38,9 @@ from src.ml.synthetic.generators import (
     OutcomeGenerator,
     PredictionGenerator,
     TriggerGenerator,
+    BusinessMetricsGenerator,
+    FeatureStoreSeeder,
+    FeatureValueGenerator,
 )
 from src.ml.synthetic.loaders import BatchLoader, LoaderConfig
 
@@ -53,6 +60,8 @@ FULL_SIZES = {
     "outcome": 10000,
     "prediction": 20000,
     "trigger": 12000,
+    "business_metrics": 10000,
+    "feature_values": 50000,
 }
 
 SMALL_SIZES = {
@@ -63,6 +72,8 @@ SMALL_SIZES = {
     "outcome": 1000,
     "prediction": 2000,
     "trigger": 1200,
+    "business_metrics": 1000,
+    "feature_values": 5000,
 }
 
 
@@ -121,6 +132,29 @@ def generate_datasets(sizes: dict, dgp_type: DGPType, seed: int = 42, verbose: b
     trigger_df = TriggerGenerator(trigger_config, patient_df=patient_df, hcp_df=hcp_df).generate()
     datasets["triggers"] = trigger_df
     logger.info(f"  Generated {len(trigger_df):,} triggers")
+
+    # 6. Generate Business Metrics (for Gap Analyzer)
+    logger.info(f"Generating {sizes['business_metrics']:,} business metrics...")
+    bm_config = GeneratorConfig(seed=seed, n_records=sizes["business_metrics"])
+    bm_df = BusinessMetricsGenerator(bm_config).generate()
+    datasets["business_metrics"] = bm_df
+    logger.info(f"  Generated {len(bm_df):,} business metrics")
+
+    # 7. Seed Feature Store (for Drift Monitor)
+    logger.info("Seeding feature store (groups and features)...")
+    fs_seeder = FeatureStoreSeeder(GeneratorConfig(seed=seed))
+    feature_groups_df, features_df = fs_seeder.seed()
+    datasets["feature_groups"] = feature_groups_df
+    datasets["features"] = features_df
+    logger.info(f"  Seeded {len(feature_groups_df):,} feature groups, {len(features_df):,} features")
+
+    # 8. Generate Feature Values (depends on feature store and patient data)
+    logger.info(f"Generating {sizes['feature_values']:,} feature values...")
+    fv_config = GeneratorConfig(seed=seed, n_records=sizes["feature_values"])
+    fv_generator = FeatureValueGenerator(fv_config, features_df=features_df, patient_df=patient_df)
+    fv_df = fv_generator.generate()
+    datasets["feature_values"] = fv_df
+    logger.info(f"  Generated {len(fv_df):,} feature values")
 
     logger.info("")
     total_records = sum(len(df) for df in datasets.values())
