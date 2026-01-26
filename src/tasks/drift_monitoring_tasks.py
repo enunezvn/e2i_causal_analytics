@@ -70,17 +70,31 @@ def load_config() -> Dict[str, Any]:
 
 
 def run_async(coro):
-    """Helper to run async coroutine in sync context."""
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            import nest_asyncio
+    """Helper to run async coroutine in sync context.
 
-            nest_asyncio.apply()
-            return loop.run_until_complete(coro)
+    Compatible with pytest-asyncio auto mode and pytest-xdist workers.
+    """
+    try:
+        # Check if we're in an existing event loop (pytest-asyncio)
+        loop = asyncio.get_running_loop()
+        # We're in a running loop - use nest_asyncio
+        import nest_asyncio
+
+        nest_asyncio.apply()
         return loop.run_until_complete(coro)
     except RuntimeError:
-        return asyncio.run(coro)
+        # No running loop - get existing or create new event loop
+        # Using get_event_loop() with fallback ensures thread-local loop reuse
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_closed():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+        except RuntimeError:
+            # No event loop at all - create one
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        return loop.run_until_complete(coro)
 
 
 @celery_app.task(bind=True, name="src.tasks.run_drift_detection")

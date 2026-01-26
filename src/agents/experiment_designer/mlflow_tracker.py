@@ -132,8 +132,8 @@ class ExperimentDesignerMLflowTracker:
                 self._mlflow = mlflow
                 if self._tracking_uri:
                     mlflow.set_tracking_uri(self._tracking_uri)
-            except ImportError:
-                logger.warning("MLflow not installed, tracking disabled")
+            except (ImportError, OSError, PermissionError) as e:
+                logger.warning(f"MLflow tracking unavailable ({type(e).__name__}): {e}")
                 return None
         return self._mlflow
 
@@ -472,104 +472,107 @@ class ExperimentDesignerMLflowTracker:
         else:
             output_dict = {}
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # Log design summary
-            summary = {
-                "design_type": output_dict.get("design_type", "unknown"),
-                "design_rationale": output_dict.get("design_rationale", ""),
-                "randomization_unit": output_dict.get("randomization_unit", ""),
-                "randomization_method": output_dict.get("randomization_method", ""),
-                "power_analysis": output_dict.get("power_analysis"),
-                "validity_score": output_dict.get("overall_validity_score", 0.0),
-                "validity_confidence": output_dict.get("validity_confidence", "low"),
-                "redesign_iterations": output_dict.get("redesign_iterations", 0),
-                "context": {
-                    "brand": self._current_context.brand if self._current_context else None,
-                    "business_question": (
-                        self._current_context.business_question
-                        if self._current_context
-                        else None
-                    ),
-                },
-            }
-            summary_path = os.path.join(tmpdir, "design_summary.json")
-            with open(summary_path, "w") as f:
-                json.dump(summary, f, indent=2, default=str)
-            mlflow.log_artifact(summary_path, "design")
-
-            # Log validity threats
-            threats = output_dict.get("validity_threats", [])
-            if threats:
-                # Convert to serializable format
-                threats_data = []
-                for t in threats:
-                    if hasattr(t, "model_dump"):
-                        threats_data.append(t.model_dump())
-                    elif hasattr(t, "dict"):
-                        threats_data.append(t.dict())
-                    elif isinstance(t, dict):
-                        threats_data.append(t)
-
-                threats_path = os.path.join(tmpdir, "validity_threats.json")
-                with open(threats_path, "w") as f:
-                    json.dump(threats_data, f, indent=2, default=str)
-                mlflow.log_artifact(threats_path, "validity")
-
-            # Log causal graph DOT
-            causal_graph = output_dict.get("causal_graph_dot", "")
-            if causal_graph:
-                dot_path = os.path.join(tmpdir, "causal_graph.dot")
-                with open(dot_path, "w") as f:
-                    f.write(causal_graph)
-                mlflow.log_artifact(dot_path, "design")
-
-            # Log analysis code template
-            analysis_code = output_dict.get("analysis_code", "")
-            if analysis_code:
-                code_path = os.path.join(tmpdir, "analysis_template.py")
-                with open(code_path, "w") as f:
-                    f.write(analysis_code)
-                mlflow.log_artifact(code_path, "code")
-
-            # Log pre-registration document
-            prereg = output_dict.get("preregistration_document", "")
-            if prereg:
-                prereg_path = os.path.join(tmpdir, "preregistration.md")
-                with open(prereg_path, "w") as f:
-                    f.write(prereg)
-                mlflow.log_artifact(prereg_path, "documents")
-
-            # Log treatments and outcomes
-            treatments = output_dict.get("treatments", [])
-            outcomes = output_dict.get("outcomes", [])
-            if treatments or outcomes:
-                spec = {
-                    "treatments": [
-                        t.model_dump() if hasattr(t, "model_dump") else (
-                            t.dict() if hasattr(t, "dict") else t
-                        )
-                        for t in treatments
-                    ],
-                    "outcomes": [
-                        o.model_dump() if hasattr(o, "model_dump") else (
-                            o.dict() if hasattr(o, "dict") else o
-                        )
-                        for o in outcomes
-                    ],
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                # Log design summary
+                summary = {
+                    "design_type": output_dict.get("design_type", "unknown"),
+                    "design_rationale": output_dict.get("design_rationale", ""),
+                    "randomization_unit": output_dict.get("randomization_unit", ""),
+                    "randomization_method": output_dict.get("randomization_method", ""),
+                    "power_analysis": output_dict.get("power_analysis"),
+                    "validity_score": output_dict.get("overall_validity_score", 0.0),
+                    "validity_confidence": output_dict.get("validity_confidence", "low"),
+                    "redesign_iterations": output_dict.get("redesign_iterations", 0),
+                    "context": {
+                        "brand": self._current_context.brand if self._current_context else None,
+                        "business_question": (
+                            self._current_context.business_question
+                            if self._current_context
+                            else None
+                        ),
+                    },
                 }
-                spec_path = os.path.join(tmpdir, "experiment_spec.json")
-                with open(spec_path, "w") as f:
-                    json.dump(spec, f, indent=2, default=str)
-                mlflow.log_artifact(spec_path, "design")
+                summary_path = os.path.join(tmpdir, "design_summary.json")
+                with open(summary_path, "w") as f:
+                    json.dump(summary, f, indent=2, default=str)
+                mlflow.log_artifact(summary_path, "design")
 
-            # Log iteration history if available
-            if state:
-                iteration_history = state.get("iteration_history", [])
-                if iteration_history:
-                    history_path = os.path.join(tmpdir, "iteration_history.json")
-                    with open(history_path, "w") as f:
-                        json.dump(iteration_history, f, indent=2, default=str)
-                    mlflow.log_artifact(history_path, "iterations")
+                # Log validity threats
+                threats = output_dict.get("validity_threats", [])
+                if threats:
+                    # Convert to serializable format
+                    threats_data = []
+                    for t in threats:
+                        if hasattr(t, "model_dump"):
+                            threats_data.append(t.model_dump())
+                        elif hasattr(t, "dict"):
+                            threats_data.append(t.dict())
+                        elif isinstance(t, dict):
+                            threats_data.append(t)
+
+                    threats_path = os.path.join(tmpdir, "validity_threats.json")
+                    with open(threats_path, "w") as f:
+                        json.dump(threats_data, f, indent=2, default=str)
+                    mlflow.log_artifact(threats_path, "validity")
+
+                # Log causal graph DOT
+                causal_graph = output_dict.get("causal_graph_dot", "")
+                if causal_graph:
+                    dot_path = os.path.join(tmpdir, "causal_graph.dot")
+                    with open(dot_path, "w") as f:
+                        f.write(causal_graph)
+                    mlflow.log_artifact(dot_path, "design")
+
+                # Log analysis code template
+                analysis_code = output_dict.get("analysis_code", "")
+                if analysis_code:
+                    code_path = os.path.join(tmpdir, "analysis_template.py")
+                    with open(code_path, "w") as f:
+                        f.write(analysis_code)
+                    mlflow.log_artifact(code_path, "code")
+
+                # Log pre-registration document
+                prereg = output_dict.get("preregistration_document", "")
+                if prereg:
+                    prereg_path = os.path.join(tmpdir, "preregistration.md")
+                    with open(prereg_path, "w") as f:
+                        f.write(prereg)
+                    mlflow.log_artifact(prereg_path, "documents")
+
+                # Log treatments and outcomes
+                treatments = output_dict.get("treatments", [])
+                outcomes = output_dict.get("outcomes", [])
+                if treatments or outcomes:
+                    spec = {
+                        "treatments": [
+                            t.model_dump() if hasattr(t, "model_dump") else (
+                                t.dict() if hasattr(t, "dict") else t
+                            )
+                            for t in treatments
+                        ],
+                        "outcomes": [
+                            o.model_dump() if hasattr(o, "model_dump") else (
+                                o.dict() if hasattr(o, "dict") else o
+                            )
+                            for o in outcomes
+                        ],
+                    }
+                    spec_path = os.path.join(tmpdir, "experiment_spec.json")
+                    with open(spec_path, "w") as f:
+                        json.dump(spec, f, indent=2, default=str)
+                    mlflow.log_artifact(spec_path, "design")
+
+                # Log iteration history if available
+                if state:
+                    iteration_history = state.get("iteration_history", [])
+                    if iteration_history:
+                        history_path = os.path.join(tmpdir, "iteration_history.json")
+                        with open(history_path, "w") as f:
+                            json.dump(iteration_history, f, indent=2, default=str)
+                        mlflow.log_artifact(history_path, "iterations")
+        except (OSError, PermissionError) as e:
+            logger.warning(f"Failed to log MLflow artifacts: {e}")
 
     def get_design_history(
         self,

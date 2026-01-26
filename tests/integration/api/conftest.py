@@ -8,6 +8,10 @@ Author: E2I Causal Analytics Team
 """
 
 import os
+
+# Set testing mode BEFORE any src imports to bypass JWT auth
+os.environ["E2I_TESTING_MODE"] = "1"
+
 from pathlib import Path
 
 import pytest
@@ -35,9 +39,13 @@ def _load_dotenv_if_available():
 _dotenv_loaded = _load_dotenv_if_available()
 
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(scope="module")
 def ensure_environment():
-    """Ensure environment variables are loaded for integration tests."""
+    """Ensure environment variables are loaded for integration tests.
+
+    Note: This fixture is NOT autouse to avoid skipping unrelated tests.
+    Integration tests should explicitly use this fixture or the integration_test marker.
+    """
     if not _dotenv_loaded:
         pytest.skip("dotenv not available - cannot load .env for integration tests")
 

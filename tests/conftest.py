@@ -39,6 +39,25 @@ from typing import Any, Dict, Optional
 
 import pytest
 import pytest_asyncio
+from dotenv import load_dotenv
+
+# =============================================================================
+# LOAD ENVIRONMENT VARIABLES from .env file IMMEDIATELY
+# =============================================================================
+# Load .env at module import time to ensure API keys are available before
+# any test files are collected. Use override=True so real .env values win
+# over any placeholder test keys that may have been set earlier.
+load_dotenv(override=True)
+
+# =============================================================================
+# TESTING MODE - Set before any src imports to bypass JWT auth
+# =============================================================================
+os.environ["E2I_TESTING_MODE"] = "1"
+
+
+def pytest_configure(config):
+    """Run load_dotenv again at configure time for safety."""
+    load_dotenv(override=True)
 
 # =============================================================================
 # CONFIGURATION
