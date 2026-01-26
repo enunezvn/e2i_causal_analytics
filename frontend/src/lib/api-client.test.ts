@@ -420,7 +420,7 @@ describe('Request Helpers', () => {
 
       const result = await del<typeof responseData>('/users/1');
 
-      expect(apiClient.delete).toHaveBeenCalledWith('/users/1');
+      expect(apiClient.delete).toHaveBeenCalledWith('/users/1', undefined);
       expect(result).toEqual(responseData);
     });
   });

@@ -43,8 +43,10 @@ function createWrapper() {
 // Sample data
 const mockHealth = {
   status: 'healthy',
-  model_version: '2.1.0',
-  last_calibration: '2026-01-01',
+  service: 'digital-twin',
+  models_available: 3,
+  simulations_pending: 0,
+  last_simulation_at: '2026-01-01T12:00:00Z',
 };
 
 const mockHistory = {
@@ -103,7 +105,7 @@ describe('DigitalTwin', () => {
     render(<DigitalTwin />, { wrapper: createWrapper() });
 
     expect(screen.getByText('Healthy')).toBeInTheDocument();
-    expect(screen.getByText('Model v2.1.0')).toBeInTheDocument();
+    expect(screen.getByText('3 models available')).toBeInTheDocument();
   });
 
   it('shows stat cards with metrics', () => {
@@ -256,10 +258,12 @@ describe('DigitalTwin', () => {
     });
 
     expect(mockMutate).toHaveBeenCalledWith({
-      intervention_type: InterventionType.HCP_ENGAGEMENT,
+      intervention: {
+        intervention_type: InterventionType.HCP_ENGAGEMENT,
+        duration_weeks: 13, // Math.ceil(90 / 7)
+      },
       brand: 'Remibrutinib',
-      sample_size: 1000,
-      duration_days: 90,
+      twin_count: 1000,
     });
   });
 
@@ -303,10 +307,10 @@ describe('DigitalTwin', () => {
     expect(screen.getByText('How It Works')).toBeInTheDocument();
   });
 
-  it('shows last calibration date', () => {
+  it('shows last simulation timestamp', () => {
     render(<DigitalTwin />, { wrapper: createWrapper() });
 
-    expect(screen.getByText(/Last model calibration:/i)).toBeInTheDocument();
+    expect(screen.getByText(/Last simulation:/i)).toBeInTheDocument();
   });
 
   it('handles unknown health status', () => {
