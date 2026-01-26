@@ -71,6 +71,11 @@ LOADING_ORDER = [
     "treatment_events",
     "ml_predictions",
     "triggers",
+    "business_metrics",
+    # Feature store tables (after feature_groups and features are seeded)
+    "feature_groups",
+    "features",
+    "feature_values",
 ]
 
 # Column mappings for each table (aligned with actual Supabase schema)
@@ -80,8 +85,11 @@ TABLE_COLUMNS = {
         "years_experience", "total_patient_volume",
     ],
     "patient_journeys": [
-        "patient_journey_id", "patient_id", "brand",
-        "journey_start_date", "insurance_type", "geographic_region", "data_split",
+        "patient_journey_id", "patient_id", "hcp_id", "brand",
+        "journey_start_date", "insurance_type", "geographic_region",
+        "disease_severity", "academic_hcp", "engagement_score",
+        "treatment_initiated", "days_to_treatment", "age_at_diagnosis",
+        "data_split",
     ],
     "treatment_events": [
         "treatment_event_id", "patient_journey_id", "patient_id", "brand",
@@ -100,6 +108,25 @@ TABLE_COLUMNS = {
         "acceptance_status", "outcome_tracked", "outcome_value",
         "trigger_reason", "causal_chain", "supporting_evidence",
         "recommended_action", "data_split",
+    ],
+    "business_metrics": [
+        "metric_id", "metric_date", "metric_type", "metric_name",
+        "brand", "region", "value", "target", "achievement_rate",
+        "year_over_year_change", "month_over_month_change", "roi",
+        "statistical_significance", "confidence_interval_lower",
+        "confidence_interval_upper", "sample_size", "data_split",
+    ],
+    "feature_groups": [
+        "id", "name", "description", "owner", "tags",
+        "source_table", "expected_update_frequency_hours", "max_age_hours",
+    ],
+    "features": [
+        "id", "feature_group_id", "name", "description", "value_type",
+        "entity_keys", "owner", "tags", "drift_threshold",
+    ],
+    "feature_values": [
+        "id", "feature_id", "entity_values", "value",
+        "event_timestamp", "freshness_status",
     ],
 }
 

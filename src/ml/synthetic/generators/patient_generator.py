@@ -196,7 +196,7 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
             propensity = (
                 2.0 +
                 0.8 * confounders["disease_severity"] +  # Strong severity effect
-                np.random.normal(0, 0.5, n)
+                self._rng.normal(0, 0.5, n)
             )
             engagement = expit(propensity / 3) * 10
         else:
@@ -205,7 +205,7 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
                 3.0 +
                 0.3 * confounders["disease_severity"] +
                 2.0 * confounders["academic_hcp"] +
-                np.random.normal(0, 1, n)
+                self._rng.normal(0, 1, n)
             )
             engagement = expit(propensity / 3) * 10
 
@@ -232,7 +232,7 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
             outcome_propensity = (
                 -2.0 +
                 true_ate * treatment +
-                np.random.normal(0, 1, n)
+                self._rng.normal(0, 1, n)
             )
         elif dgp_type == DGPType.HETEROGENEOUS:
             # Heterogeneous treatment effects by segment
@@ -253,7 +253,7 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
                 cate * treatment +  # Heterogeneous effect
                 0.4 * confounders["disease_severity"] +
                 0.6 * confounders["academic_hcp"] +
-                np.random.normal(0, 1, n)
+                self._rng.normal(0, 1, n)
             )
         elif dgp_type == DGPType.TIME_SERIES:
             # Time series: effect with lag
@@ -266,7 +266,7 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
                 true_ate * effective_treatment +
                 0.4 * confounders["disease_severity"] +
                 0.6 * confounders["academic_hcp"] +
-                np.random.normal(0, 1, n)
+                self._rng.normal(0, 1, n)
             )
         elif dgp_type == DGPType.SELECTION_BIAS:
             # Selection bias: outcome affected by selection mechanism
@@ -278,7 +278,7 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
                 true_ate * treatment +
                 0.2 * confounders["disease_severity"] +  # Residual confounding
                 0.6 * confounders["academic_hcp"] +
-                np.random.normal(0, 1, n)
+                self._rng.normal(0, 1, n)
             )
         else:
             # Default: Confounded DGP
@@ -287,7 +287,7 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
                 true_ate * treatment +  # TRUE CAUSAL EFFECT
                 0.4 * confounders["disease_severity"] +  # Confounding
                 0.6 * confounders["academic_hcp"] +  # Confounding
-                np.random.normal(0, 1, n)
+                self._rng.normal(0, 1, n)
             )
 
         # Convert to binary outcome

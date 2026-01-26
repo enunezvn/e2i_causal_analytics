@@ -426,13 +426,29 @@ CREATE TABLE patient_journeys (
     source_timestamp TIMESTAMPTZ,  -- When data was generated at source
     ingestion_timestamp TIMESTAMPTZ,  -- When we received it
     data_lag_hours INTEGER,  -- Calculated lag in hours
-    
+
+    -- NEW: Causal variable columns for ML agents
+    hcp_id VARCHAR(20),  -- Foreign key reference to hcp_profiles
+    disease_severity DECIMAL(4,2),  -- Confounder: Disease severity 0-10
+    academic_hcp INTEGER,  -- Confounder: 1 if academic HCP, 0 otherwise
+    engagement_score DECIMAL(4,2),  -- Treatment variable: Engagement 0-10
+    treatment_initiated INTEGER,  -- Outcome variable: 1 if initiated, 0 otherwise
+    days_to_treatment INTEGER,  -- Outcome timing: Days to treatment (NULL if not initiated)
+    age_at_diagnosis INTEGER,  -- Demographic: Age at diagnosis in years
+
     -- ML Split tracking
     data_split data_split_type NOT NULL DEFAULT 'unassigned',
     split_config_id UUID REFERENCES ml_split_registry(split_config_id),
-    
+
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    -- Constraints for causal variables
+    CONSTRAINT chk_disease_severity CHECK (disease_severity IS NULL OR (disease_severity >= 0 AND disease_severity <= 10)),
+    CONSTRAINT chk_academic_hcp CHECK (academic_hcp IS NULL OR academic_hcp IN (0, 1)),
+    CONSTRAINT chk_engagement_score CHECK (engagement_score IS NULL OR (engagement_score >= 0 AND engagement_score <= 10)),
+    CONSTRAINT chk_treatment_initiated CHECK (treatment_initiated IS NULL OR treatment_initiated IN (0, 1)),
+    CONSTRAINT chk_age_at_diagnosis CHECK (age_at_diagnosis IS NULL OR (age_at_diagnosis >= 0 AND age_at_diagnosis <= 120))
 );
 
 -- -----------------------------------------------------------------------------
