@@ -124,8 +124,8 @@ class DriftMonitorMLflowTracker:
                 self._mlflow = mlflow
                 if self._tracking_uri:
                     mlflow.set_tracking_uri(self._tracking_uri)
-            except ImportError:
-                logger.warning("MLflow not installed, tracking disabled")
+            except (ImportError, OSError, PermissionError) as e:
+                logger.warning(f"MLflow tracking unavailable ({type(e).__name__}): {e}")
                 return None
         return self._mlflow
 
@@ -451,67 +451,70 @@ class DriftMonitorMLflowTracker:
         else:
             output_dict = {}
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # Log monitoring summary
-            summary = {
-                "overall_drift_score": output_dict.get("overall_drift_score", 0.0),
-                "features_checked": output_dict.get("features_checked", 0),
-                "features_with_drift": output_dict.get("features_with_drift", []),
-                "drift_summary": output_dict.get("drift_summary", ""),
-                "recommended_actions": output_dict.get("recommended_actions", []),
-                "baseline_timestamp": output_dict.get("baseline_timestamp", ""),
-                "current_timestamp": output_dict.get("current_timestamp", ""),
-                "context": {
-                    "brand": self._current_context.brand if self._current_context else None,
-                    "model_id": self._current_context.model_id if self._current_context else None,
-                    "time_window": self._current_context.time_window if self._current_context else None,
-                },
-            }
-            summary_path = os.path.join(tmpdir, "monitoring_summary.json")
-            with open(summary_path, "w") as f:
-                json.dump(summary, f, indent=2, default=str)
-            mlflow.log_artifact(summary_path, "monitoring")
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                # Log monitoring summary
+                summary = {
+                    "overall_drift_score": output_dict.get("overall_drift_score", 0.0),
+                    "features_checked": output_dict.get("features_checked", 0),
+                    "features_with_drift": output_dict.get("features_with_drift", []),
+                    "drift_summary": output_dict.get("drift_summary", ""),
+                    "recommended_actions": output_dict.get("recommended_actions", []),
+                    "baseline_timestamp": output_dict.get("baseline_timestamp", ""),
+                    "current_timestamp": output_dict.get("current_timestamp", ""),
+                    "context": {
+                        "brand": self._current_context.brand if self._current_context else None,
+                        "model_id": self._current_context.model_id if self._current_context else None,
+                        "time_window": self._current_context.time_window if self._current_context else None,
+                    },
+                }
+                summary_path = os.path.join(tmpdir, "monitoring_summary.json")
+                with open(summary_path, "w") as f:
+                    json.dump(summary, f, indent=2, default=str)
+                mlflow.log_artifact(summary_path, "monitoring")
 
-            # Log data drift results
-            data_results = output_dict.get("data_drift_results", [])
-            if data_results:
-                results_path = os.path.join(tmpdir, "data_drift_results.json")
-                with open(results_path, "w") as f:
-                    json.dump(data_results, f, indent=2, default=str)
-                mlflow.log_artifact(results_path, "drift")
+                # Log data drift results
+                data_results = output_dict.get("data_drift_results", [])
+                if data_results:
+                    results_path = os.path.join(tmpdir, "data_drift_results.json")
+                    with open(results_path, "w") as f:
+                        json.dump(data_results, f, indent=2, default=str)
+                    mlflow.log_artifact(results_path, "drift")
 
-            # Log model drift results
-            model_results = output_dict.get("model_drift_results", [])
-            if model_results:
-                results_path = os.path.join(tmpdir, "model_drift_results.json")
-                with open(results_path, "w") as f:
-                    json.dump(model_results, f, indent=2, default=str)
-                mlflow.log_artifact(results_path, "drift")
+                # Log model drift results
+                model_results = output_dict.get("model_drift_results", [])
+                if model_results:
+                    results_path = os.path.join(tmpdir, "model_drift_results.json")
+                    with open(results_path, "w") as f:
+                        json.dump(model_results, f, indent=2, default=str)
+                    mlflow.log_artifact(results_path, "drift")
 
-            # Log concept drift results
-            concept_results = output_dict.get("concept_drift_results", [])
-            if concept_results:
-                results_path = os.path.join(tmpdir, "concept_drift_results.json")
-                with open(results_path, "w") as f:
-                    json.dump(concept_results, f, indent=2, default=str)
-                mlflow.log_artifact(results_path, "drift")
+                # Log concept drift results
+                concept_results = output_dict.get("concept_drift_results", [])
+                if concept_results:
+                    results_path = os.path.join(tmpdir, "concept_drift_results.json")
+                    with open(results_path, "w") as f:
+                        json.dump(concept_results, f, indent=2, default=str)
+                    mlflow.log_artifact(results_path, "drift")
 
-            # Log alerts
-            alerts = output_dict.get("alerts", [])
-            if alerts:
-                alerts_path = os.path.join(tmpdir, "alerts.json")
-                with open(alerts_path, "w") as f:
-                    json.dump(alerts, f, indent=2, default=str)
-                mlflow.log_artifact(alerts_path, "alerts")
+                # Log alerts
+                alerts = output_dict.get("alerts", [])
+                if alerts:
+                    alerts_path = os.path.join(tmpdir, "alerts.json")
+                    with open(alerts_path, "w") as f:
+                        json.dump(alerts, f, indent=2, default=str)
+                    mlflow.log_artifact(alerts_path, "alerts")
 
-            # Log structural drift details (V4.4)
-            if state:
-                structural_details = state.get("structural_drift_details")
-                if structural_details:
-                    structural_path = os.path.join(tmpdir, "structural_drift.json")
-                    with open(structural_path, "w") as f:
-                        json.dump(structural_details, f, indent=2, default=str)
-                    mlflow.log_artifact(structural_path, "drift")
+                # Log structural drift details (V4.4)
+                if state:
+                    structural_details = state.get("structural_drift_details")
+                    if structural_details:
+                        structural_path = os.path.join(tmpdir, "structural_drift.json")
+                        with open(structural_path, "w") as f:
+                            json.dump(structural_details, f, indent=2, default=str)
+                        mlflow.log_artifact(structural_path, "drift")
+        except (OSError, PermissionError) as e:
+            logger.warning(f"Failed to log MLflow artifacts: {e}")
 
     def get_monitoring_history(
         self,

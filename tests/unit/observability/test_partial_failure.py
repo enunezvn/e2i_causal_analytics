@@ -307,7 +307,10 @@ class TestChatbotGraphPartialFailureWarning:
 
         # Error should be truncated to 100 chars + "..."
         assert "..." in warning
-        assert len(warning) < len(long_error) + 100  # Warning is shorter than raw error
+        # The full 200-char error should not appear verbatim
+        assert long_error not in warning
+        # The truncated portion (first 100 chars) should appear
+        assert "x" * 100 in warning
 
 
 class TestOrchestratorRunNoRuntimeError:

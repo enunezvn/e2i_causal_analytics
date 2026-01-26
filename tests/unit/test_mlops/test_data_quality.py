@@ -11,6 +11,19 @@ from src.mlops.data_quality import (
     get_data_quality_validator,
 )
 
+# Check if Great Expectations is actually available (not just a namespace package)
+try:
+    from great_expectations.core import ExpectationSuite
+    GE_AVAILABLE = True
+except (ImportError, ModuleNotFoundError):
+    GE_AVAILABLE = False
+
+# Skip marker for tests requiring Great Expectations
+requires_ge = pytest.mark.skipif(
+    not GE_AVAILABLE,
+    reason="Great Expectations not installed"
+)
+
 
 @pytest.fixture
 def sample_df():
@@ -107,6 +120,7 @@ class TestDataQualityValidator:
         assert "custom_suite" in validator.SUITES
         assert validator.get_suite("custom_suite") == custom_expectations
 
+    @requires_ge
     @pytest.mark.asyncio
     async def test_validate_clean_data(self, validator, sample_df):
         """Test validation passes for clean data."""
@@ -121,6 +135,7 @@ class TestDataQualityValidator:
         assert result.expectations_evaluated > 0
         assert result.overall_status in ["passed", "warning"]
 
+    @requires_ge
     @pytest.mark.asyncio
     async def test_validate_with_nulls(self, validator):
         """Test validation detects null values."""
@@ -141,6 +156,7 @@ class TestDataQualityValidator:
         # Should have some failed expectations due to nulls
         assert result.expectations_failed > 0 or result.completeness_score < 1.0
 
+    @requires_ge
     @pytest.mark.asyncio
     async def test_validate_empty_df(self, validator):
         """Test validation handles empty DataFrame."""
@@ -156,6 +172,7 @@ class TestDataQualityValidator:
         # Row count expectation should fail
         assert result.expectations_failed > 0
 
+    @requires_ge
     @pytest.mark.asyncio
     async def test_validate_splits(self, validator, sample_df):
         """Test validating multiple splits."""
@@ -542,6 +559,7 @@ class TestValidatorWithAlerting:
         assert isinstance(alert_results, dict)
         assert "LogAlertHandler" in alert_results
 
+    @requires_ge
     @pytest.mark.asyncio
     async def test_validate_with_alerts(self, validator_with_alerter, sample_df):
         """Test validate_with_alerts method."""
@@ -555,6 +573,7 @@ class TestValidatorWithAlerting:
         assert isinstance(result, DataQualityResult)
         assert result.expectations_evaluated > 0
 
+    @requires_ge
     @pytest.mark.asyncio
     async def test_run_checkpoint_with_alerts(self, validator_with_alerter, sample_df):
         """Test run_checkpoint sends alerts."""
@@ -569,6 +588,7 @@ class TestValidatorWithAlerting:
 
         assert isinstance(result, DataQualityResult)
 
+    @requires_ge
     @pytest.mark.asyncio
     async def test_run_checkpoint_without_alerts(self, validator_with_alerter, sample_df):
         """Test run_checkpoint without alerts."""

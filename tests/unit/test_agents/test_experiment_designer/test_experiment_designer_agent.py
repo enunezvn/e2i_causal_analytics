@@ -5,6 +5,11 @@ Tests complete end-to-end workflows and input/output validation.
 Contract: .claude/contracts/tier3-contracts.md lines 82-142
 """
 
+# Set env vars BEFORE any imports that might use dspy
+import os
+
+os.environ.setdefault("OPENAI_API_KEY", "test-key-for-testing")
+
 import pytest
 from pydantic import ValidationError
 

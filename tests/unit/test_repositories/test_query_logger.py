@@ -17,6 +17,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+# Group tests to run on same xdist worker to avoid event loop conflicts
+pytestmark = pytest.mark.xdist_group(name="query_logger")
+
 from src.repositories.query_logger import (
     QueryMetrics,
     SlowQueryRecord,

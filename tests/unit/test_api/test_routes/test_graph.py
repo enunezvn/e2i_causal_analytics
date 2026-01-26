@@ -808,6 +808,10 @@ class TestSearchGraph:
     def test_search_graph_success(self, client, mock_semantic_memory):
         """Test successful graph search."""
         with patch(
+            "src.api.routes.graph._get_graphiti_service",
+            new_callable=AsyncMock,
+            return_value=None,
+        ), patch(
             "src.api.routes.graph._get_semantic_memory",
             new_callable=AsyncMock,
             return_value=mock_semantic_memory,
