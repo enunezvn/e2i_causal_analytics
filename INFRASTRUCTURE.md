@@ -351,10 +351,12 @@ docker ps --filter "name=supabase"
 
 ### Application Paths (on droplet)
 
+**Canonical Project Location:** `/opt/e2i_causal_analytics/`
+
 | Path | Description |
 |------|-------------|
-| `/opt/e2i_causal_analytics` | Application root |
-| `/opt/e2i_causal_analytics/.venv` | Python virtual environment |
+| `/opt/e2i_causal_analytics` | **Canonical** application root |
+| `/opt/e2i_causal_analytics/.venv` | Python virtual environment (consolidated 2026-01-26) |
 | `/opt/e2i_causal_analytics/.env` | Environment variables |
 | `/home/enunez/opik` | Opik installation |
 | `/home/enunez/opik/deployment/docker-compose` | Opik Docker compose |
@@ -363,23 +365,22 @@ docker ps --filter "name=supabase"
 | `/var/log/nginx/e2i-app.access.log` | Nginx access logs |
 | `/var/log/nginx/e2i-app.error.log` | Nginx error logs |
 
+> **Note**: Use `/opt/e2i_causal_analytics/` for all operations. The venv contains patched packages and should not be reinstalled.
+
 ### Updating the Application
 
 ```bash
 # SSH to droplet
 ssh -i ~/.ssh/replit enunez@138.197.4.36
 
-# Navigate to app directory
-cd ~/Projects/e2i_causal_analytics
+# Navigate to canonical app directory
+cd /opt/e2i_causal_analytics
 
 # Pull latest changes
 git pull origin main
 
-# Activate virtual environment
-source .venv/bin/activate
-
-# Install any new dependencies
-pip install -r requirements.txt
+# NOTE: Avoid installing dependencies unless necessary (venv has patches applied)
+# Only use pip install if specifically required
 
 # Restart the API service
 sudo systemctl restart e2i-api
@@ -524,6 +525,9 @@ swap:
 - ✅ 4GB swap configured
 - ✅ Docker and Docker Compose installed
 - ✅ Nginx installed
+- ✅ **Venv consolidated** (2026-01-26): Single canonical venv at `/opt/e2i_causal_analytics/.venv`
+  - Contains patched packages (ag-ui-langgraph, copilotkit)
+  - Avoid pip install unless strictly necessary
 
 ### Completed Setup
 
@@ -590,7 +594,7 @@ htop
 
 The droplet includes automated maintenance scripts to prevent terminal freezing and memory issues.
 
-**Scripts Location:** `~/Projects/e2i_causal_analytics/scripts/maintenance/`
+**Scripts Location:** `/opt/e2i_causal_analytics/scripts/maintenance/`
 
 | Script | Purpose | Schedule |
 |--------|---------|----------|
