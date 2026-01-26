@@ -112,7 +112,10 @@ class RedisWorkingMemory:
     # ========================================================================
 
     async def create_session(
-        self, user_id: Optional[str] = None, initial_context: Optional[Dict[str, Any]] = None
+        self,
+        user_id: Optional[str] = None,
+        initial_context: Optional[Dict[str, Any]] = None,
+        session_id: Optional[str] = None,
     ) -> str:
         """
         Create a new working memory session.
@@ -124,12 +127,14 @@ class RedisWorkingMemory:
                 - filters: Active filter settings
                 - brand: Active E2I brand
                 - region: Active E2I region
+            session_id: Optional pre-generated session ID. If not provided,
+                a new UUID will be generated.
 
         Returns:
             str: New session ID (UUID)
         """
         redis = await self.get_client()
-        session_id = str(uuid.uuid4())
+        session_id = session_id or str(uuid.uuid4())
         session_key = f"{self.session_prefix}{session_id}"
 
         context = initial_context or {}

@@ -433,11 +433,14 @@ class RedisWorkingMemory:
         return self._checkpointer
 
     async def create_session(
-        self, user_id: Optional[str] = None, initial_context: Optional[Dict[str, Any]] = None
+        self,
+        user_id: Optional[str] = None,
+        initial_context: Optional[Dict[str, Any]] = None,
+        session_id: Optional[str] = None,
     ) -> str:
         """Create new working memory session."""
         redis = await self.get_client()
-        session_id = str(uuid.uuid4())
+        session_id = session_id or str(uuid.uuid4())
 
         session_key = f"{self.config['session_prefix']}{session_id}"
 
