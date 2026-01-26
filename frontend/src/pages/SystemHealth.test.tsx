@@ -91,7 +91,7 @@ describe('SystemHealth', () => {
     render(<SystemHealth />, { wrapper: createWrapper() });
 
     expect(screen.getByText('System Health')).toBeInTheDocument();
-    expect(screen.getByText(/Service status, model health, and active alerts/)).toBeInTheDocument();
+    expect(screen.getByText(/Comprehensive system monitoring with health scores/)).toBeInTheDocument();
   });
 
   it('displays service status section with 5 services', () => {
@@ -119,31 +119,38 @@ describe('SystemHealth', () => {
   it('displays overview stat cards', () => {
     render(<SystemHealth />, { wrapper: createWrapper() });
 
-    // Services card
+    // Services card - shows X/Y format
     expect(screen.getByText('Services')).toBeInTheDocument();
     expect(screen.getByText('5/5')).toBeInTheDocument();
 
-    // Model Health card - appears in both overview and section
-    const modelHealthTexts = screen.getAllByText('Model Health');
-    expect(modelHealthTexts.length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('2 healthy')).toBeInTheDocument();
+    // Models card - shows X / Y format with sample data (2 healthy out of 3)
+    expect(screen.getByText('Models')).toBeInTheDocument();
+    expect(screen.getByText('2 / 3')).toBeInTheDocument();
 
-    // Active Alerts card - appears in both overview and section
+    // Active Alerts card - appears in both overview and alerts tab
     const activeAlertsTexts = screen.getAllByText('Active Alerts');
     expect(activeAlertsTexts.length).toBeGreaterThanOrEqual(1);
 
-    // Recent Runs card
-    expect(screen.getByText('Recent Runs')).toBeInTheDocument();
-    expect(screen.getByText('15')).toBeInTheDocument();
+    // Agents card - appears in both overview and agents tab
+    const agentsTexts = screen.getAllByText('Agents');
+    expect(agentsTexts.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('displays active alerts section', () => {
+  it('displays active alerts section', async () => {
+    const user = (await import('@testing-library/user-event')).default.setup();
     render(<SystemHealth />, { wrapper: createWrapper() });
 
-    // "Active Alerts" appears in both overview card and section title
+    // "Active Alerts" appears in overview card
     const activeAlertsTexts = screen.getAllByText('Active Alerts');
     expect(activeAlertsTexts.length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText(/Recent alerts requiring attention/)).toBeInTheDocument();
+
+    // Switch to Alerts tab to see the description
+    const alertsTab = screen.getByRole('tab', { name: /Alerts/i });
+    await user.click(alertsTab);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Recent alerts requiring attention/)).toBeInTheDocument();
+    });
   });
 
   it('shows refresh button and last updated time', () => {

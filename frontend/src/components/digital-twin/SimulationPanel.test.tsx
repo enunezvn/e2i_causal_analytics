@@ -484,7 +484,7 @@ describe('SimulationPanel', () => {
 
       await user.click(screen.getByRole('button', { name: /Advanced/i }));
 
-      expect(screen.getByText('Budget allocation for ROI calculations')).toBeInTheDocument();
+      expect(screen.getByText(/Budget allocation for ROI calculations/)).toBeInTheDocument();
     });
   });
 

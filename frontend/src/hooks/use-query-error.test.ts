@@ -88,7 +88,7 @@ describe('useQueryError', () => {
       expect(mockToast).toHaveBeenCalledWith({
         variant: 'destructive',
         title: 'Connection Error',
-        description: 'Unable to connect to the server. Please check your connection.',
+        description: 'Unable to connect to the server. Please check your internet connection and try again in a few seconds.',
       });
     });
 
@@ -103,7 +103,7 @@ describe('useQueryError', () => {
       expect(mockToast).toHaveBeenCalledWith({
         variant: 'destructive',
         title: 'Server Error',
-        description: 'Server error. Please try again later.',
+        description: 'Server error. Please try again in a few moments. If the issue persists, try simplifying your request.',
       });
     });
 
