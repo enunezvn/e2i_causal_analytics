@@ -468,6 +468,14 @@ This approach maximizes value while managing context costs and maintaining your 
 
 ## Related Documents
 
+- **[Implementation Plan](./mcp-skills-implementation-plan.md)**: Step-by-step implementation guide with:
+  - Phase 1: Remote Anthropic Connectors (zero infrastructure)
+  - Phase 2: Domain Skills Framework
+  - Phase 3: Agent Integration
+  - Phase 4: Self-Hosted MCP (optional)
+  - Code examples for ConnectorGateway, SkillLoader, agent integration
+  - Testing strategy and rollout plan
+
 - **[Domain Skills Framework](../../skills/SKILL_INTEGRATION.md)**: Expanded guide on building pharma commercial analytics skills, including:
   - Complete skill directory structure
   - 10+ skill file templates (KPI calculation, brand analytics, causal inference, etc.)
