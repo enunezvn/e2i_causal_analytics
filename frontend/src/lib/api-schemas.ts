@@ -440,6 +440,85 @@ export const CausalAnalysisResponseSchema = z.object({
 });
 
 // =============================================================================
+// AUDIT SCHEMAS
+// =============================================================================
+
+/**
+ * Audit chain entry schema - individual audit record
+ */
+export const AuditEntrySchema = z.object({
+  entry_id: z.string().uuid(),
+  workflow_id: z.string().uuid(),
+  sequence_number: z.number().int().nonnegative(),
+  agent_name: z.string(),
+  agent_tier: z.number().int().min(0).max(5),
+  action_type: z.string(),
+  created_at: z.string(),
+  duration_ms: z.number().int().nonnegative().nullable().optional(),
+  validation_passed: z.boolean().nullable().optional(),
+  confidence_score: z.number().min(0).max(1).nullable().optional(),
+  refutation_results: z.record(z.string(), z.unknown()).nullable().optional(),
+  previous_entry_id: z.string().uuid().nullable().optional(),
+  previous_hash: z.string().nullable().optional(),
+  entry_hash: z.string(),
+  user_id: z.string().nullable().optional(),
+  session_id: z.string().uuid().nullable().optional(),
+  brand: z.string().nullable().optional(),
+});
+
+/**
+ * Chain verification result schema
+ */
+export const ChainVerificationSchema = z.object({
+  workflow_id: z.string().uuid(),
+  is_valid: z.boolean(),
+  entries_checked: z.number().int().nonnegative(),
+  first_invalid_entry: z.string().uuid().nullable().optional(),
+  error_message: z.string().nullable().optional(),
+  verified_at: z.string(),
+});
+
+/**
+ * Workflow summary schema
+ */
+export const WorkflowSummarySchema = z.object({
+  workflow_id: z.string().uuid(),
+  total_entries: z.number().int().nonnegative(),
+  first_entry_at: z.string().nullable().optional(),
+  last_entry_at: z.string().nullable().optional(),
+  agents_involved: z.array(z.string()),
+  tiers_involved: z.array(z.number().int()),
+  chain_verified: z.boolean(),
+  brand: z.string().nullable().optional(),
+  total_duration_ms: z.number().int().nonnegative(),
+  avg_confidence_score: z.number().nullable().optional(),
+  validation_passed_count: z.number().int().nonnegative(),
+  validation_failed_count: z.number().int().nonnegative(),
+});
+
+/**
+ * Recent workflow item schema
+ */
+export const RecentWorkflowSchema = z.object({
+  workflow_id: z.string().uuid(),
+  started_at: z.string(),
+  entry_count: z.number().int().nonnegative(),
+  first_agent: z.string(),
+  last_agent: z.string(),
+  brand: z.string().nullable().optional(),
+});
+
+/**
+ * Audit entries list response
+ */
+export const AuditEntriesResponseSchema = z.array(AuditEntrySchema);
+
+/**
+ * Recent workflows list response
+ */
+export const RecentWorkflowsResponseSchema = z.array(RecentWorkflowSchema);
+
+// =============================================================================
 // HEALTH SCHEMAS
 // =============================================================================
 
@@ -650,6 +729,13 @@ export const schemaRegistry = {
 
   // Agents
   'agents.status': AgentStatusResponseSchema,
+
+  // Audit
+  'audit.entries': AuditEntriesResponseSchema,
+  'audit.entry': AuditEntrySchema,
+  'audit.verify': ChainVerificationSchema,
+  'audit.summary': WorkflowSummarySchema,
+  'audit.recent': RecentWorkflowsResponseSchema,
 } as const;
 
 /**
@@ -753,6 +839,10 @@ export type CausalAnalysisResponseValidated = z.infer<typeof CausalAnalysisRespo
 export type ChatResponseValidated = z.infer<typeof ChatResponseSchema>;
 export type AgentValidated = z.infer<typeof AgentSchema>;
 export type AgentStatusResponseValidated = z.infer<typeof AgentStatusResponseSchema>;
+export type AuditEntryValidated = z.infer<typeof AuditEntrySchema>;
+export type ChainVerificationValidated = z.infer<typeof ChainVerificationSchema>;
+export type WorkflowSummaryValidated = z.infer<typeof WorkflowSummarySchema>;
+export type RecentWorkflowValidated = z.infer<typeof RecentWorkflowSchema>;
 
 // Request body types inferred from schemas
 export type SimulationRequest = z.infer<typeof SimulationRequestSchema>;
