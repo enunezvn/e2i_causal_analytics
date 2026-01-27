@@ -1205,3 +1205,18 @@ Phase 3 (Agent Integration) ─────────────────�
 - Documented findings with alternatives (direct API integration)
 - **Decision**: Proceed with Skills-only approach, defer MCP phases (5-6)
 - Rationale: Skills Framework provides core value without external data dependencies
+
+### 2026-01-26 - Workflow Integration Tests Created ✅
+- Created `tests/integration/test_agent_workflow_skills.py` with 16 comprehensive tests
+- Tests validate skills are properly loaded during actual agent workflow execution:
+  - `TestCausalImpactWorkflowSkills` (5 tests): Core skill loading, brand-specific skills, clearing between runs
+  - `TestGapAnalyzerWorkflowSkills` (3 tests): ROI estimation skill loading, brand conditional loading
+  - `TestExplainerWorkflowSkills` (4 tests): Brand context loading, causal result skill loading
+  - `TestSkillWorkflowRobustness` (2 tests): Graceful handling when skill loading fails
+  - `TestSkillGuidanceMethod` (2 tests): Skill guidance method availability
+- Tests use graph mocking to verify skill state without making LLM API calls
+- Fixed skill name assertions to match actual skill frontmatter:
+  - "Brand-Specific Analytics" (not "Brand Analytics Context")
+  - "Confounder Identification for Pharma Analytics" (not "Confounder Identification Procedures")
+- All 31 tests pass (16 new workflow tests + 15 existing skill tests)
+- Run command: `pytest tests/integration/test_agent_skills.py tests/integration/test_agent_workflow_skills.py -v`
