@@ -29,6 +29,12 @@ ssh e2i-prod
 | Opik | http://138.197.4.36:5173 |
 | FalkorDB Browser | http://138.197.4.36:3030 |
 
+**FalkorDB Browser Connection URL:**
+```
+redis://falkordb:6379
+```
+Use this URL in the FalkorDB Browser login form to connect to the graph database.
+
 **Common Commands (run on droplet):**
 ```bash
 # Check API status
