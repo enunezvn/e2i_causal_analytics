@@ -44,6 +44,8 @@ async def review_and_remediate_qc(state: DataPreparerState) -> Dict[str, Any]:
         f"QC Remediation review for experiment {experiment_id}: "
         f"status={qc_status}, score={overall_score}, gate_passed={gate_passed}"
     )
+    # DEBUG: Print to ensure this node is being called
+    print(f"\n[DEBUG] QC Remediation node called: status={qc_status}, gate={gate_passed}, attempts={remediation_attempts}")
 
     # If QC already passed, no remediation needed
     if gate_passed and qc_status == "passed":
