@@ -344,8 +344,17 @@ async def tune_hyperparameters(state: Dict[str, Any]) -> Dict[str, Any]:
             except Exception as e:
                 logger.debug(f"Failed to enqueue warm-start trial: {e}")
 
-        # Get fixed parameters (random_state, n_jobs, etc.)
-        fixed_params = _get_fixed_params(algorithm_name)
+        # Get fixed parameters (random_state, n_jobs, class weights, etc.)
+        imbalance_detected = state.get("imbalance_detected", False)
+        recommended_strategy = state.get("recommended_strategy", "none")
+        class_distribution = state.get("class_distribution", {})
+
+        fixed_params = _get_fixed_params(
+            algorithm_name,
+            imbalance_detected=imbalance_detected,
+            recommended_strategy=recommended_strategy,
+            class_distribution=class_distribution,
+        )
 
         # Create validation-based objective function
         objective = optimizer.create_validation_objective(
@@ -550,11 +559,21 @@ def _get_default_metric(problem_type: str) -> str:
         return "roc_auc"
 
 
-def _get_fixed_params(algorithm_name: str) -> Dict[str, Any]:
+def _get_fixed_params(
+    algorithm_name: str,
+    imbalance_detected: bool = False,
+    recommended_strategy: str = "none",
+    class_distribution: Optional[Dict[int, int]] = None,
+) -> Dict[str, Any]:
     """Get fixed parameters for algorithm that shouldn't be tuned.
+
+    Includes class weight handling for imbalanced datasets.
 
     Args:
         algorithm_name: Algorithm name
+        imbalance_detected: Whether class imbalance was detected
+        recommended_strategy: Recommended remediation strategy
+        class_distribution: Class distribution dict {class: count}
 
     Returns:
         Dictionary of fixed parameters
@@ -609,5 +628,32 @@ def _get_fixed_params(algorithm_name: str) -> Dict[str, Any]:
             "cv": 3,
             "random_state": 42,
         }
+
+    # Add class weight handling for imbalanced datasets
+    if imbalance_detected and recommended_strategy in ("class_weight", "combined"):
+        if class_distribution and len(class_distribution) >= 2:
+            counts = list(class_distribution.values())
+            minority_count = min(counts)
+            majority_count = max(counts)
+
+            if minority_count > 0:
+                if algorithm_name == "XGBoost":
+                    # XGBoost uses scale_pos_weight
+                    fixed_params["scale_pos_weight"] = majority_count / minority_count
+                    logger.info(
+                        f"Added scale_pos_weight={fixed_params['scale_pos_weight']:.2f} for XGBoost"
+                    )
+                elif algorithm_name in ("RandomForest", "LogisticRegression", "ExtraTrees"):
+                    # sklearn models use class_weight
+                    fixed_params["class_weight"] = "balanced"
+                    logger.info(f"Added class_weight='balanced' for {algorithm_name}")
+                elif algorithm_name == "LightGBM":
+                    # LightGBM uses is_unbalance
+                    fixed_params["is_unbalance"] = True
+                    logger.info("Added is_unbalance=True for LightGBM")
+                elif algorithm_name == "GradientBoosting":
+                    # sklearn GradientBoosting doesn't support class_weight directly
+                    # but we can adjust sample weights during training
+                    pass
 
     return fixed_params

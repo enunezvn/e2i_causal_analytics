@@ -65,6 +65,28 @@ class ModelTrainerState(TypedDict, total=False):
     split_ratio_checks: List[str]  # Individual ratio check results
     leakage_warnings: List[str]  # Data leakage warnings
 
+    # Class Imbalance Detection
+    imbalance_detected: bool  # Whether imbalance was detected
+    imbalance_ratio: float  # Majority/minority ratio (e.g., 10.0 means 10:1)
+    minority_ratio: float  # Minority class percentage (e.g., 0.09 for 9%)
+    imbalance_severity: str  # none, moderate, severe, extreme
+    class_distribution: Dict[int, int]  # {0: 800, 1: 77}
+    recommended_strategy: str  # smote, random_oversample, class_weight, etc.
+    strategy_rationale: str  # LLM explanation for strategy choice
+
+    # Resampling Results
+    X_train_resampled: Any  # Resampled training features
+    y_train_resampled: Any  # Resampled training labels
+    resampling_applied: bool  # Whether resampling was actually applied
+    resampling_strategy: str  # Strategy that was applied
+    original_train_shape: tuple  # Shape before resampling
+    resampled_train_shape: tuple  # Shape after resampling
+    original_distribution: Dict[int, int]  # Class counts before
+    resampled_distribution: Dict[int, int]  # Class counts after
+
+    # Feature Names (preserved from data_preparer)
+    feature_columns: List[str]  # Original feature names from data_preparer
+
     # Preprocessing
     preprocessor: Any  # Fitted preprocessing pipeline (fit on train only)
     X_train_preprocessed: Any  # Transformed training data

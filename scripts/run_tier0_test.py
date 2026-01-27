@@ -514,6 +514,9 @@ async def step_5_model_trainer(
         "row_count": holdout_size,
     }
 
+    # Extract feature columns for downstream SHAP computation
+    feature_columns = list(X.columns)
+
     input_data = {
         "experiment_id": experiment_id,
         "model_candidate": model_candidate,
@@ -526,6 +529,7 @@ async def step_5_model_trainer(
         "test_data": test_data,
         "holdout_data": holdout_data,
         "enable_mlflow": CONFIG.enable_mlflow,  # Explicit MLflow control
+        "feature_columns": feature_columns,  # Pass feature names for SHAP
     }
 
     print("  Input:")
@@ -587,6 +591,9 @@ async def step_6_feature_analyzer(
     print("\n  Creating FeatureAnalyzerAgent...")
     agent = FeatureAnalyzerAgent()
 
+    # Use actual feature names from DataFrame columns for SHAP output
+    feature_columns = list(X_sample.columns)
+
     input_data = {
         "experiment_id": experiment_id,
         "trained_model": trained_model,
@@ -594,6 +601,7 @@ async def step_6_feature_analyzer(
         "X_sample": X_sample,
         "y_sample": y_sample,
         "max_samples": min(100, len(X_sample)),
+        "feature_columns": feature_columns,  # Pass feature names for SHAP
     }
 
     print("  Input:")

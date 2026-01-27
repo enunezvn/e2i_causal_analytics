@@ -5,7 +5,9 @@ from typing import Any, Dict
 from langgraph.graph import END, StateGraph
 
 from .nodes import (
+    apply_resampling,
     check_qc_gate,
+    detect_class_imbalance,
     enforce_splits,
     evaluate_model,
     fit_preprocessing,
@@ -32,14 +34,14 @@ def _should_proceed_after_splits(state: Dict[str, Any]) -> str:
     if state.get("error"):
         return "end"
     if state.get("split_ratios_valid", False):
-        return "fit_preprocessing"
+        return "detect_class_imbalance"
     return "end"
 
 
 def create_model_trainer_graph() -> StateGraph:
     """Create model_trainer LangGraph workflow.
 
-    Pipeline:
+    Pipeline (11 nodes):
         START
           ↓
         check_qc_gate (MANDATORY)
@@ -52,11 +54,15 @@ def create_model_trainer_graph() -> StateGraph:
           ↓
         [Splits valid?]
           ↓ YES
+        detect_class_imbalance (LLM-assisted)
+          ↓
         fit_preprocessing (train only)
+          ↓
+        apply_resampling (train only)
           ↓
         tune_hyperparameters (Optuna on validation)
           ↓
-        train_model (train on train set)
+        train_model (train on train/resampled set)
           ↓
         evaluate_model (eval on train/val/test)
           ↓
@@ -69,8 +75,10 @@ def create_model_trainer_graph() -> StateGraph:
     Critical gates:
     - QC gate MUST pass before any training
     - Split ratios MUST be valid (60/20/15/5 ± 2%)
+    - Class imbalance detection uses LLM to recommend strategy
     - Preprocessing fit ONLY on train
-    - HPO uses validation set
+    - Resampling applied ONLY to train (NEVER validation/test)
+    - HPO uses validation set (with class weights if imbalanced)
     - Test set touched ONCE for final eval
     - Holdout locked until post-deployment
     - MLflow logs all metrics, params, and model artifacts
@@ -78,11 +86,13 @@ def create_model_trainer_graph() -> StateGraph:
     """
     workflow = StateGraph(ModelTrainerState)
 
-    # Add nodes
+    # Add nodes (11 total)
     workflow.add_node("check_qc_gate", check_qc_gate)
     workflow.add_node("load_splits", load_splits)
     workflow.add_node("enforce_splits", enforce_splits)
+    workflow.add_node("detect_class_imbalance", detect_class_imbalance)
     workflow.add_node("fit_preprocessing", fit_preprocessing)
+    workflow.add_node("apply_resampling", apply_resampling)
     workflow.add_node("tune_hyperparameters", tune_hyperparameters)
     workflow.add_node("train_model", train_model)
     workflow.add_node("evaluate_model", evaluate_model)
@@ -111,13 +121,19 @@ def create_model_trainer_graph() -> StateGraph:
         "enforce_splits",
         _should_proceed_after_splits,
         {
-            "fit_preprocessing": "fit_preprocessing",
+            "detect_class_imbalance": "detect_class_imbalance",
             "end": END,
         },
     )
 
-    # Preprocessing → HPO (always)
-    workflow.add_edge("fit_preprocessing", "tune_hyperparameters")
+    # Class imbalance detection → preprocessing (always)
+    workflow.add_edge("detect_class_imbalance", "fit_preprocessing")
+
+    # Preprocessing → resampling (always)
+    workflow.add_edge("fit_preprocessing", "apply_resampling")
+
+    # Resampling → HPO (always)
+    workflow.add_edge("apply_resampling", "tune_hyperparameters")
 
     # HPO → training (always)
     workflow.add_edge("tune_hyperparameters", "train_model")
