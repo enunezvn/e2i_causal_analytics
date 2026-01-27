@@ -81,6 +81,23 @@ class TestConfig:
 CONFIG = TestConfig()
 
 
+@dataclass
+class StepResult:
+    """Result from a pipeline step."""
+    step_num: int
+    step_name: str
+    status: str  # "success", "warning", "failed"
+    duration_seconds: float = 0.0
+    key_metrics: dict = None
+    details: dict = None
+
+    def __post_init__(self):
+        if self.key_metrics is None:
+            self.key_metrics = {}
+        if self.details is None:
+            self.details = {}
+
+
 # =============================================================================
 # UTILITIES
 # =============================================================================
@@ -123,6 +140,141 @@ def print_warning(message: str) -> None:
 def print_info(message: str) -> None:
     """Print info message."""
     print(f"\n  ℹ️  {message}")
+
+
+def print_detailed_summary(
+    experiment_id: str,
+    step_results: list[StepResult],
+    state: dict[str, Any]
+) -> None:
+    """Print detailed results from each tier0 step.
+
+    Args:
+        experiment_id: The experiment identifier
+        step_results: List of StepResult objects from each step
+        state: Pipeline state with all collected data
+    """
+    print(f"\n{'='*70}")
+    print("DETAILED STEP RESULTS")
+    print(f"{'='*70}")
+
+    for result in step_results:
+        status_icon = "✅" if result.status == "success" else "⚠️" if result.status == "warning" else "❌"
+        print(f"\n{'-'*70}")
+        print(f"STEP {result.step_num}: {result.step_name} [{status_icon} {result.status.upper()}]")
+        print(f"{'-'*70}")
+
+        if result.duration_seconds > 0:
+            print(f"  Duration: {result.duration_seconds:.2f}s")
+
+        # Print key metrics
+        if result.key_metrics:
+            print("\n  Key Metrics:")
+            for key, value in result.key_metrics.items():
+                if isinstance(value, float):
+                    print(f"    • {key}: {value:.4f}")
+                else:
+                    print(f"    • {key}: {value}")
+
+        # Print step-specific details
+        if result.details:
+            print("\n  Details:")
+            for key, value in result.details.items():
+                if isinstance(value, dict):
+                    print(f"    {key}:")
+                    for k, v in list(value.items())[:10]:  # Limit nested items
+                        if isinstance(v, float):
+                            print(f"      - {k}: {v:.4f}")
+                        else:
+                            print(f"      - {k}: {v}")
+                elif isinstance(value, list) and len(value) > 5:
+                    print(f"    {key}: [{len(value)} items]")
+                else:
+                    print(f"    {key}: {value}")
+
+    # Class Imbalance Section
+    class_imbalance_info = state.get("class_imbalance_info", {})
+    if class_imbalance_info.get("imbalance_detected"):
+        print(f"\n{'='*70}")
+        print("CLASS IMBALANCE REMEDIATION")
+        print(f"{'='*70}")
+
+        print("\n  📊 Imbalance Analysis:")
+        print(f"    • Imbalance Detected: Yes")
+        print(f"    • Severity: {class_imbalance_info.get('imbalance_severity', 'unknown').upper()}")
+        print(f"    • Minority Ratio: {class_imbalance_info.get('minority_ratio', 0):.2%}")
+        print(f"    • Imbalance Ratio: {class_imbalance_info.get('imbalance_ratio', 1):.1f}:1")
+
+        class_dist = class_imbalance_info.get("class_distribution", {})
+        if class_dist:
+            print("\n  📈 Class Distribution:")
+            for cls, count in class_dist.items():
+                print(f"    • Class {cls}: {count} samples")
+
+        print("\n  🔧 Remediation Applied:")
+        print(f"    • Strategy: {class_imbalance_info.get('recommended_strategy', 'none')}")
+        print(f"    • Rationale: {class_imbalance_info.get('strategy_rationale', 'N/A')}")
+
+        # Show before/after if resampling was applied
+        resampling_info = state.get("resampling_info", {})
+        if resampling_info.get("resampling_applied"):
+            print("\n  📊 Resampling Results:")
+            print(f"    • Original Samples: {resampling_info.get('original_samples', 'N/A')}")
+            print(f"    • Resampled Samples: {resampling_info.get('resampled_samples', 'N/A')}")
+            print(f"    • New Minority Ratio: {resampling_info.get('new_minority_ratio', 'N/A')}")
+            if resampling_info.get("class_weights"):
+                print(f"    • Class Weights Applied: {resampling_info.get('class_weights')}")
+    elif class_imbalance_info:
+        print(f"\n  ℹ️  Class Imbalance: Not detected (minority ratio >= 40%)")
+
+    # Feature Importance Section
+    feature_importance = state.get("feature_importance")
+    if feature_importance:
+        print(f"\n{'='*70}")
+        print("FEATURE IMPORTANCE (SHAP)")
+        print(f"{'='*70}")
+        print("\n  Top Features:")
+        for i, fi in enumerate(feature_importance[:10], 1):
+            if isinstance(fi, dict):
+                name = fi.get("feature", f"feature_{i}")
+                importance = fi.get("importance", 0)
+                print(f"    {i}. {name}: {importance:.4f}")
+            else:
+                print(f"    {i}. {fi}")
+
+    # Validation Metrics Section
+    validation_metrics = state.get("validation_metrics", {})
+    if validation_metrics:
+        print(f"\n{'='*70}")
+        print("FINAL MODEL PERFORMANCE")
+        print(f"{'='*70}")
+
+        # Key metrics
+        key_metrics = ["roc_auc", "accuracy", "precision", "recall", "f1_score", "pr_auc", "brier_score"]
+        print("\n  Primary Metrics:")
+        for metric in key_metrics:
+            value = validation_metrics.get(metric)
+            if value is not None:
+                print(f"    • {metric}: {value:.4f}")
+
+        # Per-class metrics
+        print("\n  Per-Class Metrics:")
+        for key, value in validation_metrics.items():
+            if "class_" in key and value is not None:
+                print(f"    • {key}: {value:.4f}")
+
+    # Deployment Info
+    deployment_manifest = state.get("deployment_manifest", {})
+    if deployment_manifest:
+        print(f"\n{'='*70}")
+        print("DEPLOYMENT STATUS")
+        print(f"{'='*70}")
+        print(f"\n  • Deployment ID: {deployment_manifest.get('deployment_id', 'N/A')}")
+        print(f"  • Environment: {deployment_manifest.get('environment', 'N/A')}")
+        print(f"  • Status: {deployment_manifest.get('status', 'N/A')}")
+        print(f"  • Endpoint: {deployment_manifest.get('endpoint_url', 'N/A')}")
+
+    print(f"\n{'='*70}")
 
 
 def generate_sample_data(n_samples: int = 100, seed: int = 42) -> pd.DataFrame:
@@ -734,7 +886,11 @@ async def step_8_observability_connector(experiment_id: str, stages_completed: i
 
 async def run_pipeline(step: int | None = None, dry_run: bool = False) -> None:
     """Run the full pipeline or a specific step."""
+    import time
+
     experiment_id = f"tier0_e2e_{uuid.uuid4().hex[:8]}"
+    pipeline_start_time = time.time()
+
     print(f"\n{'='*70}")
     print(f"TIER 0 MLOPS WORKFLOW TEST")
     print(f"{'='*70}")
@@ -763,17 +919,38 @@ async def run_pipeline(step: int | None = None, dry_run: bool = False) -> None:
         "patient_df": patient_df,
     }
 
+    # Collect step results for detailed summary
+    step_results: list[StepResult] = []
+
     steps_to_run = [step] if step else list(range(1, 9))
 
     try:
         # Step 1: Scope Definer
         if 1 in steps_to_run:
+            step_start = time.time()
             result = await step_1_scope_definer(experiment_id)
             state["scope_spec"] = result.get("scope_spec", {"problem_type": CONFIG.problem_type})
             state["scope_spec"]["experiment_id"] = experiment_id
+            step_results.append(StepResult(
+                step_num=1,
+                step_name="SCOPE DEFINER",
+                status="success" if result.get("validation_passed", True) else "warning",
+                duration_seconds=time.time() - step_start,
+                key_metrics={
+                    "experiment_id": result.get("experiment_id", experiment_id),
+                    "problem_type": state["scope_spec"].get("problem_type"),
+                    "prediction_target": state["scope_spec"].get("prediction_target"),
+                    "minimum_samples": state["scope_spec"].get("minimum_samples"),
+                },
+                details={
+                    "brand": CONFIG.brand,
+                    "success_criteria": result.get("success_criteria", {}),
+                }
+            ))
 
         # Step 2: Data Preparer
         if 2 in steps_to_run:
+            step_start = time.time()
             scope_spec = state.get("scope_spec", {"problem_type": CONFIG.problem_type})
             result = await step_2_data_preparer(experiment_id, scope_spec, patient_df)
             state["qc_report"] = result.get("qc_report", {"gate_passed": True})
@@ -785,25 +962,83 @@ async def run_pipeline(step: int | None = None, dry_run: bool = False) -> None:
             if result.get("validation_df") is not None:
                 state["validation_df"] = result["validation_df"]
 
+            qc_report = result.get("qc_report", {})
+            step_results.append(StepResult(
+                step_num=2,
+                step_name="DATA PREPARER",
+                status="success" if state["gate_passed"] else "failed",
+                duration_seconds=time.time() - step_start,
+                key_metrics={
+                    "qc_status": qc_report.get("status", "unknown"),
+                    "overall_score": qc_report.get("overall_score"),
+                    "gate_passed": state["gate_passed"],
+                    "train_samples": result.get("data_readiness", {}).get("train_samples"),
+                    "validation_samples": result.get("data_readiness", {}).get("validation_samples"),
+                },
+                details={
+                    "completeness_score": qc_report.get("completeness_score"),
+                    "validity_score": qc_report.get("validity_score"),
+                    "consistency_score": qc_report.get("consistency_score"),
+                    "uniqueness_score": qc_report.get("uniqueness_score"),
+                    "timeliness_score": qc_report.get("timeliness_score"),
+                }
+            ))
+
             if not state["gate_passed"]:
                 print_failure("QC Gate blocked training. Pipeline stopped.")
                 return
 
         # Step 3: Cohort Constructor
         if 3 in steps_to_run:
+            step_start = time.time()
             eligible_df, cohort_result = await step_3_cohort_constructor(patient_df)
             state["eligible_df"] = eligible_df
             state["cohort_result"] = cohort_result
+            step_results.append(StepResult(
+                step_num=3,
+                step_name="COHORT CONSTRUCTOR",
+                status="success" if len(eligible_df) >= CONFIG.min_eligible_patients else "warning",
+                duration_seconds=time.time() - step_start,
+                key_metrics={
+                    "cohort_id": cohort_result.cohort_id,
+                    "input_patients": len(patient_df),
+                    "eligible_patients": len(eligible_df),
+                    "excluded_patients": len(patient_df) - len(eligible_df),
+                    "exclusion_rate": f"{(len(patient_df) - len(eligible_df)) / len(patient_df):.1%}",
+                },
+                details={
+                    "execution_id": cohort_result.execution_id,
+                    "status": cohort_result.status,
+                }
+            ))
 
         # Step 4: Model Selector
         if 4 in steps_to_run:
+            step_start = time.time()
             scope_spec = state.get("scope_spec", {"problem_type": CONFIG.problem_type})
             qc_report = state.get("qc_report", {"gate_passed": True})
             result = await step_4_model_selector(experiment_id, scope_spec, qc_report)
             state["model_candidate"] = result.get("model_candidate") or result.get("primary_candidate")
 
+            candidate = state["model_candidate"]
+            algo_name = candidate.get("algorithm_name") if isinstance(candidate, dict) else getattr(candidate, "algorithm_name", "Unknown")
+            step_results.append(StepResult(
+                step_num=4,
+                step_name="MODEL SELECTOR",
+                status="success" if candidate else "warning",
+                duration_seconds=time.time() - step_start,
+                key_metrics={
+                    "selected_algorithm": algo_name,
+                    "selection_score": result.get("selection_rationale", {}).get("selection_score") if isinstance(result.get("selection_rationale"), dict) else None,
+                },
+                details={
+                    "selection_rationale": result.get("selection_rationale"),
+                }
+            ))
+
         # Step 5: Model Trainer
         if 5 in steps_to_run:
+            step_start = time.time()
             eligible_df = state.get("eligible_df", patient_df)
             # Use numeric features for training
             feature_cols = ["days_on_therapy", "hcp_visits", "prior_treatments"]
@@ -829,8 +1064,54 @@ async def run_pipeline(step: int | None = None, dry_run: bool = False) -> None:
             )
             state["success_criteria_met"] = result.get("success_criteria_met", True)
 
+            # Capture class imbalance information
+            state["class_imbalance_info"] = {
+                "imbalance_detected": result.get("imbalance_detected", False),
+                "imbalance_ratio": result.get("imbalance_ratio"),
+                "minority_ratio": result.get("minority_ratio"),
+                "imbalance_severity": result.get("imbalance_severity"),
+                "class_distribution": result.get("class_distribution", {}),
+                "recommended_strategy": result.get("recommended_strategy"),
+                "strategy_rationale": result.get("strategy_rationale"),
+            }
+
+            # Capture resampling information if applied
+            state["resampling_info"] = {
+                "resampling_applied": result.get("resampling_applied", False),
+                "original_samples": result.get("original_train_samples"),
+                "resampled_samples": result.get("resampled_train_samples"),
+                "new_minority_ratio": result.get("new_minority_ratio"),
+                "class_weights": result.get("class_weights"),
+            }
+
+            step_results.append(StepResult(
+                step_num=5,
+                step_name="MODEL TRAINER",
+                status="success" if result.get("success_criteria_met") else "warning",
+                duration_seconds=time.time() - step_start,
+                key_metrics={
+                    "training_run_id": result.get("training_run_id"),
+                    "model_id": result.get("model_id"),
+                    "auc_roc": result.get("auc_roc"),
+                    "precision": result.get("precision"),
+                    "recall": result.get("recall"),
+                    "f1_score": result.get("f1_score"),
+                    "success_criteria_met": result.get("success_criteria_met"),
+                    "hpo_trials_run": result.get("hpo_trials_run"),
+                },
+                details={
+                    "mlflow_run_id": result.get("mlflow_run_id"),
+                    "model_uri": state.get("model_uri"),
+                    "training_duration_seconds": result.get("training_duration_seconds"),
+                    "imbalance_detected": result.get("imbalance_detected", False),
+                    "imbalance_severity": result.get("imbalance_severity"),
+                    "remediation_strategy": result.get("recommended_strategy"),
+                }
+            ))
+
         # Step 6: Feature Analyzer
         if 6 in steps_to_run:
+            step_start = time.time()
             eligible_df = state.get("eligible_df", patient_df)
             # Use numeric features for analysis
             feature_cols = ["days_on_therapy", "hcp_visits", "prior_treatments"]
@@ -846,8 +1127,32 @@ async def run_pipeline(step: int | None = None, dry_run: bool = False) -> None:
             )
             state["feature_importance"] = result.get("feature_importance")
 
+            # Extract top features for summary
+            top_features = {}
+            if result.get("feature_importance"):
+                for fi in result["feature_importance"][:5]:
+                    if isinstance(fi, dict):
+                        top_features[fi.get("feature", "unknown")] = fi.get("importance", 0)
+
+            step_results.append(StepResult(
+                step_num=6,
+                step_name="FEATURE ANALYZER",
+                status="success" if result.get("feature_importance") else "warning",
+                duration_seconds=time.time() - step_start,
+                key_metrics={
+                    "samples_analyzed": result.get("samples_analyzed"),
+                    "computation_time": result.get("computation_time_seconds"),
+                    "top_feature": list(top_features.keys())[0] if top_features else None,
+                },
+                details={
+                    "top_features": top_features,
+                    "explainer_type": result.get("explainer_type"),
+                }
+            ))
+
         # Step 7: Model Deployer
         if 7 in steps_to_run:
+            step_start = time.time()
             result = await step_7_model_deployer(
                 experiment_id,
                 state.get("model_uri"),
@@ -856,19 +1161,55 @@ async def run_pipeline(step: int | None = None, dry_run: bool = False) -> None:
             )
             state["deployment_manifest"] = result.get("deployment_manifest")
 
+            manifest = result.get("deployment_manifest", {})
+            step_results.append(StepResult(
+                step_num=7,
+                step_name="MODEL DEPLOYER",
+                status="success" if result.get("deployment_successful") else "warning",
+                duration_seconds=time.time() - step_start,
+                key_metrics={
+                    "deployment_id": manifest.get("deployment_id"),
+                    "environment": manifest.get("environment"),
+                    "status": manifest.get("status"),
+                    "deployment_successful": result.get("deployment_successful"),
+                },
+                details={
+                    "model_version": result.get("model_version"),
+                    "endpoint_url": manifest.get("endpoint_url"),
+                }
+            ))
+
         # Step 8: Observability Connector
         if 8 in steps_to_run:
+            step_start = time.time()
             result = await step_8_observability_connector(
                 experiment_id,
                 len(steps_to_run)
             )
+            step_results.append(StepResult(
+                step_num=8,
+                step_name="OBSERVABILITY CONNECTOR",
+                status="success" if result.get("emission_successful") else "warning",
+                duration_seconds=time.time() - step_start,
+                key_metrics={
+                    "emission_successful": result.get("emission_successful"),
+                    "events_logged": result.get("events_logged"),
+                    "quality_score": result.get("quality_score"),
+                },
+                details={}
+            ))
+
+        # Print detailed step results
+        print_detailed_summary(experiment_id, step_results, state)
 
         # Final summary
+        pipeline_duration = time.time() - pipeline_start_time
         print(f"\n{'='*70}")
         print("PIPELINE SUMMARY")
         print(f"{'='*70}")
         print(f"  Experiment ID: {experiment_id}")
         print(f"  Steps Completed: {len(steps_to_run)}")
+        print(f"  Total Duration: {pipeline_duration:.1f}s")
         print(f"  QC Gate: {'PASSED' if state.get('gate_passed', True) else 'FAILED'}")
         if state.get("eligible_df") is not None:
             print(f"  Cohort Size: {len(state['eligible_df'])}")
