@@ -851,29 +851,43 @@ class MLflowConnector:
         flavor: str = "sklearn",
         **kwargs: Any,
     ) -> Optional[str]:
-        """Log a model with the specified flavor."""
+        """Log a model with the specified flavor.
+
+        Returns the model URI from MLflow. In MLflow 3.x, this is the new
+        'models:/m-{model_id}' format. The returned URI can be used to load
+        the model via mlflow.{flavor}.load_model(model_uri).
+        """
         if not self._enabled:
             return None
 
         try:
+            # MLflow 3.x log_model returns ModelInfo with model_uri attribute
+            model_info = None
             if flavor == "sklearn":
-                self._mlflow.sklearn.log_model(model, artifact_path, **kwargs)
+                model_info = self._mlflow.sklearn.log_model(model, artifact_path, **kwargs)
             elif flavor == "xgboost":
-                self._mlflow.xgboost.log_model(model, artifact_path, **kwargs)
+                model_info = self._mlflow.xgboost.log_model(model, artifact_path, **kwargs)
             elif flavor == "lightgbm":
-                self._mlflow.lightgbm.log_model(model, artifact_path, **kwargs)
+                model_info = self._mlflow.lightgbm.log_model(model, artifact_path, **kwargs)
             elif flavor == "pytorch":
-                self._mlflow.pytorch.log_model(model, artifact_path, **kwargs)
+                model_info = self._mlflow.pytorch.log_model(model, artifact_path, **kwargs)
             elif flavor == "tensorflow":
-                self._mlflow.tensorflow.log_model(model, artifact_path, **kwargs)
+                model_info = self._mlflow.tensorflow.log_model(model, artifact_path, **kwargs)
             elif flavor == "pyfunc":
-                self._mlflow.pyfunc.log_model(artifact_path, **kwargs)
+                model_info = self._mlflow.pyfunc.log_model(artifact_path, **kwargs)
             else:
                 # Try generic sklearn as fallback
-                self._mlflow.sklearn.log_model(model, artifact_path, **kwargs)
+                model_info = self._mlflow.sklearn.log_model(model, artifact_path, **kwargs)
 
             self.circuit_breaker.record_success()
-            model_uri = f"runs:/{run_id}/{artifact_path}"
+
+            # Use the model_uri from ModelInfo (MLflow 3.x returns models:/m-{id} format)
+            # Fall back to legacy runs:/ format for older MLflow versions
+            if model_info is not None and hasattr(model_info, "model_uri"):
+                model_uri = model_info.model_uri
+            else:
+                model_uri = f"runs:/{run_id}/{artifact_path}"
+
             logger.info(f"Logged model to: {model_uri}")
             return model_uri
 

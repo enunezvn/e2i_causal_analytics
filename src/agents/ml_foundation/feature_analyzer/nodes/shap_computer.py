@@ -46,6 +46,10 @@ def validate_model_uri(model_uri: str) -> Tuple[bool, Optional[str]]:
     models_version_pattern = r"^models:/[a-zA-Z0-9_.-]+/\d+$"
     models_stage_pattern = r"^models:/[a-zA-Z0-9_.-]+/(None|Staging|Production|Archived)$"
 
+    # Pattern for MLflow 3.x "Logged Models" format: models:/m-{uuid}
+    # The model_uuid is a 32-char hex string with dashes removed
+    models_logged_pattern = r"^models:/m-[a-f0-9]{32}$"
+
     # Pattern for file:// URIs (absolute paths)
     file_pattern = r"^file:///.+$"
 
@@ -58,6 +62,8 @@ def validate_model_uri(model_uri: str) -> Tuple[bool, Optional[str]]:
         return True, None
     elif re.match(models_stage_pattern, model_uri):
         return True, None
+    elif re.match(models_logged_pattern, model_uri):
+        return True, None
     elif re.match(file_pattern, model_uri):
         return True, None
     elif re.match(absolute_path_pattern, model_uri):
@@ -66,7 +72,7 @@ def validate_model_uri(model_uri: str) -> Tuple[bool, Optional[str]]:
     return False, (
         f"Invalid model_uri format: '{model_uri}'. "
         "Expected one of: 'runs:/<run_id>/<path>', 'models:/<name>/<version>', "
-        "'models:/<name>/<stage>', 'file:///<path>', or absolute file path"
+        "'models:/<name>/<stage>', 'models:/m-<uuid>' (MLflow 3.x), 'file:///<path>', or absolute file path"
     )
 
 
