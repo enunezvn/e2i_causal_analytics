@@ -219,11 +219,30 @@ def print_detailed_summary(
         resampling_info = state.get("resampling_info", {})
         if resampling_info.get("resampling_applied"):
             print("\n  📊 Resampling Results:")
-            print(f"    • Original Samples: {resampling_info.get('original_samples', 'N/A')}")
-            print(f"    • Resampled Samples: {resampling_info.get('resampled_samples', 'N/A')}")
-            print(f"    • New Minority Ratio: {resampling_info.get('new_minority_ratio', 'N/A')}")
-            if resampling_info.get("class_weights"):
-                print(f"    • Class Weights Applied: {resampling_info.get('class_weights')}")
+            orig_samples = resampling_info.get('original_samples')
+            resamp_samples = resampling_info.get('resampled_samples')
+            print(f"    • Original Samples: {orig_samples}")
+            print(f"    • Resampled Samples: {resamp_samples}")
+            new_ratio = resampling_info.get('new_minority_ratio')
+            if new_ratio is not None:
+                print(f"    • New Minority Ratio: {new_ratio:.2%}")
+            else:
+                print(f"    • New Minority Ratio: N/A")
+            # Show resampled distribution
+            resampled_dist = resampling_info.get("resampled_distribution", {})
+            if resampled_dist:
+                print("\n  📈 Resampled Class Distribution:")
+                for cls, count in sorted(resampled_dist.items()):
+                    print(f"    • Class {cls}: {count} samples")
+        else:
+            # Resampling not applied even though imbalance detected (e.g., class_weight strategy)
+            print("\n  📊 Resampling Results:")
+            print(f"    • Resampling Applied: No")
+            strategy = resampling_info.get("resampling_strategy", "none")
+            if strategy == "class_weight":
+                print(f"    • Strategy: class_weight (handled during training)")
+            else:
+                print(f"    • Strategy: {strategy}")
     elif class_imbalance_info:
         print(f"\n  ℹ️  Class Imbalance: Not detected (minority ratio >= 40%)")
 
@@ -277,10 +296,22 @@ def print_detailed_summary(
     print(f"\n{'='*70}")
 
 
-def generate_sample_data(n_samples: int = 100, seed: int = 42) -> pd.DataFrame:
-    """Generate sample patient journey data using the ML-ready generator."""
+def generate_sample_data(
+    n_samples: int = 100,
+    seed: int = 42,
+    imbalance_ratio: float | None = None,
+) -> pd.DataFrame:
+    """Generate sample patient journey data using the ML-ready generator.
+
+    Args:
+        n_samples: Number of samples to generate
+        seed: Random seed for reproducibility
+        imbalance_ratio: If provided, force minority class to this ratio (e.g., 0.1 for 10%)
+                        None means balanced data (~50/50)
+    """
     # Use the same generator as the data_preparer agent for consistency
     from src.repositories.sample_data import SampleDataGenerator
+    import numpy as np
 
     generator = SampleDataGenerator(seed=seed)
 
@@ -294,6 +325,21 @@ def generate_sample_data(n_samples: int = 100, seed: int = 42) -> pd.DataFrame:
         start_date=start_date,
         end_date=end_date,
     )
+
+    # Apply class imbalance if requested
+    if imbalance_ratio is not None and 0 < imbalance_ratio < 0.5:
+        np.random.seed(seed)
+        target_col = CONFIG.target_outcome
+        n_minority = int(n_samples * imbalance_ratio)
+        n_majority = n_samples - n_minority
+
+        # Create imbalanced target: minority class = 1 (discontinuation)
+        labels = np.array([0] * n_majority + [1] * n_minority)
+        np.random.shuffle(labels)
+        df[target_col] = labels
+
+        print(f"  ⚠️  Injected class imbalance: {imbalance_ratio:.1%} minority (class 1)")
+        print(f"      Class 0: {n_majority} samples, Class 1: {n_minority} samples")
 
     # Filter to only the configured brand
     # (or keep all if testing multi-brand)
@@ -884,8 +930,18 @@ async def step_8_observability_connector(experiment_id: str, stages_completed: i
 # MAIN RUNNER
 # =============================================================================
 
-async def run_pipeline(step: int | None = None, dry_run: bool = False) -> None:
-    """Run the full pipeline or a specific step."""
+async def run_pipeline(
+    step: int | None = None,
+    dry_run: bool = False,
+    imbalance_ratio: float | None = None,
+) -> None:
+    """Run the full pipeline or a specific step.
+
+    Args:
+        step: Run only a specific step (1-8), or None for all steps
+        dry_run: Show what would be done without executing
+        imbalance_ratio: If provided, create imbalanced data with this minority ratio
+    """
     import time
 
     experiment_id = f"tier0_e2e_{uuid.uuid4().hex[:8]}"
@@ -900,6 +956,8 @@ async def run_pipeline(step: int | None = None, dry_run: bool = False) -> None:
     print(f"  Problem Type: {CONFIG.problem_type}")
     print(f"  MLflow Enabled: {CONFIG.enable_mlflow}")
     print(f"  MLflow Tracking URI: {os.environ.get('MLFLOW_TRACKING_URI', 'not set')}")
+    if imbalance_ratio:
+        print(f"  Class Imbalance: {imbalance_ratio:.1%} minority ratio (INJECTED)")
     print(f"  Started: {datetime.now().isoformat()}")
 
     if dry_run:
@@ -910,7 +968,7 @@ async def run_pipeline(step: int | None = None, dry_run: bool = False) -> None:
     # NOTE: Generate 600 samples to satisfy scope_spec.minimum_samples=500
     # (extra samples account for potential exclusions during cohort construction)
     print("\n  Generating sample patient data...")
-    patient_df = generate_sample_data(n_samples=600)
+    patient_df = generate_sample_data(n_samples=600, imbalance_ratio=imbalance_ratio)
     print(f"  Generated {len(patient_df)} patient records")
 
     # Pipeline state
@@ -1076,12 +1134,21 @@ async def run_pipeline(step: int | None = None, dry_run: bool = False) -> None:
             }
 
             # Capture resampling information if applied
+            resampled_dist = result.get("resampled_distribution", {})
+            # Calculate new minority ratio from resampled distribution
+            if resampled_dist:
+                total_resampled = sum(resampled_dist.values())
+                new_minority_ratio = min(resampled_dist.values()) / total_resampled if total_resampled > 0 else None
+            else:
+                new_minority_ratio = None
             state["resampling_info"] = {
                 "resampling_applied": result.get("resampling_applied", False),
                 "original_samples": result.get("original_train_samples"),
                 "resampled_samples": result.get("resampled_train_samples"),
-                "new_minority_ratio": result.get("new_minority_ratio"),
-                "class_weights": result.get("class_weights"),
+                "original_distribution": result.get("original_distribution", {}),
+                "resampled_distribution": resampled_dist,
+                "new_minority_ratio": new_minority_ratio,
+                "resampling_strategy": result.get("resampling_strategy"),
             }
 
             step_results.append(StepResult(
@@ -1257,6 +1324,13 @@ def main():
         action="store_true",
         help="Show what would be done without executing"
     )
+    parser.add_argument(
+        "--imbalanced",
+        type=float,
+        default=None,
+        metavar="RATIO",
+        help="Create imbalanced data with specified minority ratio (e.g., 0.1 for 10%% minority class)"
+    )
 
     args = parser.parse_args()
 
@@ -1267,7 +1341,7 @@ def main():
     CONFIG.hpo_trials = args.hpo_trials
 
     # Run pipeline
-    asyncio.run(run_pipeline(step=args.step, dry_run=args.dry_run))
+    asyncio.run(run_pipeline(step=args.step, dry_run=args.dry_run, imbalance_ratio=args.imbalanced))
 
 
 if __name__ == "__main__":
