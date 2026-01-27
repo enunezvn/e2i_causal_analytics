@@ -38,8 +38,6 @@ import {
   WorkflowSummarySchema,
   type RecentWorkflowValidated,
   type AuditEntryValidated,
-  type ChainVerificationValidated,
-  type WorkflowSummaryValidated,
 } from '@/lib/api-schemas';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -310,7 +308,7 @@ interface EntryItemProps {
   index: number;
 }
 
-function EntryItem({ entry, index }: EntryItemProps) {
+function EntryItem({ entry, index: _index }: EntryItemProps) {
   return (
     <div className="flex items-start gap-2 py-1.5 px-2 rounded hover:bg-muted/30 transition-colors">
       <TooltipProvider>

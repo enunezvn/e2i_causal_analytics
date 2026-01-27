@@ -226,7 +226,7 @@ describe('Home', () => {
       renderWithAllProviders(<Home />);
 
       expect(screen.getByText('Agent Insights')).toBeInTheDocument();
-      expect(screen.getByText(/Recent recommendations from the 18-agent system/)).toBeInTheDocument();
+      expect(screen.getByText(/Recent recommendations from the 20-agent system/)).toBeInTheDocument();
     });
 
     it('displays sample insights', () => {

@@ -242,12 +242,12 @@ const SYSTEM_STATUS: SystemStatus[] = [
 ];
 
 const AGENT_TIER_STATS = [
-  { tier: 0, name: 'ML Foundation', agents: 7, active: 5, color: 'bg-slate-500' },
+  { tier: 0, name: 'ML Foundation', agents: 8, active: 6, color: 'bg-slate-500' },
   { tier: 1, name: 'Orchestration', agents: 2, active: 2, color: 'bg-purple-500' },
   { tier: 2, name: 'Causal Analytics', agents: 3, active: 3, color: 'bg-blue-500' },
   { tier: 3, name: 'Monitoring', agents: 3, active: 3, color: 'bg-amber-500' },
-  { tier: 4, name: 'ML Predictions', agents: 2, active: 1, color: 'bg-emerald-500' },
-  { tier: 5, name: 'Self-Improvement', agents: 2, active: 1, color: 'bg-rose-500' },
+  { tier: 4, name: 'ML Predictions', agents: 2, active: 2, color: 'bg-emerald-500' },
+  { tier: 5, name: 'Self-Improvement', agents: 2, active: 2, color: 'bg-rose-500' },
 ];
 
 // =============================================================================
@@ -722,7 +722,7 @@ function Home() {
                     <Sparkles className="h-5 w-5" />
                     Agent Insights
                   </CardTitle>
-                  <CardDescription>Recent recommendations from the 18-agent system</CardDescription>
+                  <CardDescription>Recent recommendations from the 20-agent system</CardDescription>
                 </div>
                 <Button variant="ghost" size="sm" onClick={() => navigate('/monitoring')}>
                   View All

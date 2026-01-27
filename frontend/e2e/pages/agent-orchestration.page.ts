@@ -4,7 +4,7 @@ import { ROUTES } from '../fixtures/test-data'
 
 /**
  * Page Object Model for Agent Orchestration page.
- * Displays the 18-agent tiered orchestration system dashboard.
+ * Displays the 20-agent tiered orchestration system dashboard.
  */
 export class AgentOrchestrationPage extends BasePage {
   readonly url = ROUTES.AGENT_ORCHESTRATION
@@ -20,7 +20,7 @@ export class AgentOrchestrationPage extends BasePage {
   }
 
   get pageDescription(): Locator {
-    return this.page.getByText(/18-agent|tiered|orchestration/i).first()
+    return this.page.getByText(/20-agent|tiered|orchestration/i).first()
   }
 
   // Action Buttons

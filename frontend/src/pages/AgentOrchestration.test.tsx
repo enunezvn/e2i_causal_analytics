@@ -97,7 +97,7 @@ describe('AgentOrchestration', () => {
     render(<AgentOrchestration />, { wrapper: createWrapper() });
 
     expect(screen.getByText('Agent Orchestration')).toBeInTheDocument();
-    expect(screen.getByText(/Monitor and manage the 18-agent tiered orchestration system/)).toBeInTheDocument();
+    expect(screen.getByText(/Monitor and manage the 20-agent tiered orchestration system/)).toBeInTheDocument();
   });
 
   it('displays stat cards with correct data', () => {
@@ -179,7 +179,7 @@ describe('AgentOrchestration', () => {
 
     // Wait for agent cards to be visible (agents come from mocked context)
     await waitFor(() => {
-      expect(screen.getByText('All 18 agents across 6 tiers')).toBeInTheDocument();
+      expect(screen.getByText('All 20 agents across 6 tiers')).toBeInTheDocument();
     }, { timeout: 5000 });
   });
 
@@ -194,7 +194,7 @@ describe('AgentOrchestration', () => {
 
     // Wait for tab content to load by checking for agent cards
     await waitFor(() => {
-      expect(screen.getByText('All 18 agents across 6 tiers')).toBeInTheDocument();
+      expect(screen.getByText('All 20 agents across 6 tiers')).toBeInTheDocument();
     }, { timeout: 5000 });
 
     // Check for some agent names (our mock has these)
@@ -213,7 +213,7 @@ describe('AgentOrchestration', () => {
 
     // Wait for tab content to load
     await waitFor(() => {
-      expect(screen.getByText('All 18 agents across 6 tiers')).toBeInTheDocument();
+      expect(screen.getByText('All 20 agents across 6 tiers')).toBeInTheDocument();
     }, { timeout: 5000 });
 
     // Find the select element after content loads
@@ -303,7 +303,7 @@ describe('AgentOrchestration', () => {
 
     // Wait for tab content to load
     await waitFor(() => {
-      expect(screen.getByText('All 18 agents across 6 tiers')).toBeInTheDocument();
+      expect(screen.getByText('All 20 agents across 6 tiers')).toBeInTheDocument();
     }, { timeout: 5000 });
 
     // Find the select element and change it to filter
@@ -325,7 +325,7 @@ describe('AgentOrchestration', () => {
 
     // Verify filter is cleared - should show all agents again
     await waitFor(() => {
-      expect(screen.getByText('All 18 agents across 6 tiers')).toBeInTheDocument();
+      expect(screen.getByText('All 20 agents across 6 tiers')).toBeInTheDocument();
     }, { timeout: 5000 });
   });
 });
