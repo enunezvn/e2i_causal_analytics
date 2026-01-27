@@ -351,7 +351,8 @@ def _identify_column_types(
             n_total = len(df)
 
             # If high cardinality (>50% unique), might not be categorical
-            if n_unique / n_total < 0.5 or n_unique < 50:
+            # Guard against empty dataframes to avoid division by zero
+            if n_total == 0 or n_unique / n_total < 0.5 or n_unique < 50:
                 categorical_cols.append(col)
             else:
                 # Treat high cardinality as text, skip for now
