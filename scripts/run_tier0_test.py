@@ -29,6 +29,7 @@ Author: E2I Causal Analytics Team
 import argparse
 import asyncio
 import json
+import os
 import sys
 import uuid
 from dataclasses import dataclass
@@ -42,6 +43,11 @@ import pandas as pd
 # Add project root to path
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
+
+# Configure MLflow tracking URI for model artifact storage
+# This ensures model_uri is properly generated during model training
+if not os.environ.get("MLFLOW_TRACKING_URI"):
+    os.environ["MLFLOW_TRACKING_URI"] = "http://localhost:5000"
 
 
 # =============================================================================
@@ -58,7 +64,7 @@ class TestConfig:
     hpo_trials: int = 10
     min_eligible_patients: int = 30
     min_auc_threshold: float = 0.55
-    enable_mlflow: bool = False
+    enable_mlflow: bool = True  # MLflow must be enabled for model_uri to be generated
     enable_opik: bool = False
 
 
@@ -452,6 +458,7 @@ async def step_5_model_trainer(
         "validation_data": validation_data,
         "test_data": test_data,
         "holdout_data": holdout_data,
+        "enable_mlflow": CONFIG.enable_mlflow,  # Explicit MLflow control
     }
 
     print("  Input:")
@@ -477,6 +484,14 @@ async def step_5_model_trainer(
     print_result("success_criteria_met", result.get("success_criteria_met", "N/A"))
     print_result("hpo_trials_run", result.get("hpo_trials_run", "N/A"))
     print_result("training_duration_seconds", result.get("training_duration_seconds", "N/A"))
+
+    # MLflow logging outputs (critical for model_uri handoff to Feature Analyzer)
+    print_result("mlflow_status", result.get("mlflow_status", "N/A"))
+    print_result("mlflow_run_id", result.get("mlflow_run_id", "N/A"))
+    model_uri = result.get("model_artifact_uri") or result.get("mlflow_model_uri")
+    print_result("model_uri", model_uri or "NOT AVAILABLE")
+    if not model_uri:
+        print_warning("model_uri is None - Feature Analyzer SHAP computation will be skipped")
 
     if result.get("validation_metrics"):
         print_result("validation_metrics", result["validation_metrics"])
@@ -653,6 +668,7 @@ async def run_pipeline(step: int | None = None, dry_run: bool = False) -> None:
     print(f"  Target: {CONFIG.target_outcome}")
     print(f"  Problem Type: {CONFIG.problem_type}")
     print(f"  MLflow Enabled: {CONFIG.enable_mlflow}")
+    print(f"  MLflow Tracking URI: {os.environ.get('MLFLOW_TRACKING_URI', 'not set')}")
     print(f"  Started: {datetime.now().isoformat()}")
 
     if dry_run:
