@@ -178,10 +178,15 @@ async def compute_shap(state: Dict[str, Any]) -> Dict[str, Any]:
         max_samples = state.get("max_samples", 1000)
 
         if not model_uri:
+            logger.info("model_uri not provided - skipping SHAP computation")
             return {
-                "error": "Missing model_uri",
-                "error_type": "missing_model_uri",
-                "status": "failed",
+                "shap_skipped": True,
+                "skip_reason": "model_uri not provided - SHAP analysis requires a model",
+                "status": "skipped",
+                # Provide empty defaults for downstream processing
+                "global_importance_ranked": [],
+                "top_features": [],
+                "samples_analyzed": 0,
             }
 
         # Validate model_uri format before passing to MLflow

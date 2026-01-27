@@ -214,6 +214,9 @@ class FeatureAnalyzerAgent:
                 + final_state.get("interpretation_time_seconds", 0.0)
             )
 
+            # Check if SHAP was skipped
+            shap_skipped = final_state.get("shap_skipped", False)
+
             # Build output
             output = {
                 # SHAP Analysis
@@ -239,8 +242,11 @@ class FeatureAnalyzerAgent:
                 "samples_analyzed": final_state.get("samples_analyzed", 0),
                 "explainer_type": final_state.get("explainer_type", "unknown"),
                 "computation_time_seconds": total_time,
+                # SHAP skip status
+                "shap_skipped": shap_skipped,
+                "shap_skip_reason": final_state.get("skip_reason") if shap_skipped else None,
                 # Status
-                "status": "completed",
+                "status": "completed" if not shap_skipped else "completed_without_shap",
             }
 
             # Store to database (ml_shap_analyses table)
