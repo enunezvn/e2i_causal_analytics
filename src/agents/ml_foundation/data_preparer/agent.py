@@ -202,6 +202,14 @@ class DataPreparerAgent:
                     "warnings": final_state.get("feast_warnings", []),
                     "registered_at": final_state.get("feast_registered_at"),
                 },
+                "remediation": {
+                    "status": final_state.get("remediation_status", "not_needed"),
+                    "attempts": final_state.get("remediation_attempts", 0),
+                    "actions_taken": final_state.get("remediation_actions_taken", []),
+                    "llm_analysis": final_state.get("llm_analysis"),
+                    "root_causes": final_state.get("root_causes", []),
+                    "recommended_actions": final_state.get("recommended_actions", []),
+                },
                 "gate_passed": final_state["gate_passed"],
             }
 

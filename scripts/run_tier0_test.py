@@ -227,42 +227,49 @@ async def step_2_data_preparer(
     print("\n  Running agent...")
     result = await agent.run(input_data)
 
+    # Extract nested results
+    qc_report = result.get("qc_report", {})
+    data_readiness = result.get("data_readiness", {})
+    remediation = result.get("remediation", {})
+
     print("\n  Output:")
-    print_result("qc_status", result.get("qc_status", "unknown"))
-    print_result("overall_score", result.get("overall_score", "N/A"))
+    print_result("qc_status", qc_report.get("status", "unknown"))
+    print_result("overall_score", qc_report.get("overall_score", "N/A"))
     print_result("gate_passed", result.get("gate_passed", False))
-    print_result("train_samples", result.get("train_samples", "N/A"))
-    print_result("validation_samples", result.get("validation_samples", "N/A"))
+    print_result("train_samples", data_readiness.get("train_samples", "N/A"))
+    print_result("validation_samples", data_readiness.get("validation_samples", "N/A"))
 
     # Display QC dimension scores
     print("\n  QC Dimension Scores:")
-    print_result("completeness", result.get("completeness_score", "N/A"))
-    print_result("validity", result.get("validity_score", "N/A"))
-    print_result("consistency", result.get("consistency_score", "N/A"))
-    print_result("uniqueness", result.get("uniqueness_score", "N/A"))
-    print_result("timeliness", result.get("timeliness_score", "N/A"))
+    print_result("completeness", qc_report.get("completeness_score", "N/A"))
+    print_result("validity", qc_report.get("validity_score", "N/A"))
+    print_result("consistency", qc_report.get("consistency_score", "N/A"))
+    print_result("uniqueness", qc_report.get("uniqueness_score", "N/A"))
+    print_result("timeliness", qc_report.get("timeliness_score", "N/A"))
 
     # Display remediation information if QC failed
-    remediation_status = result.get("remediation_status")
-    if remediation_status:
+    remediation_status = remediation.get("status", "not_needed")
+    if remediation_status and remediation_status != "not_needed":
         print("\n  QC Remediation:")
         print_result("remediation_status", remediation_status)
-        print_result("remediation_attempts", result.get("remediation_attempts", 0))
+        print_result("remediation_attempts", remediation.get("attempts", 0))
 
-        if result.get("llm_analysis"):
-            print_result("llm_analysis", result.get("llm_analysis"))
+        if remediation.get("llm_analysis"):
+            print_result("llm_analysis", remediation.get("llm_analysis"))
 
-        if result.get("root_causes"):
-            print_result("root_causes", result.get("root_causes"))
+        if remediation.get("root_causes"):
+            print("\n    Root Causes:")
+            for i, cause in enumerate(remediation.get("root_causes", [])[:5], 1):
+                print(f"      {i}. {cause}")
 
-        if result.get("recommended_actions"):
+        if remediation.get("recommended_actions"):
             print("\n    Recommended Actions:")
-            for i, action in enumerate(result.get("recommended_actions", [])[:5], 1):
+            for i, action in enumerate(remediation.get("recommended_actions", [])[:5], 1):
                 print(f"      {i}. {action}")
 
-        if result.get("actions_taken"):
+        if remediation.get("actions_taken"):
             print("\n    Actions Taken:")
-            for action in result.get("actions_taken", []):
+            for action in remediation.get("actions_taken", []):
                 print(f"      - {action}")
 
     if result.get("gate_passed", False):
@@ -270,7 +277,7 @@ async def step_2_data_preparer(
     else:
         print_failure("QC GATE FAILED - Training blocked")
         # Show blocking issues
-        blocking_issues = result.get("blocking_issues", [])
+        blocking_issues = qc_report.get("blocking_issues", [])
         if blocking_issues:
             print("\n    Blocking Issues:")
             for issue in blocking_issues[:5]:
