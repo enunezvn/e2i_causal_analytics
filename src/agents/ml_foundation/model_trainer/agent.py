@@ -295,6 +295,27 @@ class ModelTrainerAgent:
         test_samples = final_state.get("test_samples", 0)
         total_samples = final_state.get("total_samples", 0)
 
+        # Class imbalance information
+        imbalance_detected = final_state.get("imbalance_detected", False)
+        imbalance_ratio = final_state.get("imbalance_ratio", 1.0)
+        minority_ratio = final_state.get("minority_ratio", 0.5)
+        imbalance_severity = final_state.get("imbalance_severity", "none")
+        class_distribution = final_state.get("class_distribution", {})
+        recommended_strategy = final_state.get("recommended_strategy", "none")
+        strategy_rationale = final_state.get("strategy_rationale", "")
+
+        # Resampling information
+        resampling_applied = final_state.get("resampling_applied", False)
+        resampling_strategy = final_state.get("resampling_strategy")
+        original_distribution = final_state.get("original_distribution", {})
+        resampled_distribution = final_state.get("resampled_distribution", {})
+
+        # Extract sample counts from shape tuples (shape is (n_samples, n_features))
+        original_train_shape = final_state.get("original_train_shape")
+        resampled_train_shape = final_state.get("resampled_train_shape")
+        original_train_samples = original_train_shape[0] if original_train_shape else None
+        resampled_train_samples = resampled_train_shape[0] if resampled_train_shape else None
+
         # MLflow Integration - Extract values from graph result
         # The mlflow_logger node logs to MLflow and returns these values in state
         mlflow_run_id = final_state.get("mlflow_run_id")
@@ -367,6 +388,21 @@ class ModelTrainerAgent:
             "validation_samples": validation_samples,
             "test_samples": test_samples,
             "total_samples": total_samples,
+            # Class imbalance info
+            "imbalance_detected": imbalance_detected,
+            "imbalance_ratio": imbalance_ratio,
+            "minority_ratio": minority_ratio,
+            "imbalance_severity": imbalance_severity,
+            "class_distribution": class_distribution,
+            "recommended_strategy": recommended_strategy,
+            "strategy_rationale": strategy_rationale,
+            # Resampling info
+            "resampling_applied": resampling_applied,
+            "original_train_samples": original_train_samples,
+            "resampled_train_samples": resampled_train_samples,
+            "resampling_strategy": resampling_strategy,
+            "original_distribution": original_distribution,
+            "resampled_distribution": resampled_distribution,
             # Database (updated after persistence)
             "persisted_to_db": False,
             # Context
