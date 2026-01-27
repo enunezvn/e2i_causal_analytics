@@ -451,8 +451,11 @@ class MLflowConnector:
         self.tracking_uri = tracking_uri or os.environ.get(
             "MLFLOW_TRACKING_URI", "mlruns"
         )
+        # When using a tracking server (http://...), let it handle artifacts via proxy
+        # Only use local artifact path for local file-based tracking
+        default_artifact_uri = None if self.tracking_uri.startswith("http") else "mlartifacts"
         self.artifact_uri = artifact_uri or os.environ.get(
-            "MLFLOW_ARTIFACT_URI", "mlartifacts"
+            "MLFLOW_ARTIFACT_URI", default_artifact_uri
         )
         self.experiment_prefix = experiment_prefix
         self.circuit_breaker = CircuitBreaker(circuit_breaker_config)
