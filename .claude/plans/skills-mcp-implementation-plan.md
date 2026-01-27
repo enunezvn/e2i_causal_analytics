@@ -37,40 +37,46 @@ This plan implements the hybrid Skills + MCP approach with **Skills first** (zer
 - [x] **1.5** Unit tests for SkillLoader
 - [x] **1.6** Droplet deployment test (34/34 tests passed)
 
-### Phase 2: Domain Skills Content
-- [ ] **2.1** Create pharma-commercial skills (kpi-calculation, brand-analytics)
-- [ ] **2.2** Create causal-inference skills (confounder-identification, dowhy-workflow)
-- [ ] **2.3** Create experiment-design skills (validity-threats, power-analysis)
-- [ ] **2.4** Create gap-analysis skills (roi-estimation)
-- [ ] **2.5** Skill content validation tests
+### Phase 2: Domain Skills Content ✅ COMPLETE
+- [x] **2.1** Create pharma-commercial skills (kpi-calculation, brand-analytics)
+- [x] **2.2** Create causal-inference skills (confounder-identification, dowhy-workflow)
+- [x] **2.3** Create experiment-design skills (validity-threats, power-analysis)
+- [x] **2.4** Create gap-analysis skills (roi-estimation)
+- [x] **2.5** Skill content validation tests
 
-### Phase 3: Agent-Skill Integration
-- [ ] **3.1** Update BaseAgent with skill methods
-- [ ] **3.2** Integrate skills with `causal_impact` agent
-- [ ] **3.3** Integrate skills with `experiment_designer` agent
-- [ ] **3.4** Integrate skills with `gap_analyzer` agent
-- [ ] **3.5** Integrate skills with `explainer` agent
-- [ ] **3.6** Integration tests on droplet
+### Phase 3: Agent-Skill Integration ✅ COMPLETE
+- [x] **3.1** Update BaseAgent with skill methods (created SkillsMixin)
+- [x] **3.2** Integrate skills with `causal_impact` agent
+- [x] **3.3** Integrate skills with `experiment_designer` agent
+- [x] **3.4** Integrate skills with `gap_analyzer` agent
+- [x] **3.5** Integrate skills with `explainer` agent
+- [x] **3.6** Integration tests on droplet
 
-### Phase 4: MCP Connector Verification
-- [ ] **4.1** Verify Anthropic connector API access
-- [ ] **4.2** Test ChEMBL connector availability
-- [ ] **4.3** Test ClinicalTrials.gov connector availability
-- [ ] **4.4** Test PubMed connector availability
-- [ ] **4.5** Document connector access status
+### Phase 4: MCP Connector Verification ✅ COMPLETE
+- [x] **4.1** Verify Anthropic connector API access
+- [x] **4.2** Test ChEMBL connector availability
+- [x] **4.3** Test ClinicalTrials.gov connector availability
+- [x] **4.4** Test PubMed connector availability
+- [x] **4.5** Document connector access status
 
-### Phase 5: MCP Gateway Implementation (If Connectors Available)
+**Result**: Pharmaceutical connectors (ChEMBL, ClinicalTrials.gov, PubMed) are NOT available as Anthropic-hosted MCP servers. These would require custom implementation. **Recommendation: Proceed with Skills-only approach** (Phase 5-6 deferred).
+
+### Phase 5: MCP Gateway Implementation ⏸️ DEFERRED
 - [ ] **5.1** Create MCP connector gateway
 - [ ] **5.2** Implement permission checking
 - [ ] **5.3** Create connector-specific helpers
 - [ ] **5.4** Unit tests for gateway
 - [ ] **5.5** Droplet deployment test
 
-### Phase 6: Full Integration
+**Status**: Deferred - pharmaceutical MCP connectors not available (see Phase 4 results)
+
+### Phase 6: Full Integration ⏸️ DEFERRED
 - [ ] **6.1** Update `tool_composer` with MCP orchestration
 - [ ] **6.2** Create MCP config (config/mcp_config.yaml)
 - [ ] **6.3** End-to-end integration tests
 - [ ] **6.4** Performance monitoring setup
+
+**Status**: Deferred - depends on Phase 5
 
 ---
 
@@ -742,6 +748,57 @@ for name, data in results.items():
 
 ---
 
+## MCP Connector Verification Results
+
+**Date**: 2026-01-26
+**Environment**: Local development (WSL2)
+
+### Key Finding: MCP Architecture Misconception
+
+The original plan assumed ChEMBL, ClinicalTrials.gov, and PubMed were available as "Anthropic-hosted MCP connectors" that could be accessed via the messages API. This assumption was **incorrect**.
+
+**How MCP Actually Works**:
+- MCP (Model Context Protocol) servers are **separate services** that provide tools to Claude instances
+- MCP servers expose tools through a standardized protocol, NOT through prompt-based requests
+- Available Anthropic/community MCP servers include: GitHub, Supabase, Brave Search, Google Maps, etc.
+- **Pharmaceutical data connectors (ChEMBL, ClinicalTrials.gov, PubMed) are NOT part of Anthropic's standard MCP offerings**
+
+### ChEMBL Connector
+- **Status**: ❌ Not Available as MCP Server
+- **Evidence**: No MCP server exists; would require custom implementation via ChEMBL REST API
+- **Alternative**: Direct API integration (https://www.ebi.ac.uk/chembl/api/data/)
+
+### ClinicalTrials.gov Connector
+- **Status**: ❌ Not Available as MCP Server
+- **Evidence**: No MCP server exists; would require custom implementation
+- **Alternative**: Direct API integration (https://clinicaltrials.gov/api/)
+
+### PubMed Connector
+- **Status**: ❌ Not Available as MCP Server
+- **Evidence**: No MCP server exists; would require custom implementation via NCBI E-utilities
+- **Alternative**: Direct API integration (https://www.ncbi.nlm.nih.gov/books/NBK25501/)
+
+### Decision
+
+**Selected**: ✅ **Skills-only approach (defer MCP)**
+
+**Rationale**:
+1. Skills Framework (Phases 1-3) provides immediate value with zero infrastructure
+2. Building custom MCP servers for pharmaceutical data requires significant effort
+3. Direct API integration can be added later as a separate feature
+4. The E2I system's core value proposition (causal analytics) doesn't require real-time external data enrichment
+
+**Deferred Work**:
+- Phase 5 (MCP Gateway Implementation) - Deferred
+- Phase 6 (Full MCP Integration) - Deferred
+- May revisit when/if Anthropic adds pharmaceutical data MCP servers
+
+### Verification Script
+
+Created `scripts/verify_mcp_connectors.py` for documentation purposes. The script confirmed the API approach doesn't work (as expected - MCP is tool-based, not prompt-based).
+
+---
+
 ## Phase 5: MCP Gateway Implementation
 
 > **Note**: This phase is CONDITIONAL on Phase 4 results. If connectors unavailable, skip to alternative approach documentation.
@@ -1139,3 +1196,12 @@ Phase 3 (Agent Integration) ─────────────────�
   - `causal-inference/confounder-identification.md` (standard confounders)
 - Created unit tests: `tests/unit/test_skills/` (34 tests)
 - Deployed to droplet and verified: **34/34 tests passed**
+
+### 2026-01-26 - Phase 4 Complete ✅
+- Created verification script: `scripts/verify_mcp_connectors.py`
+- Discovered critical architecture misconception:
+  - MCP servers are separate services providing tools, NOT prompt-accessible connectors
+  - Pharmaceutical data sources (ChEMBL, ClinicalTrials.gov, PubMed) are NOT available as Anthropic MCP servers
+- Documented findings with alternatives (direct API integration)
+- **Decision**: Proceed with Skills-only approach, defer MCP phases (5-6)
+- Rationale: Skills Framework provides core value without external data dependencies
