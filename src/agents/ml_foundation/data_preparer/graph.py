@@ -123,8 +123,10 @@ def _route_after_finalize(state: DataPreparerState) -> Literal["end", "remediate
     gate_passed = state.get("gate_passed", False)
     qc_status = state.get("qc_status", "unknown")
 
-    if gate_passed and qc_status == "passed":
-        logger.info("QC gate passed, proceeding to end")
+    # Accept both "passed" and "warning" as valid statuses
+    # "warning" indicates non-blocking issues (e.g., expected nulls in optional columns)
+    if gate_passed and qc_status in ("passed", "warning"):
+        logger.info(f"QC gate passed (status={qc_status}), proceeding to end")
         return "end"
     else:
         logger.info(
@@ -188,14 +190,16 @@ async def finalize_output(state: DataPreparerState) -> Dict[str, Any]:
         blocking_issues = state.get("blocking_issues", [])
 
         # Apply gate logic (from tier0-contracts.md)
-        # Gate ONLY passes if qc_status is explicitly "passed" AND score meets threshold
+        # Gate passes if qc_status is "passed" OR "warning" (with score threshold)
+        # "warning" allows expected issues (e.g., nulls in optional columns for active patients)
+        # "failed" always blocks (blocking issues like data leakage)
         gate_passed = True
 
-        # CRITICAL: Gate fails if QC status is not explicitly "passed"
-        # This prevents unknown/skipped/failed statuses from passing
-        if qc_status != "passed":
+        # CRITICAL: Gate fails if QC status is "failed" or unknown
+        # "warning" is acceptable if score meets threshold (checked below)
+        if qc_status not in ("passed", "warning"):
             gate_passed = False
-            logger.warning(f"QC gate BLOCKED: qc_status='{qc_status}' (must be 'passed')")
+            logger.warning(f"QC gate BLOCKED: qc_status='{qc_status}' (must be 'passed' or 'warning')")
 
         if blocking_issues:
             gate_passed = False
