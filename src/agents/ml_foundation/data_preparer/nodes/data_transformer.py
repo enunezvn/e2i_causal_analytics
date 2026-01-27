@@ -253,8 +253,8 @@ async def transform_data(state: DataPreparerState) -> Dict[str, Any]:
             else:
                 scaler = None
 
-            if scaler is not None:
-                # Fit on train
+            if scaler is not None and len(train_df) > 0:
+                # Fit on train (skip if train is empty)
                 train_df[current_numeric_cols] = scaler.fit_transform(
                     train_df[current_numeric_cols]
                 )

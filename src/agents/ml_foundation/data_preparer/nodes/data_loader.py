@@ -197,9 +197,10 @@ async def _load_sample_data(
         df = generator.triggers(n_samples=n_samples)
     elif data_source == "patient_journeys":
         # Use ml_patients() for ML-ready patient data with discontinuation_flag
-        # Use fresh date range (last 30 days) to pass timeliness checks
+        # Use fresh date range (last 90 days) to pass timeliness checks
+        # while leaving room for temporal splitting (val_days=30, test_days=30)
         end_date = datetime.now().isoformat()
-        start_date = (datetime.now() - timedelta(days=30)).isoformat()
+        start_date = (datetime.now() - timedelta(days=90)).isoformat()
         df = generator.ml_patients(
             n_patients=n_samples,
             start_date=start_date,
