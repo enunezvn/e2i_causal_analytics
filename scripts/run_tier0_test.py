@@ -137,7 +137,7 @@ async def step_1_scope_definer(experiment_id: str) -> dict[str, Any]:
     from src.agents.ml_foundation.scope_definer import ScopeDefinerAgent
 
     print("\n  Creating ScopeDefinerAgent...")
-    agent = ScopeDefinerAgent(enable_mlflow=True, enable_opik=True)
+    agent = ScopeDefinerAgent()
 
     input_data = {
         "problem_description": f"Predict patient discontinuation risk for {CONFIG.brand}",
@@ -177,7 +177,7 @@ async def step_2_data_preparer(
     from src.agents.ml_foundation.data_preparer import DataPreparerAgent
 
     print("\n  Creating DataPreparerAgent...")
-    agent = DataPreparerAgent(enable_mlflow=True, enable_opik=True)
+    agent = DataPreparerAgent()
 
     # Override required_features with actual columns from sample data
     # This ensures we don't fail QC for features that don't exist
@@ -312,7 +312,7 @@ async def step_4_model_selector(experiment_id: str, scope_spec: dict, qc_report:
     from src.agents.ml_foundation.model_selector import ModelSelectorAgent
 
     print("\n  Creating ModelSelectorAgent...")
-    agent = ModelSelectorAgent(enable_mlflow=True, enable_opik=True)
+    agent = ModelSelectorAgent()
 
     # Ensure qc_report has both gate_passed and qc_passed for compatibility
     # data_preparer uses gate_passed, model_selector expects qc_passed
@@ -372,7 +372,7 @@ async def step_5_model_trainer(
     from sklearn.linear_model import LogisticRegression
 
     print("\n  Creating ModelTrainerAgent...")
-    agent = ModelTrainerAgent(enable_mlflow=True, enable_opik=True)
+    agent = ModelTrainerAgent()
 
     # Ensure model_candidate has all required fields for model_trainer
     # Required: algorithm_name, algorithm_class, hyperparameter_search_space, default_hyperparameters
@@ -503,7 +503,7 @@ async def step_6_feature_analyzer(
     from src.agents.ml_foundation.feature_analyzer import FeatureAnalyzerAgent
 
     print("\n  Creating FeatureAnalyzerAgent...")
-    agent = FeatureAnalyzerAgent(enable_mlflow=True, enable_opik=True)
+    agent = FeatureAnalyzerAgent()
 
     input_data = {
         "experiment_id": experiment_id,
@@ -554,7 +554,7 @@ async def step_7_model_deployer(
     from src.agents.ml_foundation.model_deployer import ModelDeployerAgent
 
     print("\n  Creating ModelDeployerAgent...")
-    agent = ModelDeployerAgent(enable_mlflow=True, enable_opik=True)
+    agent = ModelDeployerAgent()
 
     deployment_name = f"kisqali_discontinuation_{experiment_id[:8]}"
 
