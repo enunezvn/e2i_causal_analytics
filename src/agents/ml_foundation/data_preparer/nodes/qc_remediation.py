@@ -407,9 +407,9 @@ def _rule_based_analysis(context: Dict[str, Any]) -> Dict[str, Any]:
         "blocking_issues_analysis": [],
     }
 
-    dimension_scores = context.get("dimension_scores", {})
-    data_stats = context.get("data_stats", {})
-    blocking_issues = context.get("blocking_issues", [])
+    dimension_scores = context.get("dimension_scores", {}) or {}
+    data_stats = context.get("data_stats", {}) or {}
+    blocking_issues = context.get("blocking_issues", []) or []
 
     # Analyze dimension scores
     for dim, score in dimension_scores.items():
