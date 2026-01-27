@@ -18,6 +18,7 @@ import time
 import uuid
 from typing import Any, Dict, Optional, TYPE_CHECKING
 
+from src.agents.base import SkillsMixin
 from .graph import create_gap_analyzer_graph
 from .state import GapAnalyzerState
 
@@ -28,10 +29,15 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class GapAnalyzerAgent:
+class GapAnalyzerAgent(SkillsMixin):
     """Gap Analyzer Agent for ROI opportunity detection.
 
     Tier 2 Standard Agent: Computational focus with minimal LLM usage.
+
+    Skills Integration:
+        - gap-analysis/roi-estimation.md: ROI calculation procedures
+        - gap-analysis/opportunity-sizing.md: Opportunity sizing framework
+        - pharma-commercial/brand-analytics.md: Brand-specific context
     """
 
     def __init__(self, enable_mlflow: bool = True, enable_opik: bool = True):
@@ -96,6 +102,12 @@ class GapAnalyzerAgent:
         Raises:
             ValueError: If required input fields are missing
         """
+        # Clear loaded skills from previous invocation
+        self.clear_loaded_skills()
+
+        # Load relevant domain skills for gap analysis
+        await self._load_analysis_skills(input_data)
+
         # Validate input first (raises ValueError for invalid input)
         self._validate_input(input_data)
 
@@ -192,6 +204,32 @@ class GapAnalyzerAgent:
                 query_id=input_data.get("query_id", str(uuid.uuid4())),
                 total_latency_ms=int((time.time() - start_time) * 1000),
             )
+
+    async def _load_analysis_skills(self, input_data: Dict[str, Any]) -> None:
+        """Load relevant skills for gap analysis.
+
+        Loads domain-specific procedural knowledge based on the analysis task.
+        Skills are optional - analysis proceeds without them if unavailable.
+
+        Args:
+            input_data: The gap analysis input parameters.
+        """
+        try:
+            # Load core gap analysis skills
+            await self.load_skill("gap-analysis/roi-estimation.md")
+            await self.load_skill("gap-analysis/opportunity-sizing.md")
+
+            # Load brand-specific context if brand is specified
+            brand = input_data.get("brand")
+            if brand:
+                await self.load_skill("pharma-commercial/brand-analytics.md")
+
+            loaded_names = self.get_loaded_skill_names()
+            if loaded_names:
+                logger.info(f"Loaded {len(loaded_names)} analysis skills: {loaded_names}")
+        except Exception as e:
+            # Skills are optional - log warning and proceed without
+            logger.warning(f"Failed to load analysis skills (proceeding without): {e}")
 
     def _validate_input(self, input_data: Dict[str, Any]) -> None:
         """Validate required input fields.

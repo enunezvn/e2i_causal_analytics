@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from src.agents.base import SkillsMixin
 from .config import ComplexityScorer, ExplainerConfig, get_default_config
 from .graph import build_explainer_graph
 from .state import ExplainerState, Insight, NarrativeSection
@@ -75,7 +76,7 @@ class ExplainerOutput(BaseModel):
 # ============================================================================
 
 
-class ExplainerAgent:
+class ExplainerAgent(SkillsMixin):
     """
     Tier 5 Explainer Agent.
 
@@ -94,6 +95,10 @@ class ExplainerAgent:
     - use_llm=None: Auto-detect based on input complexity
     - use_llm=True: Always use LLM reasoning
     - use_llm=False: Always use deterministic mode
+
+    Skills Integration:
+        - causal-inference/dowhy-workflow.md: Causal explanation context
+        - pharma-commercial/brand-analytics.md: Brand-specific terminology
     """
 
     def __init__(
@@ -207,6 +212,45 @@ class ExplainerAgent:
         """Generate a unique session ID for memory correlation."""
         return f"explainer_{uuid.uuid4().hex[:12]}"
 
+    async def _load_explanation_skills(
+        self,
+        analysis_results: List[Dict[str, Any]],
+        memory_config: Optional[Dict[str, Any]],
+    ) -> None:
+        """Load relevant skills for explanation generation.
+
+        Loads domain-specific procedural knowledge based on the analysis context.
+        Skills are optional - explanation proceeds without them if unavailable.
+
+        Args:
+            analysis_results: The analysis results to explain.
+            memory_config: Optional memory configuration with brand info.
+        """
+        try:
+            # Check if results include causal analysis
+            has_causal = any(
+                any(
+                    key in result
+                    for key in ["causal_effect", "treatment_effect", "ate", "cate"]
+                )
+                for result in analysis_results
+            )
+
+            if has_causal:
+                await self.load_skill("causal-inference/dowhy-workflow.md")
+
+            # Load brand-specific context if brand is specified
+            brand = memory_config.get("brand") if memory_config else None
+            if brand:
+                await self.load_skill("pharma-commercial/brand-analytics.md")
+
+            loaded_names = self.get_loaded_skill_names()
+            if loaded_names:
+                logger.info(f"Loaded {len(loaded_names)} explanation skills: {loaded_names}")
+        except Exception as e:
+            # Skills are optional - log warning and proceed without
+            logger.warning(f"Failed to load explanation skills (proceeding without): {e}")
+
     async def explain(
         self,
         analysis_results: List[Dict[str, Any]],
@@ -232,6 +276,12 @@ class ExplainerAgent:
         Returns:
             ExplainerOutput with narrative explanation
         """
+        # Clear loaded skills from previous invocation
+        self.clear_loaded_skills()
+
+        # Load relevant domain skills for explanation
+        await self._load_explanation_skills(analysis_results, memory_config)
+
         # Generate session ID if not provided
         effective_session_id = session_id or self._generate_session_id()
 
