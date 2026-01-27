@@ -221,6 +221,9 @@ async def step_2_data_preparer(
         "problem_type": CONFIG.problem_type,
         # Override required_features with actual available features
         "required_features": available_features,
+        # Allow 90 days staleness since sample data spans 90 days
+        # and temporal splitting puts older data in training set
+        "max_staleness_days": 90,
     })
 
     input_data = {
