@@ -49,6 +49,11 @@ sys.path.insert(0, str(PROJECT_ROOT))
 if not os.environ.get("MLFLOW_TRACKING_URI"):
     os.environ["MLFLOW_TRACKING_URI"] = "http://localhost:5000"
 
+# Configure Supabase URL for database persistence
+# Self-hosted Supabase runs on port 54321 (internal Docker network uses localhost)
+if not os.environ.get("SUPABASE_URL"):
+    os.environ["SUPABASE_URL"] = "http://localhost:54321"
+
 
 # =============================================================================
 # CONFIGURATION
@@ -224,10 +229,47 @@ async def step_2_data_preparer(
     print_result("train_samples", result.get("train_samples", "N/A"))
     print_result("validation_samples", result.get("validation_samples", "N/A"))
 
+    # Display QC dimension scores
+    print("\n  QC Dimension Scores:")
+    print_result("completeness", result.get("completeness_score", "N/A"))
+    print_result("validity", result.get("validity_score", "N/A"))
+    print_result("consistency", result.get("consistency_score", "N/A"))
+    print_result("uniqueness", result.get("uniqueness_score", "N/A"))
+    print_result("timeliness", result.get("timeliness_score", "N/A"))
+
+    # Display remediation information if QC failed
+    remediation_status = result.get("remediation_status")
+    if remediation_status:
+        print("\n  QC Remediation:")
+        print_result("remediation_status", remediation_status)
+        print_result("remediation_attempts", result.get("remediation_attempts", 0))
+
+        if result.get("llm_analysis"):
+            print_result("llm_analysis", result.get("llm_analysis"))
+
+        if result.get("root_causes"):
+            print_result("root_causes", result.get("root_causes"))
+
+        if result.get("recommended_actions"):
+            print("\n    Recommended Actions:")
+            for i, action in enumerate(result.get("recommended_actions", [])[:5], 1):
+                print(f"      {i}. {action}")
+
+        if result.get("actions_taken"):
+            print("\n    Actions Taken:")
+            for action in result.get("actions_taken", []):
+                print(f"      - {action}")
+
     if result.get("gate_passed", False):
         print_success("QC GATE PASSED - Training can proceed")
     else:
         print_failure("QC GATE FAILED - Training blocked")
+        # Show blocking issues
+        blocking_issues = result.get("blocking_issues", [])
+        if blocking_issues:
+            print("\n    Blocking Issues:")
+            for issue in blocking_issues[:5]:
+                print(f"      - {issue}")
 
     return result
 
@@ -676,8 +718,10 @@ async def run_pipeline(step: int | None = None, dry_run: bool = False) -> None:
         return
 
     # Generate sample data
+    # NOTE: Generate 600 samples to satisfy scope_spec.minimum_samples=500
+    # (extra samples account for potential exclusions during cohort construction)
     print("\n  Generating sample patient data...")
-    patient_df = generate_sample_data(n_samples=200)
+    patient_df = generate_sample_data(n_samples=600)
     print(f"  Generated {len(patient_df)} patient records")
 
     # Pipeline state

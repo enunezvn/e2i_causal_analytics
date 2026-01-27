@@ -107,5 +107,18 @@ class DataPreparerState(TypedDict, total=False):
     error: Optional[str]
     error_type: Optional[str]
 
+    # QC Remediation Loop
+    remediation_status: Literal["not_needed", "applied", "failed", "manual_required", "exhausted", "error"]
+    remediation_attempts: int  # Count of remediation attempts
+    remediation_actions_taken: List[str]  # Actions applied during remediation
+    remediation_error: Optional[str]  # Error message if remediation failed
+    requires_revalidation: bool  # Whether to re-run validation after remediation
+    llm_analysis: Optional[str]  # LLM-generated root cause summary
+    root_causes: List[str]  # Identified root causes
+    recommended_actions: List[str]  # Recommended manual actions
+    estimated_effort: str  # Low/Medium/High effort estimate
+    blocking_issues_analysis: List[Dict[str, Any]]  # Detailed blocking issue analysis
+    failure_summary: Optional[str]  # Summary when remediation exhausted
+
     # Audit chain
     audit_workflow_id: UUID
