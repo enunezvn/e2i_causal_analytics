@@ -50,6 +50,22 @@ async def narrate_importance(state: Dict[str, Any]) -> Dict[str, Any]:
         causal_only_features = state.get("causal_only_features", [])
         predictive_only_features = state.get("predictive_only_features", [])
 
+        # Check if SHAP was skipped (no model_uri provided)
+        if state.get("shap_skipped"):
+            skip_reason = state.get("skip_reason", "SHAP analysis was skipped")
+            return {
+                "interpretation": f"Feature interpretation unavailable: {skip_reason}",
+                "executive_summary": "SHAP analysis was not performed due to missing model_uri. "
+                    "This step requires a trained model to compute feature importance.",
+                "key_insights": ["SHAP analysis requires a model_uri to load the trained model"],
+                "recommendations": ["Ensure model training logs model_uri to MLflow"],
+                "cautions": ["Feature importance data is not available for this run"],
+                "interaction_interpretations": [],
+                "interpretation_time_seconds": 0.0,
+                "shap_skipped": True,
+                "status": "skipped",
+            }
+
         if not global_importance_ranked:
             return {
                 "error": "Missing SHAP analysis results for interpretation",
