@@ -116,18 +116,26 @@ class FeatureAnalyzerAgent:
         start_time = datetime.now()
         logger.info("Starting feature analysis pipeline")
 
-        # Validate required inputs
-        required_fields = ["model_uri", "experiment_id"]
+        # Validate required inputs - model_uri is optional (SHAP skipped if not provided)
+        required_fields = ["experiment_id"]
         for field in required_fields:
             if field not in input_data:
                 raise ValueError(f"Missing required field: {field}")
 
         experiment_id = input_data["experiment_id"]
+        model_uri = input_data.get("model_uri")
+
+        # Warn if model_uri is missing (SHAP analysis will be skipped)
+        if not model_uri:
+            logger.warning(
+                "model_uri not provided - SHAP analysis will be skipped. "
+                "Only basic feature statistics will be computed."
+            )
 
         # Prepare initial state
         initial_state: FeatureAnalyzerState = {
             # Input fields
-            "model_uri": input_data["model_uri"],
+            "model_uri": model_uri,
             "experiment_id": experiment_id,
             "training_run_id": input_data.get("training_run_id", "unknown"),
             # Configuration
@@ -161,13 +169,13 @@ class FeatureAnalyzerAgent:
                     operation="analyze_features",
                     metadata={
                         "experiment_id": experiment_id,
-                        "model_uri": input_data["model_uri"],
+                        "model_uri": model_uri,
                         "tier": self.tier,
                         "max_samples": initial_state["max_samples"],
                         "compute_interactions": initial_state["compute_interactions"],
                     },
                     tags=[self.agent_name, "tier_0", "shap", "interpretability"],
-                    input_data={"model_uri": input_data["model_uri"]},
+                    input_data={"model_uri": model_uri},
                 ) as span:
                     final_state = await graph.ainvoke(initial_state)
                     # Set output on span
