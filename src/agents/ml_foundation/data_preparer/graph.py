@@ -123,19 +123,14 @@ def _route_after_finalize(state: DataPreparerState) -> Literal["end", "remediate
     gate_passed = state.get("gate_passed", False)
     qc_status = state.get("qc_status", "unknown")
 
-    # DEBUG: Print routing decision
-    print(f"\n[DEBUG] _route_after_finalize: gate_passed={gate_passed}, qc_status={qc_status}")
-
     if gate_passed and qc_status == "passed":
         logger.info("QC gate passed, proceeding to end")
-        print("[DEBUG] Routing to END")
         return "end"
     else:
         logger.info(
             f"QC gate failed (status={qc_status}, passed={gate_passed}), "
             "routing to remediation review"
         )
-        print("[DEBUG] Routing to REMEDIATE")
         return "remediate"
 
 

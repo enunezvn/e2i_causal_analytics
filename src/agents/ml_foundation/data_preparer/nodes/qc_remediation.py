@@ -44,8 +44,6 @@ async def review_and_remediate_qc(state: DataPreparerState) -> Dict[str, Any]:
         f"QC Remediation review for experiment {experiment_id}: "
         f"status={qc_status}, score={overall_score}, gate_passed={gate_passed}"
     )
-    # DEBUG: Print to ensure this node is being called
-    print(f"\n[DEBUG] QC Remediation node called: status={qc_status}, gate={gate_passed}, attempts={remediation_attempts}")
 
     # If QC already passed, no remediation needed
     if gate_passed and qc_status == "passed":
@@ -63,12 +61,9 @@ async def review_and_remediate_qc(state: DataPreparerState) -> Dict[str, Any]:
     try:
         # Gather QC context for LLM analysis
         qc_context = _gather_qc_context(state)
-        print(f"[DEBUG] QC context gathered, data_stats train_samples: {qc_context.get('data_stats', {}).get('train_samples', 0)}")
 
         # Use Claude to analyze the QC failures
-        print("[DEBUG] Calling LLM analysis...")
         analysis = await _analyze_qc_failures_with_llm(qc_context)
-        print(f"[DEBUG] LLM analysis result: can_auto_remediate={analysis.get('can_auto_remediate')}, root_causes={len(analysis.get('root_causes', []))}")
 
         # Check if automatic remediation is possible
         if analysis.get("can_auto_remediate"):
@@ -108,7 +103,6 @@ async def review_and_remediate_qc(state: DataPreparerState) -> Dict[str, Any]:
 
     except Exception as e:
         logger.error(f"QC remediation review failed: {e}", exc_info=True)
-        print(f"[DEBUG] Exception in remediation: {type(e).__name__}: {e}")
         return {
             "remediation_status": "error",
             "remediation_error": str(e),
