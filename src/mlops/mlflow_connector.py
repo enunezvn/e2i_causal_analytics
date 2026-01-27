@@ -451,9 +451,15 @@ class MLflowConnector:
         self.tracking_uri = tracking_uri or os.environ.get(
             "MLFLOW_TRACKING_URI", "mlruns"
         )
-        # When using a tracking server (http://...), let it handle artifacts via proxy
-        # Only use local artifact path for local file-based tracking
-        default_artifact_uri = None if self.tracking_uri.startswith("http") else "mlartifacts"
+        # When using a tracking server with --serve-artifacts, use the mlflow-artifacts scheme
+        # This routes artifact uploads through the tracking server's proxy
+        if self.tracking_uri.startswith("http"):
+            # Extract host:port from tracking URI for artifact proxy
+            # e.g., http://localhost:5000 -> mlflow-artifacts://localhost:5000
+            server_host = self.tracking_uri.replace("http://", "").replace("https://", "")
+            default_artifact_uri = f"mlflow-artifacts://{server_host}"
+        else:
+            default_artifact_uri = "mlartifacts"
         self.artifact_uri = artifact_uri or os.environ.get(
             "MLFLOW_ARTIFACT_URI", default_artifact_uri
         )
