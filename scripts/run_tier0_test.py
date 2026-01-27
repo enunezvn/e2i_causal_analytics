@@ -33,7 +33,7 @@ import os
 import sys
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
@@ -694,7 +694,7 @@ async def step_8_observability_connector(experiment_id: str, stages_completed: i
         {
             "event_type": "pipeline_completed",
             "agent_name": "tier0_e2e_test",
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "metadata": {
                 "experiment_id": experiment_id,
                 "stages_completed": stages_completed,
