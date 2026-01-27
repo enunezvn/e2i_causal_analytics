@@ -33,6 +33,17 @@ async def detect_interactions(state: Dict[str, Any]) -> Dict[str, Any]:
         feature_names = state.get("feature_names", [])
         compute_interactions = state.get("compute_interactions", True)
 
+        # Check if SHAP was skipped (no model_uri provided)
+        if state.get("shap_skipped"):
+            return {
+                "interaction_matrix": {},
+                "top_interactions_raw": [],
+                "interaction_computation_time_seconds": 0.0,
+                "interaction_method": "skipped",
+                "shap_skipped": True,
+                "skip_reason": state.get("skip_reason", "SHAP analysis was skipped"),
+            }
+
         if not compute_interactions:
             # Skip interaction detection
             return {
