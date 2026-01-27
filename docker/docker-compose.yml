@@ -201,7 +201,7 @@ services:
   # MLflow - Experiment Tracking & Model Registry
   # ---------------------------------------------------------------------------
   mlflow:
-    image: ghcr.io/mlflow/mlflow:v2.16.0
+    image: ghcr.io/mlflow/mlflow:v3.1.0
     container_name: e2i_mlflow
     restart: unless-stopped
     ports:
