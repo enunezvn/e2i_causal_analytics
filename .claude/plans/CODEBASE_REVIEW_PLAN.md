@@ -29,8 +29,8 @@ The system is **approximately 97% production-ready** with all backend systems at
 2. ~~Core Systems 100% production-ready~~ ✅ Done (2026-01-24)
 3. ~~Security hardening for production deployment~~ ✅ Done (CORS, HSTS, rate limiting)
 4. ~~Test coverage for untested modules~~ ✅ Done (1,312 new tests, 484 memory tests verified)
-5. ~~Frontend React transformation (Phases 0-7)~~ ✅ 85% Done (80 components, 27 pages)
-6. Frontend polish & testing (Phases 8-13) ← **Current** (2-3 weeks remaining)
+5. ~~Frontend React transformation (Phases 0-7)~~ ✅ 90% Done (80 components, 27 pages, 1828 tests)
+6. Frontend E2E testing setup ← **Current** (1-2 weeks remaining)
 
 ---
 
@@ -73,7 +73,7 @@ All 18 documented agents plus 1 additional (experiment_monitor) are implemented:
 | **Memory System** | 4-layer architecture (working, episodic, semantic, procedural) | ✅ 100% | - |
 | **MLOps Stack** | 7-tool integration (MLflow, Opik, Feast, etc.) | ✅ 100% | BentoML E2E testing |
 | **API Backend** | 21 routers, 149 endpoints, security hardened | ✅ 100% | PUT/PATCH ops, feature/model routers |
-| **Frontend** | 80 components, 27 pages, 34 tests (115k lines) | ⚠️ 85% | Polish + E2E testing (2-3 weeks) |
+| **Frontend** | 80 components, 27 pages, 57 test files, 1828 tests (115k lines) | ⚠️ 90% | E2E testing (1-2 weeks) |
 | **Database** | 51 migrations, 37 tables | ✅ 100% | - |
 
 **Production Readiness Assessment (2026-01-24)**:
@@ -727,30 +727,27 @@ All 267 memory system tests pass on production droplet (138.197.4.36):
 | Phase 12 | E2E testing | ⏳ Pending |
 | Phase 13 | Docker deployment | ⏳ Pending |
 
-**Frontend Test Results (2026-01-25)**:
-- **Pass Rate**: 99.5% (1818 passed, 10 failed)
-- **Test Files**: 52 passed, 5 failed
+**Frontend Test Results (2026-01-26)**:
+- **Pass Rate**: 100% (1828 passed, 0 failed)
+- **Test Files**: 57 passed, 0 failed
 - **MSW Config**: Changed to `onUnhandledRequest: 'warn'` for incremental handler coverage
 
-**Failing Tests (10 total across 5 files)**:
-| File | Test | Issue |
-|------|------|-------|
-| `DigitalTwin.test.tsx` | displays system health status | Element not found |
-| `DigitalTwin.test.tsx` | calls runSimulation when form is submitted | API mock issue |
-| `DigitalTwin.test.tsx` | shows last calibration date | Text not found |
-| `SystemHealth.test.tsx` | renders page header with title | Element query issue |
-| `SystemHealth.test.tsx` | displays overview stat cards | Component state issue |
-| `SystemHealth.test.tsx` | displays active alerts section | Element not found |
-| `useApiError.test.tsx` | shows toast for network error | Hook behavior issue |
-| `useApiError.test.tsx` | shows toast for server error | Hook behavior issue |
-| `SimulationPanel.test.tsx` | Advanced settings (x2) | UI element query issues |
+**Previously Failing Tests - ALL FIXED (2026-01-26)**:
+| File | Tests | Status |
+|------|-------|--------|
+| `DigitalTwin.test.tsx` | 25 tests | ✅ All passing |
+| `SystemHealth.test.tsx` | 13 tests | ✅ All passing |
+| `SimulationPanel.test.tsx` | 33 tests | ✅ All passing |
+| `use-query-error.test.ts` | 23 tests | ✅ All passing (handles API errors) |
+
+**Note**: The `useApiError.test.tsx` file was incorrectly listed - the actual error handling hook is `use-query-error.ts` which has comprehensive tests.
 
 **Next Steps**:
-1. Investigate and fix 10 failing component tests
-2. Add missing MSW handlers for unhandled API routes
+1. ~~Investigate and fix 10 failing component tests~~ ✅ Done (2026-01-26)
+2. Add missing MSW handlers for unhandled API routes (warnings only, non-blocking)
 3. Complete E2E testing setup
 
-**Remaining Effort**: 2-3 weeks (polish + testing)
+**Remaining Effort**: 1-2 weeks (E2E setup + polish)
 
 ---
 
@@ -787,20 +784,20 @@ All Phase 1 Critical Fixes completed on 2026-01-17:
 5. ~~Fix environment-specific test failures (4 tests)~~ ✅ Done (2026-01-25)
 6. ~~Frontend React transformation (Phases 0-7)~~ ✅ 85% Done (2026-01-25)
 7. ~~Frontend tests baseline established~~ ✅ Done (99.5% pass rate, 1818/1828)
-8. Fix 10 failing frontend tests ← **Current**
-   - DigitalTwin.test.tsx (3 failing): health status, runSimulation, calibration date
-   - SystemHealth.test.tsx (3 failing): page header, stat cards, alerts section
-   - useApiError.test.tsx (2 failing): network error toast, server error toast
-   - SimulationPanel.test.tsx (2 failing): Advanced settings UI queries
-9. Complete E2E testing setup
+8. ~~Fix 10 failing frontend tests~~ ✅ Done (2026-01-26) - All 1828 tests passing
+   - DigitalTwin.test.tsx: ✅ 25 tests passing
+   - SystemHealth.test.tsx: ✅ 13 tests passing
+   - SimulationPanel.test.tsx: ✅ 33 tests passing
+   - useApiError.test.tsx: N/A (was incorrectly listed, use-query-error.test.ts has 23 passing tests)
+9. Complete E2E testing setup ← **Current**
 10. Verify Docker deployment
 
-**Core Systems Assessment (2026-01-25)**:
+**Core Systems Assessment (2026-01-26)**:
 - All 6 backend systems now marked 100% production-ready
 - RAG, MLOps, API Backend: Previously 95% - upgraded to 100% after production verification
 - 149 API endpoints operational (21 routers)
 - 484 memory system tests verified on droplet (2 skipped for optional deps)
-- Frontend: 85% complete (80 components, 27 pages, 34 tests)
+- Frontend: 90% complete (80 components, 27 pages, 57 test files, 1828 tests passing)
 - Enhancement opportunities documented for future work
 
 ### Medium-Term Goals (Next Quarter)
