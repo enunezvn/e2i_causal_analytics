@@ -4,7 +4,7 @@ This module assembles the data preparation pipeline using LangGraph.
 """
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Literal
 
 from langgraph.graph import END, StateGraph
 
@@ -13,6 +13,7 @@ from .nodes import (
     detect_leakage,
     load_data,
     register_features_in_feast,
+    review_and_remediate_qc,
     run_ge_validation,
     run_quality_checks,
     run_schema_validation,
@@ -21,6 +22,9 @@ from .nodes import (
 from .state import DataPreparerState
 
 logger = logging.getLogger(__name__)
+
+# Maximum remediation attempts before giving up
+MAX_REMEDIATION_ATTEMPTS = 2
 
 
 def create_data_preparer_graph() -> StateGraph:
@@ -36,6 +40,14 @@ def create_data_preparer_graph() -> StateGraph:
     7. register_features_in_feast - Register features in Feast feature store
     8. compute_baseline_metrics - Compute baseline metrics from train split
     9. finalize_output - Generate final output and QC gate decision
+    10. qc_remediation - LLM-assisted review and remediation if QC fails
+
+    QC Remediation Loop:
+    - If QC gate fails, routes to LLM-assisted remediation review
+    - Analyzes root causes using Claude
+    - Attempts automatic fixes (imputation, type conversion, etc.)
+    - Re-runs quality checks if fixes are applied
+    - Maximum 2 remediation attempts before final failure
 
     Validation Pipeline Order:
     - Pandera: Fast schema checks (types, nullability, enums)
@@ -63,8 +75,9 @@ def create_data_preparer_graph() -> StateGraph:
     graph.add_node("register_features_in_feast", register_features_in_feast)
     graph.add_node("compute_baseline_metrics", compute_baseline_metrics)
     graph.add_node("finalize_output", finalize_output)
+    graph.add_node("qc_remediation", review_and_remediate_qc)
 
-    # Define edges (sequential execution)
+    # Define edges (sequential execution with QC remediation loop)
     graph.set_entry_point("load_data")
     graph.add_edge("load_data", "run_schema_validation")
     graph.add_edge("run_schema_validation", "run_quality_checks")
@@ -74,9 +87,76 @@ def create_data_preparer_graph() -> StateGraph:
     graph.add_edge("transform_data", "register_features_in_feast")
     graph.add_edge("register_features_in_feast", "compute_baseline_metrics")
     graph.add_edge("compute_baseline_metrics", "finalize_output")
-    graph.add_edge("finalize_output", END)
+
+    # Conditional edge: after finalize_output, check if QC passed
+    graph.add_conditional_edges(
+        "finalize_output",
+        _route_after_finalize,
+        {
+            "end": END,
+            "remediate": "qc_remediation",
+        },
+    )
+
+    # Conditional edge: after remediation, either retry validation or end
+    graph.add_conditional_edges(
+        "qc_remediation",
+        _route_after_remediation,
+        {
+            "retry": "run_quality_checks",
+            "end": END,
+        },
+    )
 
     return graph
+
+
+def _route_after_finalize(state: DataPreparerState) -> Literal["end", "remediate"]:
+    """Route after finalize_output based on QC gate result.
+
+    Args:
+        state: Current agent state
+
+    Returns:
+        "end" if QC passed, "remediate" if QC failed
+    """
+    gate_passed = state.get("gate_passed", False)
+    qc_status = state.get("qc_status", "unknown")
+
+    if gate_passed and qc_status == "passed":
+        logger.info("QC gate passed, proceeding to end")
+        return "end"
+    else:
+        logger.info(
+            f"QC gate failed (status={qc_status}, passed={gate_passed}), "
+            "routing to remediation review"
+        )
+        return "remediate"
+
+
+def _route_after_remediation(state: DataPreparerState) -> Literal["retry", "end"]:
+    """Route after remediation based on result.
+
+    Args:
+        state: Current agent state
+
+    Returns:
+        "retry" if remediation was applied and revalidation needed, "end" otherwise
+    """
+    remediation_status = state.get("remediation_status", "unknown")
+    requires_revalidation = state.get("requires_revalidation", False)
+    remediation_attempts = state.get("remediation_attempts", 0)
+
+    if remediation_status == "applied" and requires_revalidation:
+        if remediation_attempts < MAX_REMEDIATION_ATTEMPTS:
+            logger.info(
+                f"Remediation applied, retrying validation "
+                f"(attempt {remediation_attempts + 1}/{MAX_REMEDIATION_ATTEMPTS})"
+            )
+            return "retry"
+
+    logger.info(f"Remediation complete with status: {remediation_status}")
+    return "end"
 
 
 async def finalize_output(state: DataPreparerState) -> Dict[str, Any]:
@@ -103,22 +183,29 @@ async def finalize_output(state: DataPreparerState) -> Dict[str, Any]:
 
     try:
         # === QC GATE DECISION ===
-        qc_status = state.get("qc_status", "skipped")
-        overall_score = state.get("overall_score", 0.0)
+        qc_status = state.get("qc_status", "unknown")
+        overall_score = state.get("overall_score")
         blocking_issues = state.get("blocking_issues", [])
 
         # Apply gate logic (from tier0-contracts.md)
+        # Gate ONLY passes if qc_status is explicitly "passed" AND score meets threshold
         gate_passed = True
 
-        if qc_status == "failed":
+        # CRITICAL: Gate fails if QC status is not explicitly "passed"
+        # This prevents unknown/skipped/failed statuses from passing
+        if qc_status != "passed":
             gate_passed = False
-            logger.warning("QC gate BLOCKED: status=failed")
+            logger.warning(f"QC gate BLOCKED: qc_status='{qc_status}' (must be 'passed')")
 
         if blocking_issues:
             gate_passed = False
             logger.warning(f"QC gate BLOCKED: {len(blocking_issues)} blocking issues")
 
-        if overall_score < 0.80:
+        # CRITICAL: Gate fails if overall_score is None or below threshold
+        if overall_score is None:
+            gate_passed = False
+            logger.warning("QC gate BLOCKED: overall_score is None (QC checks may not have run)")
+        elif overall_score < 0.80:
             gate_passed = False
             logger.warning(f"QC gate BLOCKED: score {overall_score:.2f} < 0.80")
 

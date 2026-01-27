@@ -14,7 +14,7 @@ async def rank_candidates(state: Dict[str, Any]) -> Dict[str, Any]:
     - Inference speed: 20%
     - Memory efficiency: 15%
     - Interpretability: 15%
-    - Causal ML preference (E2I): 10%
+    - Causal ML preference (E2I): 10% - ONLY if problem requires causal inference
 
     Args:
         state: ModelSelectorState with candidate_algorithms, historical_success_rates,
@@ -28,6 +28,11 @@ async def rank_candidates(state: Dict[str, Any]) -> Dict[str, Any]:
     algorithm_preferences = state.get("algorithm_preferences", [])
     row_count = state.get("row_count", 1000)
 
+    # Determine if causal inference is appropriate for this problem
+    scope_spec = state.get("scope_spec", {})
+    problem_type = scope_spec.get("problem_type", "classification")
+    requires_causal = _requires_causal_inference(problem_type, scope_spec)
+
     if not candidates:
         return {
             "ranked_candidates": [],
@@ -40,7 +45,9 @@ async def rank_candidates(state: Dict[str, Any]) -> Dict[str, Any]:
 
     for candidate in candidates:
         algo_name = candidate["name"]
-        score = _compute_selection_score(candidate, success_rates, algorithm_preferences, row_count)
+        score = _compute_selection_score(
+            candidate, success_rates, algorithm_preferences, row_count, requires_causal
+        )
         selection_scores[algo_name] = score
         candidate["selection_score"] = score
 
@@ -50,7 +57,54 @@ async def rank_candidates(state: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "ranked_candidates": ranked,
         "selection_scores": selection_scores,
+        "requires_causal_inference": requires_causal,
     }
+
+
+def _requires_causal_inference(problem_type: str, scope_spec: Dict[str, Any]) -> bool:
+    """Determine if the problem requires causal inference models.
+
+    Causal inference is appropriate when:
+    - Problem type explicitly mentions 'causal' or 'treatment_effect'
+    - Business objective involves understanding 'why' or 'effect'
+    - There's a treatment variable defined
+    - The task is about intervention optimization
+
+    Args:
+        problem_type: Type of ML problem
+        scope_spec: Scope specification from scope_definer
+
+    Returns:
+        True if causal models should be preferred
+    """
+    # Check problem type
+    causal_problem_types = [
+        "causal_inference",
+        "treatment_effect",
+        "uplift_modeling",
+        "heterogeneous_treatment_effect",
+        "intervention_optimization",
+    ]
+
+    if problem_type.lower() in causal_problem_types:
+        return True
+
+    # Check business objective for causal keywords
+    business_objective = scope_spec.get("business_objective", "").lower()
+    causal_keywords = ["treatment effect", "causal", "intervention", "uplift", "what-if", "counterfactual"]
+    if any(keyword in business_objective for keyword in causal_keywords):
+        return True
+
+    # Check if treatment variable is defined
+    if scope_spec.get("treatment_column") or scope_spec.get("treatment_variable"):
+        return True
+
+    # Standard classification/regression don't need causal models
+    standard_types = ["binary_classification", "classification", "regression", "multiclass"]
+    if problem_type.lower() in standard_types:
+        return False
+
+    return False
 
 
 def _compute_selection_score(
@@ -58,6 +112,7 @@ def _compute_selection_score(
     success_rates: Dict[str, float],
     preferences: List[str],
     data_size: int,
+    requires_causal: bool = False,
 ) -> float:
     """Compute composite selection score for a candidate.
 
@@ -66,12 +121,14 @@ def _compute_selection_score(
         success_rates: Historical success rates by algorithm name
         preferences: User algorithm preferences
         data_size: Number of training samples
+        requires_causal: Whether the problem requires causal inference
 
     Returns:
         Float score in range [0, 1]
     """
     score = 0.0
     algo_name = candidate["name"]
+    algo_family = candidate.get("family", "")
 
     # Factor 1: Historical success rate (40%)
     historical_rate = success_rates.get(algo_name, 0.5)  # Default 50% for new algos
@@ -94,8 +151,13 @@ def _compute_selection_score(
     score += interpretability * 0.15
 
     # Factor 5: Causal ML preference for E2I (10%)
-    if candidate.get("family") == "causal_ml":
+    # ONLY apply bonus if problem actually requires causal inference
+    if requires_causal and algo_family == "causal_ml":
         score += 0.10
+    elif not requires_causal and algo_family == "causal_ml":
+        # PENALTY: Causal models are inappropriate for standard classification
+        # They use effect() not predict(), causing issues with standard eval
+        score -= 0.15
 
     # Bonus: User preference (adds up to 0.1)
     if preferences and algo_name in preferences:
