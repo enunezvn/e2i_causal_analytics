@@ -448,8 +448,12 @@ class MLflowConnector:
         if self._initialized:
             return
 
+        # Default to the MLflow server (http://localhost:5000) for the E2I project
+        # The singleton pattern means if this is initialized early (before env var is set),
+        # it locks in the tracking URI. Using the server as default ensures models are
+        # logged to the correct location for tier0 tests and production workflows.
         self.tracking_uri = tracking_uri or os.environ.get(
-            "MLFLOW_TRACKING_URI", "mlruns"
+            "MLFLOW_TRACKING_URI", "http://localhost:5000"
         )
         # When using a tracking server with --serve-artifacts, use the mlflow-artifacts scheme
         # This routes artifact uploads through the tracking server's proxy
