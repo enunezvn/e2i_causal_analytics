@@ -37,14 +37,15 @@ ALGORITHM_REGISTRY = {
         "memory_gb": 1.0,
         "interpretability_score": 0.9,
         "scalability_score": 0.9,
+        # EconML model types: linear, poly, forest, gbf, nnet, automl
         "hyperparameter_space": {
-            "model_y": {"type": "categorical", "choices": ["Ridge", "Lasso", "ElasticNet"]},
-            "model_t": {"type": "categorical", "choices": ["LogisticRegression", "RandomForest"]},
+            "model_y": {"type": "categorical", "choices": ["linear", "forest", "gbf"]},
+            "model_t": {"type": "categorical", "choices": ["linear", "forest"]},
             "cv": {"type": "int", "low": 3, "high": 5},
         },
         "default_hyperparameters": {
-            "model_y": "Ridge",
-            "model_t": "LogisticRegression",
+            "model_y": "linear",  # EconML model type string (not sklearn class)
+            "model_t": "linear",  # EconML model type string (not sklearn class)
             "cv": 5,
         },
     },
