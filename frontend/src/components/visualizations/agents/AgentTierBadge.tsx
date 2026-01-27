@@ -67,7 +67,7 @@ const TIER_CONFIG: Record<AgentTier, TierConfig> = {
     color: 'text-slate-600',
     bgColor: 'bg-slate-100 dark:bg-slate-800',
     borderColor: 'border-slate-300 dark:border-slate-600',
-    agents: ['Scope Definer', 'Data Preparer', 'Feature Analyzer', 'Model Selector', 'Model Trainer', 'Model Deployer', 'Observability Connector'],
+    agents: ['Scope Definer', 'Cohort Constructor', 'Data Preparer', 'Feature Analyzer', 'Model Selector', 'Model Trainer', 'Model Deployer', 'Observability Connector'],
   },
   1: {
     name: 'Orchestration',

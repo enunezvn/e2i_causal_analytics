@@ -72,9 +72,9 @@ interface AgentRegistryEntry {
   icon?: string;
 }
 
-/** Registry of available agents - all 19 agents in 6 tiers */
+/** Registry of available agents - all 21 agents in 6 tiers */
 const AGENT_REGISTRY: Record<string, AgentRegistryEntry> = {
-  // Tier 0: ML Foundation (7 agents)
+  // Tier 0: ML Foundation (8 agents)
   'scope-definer': {
     id: 'scope-definer',
     name: 'Scope Definer',
@@ -82,6 +82,14 @@ const AGENT_REGISTRY: Record<string, AgentRegistryEntry> = {
     type: 'foundation',
     actions: ['define_scope', 'validate_requirements'],
     icon: '📋',
+  },
+  'cohort-constructor': {
+    id: 'cohort-constructor',
+    name: 'Cohort Constructor',
+    tier: 0,
+    type: 'foundation',
+    actions: ['construct_cohort', 'filter_patients', 'audit_trail'],
+    icon: '👥',
   },
   'data-preparer': {
     id: 'data-preparer',

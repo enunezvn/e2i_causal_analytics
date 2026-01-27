@@ -248,7 +248,7 @@ export const AgenticMethodology: React.FC<AgenticMethodologyProps> = ({ classNam
           </span>
         </h2>
         <p className="text-sm text-gray-500 mt-2 max-w-2xl mx-auto">
-          Complete 18-agent, 6-tier architecture with ML Foundation, Tri-Memory system, causal validation workflow, and MLOps integration.
+          Complete 20-agent, 6-tier architecture with ML Foundation, Tri-Memory system, causal validation workflow, and MLOps integration.
         </p>
       </div>
 

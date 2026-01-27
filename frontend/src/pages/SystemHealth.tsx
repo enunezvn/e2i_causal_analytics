@@ -661,7 +661,7 @@ function SystemHealth() {
                 <Bot className="h-5 w-5" />
                 Agent Health by Tier
               </CardTitle>
-              <CardDescription>18-agent tiered orchestration system status</CardDescription>
+              <CardDescription>20-agent tiered orchestration system status</CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
               {Object.entries(agentsByTier).sort((a, b) => parseInt(a[0]) - parseInt(b[0])).map(([tier, tierAgents]) => (
