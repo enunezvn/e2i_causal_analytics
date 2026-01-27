@@ -238,6 +238,25 @@ def _get_model_class_dynamic(
             from sklearn.svm import SVC, SVR
             return SVC if is_classification else SVR
 
+        elif algorithm_name == "CausalForest":
+            from econml.dml import CausalForestDML
+            return CausalForestDML
+
+        elif algorithm_name == "LinearDML":
+            from econml.dml import LinearDML
+            return LinearDML
+
+        elif algorithm_name in ("DRLearner", "SLearner", "TLearner", "XLearner"):
+            # Meta-learners share similar interface
+            from econml import metalearners, dr
+            mapping = {
+                "DRLearner": dr.DRLearner,
+                "SLearner": metalearners.SLearner,
+                "TLearner": metalearners.TLearner,
+                "XLearner": metalearners.XLearner,
+            }
+            return mapping[algorithm_name]
+
         else:
             logger.warning(f"Unknown algorithm: {algorithm_name}")
             return None
@@ -312,6 +331,22 @@ def _filter_hyperparameters(
             "C", "kernel", "degree", "gamma", "coef0", "shrinking",
             "probability", "tol", "cache_size", "class_weight", "random_state",
         },
+        "CausalForest": {
+            "n_estimators", "max_depth", "min_samples_leaf", "min_samples_split",
+            "max_features", "inference", "n_jobs", "random_state",
+            "model_y", "model_t", "discrete_treatment", "cv",
+        },
+        "LinearDML": {
+            "model_y", "model_t", "discrete_treatment", "cv", "mc_iters",
+            "random_state", "linear_first_stages",
+        },
+        "DRLearner": {
+            "model_propensity", "model_regression", "model_final",
+            "cv", "mc_iters", "random_state", "n_jobs",
+        },
+        "SLearner": {"overall_model", "cv", "random_state"},
+        "TLearner": {"models", "cv", "random_state"},
+        "XLearner": {"models", "propensity_model", "cate_models", "cv", "random_state"},
     }
 
     # Get allowed params for this algorithm

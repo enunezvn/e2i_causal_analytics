@@ -929,13 +929,28 @@ def get_model_class(algorithm_name: str, problem_type: str) -> Optional[type]:
             return ExtraTreesClassifier if is_classification else ExtraTreesRegressor
 
         elif algorithm_name == "CausalForest":
-            # Causal ML models need special handling
-            logger.warning("CausalForest requires special HPO handling")
-            return None
+            from econml.dml import CausalForestDML
+            return CausalForestDML
 
         elif algorithm_name == "LinearDML":
-            logger.warning("LinearDML requires special HPO handling")
-            return None
+            from econml.dml import LinearDML
+            return LinearDML
+
+        elif algorithm_name == "DRLearner":
+            from econml.dr import DRLearner
+            return DRLearner
+
+        elif algorithm_name == "SLearner":
+            from econml.metalearners import SLearner
+            return SLearner
+
+        elif algorithm_name == "TLearner":
+            from econml.metalearners import TLearner
+            return TLearner
+
+        elif algorithm_name == "XLearner":
+            from econml.metalearners import XLearner
+            return XLearner
 
         else:
             logger.warning(f"Unknown algorithm: {algorithm_name}")
