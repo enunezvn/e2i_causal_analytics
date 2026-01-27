@@ -39,10 +39,15 @@ from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
+from dotenv import load_dotenv
 
 # Add project root to path
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
+
+# Load environment variables from .env file
+# This provides ANTHROPIC_API_KEY, SUPABASE_ANON_KEY, and other secrets
+load_dotenv(PROJECT_ROOT / ".env")
 
 # Configure MLflow tracking URI for model artifact storage
 # This ensures model_uri is properly generated during model training
