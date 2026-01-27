@@ -147,7 +147,7 @@ async def finalize_output(state: DataPreparerState) -> Dict[str, Any]:
         is_ready = qc_passed and len(missing_required_features) == 0
 
         # Blockers (same as blocking_issues)
-        blockers = blocking_issues.copy()
+        blockers = (blocking_issues or []).copy()
         if missing_required_features:
             blockers.append(f"Missing required features: {', '.join(missing_required_features)}")
 

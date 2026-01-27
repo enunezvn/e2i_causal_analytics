@@ -136,17 +136,23 @@ class CohortConfig:
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
+        # Handle None temporal_requirements gracefully
+        if self.temporal_requirements is not None:
+            temporal_dict = {
+                "lookback_days": self.temporal_requirements.lookback_days,
+                "followup_days": self.temporal_requirements.followup_days,
+                "index_date_field": self.temporal_requirements.index_date_field,
+            }
+        else:
+            temporal_dict = None
+
         return {
             "cohort_name": self.cohort_name,
             "brand": self.brand,
             "indication": self.indication,
             "inclusion_criteria": [c.to_dict() for c in self.inclusion_criteria],
             "exclusion_criteria": [c.to_dict() for c in self.exclusion_criteria],
-            "temporal_requirements": {
-                "lookback_days": self.temporal_requirements.lookback_days,
-                "followup_days": self.temporal_requirements.followup_days,
-                "index_date_field": self.temporal_requirements.index_date_field,
-            },
+            "temporal_requirements": temporal_dict,
             "required_fields": self.required_fields,
             "version": self.version,
             "status": self.status,
@@ -161,7 +167,17 @@ class CohortConfig:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "CohortConfig":
         """Create CohortConfig from dictionary."""
-        temporal = data.get("temporal_requirements", {})
+        temporal = data.get("temporal_requirements")
+        # Handle None temporal_requirements explicitly
+        if temporal is None:
+            temporal_req = None
+        else:
+            temporal_req = TemporalRequirements(
+                lookback_days=temporal.get("lookback_days", 180),
+                followup_days=temporal.get("followup_days", 90),
+                index_date_field=temporal.get("index_date_field", "diagnosis_date"),
+            )
+
         return cls(
             cohort_name=data["cohort_name"],
             brand=data["brand"],
@@ -172,11 +188,7 @@ class CohortConfig:
             exclusion_criteria=[
                 Criterion.from_dict(c) for c in data.get("exclusion_criteria", [])
             ],
-            temporal_requirements=TemporalRequirements(
-                lookback_days=temporal.get("lookback_days", 180),
-                followup_days=temporal.get("followup_days", 90),
-                index_date_field=temporal.get("index_date_field", "diagnosis_date"),
-            ),
+            temporal_requirements=temporal_req,
             required_fields=data.get("required_fields", []),
             version=data.get("version", "1.0.0"),
             status=data.get("status", "active"),

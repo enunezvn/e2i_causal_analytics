@@ -196,7 +196,8 @@ async def _load_sample_data(
     elif data_source == "triggers":
         df = generator.triggers(n_samples=n_samples)
     elif data_source == "patient_journeys":
-        df = generator.patient_journeys(n_patients=n_samples // 5)
+        # Use ml_patients() for ML-ready patient data with discontinuation_flag
+        df = generator.ml_patients(n_patients=n_samples)
     elif data_source == "agent_activities":
         df = generator.agent_activities(n_samples=n_samples)
     elif data_source == "causal_paths":

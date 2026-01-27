@@ -625,7 +625,7 @@ class DataQualityValidator:
             .build()
         )
 
-        # Patient journeys suite
+        # Patient journeys suite (event-level data)
         self.SUITES["patient_journeys"] = (
             ExpectationSuiteBuilder("patient_journeys")
             .expect_table_row_count_to_be_between(min_value=1)
@@ -634,6 +634,27 @@ class DataQualityValidator:
             .expect_column_to_exist("event_date")
             .expect_column_values_to_not_be_null("patient_id")
             .expect_column_values_to_not_be_null("event_type")
+            .build()
+        )
+
+        # ML patients suite (patient-level ML-ready data)
+        self.SUITES["ml_patients"] = (
+            ExpectationSuiteBuilder("ml_patients")
+            .expect_table_row_count_to_be_between(min_value=1)
+            .expect_column_to_exist("patient_journey_id")
+            .expect_column_to_exist("patient_id")
+            .expect_column_to_exist("brand")
+            .expect_column_to_exist("discontinuation_flag")
+            .expect_column_values_to_not_be_null("patient_journey_id")
+            .expect_column_values_to_not_be_null("patient_id")
+            .expect_column_values_to_not_be_null("brand")
+            .expect_column_values_to_not_be_null("discontinuation_flag")
+            .expect_column_values_to_be_in_set(
+                "brand", ["Remibrutinib", "Fabhalta", "Kisqali"], mostly=0.95
+            )
+            .expect_column_values_to_be_in_set(
+                "discontinuation_flag", [0, 1, True, False], mostly=1.0
+            )
             .build()
         )
 
