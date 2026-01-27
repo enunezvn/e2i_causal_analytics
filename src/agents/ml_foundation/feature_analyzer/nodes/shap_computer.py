@@ -4,6 +4,7 @@ Computes SHAP values for model interpretability using the SHAP library.
 This is a deterministic computation node with no LLM calls.
 """
 
+import logging
 import re
 import time
 import uuid
@@ -12,6 +13,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import mlflow
 import numpy as np
 import shap
+
+logger = logging.getLogger(__name__)
 
 
 def validate_model_uri(model_uri: str) -> Tuple[bool, Optional[str]]:
