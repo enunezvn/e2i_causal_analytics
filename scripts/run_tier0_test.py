@@ -819,9 +819,9 @@ def main():
         help="Run only a specific step (1-8)"
     )
     parser.add_argument(
-        "--enable-mlflow",
+        "--disable-mlflow",
         action="store_true",
-        help="Enable MLflow tracking"
+        help="Disable MLflow tracking (enabled by default for model_uri generation)"
     )
     parser.add_argument(
         "--enable-opik",
@@ -843,7 +843,8 @@ def main():
     args = parser.parse_args()
 
     # Update config
-    CONFIG.enable_mlflow = args.enable_mlflow
+    if args.disable_mlflow:
+        CONFIG.enable_mlflow = False
     CONFIG.enable_opik = args.enable_opik
     CONFIG.hpo_trials = args.hpo_trials
 
