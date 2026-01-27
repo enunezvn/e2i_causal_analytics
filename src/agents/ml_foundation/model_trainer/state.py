@@ -124,13 +124,20 @@ class ModelTrainerState(TypedDict, total=False):
     training_run_id: str  # Unique training run ID
     model_id: str  # Model identifier
 
-    # MLflow Integration
+    # MLflow Integration (populated by log_to_mlflow node)
     mlflow_run_id: Optional[str]  # MLflow run ID
     mlflow_experiment_id: Optional[str]  # MLflow experiment ID
-    model_artifact_uri: str  # MLflow model artifact URI
+    mlflow_status: str  # MLflow logging status: success, disabled, skipped, failed
+    mlflow_model_uri: Optional[str]  # MLflow model URI (runs:/<run_id>/model)
+    mlflow_registered: bool  # Whether model was registered in registry
+    mlflow_model_version: Optional[str]  # Registered model version
+    mlflow_model_name: Optional[str]  # Registered model name
+    db_training_run_id: Optional[str]  # Database training run ID (UUID)
+    # Legacy fields (kept for compatibility)
+    model_artifact_uri: str  # MLflow model artifact URI (deprecated, use mlflow_model_uri)
     preprocessing_artifact_uri: str  # Preprocessing artifact URI
-    registered_model_name: str  # MLflow registered model name
-    model_version: int  # MLflow model version
+    registered_model_name: str  # MLflow registered model name (deprecated)
+    model_version: int  # MLflow model version (deprecated)
     model_stage: str  # MLflow stage (Staging, Production)
 
     # Artifacts
