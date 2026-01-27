@@ -23,6 +23,7 @@ from typing import Any, Literal, Optional, TYPE_CHECKING
 
 from pydantic import BaseModel, Field, field_validator
 
+from src.agents.base import SkillsMixin
 from src.agents.experiment_designer.graph import (
     create_experiment_designer_graph,
 )
@@ -201,7 +202,7 @@ class ExperimentDesignerOutput(BaseModel):
 # ===== MAIN AGENT =====
 
 
-class ExperimentDesignerAgent:
+class ExperimentDesignerAgent(SkillsMixin):
     """Experiment Designer Agent - Designs rigorous experiments for causal inference.
 
     This agent designs experiments to answer business questions using:
@@ -234,6 +235,11 @@ class ExperimentDesignerAgent:
         - Power analysis: <100ms
         - Validity audit: <30s
         - Template generation: <500ms
+
+    Skills Integration:
+        - experiment-design/validity-threats.md: Validity threat assessment framework
+        - experiment-design/power-analysis.md: Sample size calculation guidance
+        - pharma-commercial/brand-analytics.md: Brand-specific experiment context
     """
 
     def __init__(self, max_redesign_iterations: int = 2, enable_mlflow: bool = True):
@@ -281,6 +287,12 @@ class ExperimentDesignerAgent:
             ValueError: If input validation fails
             RuntimeError: If experiment design fails
         """
+        # Clear loaded skills from previous invocation
+        self.clear_loaded_skills()
+
+        # Note: Skill loading is async, so for sync run() we skip it
+        # Use arun() for full skill integration
+
         # Create initial state from input
         initial_state = self._create_initial_state(input_data)
 
@@ -310,6 +322,12 @@ class ExperimentDesignerAgent:
             ValueError: If input validation fails
             RuntimeError: If experiment design fails
         """
+        # Clear loaded skills from previous invocation
+        self.clear_loaded_skills()
+
+        # Load relevant domain skills for experiment design
+        await self._load_design_skills(input_data)
+
         # Create initial state from input
         initial_state = self._create_initial_state(input_data)
 
@@ -360,6 +378,31 @@ class ExperimentDesignerAgent:
                 raise RuntimeError(f"Experiment design failed: {'; '.join(error_messages)}")
 
             return output
+
+    async def _load_design_skills(self, input_data: ExperimentDesignerInput) -> None:
+        """Load relevant skills for experiment design.
+
+        Loads domain-specific procedural knowledge based on the design task.
+        Skills are optional - design proceeds without them if unavailable.
+
+        Args:
+            input_data: The experiment design input parameters.
+        """
+        try:
+            # Load core experiment design skills
+            await self.load_skill("experiment-design/validity-threats.md")
+            await self.load_skill("experiment-design/power-analysis.md")
+
+            # Load brand-specific context if brand is specified
+            if input_data.brand:
+                await self.load_skill("pharma-commercial/brand-analytics.md")
+
+            loaded_names = self.get_loaded_skill_names()
+            if loaded_names:
+                logger.info(f"Loaded {len(loaded_names)} design skills: {loaded_names}")
+        except Exception as e:
+            # Skills are optional - log warning and proceed without
+            logger.warning(f"Failed to load design skills (proceeding without): {e}")
 
     def _create_initial_state(self, input_data: ExperimentDesignerInput) -> ExperimentDesignState:
         """Create initial state from input.

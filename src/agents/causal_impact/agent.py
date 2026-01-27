@@ -8,6 +8,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional, TYPE_CHECKING
 
+from src.agents.base import SkillsMixin
 from src.agents.causal_impact.graph import create_causal_impact_graph
 from src.agents.causal_impact.state import (
     CausalImpactOutput,
@@ -63,7 +64,7 @@ class FallbackChain:
         return self.current_index >= len(self.options)
 
 
-class CausalImpactAgent:
+class CausalImpactAgent(SkillsMixin):
     """Causal Impact Agent - Causal effect estimation and interpretation.
 
     Tier: 2 (Causal Analytics)
@@ -76,6 +77,11 @@ class CausalImpactAgent:
     3. refutation: Robustness tests (15s)
     4. sensitivity: E-value analysis (5s)
     5. interpretation: Natural language output (30s)
+
+    Skills Integration:
+    - causal-inference/confounder-identification.md: DAG construction guidance
+    - causal-inference/dowhy-workflow.md: Estimation procedures
+    - pharma-commercial/brand-analytics.md: Brand-specific confounders
     """
 
     tier = 2
@@ -150,6 +156,12 @@ class CausalImpactAgent:
             ValueError: If required input fields are missing
         """
         start_time = time.time()
+
+        # Clear loaded skills from previous invocation
+        self.clear_loaded_skills()
+
+        # Load relevant domain skills for this analysis
+        await self._load_analysis_skills(input_data)
 
         # Validate required input fields per contract
         required_fields = ["query", "treatment_var", "outcome_var", "confounders", "data_source"]
@@ -756,3 +768,54 @@ class CausalImpactAgent:
         Call this at the start of a new analysis if reusing agent instance.
         """
         self._fallback_chain.reset()
+
+    # ========================================================================
+    # SKILLS INTEGRATION (Contract: SkillsMixin)
+    # ========================================================================
+
+    async def _load_analysis_skills(self, input_data: Dict[str, Any]) -> None:
+        """Load relevant skills for the causal analysis.
+
+        Loads domain-specific procedural knowledge based on the analysis context.
+        Skills provide guidance on confounder identification, estimation methods,
+        and brand-specific considerations.
+
+        Args:
+            input_data: Input data containing analysis context
+        """
+        try:
+            # Always load core causal inference skills
+            await self.load_skill("causal-inference/confounder-identification.md")
+            await self.load_skill("causal-inference/dowhy-workflow.md")
+
+            # Load brand-specific skills if brand is specified
+            brand = input_data.get("brand")
+            if brand:
+                brand_skill = await self.load_skill("pharma-commercial/brand-analytics.md")
+                if brand_skill:
+                    logger.debug(f"Loaded brand analytics skill for brand: {brand}")
+
+            # Log loaded skills
+            skill_names = self.get_loaded_skill_names()
+            if skill_names:
+                logger.info(f"Loaded {len(skill_names)} skills for causal analysis: {skill_names}")
+
+        except Exception as e:
+            # Skills are optional - analysis should proceed without them
+            logger.warning(f"Failed to load analysis skills (proceeding without): {e}")
+
+    def get_skill_guidance(self, phase: str) -> str:
+        """Get skill-based guidance for a specific analysis phase.
+
+        Args:
+            phase: Analysis phase (e.g., "graph_building", "estimation", "refutation")
+
+        Returns:
+            Relevant skill content for the phase, or empty string if unavailable.
+        """
+        skill_context = self.get_skill_context()
+        if not skill_context:
+            return ""
+
+        # Return full context - nodes can extract relevant sections
+        return skill_context
