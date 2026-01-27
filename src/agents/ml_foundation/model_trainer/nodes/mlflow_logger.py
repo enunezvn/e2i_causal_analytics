@@ -181,9 +181,14 @@ async def log_to_mlflow(state: Dict[str, Any]) -> Dict[str, Any]:
                 await run.log_metrics({"primary_metric": primary_metric})
 
             # Log model artifact
+            logger.info(
+                f"Logging model artifact: algorithm={algorithm_name}, "
+                f"framework={framework}, model_type={type(trained_model).__name__}"
+            )
             model_uri = await _log_model_artifact(
                 run, trained_model, algorithm_name, framework
             )
+            logger.info(f"Model artifact logging result: model_uri={model_uri}")
 
             # Log additional artifacts
             await _log_additional_artifacts(run, state)
@@ -373,24 +378,28 @@ async def _log_model_artifact(
     flavor = _get_mlflow_flavor(algorithm_name, framework)
 
     try:
+        logger.info(f"Attempting to log model with flavor={flavor}")
         model_uri = await run.log_model(
             model=model,
             artifact_path="model",
             flavor=flavor,
         )
+        logger.info(f"Successfully logged model: {model_uri}")
         return model_uri
     except Exception as e:
-        logger.warning(f"Failed to log model with {flavor} flavor: {e}")
+        logger.warning(f"Failed to log model with {flavor} flavor: {e}", exc_info=True)
         # Fallback to sklearn flavor
         try:
+            logger.info("Attempting fallback to sklearn flavor")
             model_uri = await run.log_model(
                 model=model,
                 artifact_path="model",
                 flavor="sklearn",
             )
+            logger.info(f"Successfully logged model with sklearn fallback: {model_uri}")
             return model_uri
         except Exception as e2:
-            logger.error(f"Failed to log model: {e2}")
+            logger.error(f"Failed to log model with sklearn fallback: {e2}", exc_info=True)
             return None
 
 
