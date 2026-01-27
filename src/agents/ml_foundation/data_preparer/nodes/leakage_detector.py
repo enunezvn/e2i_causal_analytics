@@ -79,7 +79,7 @@ async def detect_leakage(state: DataPreparerState) -> Dict[str, Any]:
         # Add to blocking issues if leakage detected
         blocking_updates = {}
         if leakage_detected:
-            existing_blocking = state.get("blocking_issues", [])
+            existing_blocking = state.get("blocking_issues") or []
             blocking_updates["blocking_issues"] = existing_blocking + leakage_issues
 
         logger.info(
@@ -347,6 +347,9 @@ def check_train_test_contamination(
     """Check for train-test contamination.
 
     Contamination occurs when the same samples appear in multiple splits.
+    This function prefers using a unique identifier column (like patient_journey_id
+    or patient_id) over DataFrame index, since index-based checking gives false
+    positives when DataFrames have been reset with sequential indices.
 
     Args:
         train_df: Training DataFrame
@@ -360,8 +363,13 @@ def check_train_test_contamination(
     issues = []
 
     try:
-        # Check if DataFrames have an index we can compare
-        # If they have a unique identifier column, we should use that instead
+        # Identify unique identifier column for more accurate contamination checking
+        # Priority: patient_journey_id > patient_id > id > index
+        id_column = None
+        for candidate in ["patient_journey_id", "patient_id", "id"]:
+            if candidate in train_df.columns:
+                id_column = candidate
+                break
 
         splits = {
             "validation": validation_df,
@@ -373,10 +381,21 @@ def check_train_test_contamination(
             if split_df is None:
                 continue
 
-            # Check for index overlap
-            train_indices = set(train_df.index)
-            split_indices = set(split_df.index)
-            overlap = train_indices.intersection(split_indices)
+            if id_column and id_column in split_df.columns:
+                # Use unique identifier column for comparison
+                train_ids = set(train_df[id_column].astype(str))
+                split_ids = set(split_df[id_column].astype(str))
+                overlap = train_ids.intersection(split_ids)
+            else:
+                # Fallback to row hash comparison (more reliable than index)
+                # Create hash from all columns to identify unique rows
+                train_hashes = set(
+                    train_df.apply(lambda row: hash(tuple(row)), axis=1)
+                )
+                split_hashes = set(
+                    split_df.apply(lambda row: hash(tuple(row)), axis=1)
+                )
+                overlap = train_hashes.intersection(split_hashes)
 
             if len(overlap) > 0:
                 overlap_pct = len(overlap) / len(train_df) * 100

@@ -533,6 +533,105 @@ class SampleDataGenerator:
 
         return pd.DataFrame(data)
 
+    def ml_patients(
+        self,
+        n_patients: int = 200,
+        target_rate: float = 0.3,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> pd.DataFrame:
+        """
+        Generate ML-ready patient data with classification target.
+
+        This method produces patient-level features suitable for
+        binary classification (e.g., discontinuation prediction).
+        Output matches PatientJourneysSchema for Pandera validation.
+
+        Args:
+            n_patients: Number of patients
+            target_rate: Approximate rate of positive class (discontinuation)
+            start_date: Start date
+            end_date: End date
+
+        Returns:
+            DataFrame with patient-level features and discontinuation_flag
+        """
+        if start_date:
+            start = datetime.fromisoformat(start_date)
+        else:
+            start = datetime.now() - timedelta(days=365)
+
+        if end_date:
+            end = datetime.fromisoformat(end_date)
+        else:
+            end = datetime.now()
+
+        # Valid journey statuses per Pandera schema
+        # E2I_JOURNEY_STATUSES = ["active", "stable", "transitioning", "completed"]
+        valid_statuses = ["active", "stable", "transitioning", "completed"]
+
+        # Valid regions per Pandera schema (lowercase)
+        # E2I_REGIONS = ["northeast", "south", "midwest", "west"]
+        valid_regions = ["northeast", "south", "midwest", "west"]
+
+        data = []
+        for _ in range(n_patients):
+            patient_journey_id = self._random_uuid()
+            patient_id = self._random_uuid()  # Required by schema
+            brand = random.choice(BRANDS)
+            geographic_region = random.choice(valid_regions)  # Renamed per schema
+
+            # Generate patient features
+            days_on_therapy = np.random.randint(30, 365)
+            hcp_visits = np.random.randint(1, 20)
+            prior_treatments = np.random.randint(0, 5)
+            age_group = random.choice(["<50", "50-65", ">65"])
+            data_quality_score = np.random.uniform(0.5, 1.0)
+
+            # Generate discontinuation flag with correlation to features
+            # Higher risk with: fewer hcp_visits, more prior treatments, shorter therapy
+            risk_score = (
+                0.3  # Base rate
+                - 0.01 * hcp_visits  # More visits = lower risk
+                + 0.05 * prior_treatments  # More prior treatments = higher risk
+                - 0.001 * days_on_therapy  # Longer therapy = lower risk
+            )
+            risk_score = max(0.05, min(0.95, risk_score + np.random.normal(0, 0.1)))
+            discontinuation_flag = 1 if np.random.random() < risk_score else 0
+
+            # Map discontinuation to valid journey status
+            # completed = successfully finished, stable = ongoing well
+            if discontinuation_flag:
+                journey_status = "transitioning"  # About to discontinue
+            else:
+                journey_status = random.choice(["active", "stable", "completed"])
+
+            journey_start = self._random_date(start, end)
+            journey_end = (
+                journey_start + timedelta(days=days_on_therapy)
+                if journey_status == "completed"
+                else None
+            )
+
+            data.append({
+                "patient_journey_id": patient_journey_id,
+                "patient_id": patient_id,  # Required by schema
+                "brand": brand,
+                "geographic_region": geographic_region,  # Renamed per schema
+                "journey_status": journey_status,
+                "journey_start_date": journey_start.isoformat(),
+                "journey_end_date": journey_end.isoformat() if journey_end else None,
+                "data_quality_score": round(data_quality_score, 3),
+                "days_on_therapy": days_on_therapy,
+                "hcp_visits": hcp_visits,
+                "prior_treatments": prior_treatments,
+                "age_group": age_group,
+                "discontinuation_flag": discontinuation_flag,
+                "created_at": journey_start.isoformat(),
+            })
+
+        return pd.DataFrame(data)
+
     def generate_ml_dataset(
         self,
         table: str = "business_metrics",

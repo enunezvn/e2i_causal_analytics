@@ -55,6 +55,21 @@ async def run_ge_validation(state: DataPreparerState) -> Dict[str, Any]:
 
         # Check if suite exists for this data source
         available_suites = list(validator.SUITES.keys())
+
+        # Auto-detect ML patient data format vs event-level patient_journeys
+        # ML patient data has patient_journey_id and discontinuation_flag but no event_type
+        if data_source == "patient_journeys" and train_df is not None:
+            has_ml_patient_cols = (
+                "patient_journey_id" in train_df.columns
+                and "discontinuation_flag" in train_df.columns
+            )
+            has_event_cols = "event_type" in train_df.columns
+            if has_ml_patient_cols and not has_event_cols:
+                logger.info(
+                    "Detected ML patient data format, using 'ml_patients' suite"
+                )
+                data_source = "ml_patients"
+
         if data_source not in available_suites:
             logger.info(
                 f"No GE suite for '{data_source}', using generic validation. "

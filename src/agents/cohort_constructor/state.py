@@ -164,6 +164,9 @@ class CohortConstructorState(TypedDict, total=False):
     # Timing
     apply_criteria_ms: int
 
+    # Internal: eligible indices from criteria application (for next node)
+    _eligible_indices: List[Any]
+
     # ========================================================================
     # NODE 3 OUTPUT: Temporal Validation
     # ========================================================================
@@ -179,6 +182,9 @@ class CohortConstructorState(TypedDict, total=False):
 
     # Timing
     validate_temporal_ms: int
+
+    # Internal: eligible indices after temporal validation (for next node)
+    _temporal_eligible_indices: List[Any]
 
     # ========================================================================
     # NODE 4 OUTPUT: Metadata Generation
@@ -343,4 +349,7 @@ def create_initial_state(
         apply_criteria_ms=0,
         validate_temporal_ms=0,
         generate_metadata_ms=0,
+        # Internal indices (passed between nodes)
+        _eligible_indices=[],
+        _temporal_eligible_indices=[],
     )

@@ -413,6 +413,24 @@ async def validate_temporal(state: CohortConstructorState) -> Dict[str, Any]:
         config = CohortConfig.from_dict(config_dict)
         temporal_req = config.temporal_requirements
 
+        # If no temporal requirements, skip temporal validation entirely
+        if temporal_req is None:
+            logger.info("No temporal requirements configured, skipping temporal validation")
+            eligible_indices = state.get("_eligible_indices", [])
+            elapsed_ms = int((time.perf_counter() - start_time) * 1000)
+            return {
+                "post_temporal_count": len(eligible_indices),
+                "temporal_log": [],
+                "lookback_exclusions": 0,
+                "followup_exclusions": 0,
+                "total_temporal_exclusions": 0,
+                "validate_temporal_ms": elapsed_ms,
+                "current_phase": "generating_metadata",
+                "status": "processing",
+                "_temporal_eligible_indices": eligible_indices,
+                "warnings": ["Temporal validation skipped: no temporal requirements configured"],
+            }
+
         source_population = state.get("source_population")
         if not source_population:
             return {
