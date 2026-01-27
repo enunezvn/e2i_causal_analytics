@@ -180,6 +180,11 @@ class FeatureAnalyzerState(TypedDict, total=False):
     # Status
     status: str  # "completed" | "failed" | "in_progress"
 
+    # === SKIP HANDLING ===
+
+    shap_skipped: bool  # Whether SHAP computation was skipped (e.g., no model_uri)
+    skip_reason: Optional[str]  # Reason for skipping SHAP computation
+
     # === ERROR HANDLING ===
 
     error: Optional[str]  # Error message if failed
