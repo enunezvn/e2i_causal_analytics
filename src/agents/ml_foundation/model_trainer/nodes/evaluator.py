@@ -111,6 +111,9 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
             "error_type": "prediction_failed",
         }
 
+    # Get imbalance detection status
+    imbalance_detected = state.get("imbalance_detected", False)
+
     # Compute metrics based on problem type
     try:
         if problem_type in ["binary_classification"]:
@@ -124,6 +127,7 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
                 y_test=y_test_np,
                 y_test_pred=predictions["y_test_pred"],
                 y_test_proba=predictions["y_test_proba"],
+                imbalance_detected=imbalance_detected,
             )
         elif problem_type == "multiclass_classification":
             metrics_result = _compute_multiclass_metrics(
@@ -365,6 +369,7 @@ def _compute_classification_metrics(
     y_test: np.ndarray,
     y_test_pred: np.ndarray,
     y_test_proba: Optional[np.ndarray],
+    imbalance_detected: bool = False,
 ) -> Dict[str, Any]:
     """Compute binary classification metrics using sklearn.
 
@@ -378,6 +383,7 @@ def _compute_classification_metrics(
         y_test: Test labels
         y_test_pred: Test predictions
         y_test_proba: Test probabilities
+        imbalance_detected: Whether class imbalance was detected
 
     Returns:
         Dictionary of metrics
@@ -428,7 +434,8 @@ def _compute_classification_metrics(
         y_test, y_test_pred, y_test_proba, problem_type="binary_classification"
     )
 
-    return {
+    # Build result dictionary
+    result = {
         "train_metrics": train_metrics,
         "validation_metrics": validation_metrics,
         "test_metrics": test_metrics,
@@ -447,7 +454,22 @@ def _compute_classification_metrics(
         "rmse": None,
         "mae": None,
         "r2": None,
+        # Weighted metrics for imbalanced classification
+        "f1_macro": test_metrics.get("f1_macro"),
+        "f1_weighted": test_metrics.get("f1_weighted"),
     }
+
+    # Add minority class metrics when imbalance is detected
+    # These are the key metrics for evaluating imbalanced classification
+    if imbalance_detected:
+        result["minority_recall"] = test_metrics.get("recall_class_1", 0.0)
+        result["minority_precision"] = test_metrics.get("precision_class_1", 0.0)
+        logger.info(
+            f"Imbalance metrics: minority_recall={result['minority_recall']:.4f}, "
+            f"minority_precision={result['minority_precision']:.4f}"
+        )
+
+    return result
 
 
 def _compute_split_classification_metrics(
@@ -470,6 +492,14 @@ def _compute_split_classification_metrics(
         "precision": float(precision_score(y_true, y_pred, zero_division=0)),
         "recall": float(recall_score(y_true, y_pred, zero_division=0)),
         "f1_score": float(f1_score(y_true, y_pred, zero_division=0)),
+        # Weighted metrics (critical for imbalanced data)
+        "f1_macro": float(f1_score(y_true, y_pred, average="macro", zero_division=0)),
+        "f1_weighted": float(f1_score(y_true, y_pred, average="weighted", zero_division=0)),
+        # Per-class metrics (essential for understanding imbalanced performance)
+        "precision_class_0": float(precision_score(y_true, y_pred, pos_label=0, zero_division=0)),
+        "precision_class_1": float(precision_score(y_true, y_pred, pos_label=1, zero_division=0)),
+        "recall_class_0": float(recall_score(y_true, y_pred, pos_label=0, zero_division=0)),
+        "recall_class_1": float(recall_score(y_true, y_pred, pos_label=1, zero_division=0)),
     }
 
     # Probability-based metrics

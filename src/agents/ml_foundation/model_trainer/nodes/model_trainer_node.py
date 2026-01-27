@@ -44,13 +44,31 @@ async def train_model(state: Dict[str, Any]) -> Dict[str, Any]:
     early_stopping = state.get("early_stopping", False)
     early_stopping_patience = state.get("early_stopping_patience", 10)
 
-    # Extract preprocessed data
-    X_train_preprocessed = state.get("X_train_preprocessed")
+    # Check if resampling was applied - use resampled data if available
+    resampling_applied = state.get("resampling_applied", False)
+
+    if resampling_applied:
+        # Use resampled training data (already preprocessed)
+        X_train_preprocessed = state.get("X_train_resampled")
+        y_train = state.get("y_train_resampled")
+        logger.info(
+            f"Using resampled training data: strategy={state.get('resampling_strategy', 'unknown')}, "
+            f"original_shape={state.get('original_train_shape')}, "
+            f"resampled_shape={state.get('resampled_train_shape')}"
+        )
+    else:
+        # Use preprocessed training data (standard path)
+        X_train_preprocessed = state.get("X_train_preprocessed")
+        train_data = state.get("train_data", {})
+        y_train = train_data.get("y")
+
+    # Extract validation data (never resampled)
     X_validation_preprocessed = state.get("X_validation_preprocessed")
-    train_data = state.get("train_data", {})
     validation_data = state.get("validation_data", {})
-    y_train = train_data.get("y")
     y_validation = validation_data.get("y")
+
+    # Extract feature columns for setting on model
+    feature_columns = state.get("feature_columns")
 
     # Validate required data
     if X_train_preprocessed is None or y_train is None:
@@ -135,6 +153,15 @@ async def train_model(state: Dict[str, Any]) -> Dict[str, Any]:
             f"Model training completed: early_stopped={early_stopped}, "
             f"final_epoch={final_epoch}"
         )
+
+        # Set feature names on model for SHAP compatibility
+        if feature_columns is not None and len(feature_columns) > 0:
+            try:
+                model.feature_names_in_ = np.array(feature_columns)
+                logger.info(f"Set feature_names_in_ with {len(feature_columns)} features")
+            except (AttributeError, TypeError) as e:
+                # Model doesn't support this attribute - this is fine
+                logger.debug(f"Could not set feature_names_in_: {e}")
 
     except Exception as e:
         logger.error(f"Model training failed: {e}")

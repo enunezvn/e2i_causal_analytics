@@ -33,6 +33,7 @@ class FeatureAnalyzerState(TypedDict, total=False):
     y_val: Any  # Validation target (optional)
     y_test: Any  # Test target (optional)
     problem_type: str  # "classification" | "regression"
+    feature_columns: List[str]  # Feature names from data_preparer (for SHAP output)
 
     # === INPUT FIELDS (for SHAP - from model_trainer) ===
 

@@ -147,6 +147,8 @@ class FeatureAnalyzerAgent:
             "y_sample": input_data.get("y_sample"),
             "X_train": input_data.get("X_train"),
             "y_train": input_data.get("y_train"),
+            # Feature names from data_preparer (for SHAP output)
+            "feature_columns": input_data.get("feature_columns"),
             # Status
             "status": "in_progress",
         }

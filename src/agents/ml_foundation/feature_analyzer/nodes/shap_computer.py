@@ -220,17 +220,32 @@ async def compute_shap(state: Dict[str, Any]) -> Dict[str, Any]:
             training_run_id = state.get("training_run_id", "unknown")
             model_version = state.get("model_version", "unknown")
 
-        # Get feature names
-        if hasattr(loaded_model, "feature_names_in_"):
+        # Get feature names - prioritize state's feature_columns over model attributes
+        # This ensures feature names from data_preparer flow through to SHAP output
+        feature_columns = state.get("feature_columns")
+
+        if feature_columns and len(feature_columns) > 0:
+            # Use preserved feature names from data_preparer
+            feature_names = list(feature_columns)
+            logger.info(f"Using {len(feature_names)} feature names from state.feature_columns")
+        elif hasattr(loaded_model, "feature_names_in_"):
+            # Use feature names from model (set during training)
             feature_names = list(loaded_model.feature_names_in_)
+            logger.info(f"Using {len(feature_names)} feature names from model.feature_names_in_")
         elif hasattr(loaded_model, "feature_name_"):
+            # LightGBM stores feature names differently
             feature_names = list(loaded_model.feature_name_)
+            logger.info(f"Using {len(feature_names)} feature names from model.feature_name_")
         else:
-            # Fallback: use generic names
+            # Fallback: use generic names (last resort)
             n_features = (
                 loaded_model.n_features_in_ if hasattr(loaded_model, "n_features_in_") else 10
             )
             feature_names = [f"feature_{i}" for i in range(n_features)]
+            logger.warning(
+                f"Using generic feature names (feature_0, feature_1, ...) - "
+                f"feature_columns not preserved from data_preparer"
+            )
 
         # L5 Fix: Support feature name anonymization to prevent schema leakage
         anonymize_features = state.get("anonymize_features", False)
