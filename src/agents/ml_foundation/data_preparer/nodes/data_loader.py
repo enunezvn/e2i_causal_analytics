@@ -4,7 +4,7 @@ This node loads data from Supabase using MLDataLoader from Phase 1.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 
 # Use direct module imports to avoid circular import with src.repositories
@@ -197,7 +197,14 @@ async def _load_sample_data(
         df = generator.triggers(n_samples=n_samples)
     elif data_source == "patient_journeys":
         # Use ml_patients() for ML-ready patient data with discontinuation_flag
-        df = generator.ml_patients(n_patients=n_samples)
+        # Use fresh date range (last 30 days) to pass timeliness checks
+        end_date = datetime.now().isoformat()
+        start_date = (datetime.now() - timedelta(days=30)).isoformat()
+        df = generator.ml_patients(
+            n_patients=n_samples,
+            start_date=start_date,
+            end_date=end_date,
+        )
     elif data_source == "agent_activities":
         df = generator.agent_activities(n_samples=n_samples)
     elif data_source == "causal_paths":
