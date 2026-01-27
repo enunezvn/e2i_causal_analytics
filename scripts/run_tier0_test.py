@@ -34,7 +34,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
@@ -104,6 +104,11 @@ def print_warning(message: str) -> None:
     print(f"\n  ⚠️  {message}")
 
 
+def print_info(message: str) -> None:
+    """Print info message."""
+    print(f"\n  ℹ️  {message}")
+
+
 def generate_sample_data(n_samples: int = 100, seed: int = 42) -> pd.DataFrame:
     """Generate sample patient journey data using the ML-ready generator."""
     # Use the same generator as the data_preparer agent for consistency
@@ -132,7 +137,7 @@ async def step_1_scope_definer(experiment_id: str) -> dict[str, Any]:
     from src.agents.ml_foundation.scope_definer import ScopeDefinerAgent
 
     print("\n  Creating ScopeDefinerAgent...")
-    agent = ScopeDefinerAgent()
+    agent = ScopeDefinerAgent(enable_mlflow=True, enable_opik=True)
 
     input_data = {
         "problem_description": f"Predict patient discontinuation risk for {CONFIG.brand}",
@@ -172,7 +177,7 @@ async def step_2_data_preparer(
     from src.agents.ml_foundation.data_preparer import DataPreparerAgent
 
     print("\n  Creating DataPreparerAgent...")
-    agent = DataPreparerAgent()
+    agent = DataPreparerAgent(enable_mlflow=True, enable_opik=True)
 
     # Override required_features with actual columns from sample data
     # This ensures we don't fail QC for features that don't exist
@@ -307,7 +312,7 @@ async def step_4_model_selector(experiment_id: str, scope_spec: dict, qc_report:
     from src.agents.ml_foundation.model_selector import ModelSelectorAgent
 
     print("\n  Creating ModelSelectorAgent...")
-    agent = ModelSelectorAgent()
+    agent = ModelSelectorAgent(enable_mlflow=True, enable_opik=True)
 
     # Ensure qc_report has both gate_passed and qc_passed for compatibility
     # data_preparer uses gate_passed, model_selector expects qc_passed
@@ -367,7 +372,7 @@ async def step_5_model_trainer(
     from sklearn.linear_model import LogisticRegression
 
     print("\n  Creating ModelTrainerAgent...")
-    agent = ModelTrainerAgent()
+    agent = ModelTrainerAgent(enable_mlflow=True, enable_opik=True)
 
     # Ensure model_candidate has all required fields for model_trainer
     # Required: algorithm_name, algorithm_class, hyperparameter_search_space, default_hyperparameters
@@ -375,16 +380,14 @@ async def step_5_model_trainer(
         print_warning("No valid model_candidate from selector, using LogisticRegression fallback")
         model_candidate = {}
 
-    # Causal models (EconML/DoWhy) require special handling - fall back to LogisticRegression
-    # for standard classification tasks since model_trainer doesn't support them directly
-    causal_models = ["LinearDML", "CausalForest", "DoubleLasso", "SparseLinearDML", "DML"]
+    # Check if causal model - these are now supported in model_trainer
+    causal_models = ["LinearDML", "CausalForest", "DoubleLasso", "SparseLinearDML", "DML",
+                     "DRLearner", "SLearner", "TLearner", "XLearner"]
     algo_name = model_candidate.get("algorithm_name", "")
     if algo_name in causal_models:
-        print_warning(
-            f"Model selector chose causal model '{algo_name}' which requires special handling. "
-            f"Using LogisticRegression fallback for binary classification."
-        )
-        model_candidate = {}  # Reset to trigger fallback
+        print_info(f"Causal model '{algo_name}' selected - treatment indicator required for full causal inference")
+        # Note: For true causal inference, treatment must come from data
+        # Causal models can still train on classification tasks for demonstration
 
     # Ensure all required fields exist
     if "algorithm_name" not in model_candidate:
@@ -491,7 +494,8 @@ async def step_6_feature_analyzer(
     experiment_id: str,
     trained_model: Any,
     X_sample: pd.DataFrame,
-    y_sample: pd.Series
+    y_sample: pd.Series,
+    model_uri: Optional[str] = None
 ) -> dict[str, Any]:
     """Step 6: Analyze feature importance."""
     print_header(6, "FEATURE ANALYZER")
@@ -499,11 +503,12 @@ async def step_6_feature_analyzer(
     from src.agents.ml_foundation.feature_analyzer import FeatureAnalyzerAgent
 
     print("\n  Creating FeatureAnalyzerAgent...")
-    agent = FeatureAnalyzerAgent()
+    agent = FeatureAnalyzerAgent(enable_mlflow=True, enable_opik=True)
 
     input_data = {
         "experiment_id": experiment_id,
         "trained_model": trained_model,
+        "model_uri": model_uri,
         "X_sample": X_sample,
         "y_sample": y_sample,
         "max_samples": min(100, len(X_sample)),
@@ -549,7 +554,7 @@ async def step_7_model_deployer(
     from src.agents.ml_foundation.model_deployer import ModelDeployerAgent
 
     print("\n  Creating ModelDeployerAgent...")
-    agent = ModelDeployerAgent()
+    agent = ModelDeployerAgent(enable_mlflow=True, enable_opik=True)
 
     deployment_name = f"kisqali_discontinuation_{experiment_id[:8]}"
 
@@ -723,7 +728,12 @@ async def run_pipeline(step: int | None = None, dry_run: bool = False) -> None:
             )
             state["trained_model"] = result.get("trained_model")
             state["validation_metrics"] = result.get("validation_metrics", {})
-            state["model_uri"] = result.get("model_artifact_uri")
+            # Try multiple possible keys for model_uri
+            state["model_uri"] = (
+                result.get("model_uri")
+                or result.get("model_artifact_uri")
+                or result.get("mlflow_model_uri")
+            )
             state["success_criteria_met"] = result.get("success_criteria_met", True)
 
         # Step 6: Feature Analyzer
@@ -738,7 +748,8 @@ async def run_pipeline(step: int | None = None, dry_run: bool = False) -> None:
                 experiment_id,
                 state.get("trained_model"),
                 X.iloc[:50],
-                y.iloc[:50]
+                y.iloc[:50],
+                model_uri=state.get("model_uri")
             )
             state["feature_importance"] = result.get("feature_importance")
 

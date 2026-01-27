@@ -587,5 +587,27 @@ def _get_fixed_params(algorithm_name: str) -> Dict[str, Any]:
         fixed_params = {
             "random_state": 42,
         }
+    elif algorithm_name == "CausalForest":
+        fixed_params = {
+            "n_jobs": -1,
+            "inference": True,
+            "random_state": 42,
+        }
+    elif algorithm_name == "LinearDML":
+        fixed_params = {
+            "cv": 3,
+            "mc_iters": 3,
+            "random_state": 42,
+        }
+    elif algorithm_name == "DRLearner":
+        fixed_params = {
+            "cv": 3,
+            "random_state": 42,
+        }
+    elif algorithm_name in ["SLearner", "TLearner", "XLearner"]:
+        fixed_params = {
+            "cv": 3,
+            "random_state": 42,
+        }
 
     return fixed_params
