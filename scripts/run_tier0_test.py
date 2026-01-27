@@ -33,7 +33,7 @@ import os
 import sys
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
@@ -131,7 +131,17 @@ def generate_sample_data(n_samples: int = 100, seed: int = 42) -> pd.DataFrame:
     from src.repositories.sample_data import SampleDataGenerator
 
     generator = SampleDataGenerator(seed=seed)
-    df = generator.ml_patients(n_patients=n_samples)
+
+    # Use fresh date range (last 30 days) to pass timeliness checks
+    # Default range is 365 days which causes staleness warnings
+    end_date = datetime.now().isoformat()
+    start_date = (datetime.now() - timedelta(days=30)).isoformat()
+
+    df = generator.ml_patients(
+        n_patients=n_samples,
+        start_date=start_date,
+        end_date=end_date,
+    )
 
     # Filter to only the configured brand
     # (or keep all if testing multi-brand)
