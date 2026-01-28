@@ -449,44 +449,51 @@ class ModelTrainerAgent:
         Returns:
             True if persisted successfully, False otherwise
         """
+        from uuid import UUID, uuid4
+
         try:
             repo = _get_training_run_repository()
             if repo is None:
                 logger.debug("Skipping training run persistence (no repository)")
                 return False
 
-            # Create training run record
-            result = await repo.create_run(
-                experiment_id=output.get("experiment_id", ""),
-                training_run_id=output.get("training_run_id", ""),
-                model_id=output.get("model_id", ""),
-                algorithm_name=output.get("algorithm_name", "unknown"),
-                algorithm_class=output.get("algorithm_class", ""),
+            # Convert experiment_id to UUID if it's a string
+            experiment_id_str = output.get("experiment_id", "")
+            try:
+                experiment_id = UUID(experiment_id_str) if experiment_id_str else uuid4()
+            except (ValueError, TypeError):
+                # If not a valid UUID string, generate a new one
+                experiment_id = uuid4()
+
+            # Create training run record using create_run_with_hpo
+            # which accepts HPO-related parameters
+            result = await repo.create_run_with_hpo(
+                experiment_id=experiment_id,
+                run_name=output.get("training_run_id", f"run_{uuid4().hex[:8]}"),
+                mlflow_run_id=output.get("mlflow_run_id", ""),
+                algorithm=output.get("algorithm_name", "unknown"),
                 hyperparameters=output.get("best_hyperparameters", {}),
-                problem_type=output.get("problem_type", "binary_classification"),
-                train_samples=output.get("train_samples", 0),
+                training_samples=output.get("train_samples", 0),
+                feature_names=output.get("feature_names", []),
+                optuna_study_name=output.get("hpo_study_name"),
+                optuna_trial_number=output.get("hpo_best_trial"),
+                is_best_trial=output.get("hpo_completed", False),
                 validation_samples=output.get("validation_samples", 0),
                 test_samples=output.get("test_samples", 0),
-                hpo_enabled=output.get("hpo_completed", False),
-                hpo_trials_run=output.get("hpo_trials_run", 0),
-                early_stopped=output.get("early_stopped", False),
-                training_duration_seconds=output.get("training_duration_seconds", 0.0),
-                created_by="model_trainer",
             )
 
-            if result:
-                # Update with metrics
+            if result and result.id:
+                # Update with metrics using the returned run's UUID
                 await repo.update_run_metrics(
-                    training_run_id=output.get("training_run_id", ""),
+                    run_id=result.id,
                     train_metrics=output.get("train_metrics", {}),
                     validation_metrics=output.get("validation_metrics", {}),
                     test_metrics=output.get("test_metrics", {}),
-                    success_criteria_met=output.get("success_criteria_met", False),
                 )
 
                 logger.info(
-                    f"Persisted training run: {output.get('training_run_id')} "
-                    f"for experiment {output.get('experiment_id')}"
+                    f"Persisted training run: {result.run_name} "
+                    f"for experiment {experiment_id}"
                 )
                 return True
 
