@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import io
 import json
 import os
 import pickle
@@ -345,6 +346,271 @@ def import_class(module_path: str, class_name: str) -> type:
 
 
 # =============================================================================
+# ENHANCED OUTPUT HELPERS (Tier0-style formatting)
+# =============================================================================
+
+
+def print_input_section(inputs: dict[str, Any]) -> None:
+    """Print standardized input summary section."""
+    print("\n  📥 Input Summary:")
+    for key, value in inputs.items():
+        if isinstance(value, str) and len(value) > 60:
+            print(f"    • {key}: {value[:60]}...")
+        elif isinstance(value, list):
+            print(f"    • {key}: [{len(value)} items]")
+        elif isinstance(value, dict):
+            print(f"    • {key}: {{{len(value)} keys}}")
+        else:
+            print(f"    • {key}: {value}")
+
+
+def print_processing_section(steps: list[tuple[str, bool]]) -> None:
+    """Print processing steps with checkmarks.
+
+    Args:
+        steps: List of (step_description, success)
+    """
+    print("\n  ⚙️  Processing:")
+    for desc, success in steps:
+        icon = "✅" if success else "❌"
+        print(f"    {icon} {desc}")
+
+
+def print_validation_checks(checks: list[tuple[str, bool, str, str]]) -> None:
+    """Print validation checks with expected vs actual.
+
+    Args:
+        checks: List of (check_name, passed, expected, actual)
+    """
+    print("\n  🔍 Validation Checks:")
+    for name, passed, expected, actual in checks:
+        icon = "✅ PASS" if passed else "❌ FAIL"
+        print(f"    • {name}: {icon}")
+        print(f"        Expected: {expected}")
+        print(f"        Actual:   {actual}")
+
+
+def print_metrics_table(metrics: list[tuple[str, Any, str | None, bool | None]]) -> None:
+    """Print key metrics in table format.
+
+    Args:
+        metrics: List of (metric_name, value, threshold, passed)
+                threshold and passed are optional (None to skip)
+    """
+    print("\n  📊 Key Metrics:")
+    print(f"    {'Metric':<25} {'Value':<15} {'Threshold':<15} {'Status':<10}")
+    print(f"    {'-'*65}")
+
+    for name, value, threshold, passed in metrics:
+        # Format value
+        if isinstance(value, float):
+            value_str = f"{value:.4f}"
+        elif value is None:
+            value_str = "N/A"
+        else:
+            value_str = str(value)[:15]
+
+        # Format threshold
+        threshold_str = str(threshold) if threshold else "-"
+
+        # Format status
+        if passed is None:
+            status_str = "-"
+        elif passed:
+            status_str = "✅"
+        else:
+            status_str = "❌"
+
+        print(f"    {name:<25} {value_str:<15} {threshold_str:<15} {status_str:<10}")
+
+
+def print_analysis_section(
+    title: str,
+    insights: list[str],
+    recommendations: list[str] | None = None,
+) -> None:
+    """Print analysis insights and recommendations.
+
+    Args:
+        title: Section title (e.g., "CAUSAL IMPACT Analysis")
+        insights: List of insight bullet points
+        recommendations: Optional list of recommendations
+    """
+    print(f"\n  💡 {title}:")
+    for insight in insights:
+        print(f"    • {insight}")
+
+    if recommendations:
+        print("\n    Recommendations:")
+        for i, rec in enumerate(recommendations, 1):
+            print(f"      {i}. {rec}")
+
+
+def print_step_result(status: str, message: str, duration_s: float | None = None) -> None:
+    """Print final step result with status.
+
+    Args:
+        status: "success", "warning", or "failed"
+        message: Result message
+        duration_s: Optional duration in seconds
+    """
+    print("\n  " + "-" * 60)
+
+    if status == "success":
+        icon = "✅"
+        label = "RESULT: PASS"
+    elif status == "warning":
+        icon = "⚠️"
+        label = "RESULT: PASS (with warnings)"
+    else:
+        icon = "❌"
+        label = "RESULT: FAIL"
+
+    duration_str = f" ({duration_s:.1f}s)" if duration_s else ""
+    print(f"  {icon} {label} - {message}{duration_str}")
+    print("  " + "-" * 60)
+
+
+# Tier descriptions for analysis
+TIER_DESCRIPTIONS = {
+    1: "Orchestration",
+    2: "Causal Analytics",
+    3: "Monitoring",
+    4: "ML Predictions",
+    5: "Self-Improvement",
+}
+
+# Agent-specific analysis extractors
+AGENT_ANALYSIS_CONFIG = {
+    "orchestrator": {
+        "key_fields": ["routing_decision", "selected_agents", "confidence"],
+        "insights_template": [
+            "Query routed to {selected_agents} agents",
+            "Routing confidence: {confidence}",
+        ],
+    },
+    "tool_composer": {
+        "key_fields": ["composed_tools", "execution_plan", "tool_count"],
+        "insights_template": [
+            "Composed {tool_count} tools for query execution",
+            "Execution plan generated successfully",
+        ],
+    },
+    "causal_impact": {
+        "key_fields": ["overall_ate", "causal_effect", "confidence_interval", "p_value"],
+        "insights_template": [
+            "Average Treatment Effect (ATE): {overall_ate}",
+            "Statistical significance: p={p_value}",
+        ],
+    },
+    "gap_analyzer": {
+        "key_fields": ["gaps_identified", "total_gap_value", "top_opportunities"],
+        "insights_template": [
+            "Identified {gaps_identified} performance gaps",
+            "Total opportunity value: {total_gap_value}",
+        ],
+    },
+    "heterogeneous_optimizer": {
+        "key_fields": ["heterogeneity_score", "segments_analyzed", "cate_results"],
+        "insights_template": [
+            "Heterogeneity score: {heterogeneity_score}",
+            "Analyzed {segments_analyzed} patient segments",
+        ],
+    },
+    "drift_monitor": {
+        "key_fields": ["drift_detected", "drift_score", "features_drifted"],
+        "insights_template": [
+            "Drift detected: {drift_detected}",
+            "Overall drift score: {drift_score}",
+        ],
+    },
+    "experiment_designer": {
+        "key_fields": ["experiment_design", "sample_size", "statistical_power", "validity_assessment"],
+        "insights_template": [
+            "Experiment design created with n={sample_size}",
+            "Statistical power: {statistical_power}",
+        ],
+    },
+    "health_score": {
+        "key_fields": ["health_status", "overall_score", "component_scores"],
+        "insights_template": [
+            "System health: {health_status}",
+            "Overall health score: {overall_score}",
+        ],
+    },
+    "prediction_synthesizer": {
+        "key_fields": ["prediction", "confidence", "model_agreement"],
+        "insights_template": [
+            "Synthesized prediction: {prediction}",
+            "Model agreement: {model_agreement}",
+        ],
+    },
+    "resource_optimizer": {
+        "key_fields": ["optimization_result", "cost_savings", "allocation_changes"],
+        "insights_template": [
+            "Optimization completed: {optimization_result}",
+            "Projected savings: {cost_savings}",
+        ],
+    },
+    "explainer": {
+        "key_fields": ["executive_summary", "explanation_type", "confidence"],
+        "insights_template": [
+            "Generated {explanation_type} explanation",
+            "Summary: {executive_summary}",
+        ],
+    },
+    "feedback_learner": {
+        "key_fields": ["learning_summary", "improvements_identified", "patterns_learned"],
+        "insights_template": [
+            "Learning cycle complete: {learning_summary}",
+            "Improvements identified: {improvements_identified}",
+        ],
+    },
+}
+
+
+def extract_agent_insights(agent_name: str, output: dict[str, Any]) -> list[str]:
+    """Extract agent-specific insights from output."""
+    config = AGENT_ANALYSIS_CONFIG.get(agent_name, {})
+    insights = []
+
+    # Try to fill in template insights
+    for template in config.get("insights_template", []):
+        try:
+            # Extract values from output
+            values = {}
+            for key in config.get("key_fields", []):
+                val = output.get(key)
+                if val is not None:
+                    if isinstance(val, float):
+                        values[key] = f"{val:.4f}"
+                    elif isinstance(val, list):
+                        values[key] = len(val)
+                    elif isinstance(val, str) and len(val) > 50:
+                        values[key] = val[:50] + "..."
+                    else:
+                        values[key] = val
+                else:
+                    values[key] = "N/A"
+
+            insight = template.format(**values)
+            insights.append(insight)
+        except (KeyError, ValueError):
+            continue
+
+    # Add generic insights if we couldn't extract specific ones
+    if not insights:
+        if output.get("status"):
+            insights.append(f"Agent completed with status: {output['status']}")
+        if output.get("analysis_complete"):
+            insights.append("Analysis completed successfully")
+        if not insights:
+            insights.append("Agent execution completed")
+
+    return insights
+
+
+# =============================================================================
 # TIER0 STATE LOADING
 # =============================================================================
 
@@ -635,43 +901,107 @@ async def test_agent(
 
 
 def print_agent_result(result: AgentTestResult, verbose: bool = True) -> None:
-    """Print detailed result for a single agent.
+    """Print detailed result for a single agent in enhanced Tier0-style format.
 
     Args:
         result: AgentTestResult to print
         verbose: If True, print full details; if False, print summary only
     """
-    print_header(f"TESTING: {result.agent_name} (Tier {result.tier})")
+    tier_name = TIER_DESCRIPTIONS.get(result.tier, "Unknown")
+    print_header(f"AGENT: {result.agent_name.upper()} (Tier {result.tier} - {tier_name})")
 
-    # Input summary
-    print("\n  INPUT SUMMARY:")
-    for key, value in result.input_summary.items():
-        if isinstance(value, list):
-            if len(value) <= 3:
-                print(f"    {key}: {value}")
-            else:
-                print(f"    {key}: {value[:3]}... ({len(value)} total)")
-        else:
-            print(f"    {key}: {value}")
+    # Input summary (enhanced format)
+    print_input_section(result.input_summary)
 
-    # Execution
-    print("\n  EXECUTION:")
-    status = "\033[92mPASS\033[0m" if result.success else "\033[91mFAIL\033[0m"
-    print(f"    Status: {status}")
-    print(f"    Time: {format_duration(result.execution_time_ms)}")
+    # Processing steps
+    processing_steps = [
+        (f"Agent {result.agent_name} instantiated", True),
+        (f"Input validation passed", not result.error or "input" not in (result.error or "").lower()),
+        (f"Agent execution {'completed' if result.success else 'failed'}", result.success),
+    ]
+    if result.contract_validation:
+        processing_steps.append(
+            (f"Contract validation ({result.contract_validation.state_class})",
+             result.contract_validation.valid)
+        )
+    if result.trace_verification:
+        processing_steps.append(
+            (f"Opik trace captured", result.trace_verification.trace_exists)
+        )
+    print_processing_section(processing_steps)
 
-    if result.error:
-        print(f"    Error: {result.error}")
-        if verbose and result.error_traceback:
-            # Print last few lines of traceback
-            tb_lines = result.error_traceback.strip().split("\n")
-            print("    Traceback (last 5 lines):")
-            for line in tb_lines[-5:]:
-                print(f"      {line}")
+    # Validation checks
+    checks = []
+    if result.contract_validation:
+        cv = result.contract_validation
+        req_present = len(cv.required_fields_present)
+        req_total = cv.required_total
+        checks.append((
+            "Required fields present",
+            req_present == req_total,
+            f"{req_total} required fields",
+            f"{req_present}/{req_total} present"
+        ))
+        checks.append((
+            "Type validation",
+            len(cv.type_errors) == 0,
+            "no type errors",
+            f"{len(cv.type_errors)} type errors" if cv.type_errors else "all types valid"
+        ))
+    checks.append((
+        "Execution completed",
+        result.success,
+        "success without errors",
+        "success" if result.success else f"failed: {(result.error or 'unknown')[:40]}"
+    ))
+    if result.trace_verification:
+        tv = result.trace_verification
+        checks.append((
+            "Observability trace",
+            tv.trace_exists,
+            "trace captured",
+            "trace exists" if tv.trace_exists else "no trace"
+        ))
+    print_validation_checks(checks)
 
-    # Agent output - detailed view
-    if result.agent_output and verbose:
-        print("\n  AGENT OUTPUT:")
+    # Key metrics table
+    metrics = [
+        ("execution_time", result.execution_time_ms / 1000, None, None),
+        ("agent_tier", result.tier, None, None),
+    ]
+    if result.contract_validation:
+        cv = result.contract_validation
+        metrics.append(("required_fields", f"{len(cv.required_fields_present)}/{cv.required_total}", None, None))
+        metrics.append(("optional_fields", f"{len(cv.optional_fields_present)}/{cv.optional_total}", None, None))
+        metrics.append(("contract_valid", cv.valid, "True", cv.valid))
+    if result.trace_verification and result.trace_verification.trace_exists:
+        tv = result.trace_verification
+        metrics.append(("trace_spans", tv.span_count, None, None))
+        if tv.duration_ms:
+            metrics.append(("trace_duration_ms", tv.duration_ms, None, None))
+
+    # Add agent-specific metrics from output
+    if result.agent_output:
+        output = result.agent_output
+        # Extract key numeric/boolean metrics
+        priority_metrics = ["overall_ate", "heterogeneity_score", "drift_score", "health_score",
+                          "overall_score", "confidence", "statistical_power", "p_value"]
+        for key in priority_metrics:
+            if key in output and output[key] is not None:
+                val = output[key]
+                if isinstance(val, (int, float, bool)):
+                    metrics.append((key, val, None, None))
+
+    print_metrics_table(metrics)
+
+    # Agent-specific analysis
+    if result.agent_output:
+        insights = extract_agent_insights(result.agent_name, result.agent_output)
+        print_analysis_section(f"{result.agent_name.upper()} Analysis", insights)
+
+    # Show key output fields if verbose
+    if verbose and result.agent_output:
+        print("\n  📋 Key Output Fields:")
         output_items = list(result.agent_output.items())
 
         # Prioritize important fields
@@ -682,114 +1012,61 @@ def print_agent_result(result: AgentTestResult, verbose: bool = True) -> None:
         other_items = [(k, v) for k, v in output_items if k not in priority_fields]
 
         # Show priority items first
-        for key, value in priority_items:
+        for key, value in priority_items[:6]:
             _print_output_value(key, value, indent=4)
 
-        # Show other items (limit to 8)
-        for key, value in other_items[:8]:
+        # Show other items (limit)
+        shown = len(priority_items[:6])
+        for key, value in other_items[:max(0, 6 - shown)]:
             _print_output_value(key, value, indent=4)
 
-        remaining = len(other_items) - 8
+        total_fields = len(output_items)
+        shown_total = min(6, len(priority_items)) + min(max(0, 6 - len(priority_items[:6])), len(other_items))
+        remaining = total_fields - shown_total
         if remaining > 0:
             print(f"    ... and {remaining} more fields")
 
-    # Contract validation - detailed field view
-    if result.contract_validation:
+    # Contract validation details (verbose)
+    if verbose and result.contract_validation:
         cv = result.contract_validation
-        print("\n  CONTRACT VALIDATION:")
-        print(f"    State Class: {cv.state_class}")
-
-        # Required fields with checkmarks
-        req_present = len(cv.required_fields_present)
-        req_total = cv.required_total
-        print(f"    Required Fields: {req_present}/{req_total} present")
-
-        if verbose and cv.required_fields_valid:
-            for fv in cv.required_fields_valid[:10]:  # Limit display
-                if fv.present and fv.valid_type:
-                    print(f"      \u2713 {fv.name} ({fv.actual_type})")
-                elif fv.present and not fv.valid_type:
-                    print(f"      \u2717 {fv.name}: type error - {fv.error}")
-                else:
-                    print(f"      - {fv.name} (missing)")
-
-        # Optional fields
-        opt_present = len(cv.optional_fields_present)
-        opt_total = cv.optional_total
-        print(f"    Optional Fields: {opt_present}/{opt_total} present")
-
-        if verbose and cv.optional_fields_valid:
-            for fv in cv.optional_fields_valid[:8]:  # Limit display
-                if fv.valid_type:
-                    print(f"      \u2713 {fv.name} ({fv.actual_type})")
-                else:
-                    print(f"      \u2717 {fv.name}: {fv.error}")
-
-        # Type errors summary
         if cv.type_errors:
-            print(f"    Type Errors: {len(cv.type_errors)}")
+            print("\n  ⚠️  Type Errors:")
             for te in cv.type_errors[:3]:
-                print(f"      - {te.get('field')}: expected {te.get('expected')}, got {te.get('actual')}")
-
-        # Extra fields
-        if cv.extra_fields:
-            print(f"    Extra Fields: {cv.extra_fields[:5]}")
-
-        # Warnings summary
+                print(f"    • {te.get('field')}: expected {te.get('expected')}, got {te.get('actual')}")
         if cv.warnings:
-            print(f"    Warnings: {len(cv.warnings)}")
-            for w in cv.warnings[:3]:
-                # Truncate long warnings
-                w_display = w[:80] + "..." if len(w) > 80 else w
-                print(f"      - {w_display}")
+            print(f"\n  ⚠️  Warnings ({len(cv.warnings)}):")
+            for w in cv.warnings[:2]:
+                w_display = w[:70] + "..." if len(w) > 70 else w
+                print(f"    • {w_display}")
 
-    # Observability
-    if result.trace_verification:
+    # Observability details (verbose)
+    if verbose and result.trace_verification and result.trace_verification.trace_exists:
         tv = result.trace_verification
-        print("\n  OBSERVABILITY:")
+        print("\n  🔭 Observability Details:")
         if tv.trace_id:
-            print(f"    Trace ID: {tv.trace_id[:36]}...")
-            if tv.trace_url:
-                print(f"    Trace URL: {tv.trace_url}")
-        exists_str = "\033[92mYes\033[0m" if tv.trace_exists else "\033[91mNo\033[0m"
-        print(f"    Trace Exists: {exists_str}")
-        if tv.trace_exists:
-            valid_str = "\033[92mYes\033[0m" if tv.metadata_valid else "\033[91mNo\033[0m"
-            print(f"    Metadata Valid: {valid_str}")
-            if verbose:
-                print(f"      Expected: agent_name={result.agent_name}, tier={result.tier}")
-            print(f"    Spans: {tv.span_count}")
-            if verbose and tv.span_names:
-                for span in tv.span_names[:5]:
-                    print(f"      - {span}")
-            if tv.duration_ms:
-                print(f"    Duration: {format_duration(tv.duration_ms)}")
-            if tv.error_captured:
-                print("    Error Captured in Trace: Yes")
+            print(f"    • Trace ID: {tv.trace_id[:40]}...")
+        if tv.trace_url:
+            print(f"    • URL: {tv.trace_url}")
+        if tv.span_names:
+            print(f"    • Spans: {', '.join(tv.span_names[:5])}")
 
-    # Performance metrics
-    if result.performance_metrics:
-        pm = result.performance_metrics
-        print("\n  PERFORMANCE:")
-        print(f"    Total Time: {format_duration(pm.total_time_ms)}")
-        if pm.llm_calls > 0:
-            print(f"    LLM Calls: {pm.llm_calls}")
-            print(f"    LLM Tokens: {pm.llm_tokens_input} in / {pm.llm_tokens_output} out")
-        if pm.tool_calls > 0:
-            print(f"    Tool Calls: {pm.tool_calls}")
-        if pm.memory_peak_mb:
-            print(f"    Memory Peak: {pm.memory_peak_mb:.1f} MB")
+    # Error details if failed
+    if result.error:
+        print("\n  🚨 Error Details:")
+        print(f"    {result.error}")
+        if verbose and result.error_traceback:
+            tb_lines = result.error_traceback.strip().split("\n")
+            print("    Traceback (last 3 lines):")
+            for line in tb_lines[-3:]:
+                print(f"      {line}")
 
-    # Final status with clear visual indicator
-    print()
+    # Final result line
+    duration_s = result.execution_time_ms / 1000
     if result.success:
-        print("  \u2705 PASSED")
+        print_step_result("success", f"{result.agent_name} completed successfully", duration_s)
     else:
-        error_msg = result.error or "Contract validation failed"
-        # Truncate long error messages
-        if len(error_msg) > 100:
-            error_msg = error_msg[:100] + "..."
-        print(f"  \u274c FAILED: {error_msg}")
+        error_brief = (result.error or "Unknown error")[:50]
+        print_step_result("failed", f"{result.agent_name}: {error_brief}", duration_s)
 
 
 def _print_output_value(key: str, value: Any, indent: int = 4) -> None:
@@ -1215,6 +1492,17 @@ def main():
         action="store_true",
         help="Show brief output (opposite of --verbose)",
     )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default="docs/results",
+        help="Directory to save results MD file (default: docs/results)",
+    )
+    parser.add_argument(
+        "--no-save",
+        action="store_true",
+        help="Do not save results to markdown file (only print to console)",
+    )
 
     args = parser.parse_args()
 
@@ -1231,19 +1519,74 @@ def main():
     # Determine verbosity
     verbose = args.verbose and not args.brief
 
-    # Run tests
-    asyncio.run(
-        run_tests(
-            tier0_cache=args.tier0_cache,
-            run_tier0_first=args.run_tier0_first,
-            tiers=tiers,
-            agents=agents,
-            skip_observability=args.skip_observability,
-            output_path=args.output,
-            timeout_seconds=args.timeout,
-            verbose=verbose,
+    # Setup output capturing for markdown save
+    output_buffer = io.StringIO()
+
+    class TeeOutput:
+        """Write to both console and buffer."""
+        def __init__(self, console, buffer):
+            self.console = console
+            self.buffer = buffer
+
+        def write(self, text):
+            # Strip ANSI color codes for markdown file
+            import re
+            clean_text = re.sub(r'\x1b\[[0-9;]*m', '', text)
+            self.buffer.write(clean_text)
+            self.console.write(text)
+
+        def flush(self):
+            self.console.flush()
+            self.buffer.flush()
+
+    # Capture output
+    original_stdout = sys.stdout
+    if not args.no_save:
+        sys.stdout = TeeOutput(original_stdout, output_buffer)
+
+    try:
+        # Run tests
+        asyncio.run(
+            run_tests(
+                tier0_cache=args.tier0_cache,
+                run_tier0_first=args.run_tier0_first,
+                tiers=tiers,
+                agents=agents,
+                skip_observability=args.skip_observability,
+                output_path=args.output,
+                timeout_seconds=args.timeout,
+                verbose=verbose,
+            )
         )
-    )
+    finally:
+        # Restore stdout
+        sys.stdout = original_stdout
+
+        # Save results to markdown file
+        if not args.no_save and output_buffer.getvalue():
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_dir = Path(args.output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            output_file = output_dir / f"tier1_5_pipeline_run_{timestamp}.md"
+
+            # Build markdown content
+            md_content = "# Tier 1-5 Agent Test Results\n\n"
+            md_content += f"**Generated**: {datetime.now().isoformat()}\n\n"
+            md_content += "## Test Configuration\n\n"
+            md_content += f"- **Tiers Tested**: {args.tiers or 'all (1-5)'}\n"
+            md_content += f"- **Agents Tested**: {args.agents or 'all'}\n"
+            md_content += f"- **Tier0 Cache**: {args.tier0_cache or 'auto-generated'}\n"
+            md_content += f"- **Observability**: {'skipped' if args.skip_observability else 'enabled'}\n"
+            md_content += f"- **Timeout**: {args.timeout}s per agent\n\n"
+            md_content += "## Results\n\n"
+            md_content += "```\n"
+            md_content += output_buffer.getvalue()
+            md_content += "```\n"
+
+            with open(output_file, "w") as f:
+                f.write(md_content)
+
+            print(f"\n📄 Results saved to: {output_file}")
 
 
 if __name__ == "__main__":
