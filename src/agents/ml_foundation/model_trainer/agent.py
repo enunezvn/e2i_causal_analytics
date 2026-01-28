@@ -27,13 +27,13 @@ from .state import ModelTrainerState
 logger = logging.getLogger(__name__)
 
 
-def _get_training_run_repository():
-    """Get MLTrainingRunRepository (lazy import to avoid circular deps)."""
+async def _get_training_run_repository():
+    """Get MLTrainingRunRepository with async client (lazy import to avoid circular deps)."""
     try:
         from src.repositories.ml_experiment import MLTrainingRunRepository
-        from src.memory.services.factories import get_supabase_client
+        from src.memory.services.factories import get_async_supabase_client
 
-        client = get_supabase_client()
+        client = await get_async_supabase_client()
         return MLTrainingRunRepository(supabase_client=client)
     except Exception as e:
         logger.warning(f"Could not get training run repository: {e}")
@@ -452,7 +452,7 @@ class ModelTrainerAgent:
         from uuid import UUID, uuid4
 
         try:
-            repo = _get_training_run_repository()
+            repo = await _get_training_run_repository()
             if repo is None:
                 logger.debug("Skipping training run persistence (no repository)")
                 return False
