@@ -17,6 +17,11 @@ Integration:
 
 from .agent import HealthScoreAgent, HealthScoreInput, HealthScoreOutput
 from .graph import build_health_score_graph
+from .health_client import (
+    SupabaseHealthClient,
+    SimpleHealthClient,
+    get_health_client_for_testing,
+)
 from .mlflow_tracker import (
     HealthScoreMLflowTracker,
     HealthScoreMetrics,
@@ -47,6 +52,10 @@ __all__ = [
     "PipelineStatus",
     "AgentStatus",
     "build_health_score_graph",
+    # Health clients
+    "SupabaseHealthClient",
+    "SimpleHealthClient",
+    "get_health_client_for_testing",
     # MLflow tracking
     "HealthScoreMLflowTracker",
     "HealthScoreMetrics",

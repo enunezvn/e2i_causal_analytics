@@ -8,6 +8,7 @@ Components:
 - ContractValidator: Validates agent outputs against TypedDict contracts
 - OpikTraceVerifier: Verifies Opik observability traces
 - QualityGateValidator: Validates agent outputs against per-agent quality gates
+- DataSourceValidator: Validates agents use appropriate data sources (real vs mock)
 - AGENT_QUALITY_GATES: Per-agent quality threshold definitions
 """
 
@@ -22,8 +23,14 @@ from src.testing.quality_gate_validator import (
 from src.testing.agent_quality_gates import (
     AGENT_QUALITY_GATES,
     AgentQualityGate,
+    DataSourceRequirement,
     get_quality_gate,
     list_configured_agents,
+)
+from src.testing.data_source_validator import (
+    DataSourceValidator,
+    DataSourceValidationResult,
+    DataSourceType,
 )
 
 __all__ = [
@@ -37,6 +44,11 @@ __all__ = [
     "QualityCheckResult",
     "AGENT_QUALITY_GATES",
     "AgentQualityGate",
+    "DataSourceRequirement",
     "get_quality_gate",
     "list_configured_agents",
+    # Data source validation
+    "DataSourceValidator",
+    "DataSourceValidationResult",
+    "DataSourceType",
 ]

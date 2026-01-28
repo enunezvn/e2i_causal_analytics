@@ -50,9 +50,29 @@ class CATEEstimatorNode:
     across segments.
     """
 
-    def __init__(self, data_connector=None):
+    def __init__(self, data_connector=None, require_real_data: bool = False):
+        """Initialize CATE estimator node.
+
+        Args:
+            data_connector: Data connector for fetching analysis data.
+                           If None, uses default based on environment.
+            require_real_data: If True, raises ValueError if only mock data
+                              is available. Used in testing to ensure real
+                              Supabase data is used.
+        """
+        self.require_real_data = require_real_data
         self.data_connector = data_connector or _get_default_data_connector()
         self.timeout_seconds = 180
+
+        # Validate real data requirement
+        if self.require_real_data:
+            connector_type = type(self.data_connector).__name__
+            if "Mock" in connector_type:
+                raise ValueError(
+                    f"require_real_data=True but data connector is {connector_type}. "
+                    "Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY environment variables "
+                    "to use real Supabase data."
+                )
 
     async def execute(self, state: HeterogeneousOptimizerState) -> HeterogeneousOptimizerState:
         """Execute CATE estimation."""
@@ -203,7 +223,8 @@ class CATEEstimatorNode:
         """Fetch data for CATE estimation.
 
         Attempts to fetch from primary connector first. If that returns insufficient
-        data (e.g., Supabase table missing columns), falls back to MockDataConnector.
+        data (e.g., Supabase table missing columns), falls back to MockDataConnector
+        unless require_real_data is True.
         """
         columns = (
             [state["treatment_var"], state["outcome_var"]]
@@ -218,11 +239,21 @@ class CATEEstimatorNode:
         )
 
         # If primary connector returns insufficient data, fallback to mock
+        # (unless require_real_data is True)
         if df is None or len(df) < 100:
+            row_count = len(df) if df is not None else 0
+
+            if self.require_real_data:
+                raise ValueError(
+                    f"Primary data connector returned insufficient data ({row_count} rows, "
+                    f"need >= 100) and require_real_data=True. "
+                    "Cannot fall back to MockDataConnector."
+                )
+
             from ..connectors import MockDataConnector
 
             logger.warning(
-                f"Primary connector returned {len(df) if df is not None else 0} rows. "
+                f"Primary connector returned {row_count} rows. "
                 f"Falling back to MockDataConnector for testing."
             )
             mock_connector = MockDataConnector()

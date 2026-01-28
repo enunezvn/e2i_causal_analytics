@@ -143,6 +143,18 @@ class QualityGateDetail:
 
 
 @dataclass
+class DataSourceDetail:
+    """Detailed data source validation results."""
+
+    passed: bool
+    detected_source: str = "unknown"
+    acceptable_sources: list[str] = field(default_factory=list)
+    reject_mock: bool = False
+    message: str = ""
+    evidence: list[str] = field(default_factory=list)
+
+
+@dataclass
 class AgentTestResult:
     """Complete result of testing a single agent."""
 
@@ -168,6 +180,9 @@ class AgentTestResult:
 
     # Quality Gate Details
     quality_gate: QualityGateDetail | None = None
+
+    # Data Source Validation Details
+    data_source: DataSourceDetail | None = None
 
     # Observability Details
     trace_verification: TraceVerificationDetail | None = None
@@ -310,6 +325,71 @@ AGENT_CONFIGS = {
         "uses_kwargs": True,  # time_range_start, time_range_end, batch_id, etc.
     },
 }
+
+
+# =============================================================================
+# AGENT-SPECIFIC CONFIGURATION
+# =============================================================================
+
+
+def _get_agent_kwargs(agent_name: str, enforce_real_data: bool = True) -> dict[str, Any]:
+    """Get agent-specific constructor kwargs for testing.
+
+    This function returns kwargs that should be passed to agent constructors
+    to ensure they use real data sources instead of mock fallbacks.
+
+    Args:
+        agent_name: Name of the agent
+        enforce_real_data: If True, configure agents to require real data sources
+
+    Returns:
+        Dict of kwargs to pass to agent constructor
+    """
+    if not enforce_real_data:
+        return {}
+
+    if agent_name == "health_score":
+        # Inject real health client for health_score agent
+        try:
+            from src.agents.health_score.health_client import get_health_client_for_testing
+            return {"health_client": get_health_client_for_testing()}
+        except ImportError:
+            return {}
+
+    elif agent_name == "gap_analyzer":
+        # gap_analyzer: explicitly disable mock usage
+        # The default is now use_mock=False, but we ensure it here
+        return {}  # No special kwargs needed, default is now correct
+
+    elif agent_name == "heterogeneous_optimizer":
+        # heterogeneous_optimizer: require real data
+        # Note: This is set at the node level, not agent level
+        # The agent will use real data by default, but we can't easily
+        # inject require_real_data=True without modifying agent constructor
+        return {}
+
+    return {}
+
+
+def _get_graph_kwargs(agent_name: str, enforce_real_data: bool = True) -> dict[str, Any]:
+    """Get kwargs for graph creation functions.
+
+    Some agents use graph factories that accept configuration options.
+
+    Args:
+        agent_name: Name of the agent
+        enforce_real_data: If True, configure graphs to require real data
+
+    Returns:
+        Dict of kwargs for graph creation
+    """
+    if not enforce_real_data:
+        return {}
+
+    if agent_name == "gap_analyzer":
+        return {"use_mock": False}
+
+    return {}
 
 
 # =============================================================================
@@ -702,8 +782,10 @@ async def test_agent(
     mapper: Any,  # Tier0OutputMapper
     validator: Any,  # ContractValidator
     quality_validator: Any,  # QualityGateValidator
+    data_source_validator: Any | None,  # DataSourceValidator
     trace_verifier: Any | None,  # OpikTraceVerifier
     timeout_seconds: float = 30.0,
+    enforce_real_data: bool = True,
 ) -> AgentTestResult:
     """Test a single agent.
 
@@ -713,8 +795,10 @@ async def test_agent(
         mapper: Tier0OutputMapper instance
         validator: ContractValidator instance
         quality_validator: QualityGateValidator instance
+        data_source_validator: DataSourceValidator instance (or None to skip)
         trace_verifier: OpikTraceVerifier instance (or None to skip)
         timeout_seconds: Maximum execution time
+        enforce_real_data: If True, configure agents to use real data sources
 
     Returns:
         AgentTestResult with test details
@@ -735,9 +819,10 @@ async def test_agent(
         agent_input = mapper.get_agent_mapping(agent_name)
         result.input_summary = summarize_input(agent_input)
 
-        # 2. Import and instantiate agent
+        # 2. Import and instantiate agent with real-data configuration
         agent_class = import_class(config["agent_module"], config["agent_class"])
-        agent = agent_class()
+        agent_kwargs = _get_agent_kwargs(agent_name, enforce_real_data=enforce_real_data)
+        agent = agent_class(**agent_kwargs)
 
         # 3. Get the method to call (default: "run")
         method_name = config.get("method", "run")
@@ -909,7 +994,30 @@ async def test_agent(
                 warnings=[f"Quality gate validation failed: {e}"],
             )
 
-        # 7. Verify observability (if verifier provided)
+        # 7. Validate data source (if validator provided)
+        if data_source_validator is not None:
+            try:
+                ds_result = data_source_validator.validate(
+                    agent_name=agent_name,
+                    agent_output=result.agent_output,
+                    execution_logs=[],  # Could capture logs if needed
+                    agent_instance=agent,
+                )
+                result.data_source = DataSourceDetail(
+                    passed=ds_result.passed,
+                    detected_source=ds_result.detected_source.value,
+                    acceptable_sources=[s.value for s in ds_result.acceptable_sources],
+                    reject_mock=ds_result.reject_mock,
+                    message=ds_result.message,
+                    evidence=ds_result.evidence,
+                )
+            except Exception as e:
+                result.data_source = DataSourceDetail(
+                    passed=False,
+                    message=f"Data source validation failed: {e}",
+                )
+
+        # 8. Verify observability (if verifier provided)
         if trace_verifier is not None:
             trace_id = result.agent_output.get("trace_id")
             if trace_id:
@@ -937,14 +1045,20 @@ async def test_agent(
                         trace_id=trace_id,
                     )
 
-        # 8. Determine overall success
+        # 9. Determine overall success
         # Success requires ALL of:
         # 1. No execution errors
         # 2. Quality gate passes (primary check - agent-specific)
+        # 3. Data source validation passes (if validator provided)
+        data_source_ok = (
+            result.data_source is None  # No validator = OK
+            or result.data_source.passed
+        )
         result.success = (
             result.error is None
             and result.quality_gate is not None
             and result.quality_gate.passed
+            and data_source_ok
         )
 
     except Exception as e:
@@ -1431,6 +1545,7 @@ async def run_tests(
         ContractValidator,
         OpikTraceVerifier,
         QualityGateValidator,
+        DataSourceValidator,
     )
 
     print_header("TIER 1-5 AGENT TESTING FRAMEWORK")
@@ -1457,8 +1572,12 @@ async def run_tests(
     mapper = Tier0OutputMapper(tier0_state)
     # ContractValidator validates TypedDict structure
     # QualityGateValidator enforces per-agent quality thresholds
+    # DataSourceValidator ensures agents use real data sources (not mocks)
     validator = ContractValidator()
     quality_validator = QualityGateValidator()
+    data_source_validator = DataSourceValidator()
+
+    print("Data Source Validation: Enabled")
 
     trace_verifier = None
     if not skip_observability:
@@ -1514,8 +1633,10 @@ async def run_tests(
             mapper=mapper,
             validator=validator,
             quality_validator=quality_validator,
+            data_source_validator=data_source_validator,
             trace_verifier=trace_verifier,
             timeout_seconds=agent_timeout,
+            enforce_real_data=True,
         )
         results.append(result)
         print_agent_result(result, verbose=verbose)
@@ -1565,6 +1686,23 @@ async def run_tests(
                 1 for r in results if r.trace_verification and r.trace_verification.metadata_valid
             ),
             "opik_health": "healthy" if trace_verifier else "not_checked",
+        },
+        "data_source_summary": {
+            "validated": sum(1 for r in results if r.data_source is not None),
+            "passed": sum(1 for r in results if r.data_source and r.data_source.passed),
+            "failed": sum(1 for r in results if r.data_source and not r.data_source.passed),
+            "mock_detected": sum(
+                1 for r in results
+                if r.data_source and r.data_source.detected_source == "mock"
+            ),
+            "failed_agents": [
+                {
+                    "agent": r.agent_name,
+                    "detected_source": r.data_source.detected_source if r.data_source else None,
+                    "message": r.data_source.message if r.data_source else None,
+                }
+                for r in results if r.data_source and not r.data_source.passed
+            ],
         },
     }
 
