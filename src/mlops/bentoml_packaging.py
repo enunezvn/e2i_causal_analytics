@@ -1135,11 +1135,17 @@ def generate_docker_compose(
 # ============================================================================
 
 
-def validate_bento(bento_tag: str) -> Dict[str, Any]:
+def validate_bento(bento_tag: str, strict: bool = False) -> Dict[str, Any]:
     """Validate a Bento is ready for deployment.
+
+    Modern BentoML (v1.4+) structures bentos differently, so this validation
+    focuses on essential checks (bento exists and is loadable) rather than
+    specific file layouts.
 
     Args:
         bento_tag: Tag of the Bento to validate
+        strict: If True, require all traditional files to be present.
+                If False (default), only check if bento exists and is valid.
 
     Returns:
         Validation result with status and details
@@ -1152,38 +1158,78 @@ def validate_bento(bento_tag: str) -> Dict[str, Any]:
         "bento_tag": bento_tag,
         "checks": {},
         "errors": [],
+        "warnings": [],
     }
 
+    # Primary check: Bento exists and can be loaded
     try:
         bento = bentoml.get(bento_tag)
         result["checks"]["bento_exists"] = True
+        result["bento_info"] = {
+            "tag": str(bento.tag),
+            "path": str(bento.path) if hasattr(bento, "path") else None,
+        }
     except Exception as e:
         result["errors"].append(f"Bento not found: {e}")
         result["checks"]["bento_exists"] = False
         return result
 
-    # Check for required files
+    # Secondary check: Look for service files (warning if missing, not error)
+    # Modern BentoML stores these in various locations
     try:
-        bento_path = bento.path
-        required_files = ["service.py", "bentofile.yaml"]
-        for f in required_files:
-            file_exists = (Path(bento_path) / f).exists()
-            result["checks"][f"has_{f}"] = file_exists
-            if not file_exists:
-                result["errors"].append(f"Missing required file: {f}")
-    except Exception as e:
-        result["errors"].append(f"Could not access Bento path: {e}")
+        bento_path = Path(bento.path) if hasattr(bento, "path") else None
+        if bento_path:
+            # Check multiple possible locations for service files
+            possible_service_files = [
+                "service.py",
+                "src/service.py",
+                "apis/service.py",
+            ]
+            service_found = False
+            for f in possible_service_files:
+                if (bento_path / f).exists():
+                    service_found = True
+                    result["checks"]["has_service"] = True
+                    result["service_file"] = f
+                    break
 
-    # Check models
+            if not service_found:
+                if strict:
+                    result["errors"].append("No service.py found in Bento")
+                else:
+                    result["warnings"].append(
+                        "No service.py found (may be embedded in Bento)"
+                    )
+                result["checks"]["has_service"] = False
+
+            # Check for bentofile.yaml (optional in modern BentoML)
+            bentofile_exists = (bento_path / "bentofile.yaml").exists()
+            result["checks"]["has_bentofile"] = bentofile_exists
+            if not bentofile_exists and strict:
+                result["errors"].append("Missing bentofile.yaml")
+    except Exception as e:
+        result["warnings"].append(f"Could not check Bento files: {e}")
+
+    # Check models (informational - some bentos load models dynamically)
     try:
-        models = bento.info.models
-        result["checks"]["has_models"] = len(models) > 0
-        result["model_count"] = len(models)
-        if len(models) == 0:
-            result["errors"].append("No models found in Bento")
+        if hasattr(bento, "info") and hasattr(bento.info, "models"):
+            models = bento.info.models
+            result["checks"]["has_models"] = len(models) > 0
+            result["model_count"] = len(models)
+            if len(models) == 0:
+                if strict:
+                    result["errors"].append("No models found in Bento")
+                else:
+                    result["warnings"].append(
+                        "No models embedded (may be loaded dynamically)"
+                    )
+        else:
+            result["checks"]["has_models"] = False
+            result["model_count"] = 0
     except Exception as e:
-        result["errors"].append(f"Could not list models: {e}")
+        result["warnings"].append(f"Could not list models: {e}")
 
+    # Bento is valid if it exists and we have no blocking errors
     result["valid"] = len(result["errors"]) == 0
     return result
 
