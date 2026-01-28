@@ -432,12 +432,13 @@ class Tier0ModelService:
     print(f"    Starting BentoML service on port {port} (PID: {process.pid})...")
 
     # Wait for service to be ready
+    # BentoML @api endpoints use POST, not GET
     endpoint = f"http://localhost:{port}"
     async with httpx.AsyncClient() as client:
         for retry in range(30):  # 30 retries (30 seconds max)
             await asyncio.sleep(1)
             try:
-                resp = await client.get(f"{endpoint}/health", timeout=2.0)
+                resp = await client.post(f"{endpoint}/health", timeout=2.0)
                 if resp.status_code == 200:
                     print(f"    Service ready at {endpoint}")
                     return {"started": True, "endpoint": endpoint, "pid": process.pid}
@@ -474,10 +475,10 @@ async def verify_bentoml_predictions(
 
     result = {"health_check": False, "prediction_test": False}
 
-    # Health check
+    # Health check (BentoML @api endpoints use POST)
     async with httpx.AsyncClient() as client:
         try:
-            health_resp = await client.get(f"{endpoint}/health", timeout=5.0)
+            health_resp = await client.post(f"{endpoint}/health", timeout=5.0)
             if health_resp.status_code == 200:
                 health_data = health_resp.json()
                 result["health_check"] = health_data.get("status") == "healthy"
