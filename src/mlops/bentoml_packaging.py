@@ -37,6 +37,20 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+def _get_bentoml_executable() -> str:
+    """Get the path to the bentoml executable.
+
+    Returns the full path to bentoml in the current Python environment's
+    bin directory, falling back to 'bentoml' if not found.
+    """
+    import sys
+    venv_bin = Path(sys.executable).parent
+    bentoml_path = venv_bin / "bentoml"
+    if bentoml_path.exists():
+        return str(bentoml_path)
+    return "bentoml"
+
+
 # ============================================================================
 # Configuration Classes
 # ============================================================================
@@ -380,7 +394,7 @@ def _bento_exists(bento_name: str, version: Optional[str] = None) -> bool:
     try:
         check_target = f"{bento_name}:{version}" if version else bento_name
         result = subprocess.run(
-            ["bentoml", "list", check_target, "-o", "json", "--quiet"],
+            [_get_bentoml_executable(), "list", check_target, "-o", "json", "--quiet"],
             capture_output=True,
             text=True,
         )
@@ -431,7 +445,7 @@ def build_bento(
             )
 
     # Build using bentoml CLI
-    cmd = ["bentoml", "build", str(service_dir)]
+    cmd = [_get_bentoml_executable(), "build", str(service_dir)]
 
     if bento_name:
         cmd.extend(["--name", bento_name])
@@ -448,7 +462,7 @@ def build_bento(
             # Try one more time with a more unique version
             timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
             version = f"{version or 'v1'}_{timestamp}"
-            cmd = ["bentoml", "build", str(service_dir)]
+            cmd = [_get_bentoml_executable(), "build", str(service_dir)]
             if bento_name:
                 cmd.extend(["--name", bento_name])
             cmd.extend(["--version", version])
@@ -531,7 +545,7 @@ def containerize_bento(
 
     # Build Docker image
     cmd = [
-        "bentoml", "containerize",
+        _get_bentoml_executable(), "containerize",
         bento_tag,
         "-t", config.full_image_name,
     ]
