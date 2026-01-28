@@ -472,54 +472,500 @@ def generate_service_file(
     service_name: str = "prediction_service",
     **kwargs,
 ) -> Path:
-    """Generate a service.py file for a model.
+    """Generate a self-contained service.py file for a model.
+
+    This function generates a fully self-contained BentoML service file that
+    does NOT require any imports from the `src` package. This is critical
+    because BentoML builds run in isolation and cannot resolve project imports.
 
     Args:
         model_tag: BentoML model tag
         service_type: Type of service (classification, regression, causal)
         output_path: Path to write service file
         service_name: Name for the service
-        **kwargs: Additional arguments for the service template
+        **kwargs: Additional arguments:
+            - n_classes (int): Number of classes for classification (default: 2)
+            - class_names (list): Class label names
+            - default_threshold (float): Classification threshold (default: 0.5)
+            - target_name (str): Target variable name for regression
+            - treatment_name (str): Treatment variable name for causal
+            - outcome_name (str): Outcome variable name for causal
+            - cpu (str): CPU resource limit (default: "1")
+            - memory (str): Memory resource limit (default: "2Gi")
+            - timeout (int): Request timeout in seconds (default: 60)
 
     Returns:
         Path to generated service file
     """
     output_path = Path(output_path)
 
+    # Extract common kwargs with defaults
+    cpu = kwargs.get("cpu", "1")
+    memory = kwargs.get("memory", "2Gi")
+    timeout = kwargs.get("timeout", 60)
+
     if service_type == "classification":
-        template_import = "from src.mlops.bentoml_templates import ClassificationServiceTemplate"
-        template_class = "ClassificationServiceTemplate"
+        service_code = _generate_classification_service(
+            model_tag=model_tag,
+            service_name=service_name,
+            n_classes=kwargs.get("n_classes", 2),
+            class_names=kwargs.get("class_names"),
+            default_threshold=kwargs.get("default_threshold", 0.5),
+            cpu=cpu,
+            memory=memory,
+            timeout=timeout,
+        )
     elif service_type == "regression":
-        template_import = "from src.mlops.bentoml_templates import RegressionServiceTemplate"
-        template_class = "RegressionServiceTemplate"
+        service_code = _generate_regression_service(
+            model_tag=model_tag,
+            service_name=service_name,
+            target_name=kwargs.get("target_name", "target"),
+            cpu=cpu,
+            memory=memory,
+            timeout=timeout,
+        )
     elif service_type == "causal":
-        template_import = "from src.mlops.bentoml_templates import CausalInferenceServiceTemplate"
-        template_class = "CausalInferenceServiceTemplate"
+        service_code = _generate_causal_service(
+            model_tag=model_tag,
+            service_name=service_name,
+            treatment_name=kwargs.get("treatment_name", "treatment"),
+            outcome_name=kwargs.get("outcome_name", "outcome"),
+            cpu=cpu,
+            memory=memory,
+            timeout=timeout,
+        )
     else:
         raise ValueError(f"Unknown service type: {service_type}")
 
-    # Format kwargs for service creation
-    kwargs_str = ", ".join(f'{k}="{v}"' if isinstance(v, str) else f'{k}={v}' for k, v in kwargs.items())
+    output_path.write_text(service_code)
+    logger.info(f"Generated self-contained service file: {output_path}")
+    return output_path
 
-    service_code = f'''"""Auto-generated BentoML service for {model_tag}.
 
+def _generate_classification_service(
+    model_tag: str,
+    service_name: str,
+    n_classes: int = 2,
+    class_names: Optional[List[str]] = None,
+    default_threshold: float = 0.5,
+    cpu: str = "1",
+    memory: str = "2Gi",
+    timeout: int = 60,
+) -> str:
+    """Generate self-contained classification service code."""
+    class_names_str = repr(class_names) if class_names else f"[f'class_{{i}}' for i in range({n_classes})]"
+
+    return f'''"""Auto-generated BentoML Classification Service.
+
+Model: {model_tag}
+Service: {service_name}
 Generated: {datetime.now(timezone.utc).isoformat()}
-Service Type: {service_type}
+
+This is a self-contained service file with no external project dependencies.
 """
 
-{template_import}
+import logging
+import time
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
-# Create the service class
-{service_name} = {template_class}.create(
-    model_tag="{model_tag}",
-    service_name="{service_name}",
-    {kwargs_str}
+import numpy as np
+import bentoml
+from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# Request/Response Models
+# ============================================================================
+
+
+class ClassificationInput(BaseModel):
+    """Input schema for classification requests."""
+    features: List[List[float]] = Field(..., description="Feature matrix (samples x features)", min_length=1)
+    threshold: float = Field(default={default_threshold}, ge=0.0, le=1.0, description="Classification threshold")
+    return_all_classes: bool = Field(default=False, description="Return probabilities for all classes")
+
+
+class ClassificationOutput(BaseModel):
+    """Output schema for classification responses."""
+    predictions: List[int] = Field(..., description="Predicted class labels")
+    probabilities: List[float] = Field(..., description="Prediction probabilities")
+    all_probabilities: Optional[List[List[float]]] = Field(default=None, description="Probabilities for all classes")
+    confidence_scores: List[float] = Field(..., description="Confidence scores")
+    model_id: str = Field(..., description="Model identifier")
+    prediction_time_ms: float = Field(..., description="Prediction time in milliseconds")
+
+
+# ============================================================================
+# Service Definition
+# ============================================================================
+
+
+@bentoml.service(
+    name="{service_name}",
+    resources={{"cpu": "{cpu}", "memory": "{memory}"}},
+    traffic={{"timeout": {timeout}}},
 )
+class {service_name.title().replace("_", "")}Service:
+    """BentoML classification service for {model_tag}."""
+
+    def __init__(self):
+        """Initialize service and load model."""
+        self.model_tag = "{model_tag}"
+        self.n_classes = {n_classes}
+        self.class_names = {class_names_str}
+        self.default_threshold = {default_threshold}
+        self._model = None
+        self._prediction_count = 0
+        self._total_latency_ms = 0.0
+
+        # Load model - auto-detect framework from metadata
+        model_ref = bentoml.models.get(self.model_tag)
+        framework = model_ref.info.metadata.get("framework", "sklearn")
+
+        if framework == "sklearn":
+            self._model = bentoml.sklearn.load_model(self.model_tag)
+        elif framework == "xgboost":
+            self._model = bentoml.xgboost.load_model(self.model_tag)
+        elif framework == "lightgbm":
+            self._model = bentoml.lightgbm.load_model(self.model_tag)
+        else:
+            self._model = bentoml.picklable_model.load_model(self.model_tag)
+
+        logger.info(f"Loaded classification model: {{self.model_tag}}")
+
+    @bentoml.api
+    async def predict(self, input_data: ClassificationInput) -> ClassificationOutput:
+        """Run classification prediction."""
+        start_time = time.time()
+
+        features = np.array(input_data.features)
+        predictions = self._model.predict(features)
+
+        # Get probabilities if available
+        if hasattr(self._model, 'predict_proba'):
+            all_proba = self._model.predict_proba(features)
+            if self.n_classes == 2:
+                probabilities = all_proba[:, 1].tolist()
+                predictions = (np.array(probabilities) >= input_data.threshold).astype(int).tolist()
+            else:
+                probabilities = np.max(all_proba, axis=1).tolist()
+        else:
+            all_proba = None
+            probabilities = [1.0] * len(predictions)
+
+        confidence_scores = np.max(all_proba, axis=1).tolist() if all_proba is not None else probabilities
+        elapsed_ms = (time.time() - start_time) * 1000
+
+        self._prediction_count += len(predictions)
+        self._total_latency_ms += elapsed_ms
+
+        return ClassificationOutput(
+            predictions=list(map(int, predictions)),
+            probabilities=probabilities,
+            all_probabilities=all_proba.tolist() if input_data.return_all_classes and all_proba is not None else None,
+            confidence_scores=confidence_scores,
+            model_id=self.model_tag,
+            prediction_time_ms=elapsed_ms,
+        )
+
+    @bentoml.api
+    async def health(self) -> Dict[str, Any]:
+        """Health check endpoint."""
+        return {{
+            "status": "healthy",
+            "model_id": self.model_tag,
+            "model_loaded": self._model is not None,
+            "n_classes": self.n_classes,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }}
+
+    @bentoml.api
+    async def metrics(self) -> Dict[str, Any]:
+        """Get service metrics."""
+        avg_latency = self._total_latency_ms / self._prediction_count if self._prediction_count > 0 else 0.0
+        return {{
+            "prediction_count": self._prediction_count,
+            "total_latency_ms": self._total_latency_ms,
+            "average_latency_ms": avg_latency,
+        }}
 '''
 
-    output_path.write_text(service_code)
-    logger.info(f"Generated service file: {output_path}")
-    return output_path
+
+def _generate_regression_service(
+    model_tag: str,
+    service_name: str,
+    target_name: str = "target",
+    cpu: str = "1",
+    memory: str = "2Gi",
+    timeout: int = 60,
+) -> str:
+    """Generate self-contained regression service code."""
+    return f'''"""Auto-generated BentoML Regression Service.
+
+Model: {model_tag}
+Service: {service_name}
+Generated: {datetime.now(timezone.utc).isoformat()}
+
+This is a self-contained service file with no external project dependencies.
+"""
+
+import logging
+import time
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+
+import numpy as np
+import bentoml
+from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# Request/Response Models
+# ============================================================================
+
+
+class RegressionInput(BaseModel):
+    """Input schema for regression requests."""
+    features: List[List[float]] = Field(..., description="Feature matrix (samples x features)", min_length=1)
+    return_intervals: bool = Field(default=False, description="Return prediction intervals")
+    confidence_level: float = Field(default=0.95, ge=0.5, le=0.99, description="Confidence level for intervals")
+
+
+class RegressionOutput(BaseModel):
+    """Output schema for regression responses."""
+    predictions: List[float] = Field(..., description="Predicted values")
+    lower_bounds: Optional[List[float]] = Field(default=None, description="Lower bounds of prediction intervals")
+    upper_bounds: Optional[List[float]] = Field(default=None, description="Upper bounds of prediction intervals")
+    model_id: str = Field(..., description="Model identifier")
+    prediction_time_ms: float = Field(..., description="Prediction time in milliseconds")
+
+
+# ============================================================================
+# Service Definition
+# ============================================================================
+
+
+@bentoml.service(
+    name="{service_name}",
+    resources={{"cpu": "{cpu}", "memory": "{memory}"}},
+    traffic={{"timeout": {timeout}}},
+)
+class {service_name.title().replace("_", "")}Service:
+    """BentoML regression service for {model_tag}."""
+
+    def __init__(self):
+        """Initialize service and load model."""
+        self.model_tag = "{model_tag}"
+        self.target_name = "{target_name}"
+        self._model = None
+        self._prediction_count = 0
+        self._total_latency_ms = 0.0
+
+        # Load model - auto-detect framework from metadata
+        model_ref = bentoml.models.get(self.model_tag)
+        framework = model_ref.info.metadata.get("framework", "sklearn")
+
+        if framework == "sklearn":
+            self._model = bentoml.sklearn.load_model(self.model_tag)
+        elif framework == "xgboost":
+            self._model = bentoml.xgboost.load_model(self.model_tag)
+        elif framework == "lightgbm":
+            self._model = bentoml.lightgbm.load_model(self.model_tag)
+        else:
+            self._model = bentoml.picklable_model.load_model(self.model_tag)
+
+        logger.info(f"Loaded regression model: {{self.model_tag}}")
+
+    @bentoml.api
+    async def predict(self, input_data: RegressionInput) -> RegressionOutput:
+        """Run regression prediction."""
+        start_time = time.time()
+
+        features = np.array(input_data.features)
+        predictions = self._model.predict(features)
+
+        elapsed_ms = (time.time() - start_time) * 1000
+
+        self._prediction_count += len(predictions)
+        self._total_latency_ms += elapsed_ms
+
+        return RegressionOutput(
+            predictions=predictions.tolist(),
+            lower_bounds=None,
+            upper_bounds=None,
+            model_id=self.model_tag,
+            prediction_time_ms=elapsed_ms,
+        )
+
+    @bentoml.api
+    async def health(self) -> Dict[str, Any]:
+        """Health check endpoint."""
+        return {{
+            "status": "healthy",
+            "model_id": self.model_tag,
+            "model_loaded": self._model is not None,
+            "target_name": self.target_name,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }}
+
+    @bentoml.api
+    async def metrics(self) -> Dict[str, Any]:
+        """Get service metrics."""
+        avg_latency = self._total_latency_ms / self._prediction_count if self._prediction_count > 0 else 0.0
+        return {{
+            "prediction_count": self._prediction_count,
+            "total_latency_ms": self._total_latency_ms,
+            "average_latency_ms": avg_latency,
+        }}
+'''
+
+
+def _generate_causal_service(
+    model_tag: str,
+    service_name: str,
+    treatment_name: str = "treatment",
+    outcome_name: str = "outcome",
+    cpu: str = "2",
+    memory: str = "4Gi",
+    timeout: int = 120,
+) -> str:
+    """Generate self-contained causal inference service code."""
+    return f'''"""Auto-generated BentoML Causal Inference Service.
+
+Model: {model_tag}
+Service: {service_name}
+Generated: {datetime.now(timezone.utc).isoformat()}
+
+This is a self-contained service file with no external project dependencies.
+"""
+
+import logging
+import time
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+
+import numpy as np
+import bentoml
+from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# Request/Response Models
+# ============================================================================
+
+
+class CausalInput(BaseModel):
+    """Input schema for causal inference requests."""
+    features: List[List[float]] = Field(..., description="Feature matrix (samples x features)", min_length=1)
+    treatment: Optional[List[int]] = Field(default=None, description="Treatment assignment (0 or 1)")
+    return_intervals: bool = Field(default=True, description="Return confidence intervals for CATE")
+    confidence_level: float = Field(default=0.95, ge=0.5, le=0.99, description="Confidence level")
+
+
+class CATEOutput(BaseModel):
+    """Output schema for CATE estimation."""
+    cate: List[float] = Field(..., description="Conditional Average Treatment Effect estimates")
+    lower_bounds: Optional[List[float]] = Field(default=None, description="Lower bounds of confidence intervals")
+    upper_bounds: Optional[List[float]] = Field(default=None, description="Upper bounds of confidence intervals")
+    ate: float = Field(..., description="Average Treatment Effect (mean of CATE)")
+    ate_std: float = Field(..., description="Standard deviation of ATE")
+    model_id: str = Field(..., description="Model identifier")
+    prediction_time_ms: float = Field(..., description="Prediction time in milliseconds")
+
+
+# ============================================================================
+# Service Definition
+# ============================================================================
+
+
+@bentoml.service(
+    name="{service_name}",
+    resources={{"cpu": "{cpu}", "memory": "{memory}"}},
+    traffic={{"timeout": {timeout}}},
+)
+class {service_name.title().replace("_", "")}Service:
+    """BentoML causal inference service for {model_tag}."""
+
+    def __init__(self):
+        """Initialize service and load model."""
+        self.model_tag = "{model_tag}"
+        self.treatment_name = "{treatment_name}"
+        self.outcome_name = "{outcome_name}"
+        self._model = None
+        self._prediction_count = 0
+        self._total_latency_ms = 0.0
+
+        # EconML/DoWhy models are typically pickled
+        self._model = bentoml.picklable_model.load_model(self.model_tag)
+        logger.info(f"Loaded causal model: {{self.model_tag}}")
+
+    def _estimate_cate(self, features: np.ndarray) -> np.ndarray:
+        """Estimate CATE using the loaded model."""
+        if hasattr(self._model, 'effect'):
+            return self._model.effect(features)
+        elif hasattr(self._model, 'const_marginal_effect'):
+            return self._model.const_marginal_effect(features)
+        elif hasattr(self._model, 'predict'):
+            return self._model.predict(features)
+        else:
+            raise ValueError("Model does not support CATE estimation")
+
+    @bentoml.api
+    async def estimate_cate(self, input_data: CausalInput) -> CATEOutput:
+        """Estimate Conditional Average Treatment Effect."""
+        start_time = time.time()
+
+        features = np.array(input_data.features)
+        cate = self._estimate_cate(features)
+        if cate.ndim > 1:
+            cate = cate.flatten()
+
+        ate = float(np.mean(cate))
+        ate_std = float(np.std(cate))
+        elapsed_ms = (time.time() - start_time) * 1000
+
+        self._prediction_count += len(cate)
+        self._total_latency_ms += elapsed_ms
+
+        return CATEOutput(
+            cate=cate.tolist(),
+            lower_bounds=None,
+            upper_bounds=None,
+            ate=ate,
+            ate_std=ate_std,
+            model_id=self.model_tag,
+            prediction_time_ms=elapsed_ms,
+        )
+
+    @bentoml.api
+    async def health(self) -> Dict[str, Any]:
+        """Health check endpoint."""
+        return {{
+            "status": "healthy",
+            "model_id": self.model_tag,
+            "model_loaded": self._model is not None,
+            "treatment_name": self.treatment_name,
+            "outcome_name": self.outcome_name,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }}
+
+    @bentoml.api
+    async def metrics(self) -> Dict[str, Any]:
+        """Get service metrics."""
+        avg_latency = self._total_latency_ms / self._prediction_count if self._prediction_count > 0 else 0.0
+        return {{
+            "prediction_count": self._prediction_count,
+            "total_latency_ms": self._total_latency_ms,
+            "average_latency_ms": avg_latency,
+        }}
+'''
 
 
 def generate_docker_compose(
