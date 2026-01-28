@@ -2626,21 +2626,56 @@ async def run_pipeline(
             result = await step_1_scope_definer(experiment_id)
             state["scope_spec"] = result.get("scope_spec", {"problem_type": CONFIG.problem_type})
             state["scope_spec"]["experiment_id"] = experiment_id
+            duration = time.time() - step_start
+            scope_spec = state["scope_spec"]
+            success_criteria = result.get("success_criteria", {})
+            validation_passed = result.get("validation_passed", True)
+
             step_results.append(StepResult(
                 step_num=1,
                 step_name="SCOPE DEFINER",
-                status="success" if result.get("validation_passed", True) else "warning",
-                duration_seconds=time.time() - step_start,
+                status="success" if validation_passed else "warning",
+                duration_seconds=duration,
                 key_metrics={
                     "experiment_id": result.get("experiment_id", experiment_id),
-                    "problem_type": state["scope_spec"].get("problem_type"),
-                    "prediction_target": state["scope_spec"].get("prediction_target"),
-                    "minimum_samples": state["scope_spec"].get("minimum_samples"),
+                    "problem_type": scope_spec.get("problem_type"),
+                    "prediction_target": scope_spec.get("prediction_target"),
+                    "minimum_samples": scope_spec.get("minimum_samples"),
                 },
                 details={
                     "brand": CONFIG.brand,
-                    "success_criteria": result.get("success_criteria", {}),
-                }
+                    "success_criteria": success_criteria,
+                },
+                # Enhanced format fields
+                input_summary={
+                    "problem_description": scope_spec.get("problem_description", "Predict patient discontinuation risk"),
+                    "business_objective": scope_spec.get("business_objective", "Identify high-risk patients"),
+                    "target_outcome": scope_spec.get("prediction_target", CONFIG.target_outcome),
+                    "problem_type_hint": CONFIG.problem_type,
+                    "brand": CONFIG.brand,
+                },
+                validation_checks=[
+                    ("Problem type defined", scope_spec.get("problem_type") is not None,
+                     "problem_type present", scope_spec.get("problem_type", "None")),
+                    ("Prediction target set", scope_spec.get("prediction_target") is not None,
+                     "prediction_target present", scope_spec.get("prediction_target", "None")),
+                    ("Minimum samples specified", (scope_spec.get("minimum_samples") or 0) > 0,
+                     "minimum_samples > 0", scope_spec.get("minimum_samples", 0)),
+                    ("Scope validation", validation_passed,
+                     "validation_passed = True", f"validation_passed = {validation_passed}"),
+                ],
+                metrics_table=[
+                    ("experiment_id", result.get("experiment_id", experiment_id), None, None),
+                    ("problem_type", scope_spec.get("problem_type"), None, None),
+                    ("prediction_target", scope_spec.get("prediction_target"), None, None),
+                    ("minimum_samples", scope_spec.get("minimum_samples"), None, None),
+                ],
+                interpretation=[
+                    f"Binary classification scope defined for patient risk prediction",
+                    f"Target outcome: {scope_spec.get('prediction_target', CONFIG.target_outcome)}",
+                    f"Sample requirement ({scope_spec.get('minimum_samples', 'N/A')}) appropriate for ML",
+                ],
+                result_message="Scope definition complete",
             ))
 
         # Step 2: Data Preparer
