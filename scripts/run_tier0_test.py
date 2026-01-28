@@ -3320,6 +3320,10 @@ async def run_pipeline(
 
 def main():
     """Main entry point."""
+    import sys
+    import io
+    from pathlib import Path
+
     parser = argparse.ArgumentParser(
         description="Run Tier 0 MLOps workflow test"
     )
@@ -3362,6 +3366,17 @@ def main():
         action="store_true",
         help="Include BentoML model serving verification with the real trained model"
     )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default="docs/results",
+        help="Directory to save results MD file (default: docs/results)"
+    )
+    parser.add_argument(
+        "--no-save",
+        action="store_true",
+        help="Do not save results to file (only print to console)"
+    )
 
     args = parser.parse_args()
 
@@ -3371,13 +3386,60 @@ def main():
     CONFIG.enable_opik = args.enable_opik
     CONFIG.hpo_trials = args.hpo_trials
 
-    # Run pipeline
-    asyncio.run(run_pipeline(
-        step=args.step,
-        dry_run=args.dry_run,
-        imbalance_ratio=args.imbalanced,
-        include_bentoml=args.include_bentoml,
-    ))
+    # Setup output capture if saving results
+    output_buffer = None
+    original_stdout = sys.stdout
+
+    if not args.no_save:
+        # Create output directory if it doesn't exist
+        output_dir = Path(args.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create a tee-like output that writes to both console and buffer
+        class TeeOutput:
+            def __init__(self, *streams):
+                self.streams = streams
+
+            def write(self, data):
+                for stream in self.streams:
+                    stream.write(data)
+                    stream.flush()
+
+            def flush(self):
+                for stream in self.streams:
+                    stream.flush()
+
+        output_buffer = io.StringIO()
+        sys.stdout = TeeOutput(original_stdout, output_buffer)
+
+    try:
+        # Run pipeline
+        asyncio.run(run_pipeline(
+            step=args.step,
+            dry_run=args.dry_run,
+            imbalance_ratio=args.imbalanced,
+            include_bentoml=args.include_bentoml,
+        ))
+    finally:
+        # Restore stdout
+        sys.stdout = original_stdout
+
+        # Save results to file
+        if not args.no_save and output_buffer:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_file = Path(args.output_dir) / f"tier0_pipeline_run_{timestamp}.md"
+
+            # Add markdown header
+            md_content = f"# Tier 0 Pipeline Run Results\n\n"
+            md_content += f"**Generated**: {datetime.now().isoformat()}\n\n"
+            md_content += "```\n"
+            md_content += output_buffer.getvalue()
+            md_content += "```\n"
+
+            with open(output_file, "w") as f:
+                f.write(md_content)
+
+            print(f"\n📄 Results saved to: {output_file}")
 
 
 if __name__ == "__main__":
