@@ -152,6 +152,151 @@ def print_info(message: str) -> None:
     print(f"\n  ℹ️  {message}")
 
 
+def print_confusion_matrix(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    y_proba: np.ndarray | None = None,
+    title: str = "Confusion Matrix"
+) -> dict:
+    """Print formatted confusion matrix with detailed metrics.
+
+    Args:
+        y_true: True labels
+        y_pred: Predicted labels
+        y_proba: Predicted probabilities (optional, for threshold analysis)
+        title: Section title
+
+    Returns:
+        Dictionary with confusion matrix values and derived metrics
+    """
+    from sklearn.metrics import confusion_matrix, classification_report
+
+    cm = confusion_matrix(y_true, y_pred)
+    tn, fp, fn, tp = cm.ravel() if cm.size == 4 else (0, 0, 0, 0)
+
+    print(f"\n  {title}:")
+    print(f"    ┌─────────────────────────────────────┐")
+    print(f"    │           Predicted                 │")
+    print(f"    │         Neg        Pos              │")
+    print(f"    │  Actual ────────────────            │")
+    print(f"    │    Neg   TN={tn:4d}    FP={fp:4d}          │")
+    print(f"    │    Pos   FN={fn:4d}    TP={tp:4d}          │")
+    print(f"    └─────────────────────────────────────┘")
+
+    # Calculate derived metrics
+    total = tn + fp + fn + tp
+    accuracy = (tp + tn) / total if total > 0 else 0
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+    specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
+    npv = tn / (tn + fn) if (tn + fn) > 0 else 0  # Negative Predictive Value
+    fpr = fp / (fp + tn) if (fp + tn) > 0 else 0  # False Positive Rate
+    fnr = fn / (fn + tp) if (fn + tp) > 0 else 0  # False Negative Rate
+
+    print(f"\n    Derived Metrics:")
+    print(f"      • Accuracy:    {accuracy:.4f} ({tp + tn}/{total} correct)")
+    print(f"      • Precision:   {precision:.4f} (of predicted pos, {tp}/{tp + fp} correct)")
+    print(f"      • Recall/TPR:  {recall:.4f} (of actual pos, {tp}/{tp + fn} found)")
+    print(f"      • Specificity: {specificity:.4f} (of actual neg, {tn}/{tn + fp} found)")
+    print(f"      • F1 Score:    {f1:.4f}")
+    print(f"      • NPV:         {npv:.4f} (of predicted neg, {tn}/{tn + fn} correct)")
+    print(f"      • FPR:         {fpr:.4f} (false alarm rate)")
+    print(f"      • FNR:         {fnr:.4f} (miss rate)")
+
+    return {
+        "tn": tn, "fp": fp, "fn": fn, "tp": tp,
+        "accuracy": accuracy, "precision": precision, "recall": recall,
+        "specificity": specificity, "f1": f1, "npv": npv, "fpr": fpr, "fnr": fnr
+    }
+
+
+def print_classification_report(y_true: np.ndarray, y_pred: np.ndarray) -> None:
+    """Print scikit-learn classification report with formatting."""
+    from sklearn.metrics import classification_report
+
+    print("\n  Classification Report (per-class):")
+    report = classification_report(y_true, y_pred, target_names=["Class 0 (No Discont.)", "Class 1 (Discont.)"])
+    for line in report.split('\n'):
+        print(f"    {line}")
+
+
+def print_threshold_analysis(y_true: np.ndarray, y_proba: np.ndarray) -> None:
+    """Analyze model performance at different probability thresholds."""
+    from sklearn.metrics import precision_score, recall_score, f1_score
+
+    thresholds = [0.3, 0.4, 0.5, 0.6, 0.7]
+
+    print("\n  Threshold Analysis:")
+    print(f"    {'Threshold':<12} {'Precision':<12} {'Recall':<12} {'F1':<12} {'Pred Pos':<12}")
+    print(f"    {'-'*56}")
+
+    for thresh in thresholds:
+        y_pred_at_thresh = (y_proba >= thresh).astype(int)
+        prec = precision_score(y_true, y_pred_at_thresh, zero_division=0)
+        rec = recall_score(y_true, y_pred_at_thresh, zero_division=0)
+        f1 = f1_score(y_true, y_pred_at_thresh, zero_division=0)
+        n_pred_pos = y_pred_at_thresh.sum()
+
+        marker = " ◄── default" if thresh == 0.5 else ""
+        print(f"    {thresh:<12.1f} {prec:<12.4f} {rec:<12.4f} {f1:<12.4f} {n_pred_pos:<12}{marker}")
+
+
+def print_model_coefficients(model: Any, feature_names: list[str]) -> None:
+    """Print model coefficients/weights for interpretability."""
+    print("\n  Model Coefficients/Weights:")
+
+    # Handle different model types
+    if hasattr(model, 'coef_'):
+        coefs = model.coef_.flatten()
+        intercept = getattr(model, 'intercept_', [0])[0]
+
+        print(f"    Intercept: {intercept:.4f}")
+        print(f"    Feature Coefficients:")
+
+        # Sort by absolute value
+        coef_pairs = list(zip(feature_names, coefs))
+        coef_pairs.sort(key=lambda x: abs(x[1]), reverse=True)
+
+        for name, coef in coef_pairs:
+            direction = "↑" if coef > 0 else "↓" if coef < 0 else "○"
+            print(f"      {direction} {name}: {coef:+.4f}")
+
+    elif hasattr(model, 'feature_importances_'):
+        importances = model.feature_importances_
+        print(f"    Feature Importances (tree-based):")
+
+        imp_pairs = list(zip(feature_names, importances))
+        imp_pairs.sort(key=lambda x: x[1], reverse=True)
+
+        for name, imp in imp_pairs:
+            bar = "█" * int(imp * 20)
+            print(f"      {name}: {imp:.4f} {bar}")
+    else:
+        print(f"    (Model type {type(model).__name__} does not expose coefficients)")
+
+
+def print_data_distribution_analysis(y_train: np.ndarray, y_val: np.ndarray, y_test: np.ndarray = None) -> None:
+    """Print data distribution across splits."""
+    print("\n  Data Distribution Analysis:")
+
+    def calc_dist(y, name):
+        if y is None or len(y) == 0:
+            return
+        unique, counts = np.unique(y, return_counts=True)
+        total = len(y)
+        print(f"\n    {name} (n={total}):")
+        for cls, cnt in zip(unique, counts):
+            pct = cnt / total * 100
+            bar = "█" * int(pct / 5)
+            print(f"      Class {cls}: {cnt:4d} ({pct:5.1f}%) {bar}")
+
+    calc_dist(y_train, "Training Set")
+    calc_dist(y_val, "Validation Set")
+    if y_test is not None:
+        calc_dist(y_test, "Test Set")
+
+
 def print_detailed_summary(
     experiment_id: str,
     step_results: list[StepResult],
@@ -201,6 +346,41 @@ def print_detailed_summary(
                     print(f"    {key}: [{len(value)} items]")
                 else:
                     print(f"    {key}: {value}")
+
+    # Cohort Construction Analysis
+    cohort_result = state.get("cohort_result")
+    if cohort_result:
+        print(f"\n{'='*70}")
+        print("COHORT CONSTRUCTION ANALYSIS")
+        print(f"{'='*70}")
+
+        patient_df = state.get("patient_df")
+        eligible_df = state.get("eligible_df")
+        input_count = len(patient_df) if patient_df is not None else 0
+        eligible_count = len(eligible_df) if eligible_df is not None else 0
+        excluded_count = input_count - eligible_count
+
+        print(f"\n  📊 Patient Flow:")
+        print(f"    • Input Patients:    {input_count}")
+        print(f"    • Eligible Patients: {eligible_count}")
+        print(f"    • Excluded Patients: {excluded_count}")
+        if input_count > 0:
+            print(f"    • Retention Rate:    {eligible_count / input_count:.1%}")
+
+        if hasattr(cohort_result, 'eligibility_stats') and cohort_result.eligibility_stats:
+            stats = cohort_result.eligibility_stats
+            print(f"\n  📋 Eligibility Statistics:")
+            for key, value in stats.items():
+                if isinstance(value, float):
+                    print(f"    • {key}: {value:.4f}")
+                else:
+                    print(f"    • {key}: {value}")
+
+        # Show what criteria were applied
+        print(f"\n  🔍 Applied Criteria:")
+        print(f"    • Cohort ID: {cohort_result.cohort_id}")
+        print(f"    • Execution ID: {cohort_result.execution_id}")
+        print(f"    • Status: {cohort_result.status}")
 
     # Class Imbalance Section
     class_imbalance_info = state.get("class_imbalance_info", {})
@@ -291,6 +471,68 @@ def print_detailed_summary(
         for key, value in validation_metrics.items():
             if "class_" in key and value is not None:
                 print(f"    • {key}: {value:.4f}")
+
+    # =========================================================================
+    # ENHANCED ACCURACY ANALYSIS SECTION
+    # =========================================================================
+    accuracy_data = state.get("accuracy_analysis", {})
+    if accuracy_data:
+        print(f"\n{'='*70}")
+        print("ENHANCED ACCURACY ANALYSIS")
+        print(f"{'='*70}")
+
+        # Confusion Matrix
+        if accuracy_data.get("y_true") is not None and accuracy_data.get("y_pred") is not None:
+            y_true = np.array(accuracy_data["y_true"])
+            y_pred = np.array(accuracy_data["y_pred"])
+            y_proba = np.array(accuracy_data["y_proba"]) if accuracy_data.get("y_proba") is not None else None
+
+            # Print confusion matrix with all derived metrics
+            print_confusion_matrix(y_true, y_pred, y_proba, "Validation Set Confusion Matrix")
+
+            # Print full classification report
+            print_classification_report(y_true, y_pred)
+
+            # Threshold analysis (if probabilities available)
+            if y_proba is not None:
+                print_threshold_analysis(y_true, y_proba)
+
+        # Model coefficients/weights
+        trained_model = state.get("trained_model")
+        if trained_model is not None:
+            feature_cols = accuracy_data.get("feature_columns", ["days_on_therapy", "hcp_visits", "prior_treatments"])
+            print_model_coefficients(trained_model, feature_cols)
+
+        # Data distribution across splits
+        if accuracy_data.get("y_train") is not None:
+            print_data_distribution_analysis(
+                np.array(accuracy_data.get("y_train", [])),
+                np.array(accuracy_data.get("y_val", [])),
+                np.array(accuracy_data.get("y_test", []))
+            )
+
+        # Train vs Validation comparison (overfitting check)
+        train_metrics = accuracy_data.get("train_metrics", {})
+        val_metrics = accuracy_data.get("val_metrics", {})
+        if train_metrics and val_metrics:
+            print("\n  Overfitting Analysis (Train vs Validation):")
+            print(f"    {'Metric':<15} {'Train':<12} {'Validation':<12} {'Delta':<12} {'Status':<15}")
+            print(f"    {'-'*60}")
+
+            for metric in ["accuracy", "precision", "recall", "f1", "roc_auc"]:
+                train_val = train_metrics.get(metric)
+                val_val = val_metrics.get(metric)
+                if train_val is not None and val_val is not None:
+                    delta = train_val - val_val
+                    if delta > 0.1:
+                        status = "⚠️ Overfitting"
+                    elif delta > 0.05:
+                        status = "⚡ Mild overfit"
+                    elif delta < -0.05:
+                        status = "❓ Unusual"
+                    else:
+                        status = "✅ Good"
+                    print(f"    {metric:<15} {train_val:<12.4f} {val_val:<12.4f} {delta:+<12.4f} {status:<15}")
 
     # Deployment Info
     deployment_manifest = state.get("deployment_manifest", {})
@@ -950,6 +1192,75 @@ async def step_5_model_trainer(
     elif auc:
         print_warning(f"Model AUC ({auc:.3f}) below threshold ({CONFIG.min_auc_threshold})")
 
+    # =========================================================================
+    # ENHANCED ACCURACY DATA COLLECTION
+    # =========================================================================
+    # Capture detailed accuracy data for enhanced summary
+    trained_model = result.get("trained_model")
+    if trained_model is not None:
+        from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
+
+        # Get validation data predictions
+        X_val = validation_data["X"]
+        y_val = validation_data["y"]
+        X_train = train_data["X"]
+        y_train = train_data["y"]
+        X_test = test_data["X"]
+        y_test = test_data["y"]
+
+        # Generate predictions on validation set
+        y_val_pred = trained_model.predict(X_val)
+        y_val_proba = None
+        if hasattr(trained_model, 'predict_proba'):
+            y_val_proba = trained_model.predict_proba(X_val)[:, 1]
+
+        # Generate predictions on training set (for overfitting analysis)
+        y_train_pred = trained_model.predict(X_train)
+        y_train_proba = None
+        if hasattr(trained_model, 'predict_proba'):
+            y_train_proba = trained_model.predict_proba(X_train)[:, 1]
+
+        # Calculate train metrics
+        train_metrics = {
+            "accuracy": accuracy_score(y_train, y_train_pred),
+            "precision": precision_score(y_train, y_train_pred, zero_division=0),
+            "recall": recall_score(y_train, y_train_pred, zero_division=0),
+            "f1": f1_score(y_train, y_train_pred, zero_division=0),
+        }
+        if y_train_proba is not None:
+            try:
+                train_metrics["roc_auc"] = roc_auc_score(y_train, y_train_proba)
+            except ValueError:
+                pass
+
+        # Calculate validation metrics
+        val_metrics = {
+            "accuracy": accuracy_score(y_val, y_val_pred),
+            "precision": precision_score(y_val, y_val_pred, zero_division=0),
+            "recall": recall_score(y_val, y_val_pred, zero_division=0),
+            "f1": f1_score(y_val, y_val_pred, zero_division=0),
+        }
+        if y_val_proba is not None:
+            try:
+                val_metrics["roc_auc"] = roc_auc_score(y_val, y_val_proba)
+            except ValueError:
+                pass
+
+        # Store accuracy analysis data in result for state capture
+        result["accuracy_analysis"] = {
+            "y_true": y_val.tolist() if hasattr(y_val, 'tolist') else list(y_val),
+            "y_pred": y_val_pred.tolist() if hasattr(y_val_pred, 'tolist') else list(y_val_pred),
+            "y_proba": y_val_proba.tolist() if y_val_proba is not None else None,
+            "y_train": y_train.tolist() if hasattr(y_train, 'tolist') else list(y_train),
+            "y_val": y_val.tolist() if hasattr(y_val, 'tolist') else list(y_val),
+            "y_test": y_test.tolist() if hasattr(y_test, 'tolist') else list(y_test),
+            "train_metrics": train_metrics,
+            "val_metrics": val_metrics,
+            "feature_columns": feature_columns,
+        }
+
+        print_info(f"Captured accuracy analysis data: {len(y_val)} validation samples")
+
     return result
 
 
@@ -1470,6 +1781,10 @@ async def run_pipeline(
                 "new_minority_ratio": new_minority_ratio,
                 "resampling_strategy": result.get("resampling_strategy"),
             }
+
+            # Capture enhanced accuracy analysis data
+            if result.get("accuracy_analysis"):
+                state["accuracy_analysis"] = result["accuracy_analysis"]
 
             step_results.append(StepResult(
                 step_num=5,
