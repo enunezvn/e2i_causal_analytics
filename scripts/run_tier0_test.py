@@ -2005,6 +2005,11 @@ async def run_pipeline(
 
         # Final summary
         pipeline_duration = time.time() - pipeline_start_time
+
+        # Determine overall pipeline status
+        failed_steps = [r for r in step_results if r.status == "failed"]
+        warning_steps = [r for r in step_results if r.status == "warning"]
+
         print(f"\n{'='*70}")
         print("PIPELINE SUMMARY")
         print(f"{'='*70}")
@@ -2019,7 +2024,19 @@ async def run_pipeline(
         if include_bentoml and state.get("bentoml_pid"):
             print(f"  BentoML Serving: Verified (PID: {state['bentoml_pid']})")
         print(f"  Completed: {datetime.now().isoformat()}")
-        print_success("Pipeline completed successfully!")
+
+        # Print step status summary
+        success_count = len([r for r in step_results if r.status == "success"])
+        print(f"\n  Step Status: {success_count} success, {len(warning_steps)} warnings, {len(failed_steps)} failed")
+
+        if failed_steps:
+            print_failure(f"PIPELINE FAILED - {len(failed_steps)} step(s) failed:")
+            for step in failed_steps:
+                print(f"    • Step {step.step_num} ({step.step_name})")
+        elif warning_steps:
+            print_warning(f"Pipeline completed with {len(warning_steps)} warning(s)")
+        else:
+            print_success("Pipeline completed successfully!")
 
     except Exception as e:
         print_failure(f"Pipeline failed: {e}")
