@@ -599,6 +599,9 @@ class OptunaOptimizer:
     ) -> float:
         """Evaluate model on data.
 
+        For binary classification with imbalanced data, penalizes models
+        that predict all samples as the majority class (0% minority recall).
+
         Args:
             model: Trained model
             X: Features
@@ -614,7 +617,18 @@ class OptunaOptimizer:
             y_proba = model.predict_proba(X)[:, 1] if hasattr(model, "predict_proba") else y_pred
 
             if metric == "roc_auc":
-                return roc_auc_score(y, y_proba)
+                auc = roc_auc_score(y, y_proba)
+                # CRITICAL: Penalize models that predict all negatives
+                # These models have high AUC but are useless in practice
+                if problem_type == "binary_classification":
+                    minority_recall = recall_score(y, y_pred, pos_label=1, zero_division=0)
+                    if minority_recall == 0:
+                        # Heavy penalty: model predicts all negatives
+                        return auc * 0.5
+                    else:
+                        # Weighted combination: 70% AUC + 30% minority recall
+                        return auc * 0.7 + minority_recall * 0.3
+                return auc
             elif metric == "accuracy":
                 return accuracy_score(y, y_pred)
             elif metric == "f1":

@@ -630,7 +630,9 @@ def _get_fixed_params(
         }
 
     # Add class weight handling for imbalanced datasets
-    if imbalance_detected and recommended_strategy in ("class_weight", "combined"):
+    # CRITICAL: Always apply when imbalance detected, regardless of strategy
+    # Even with SMOTE, class_weight provides defense-in-depth
+    if imbalance_detected:
         if class_distribution and len(class_distribution) >= 2:
             counts = list(class_distribution.values())
             minority_count = min(counts)

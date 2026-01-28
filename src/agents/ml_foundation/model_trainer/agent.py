@@ -278,6 +278,9 @@ class ModelTrainerAgent:
 
         # Preprocessing and HPO info
         preprocessing_statistics = final_state.get("preprocessing_statistics", {})
+        fitted_preprocessor = final_state.get("fitted_preprocessor")  # For inference
+        X_validation_preprocessed = final_state.get("X_validation_preprocessed")  # For analysis
+        X_test_preprocessed = final_state.get("X_test_preprocessed")  # For analysis
         best_hyperparameters = final_state.get("best_hyperparameters", {})
         hpo_completed = final_state.get("hpo_completed", False)
         hpo_best_trial = final_state.get("hpo_best_trial")
@@ -379,6 +382,9 @@ class ModelTrainerAgent:
             "hpo_best_trial": hpo_best_trial,
             "hpo_trials_run": hpo_trials_run,
             "preprocessing_statistics": preprocessing_statistics,
+            "fitted_preprocessor": fitted_preprocessor,  # For inference on new data
+            "X_validation_preprocessed": X_validation_preprocessed,  # For analysis
+            "X_test_preprocessed": X_test_preprocessed,  # For analysis
             "training_duration_seconds": training_duration_seconds,
             "early_stopped": early_stopped,
             "training_started_at": training_started_at,
