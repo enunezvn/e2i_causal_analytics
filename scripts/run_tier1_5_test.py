@@ -234,6 +234,7 @@ AGENT_CONFIGS = {
         "is_async": False,  # sync method
         "input_module": "src.agents.experiment_designer.agent",
         "input_model": "ExperimentDesignerInput",
+        "timeout": 120.0,  # LLM-based validity audit needs more time
     },
     "health_score": {
         "tier": 3,
@@ -1091,13 +1092,15 @@ async def run_tests(
     total_start = time.time()
 
     for agent_name, config in agents_to_test.items():
+        # Use per-agent timeout if specified, otherwise use global timeout
+        agent_timeout = config.get("timeout", timeout_seconds)
         result = await test_agent(
             agent_name=agent_name,
             config=config,
             mapper=mapper,
             validator=validator,
             trace_verifier=trace_verifier,
-            timeout_seconds=timeout_seconds,
+            timeout_seconds=agent_timeout,
         )
         results.append(result)
         print_agent_result(result, verbose=verbose)
