@@ -96,19 +96,36 @@ CONFIG = TestConfig()
 
 @dataclass
 class StepResult:
-    """Result from a pipeline step."""
+    """Result from a pipeline step with enhanced format data."""
     step_num: int
     step_name: str
     status: str  # "success", "warning", "failed"
     duration_seconds: float = 0.0
     key_metrics: dict = None
     details: dict = None
+    # Enhanced format fields
+    input_summary: dict = None
+    processing_steps: list = None  # List of (description, success, detail)
+    validation_checks: list = None  # List of (name, passed, expected, actual)
+    metrics_table: list = None  # List of (name, value, threshold, passed)
+    interpretation: list = None  # List of observation strings
+    result_message: str = ""
 
     def __post_init__(self):
         if self.key_metrics is None:
             self.key_metrics = {}
         if self.details is None:
             self.details = {}
+        if self.input_summary is None:
+            self.input_summary = {}
+        if self.processing_steps is None:
+            self.processing_steps = []
+        if self.validation_checks is None:
+            self.validation_checks = []
+        if self.metrics_table is None:
+            self.metrics_table = []
+        if self.interpretation is None:
+            self.interpretation = []
 
 
 # =============================================================================
@@ -612,7 +629,7 @@ def print_detailed_summary(
     step_results: list[StepResult],
     state: dict[str, Any]
 ) -> None:
-    """Print detailed results from each tier0 step.
+    """Print detailed results from each tier0 step using enhanced format.
 
     Args:
         experiment_id: The experiment identifier
@@ -632,8 +649,33 @@ def print_detailed_summary(
         if result.duration_seconds > 0:
             print(f"  Duration: {result.duration_seconds:.2f}s")
 
-        # Print key metrics
-        if result.key_metrics:
+        # Enhanced format: Input Summary
+        if result.input_summary:
+            print_input_section(result.input_summary)
+
+        # Enhanced format: Processing Steps
+        if result.processing_steps:
+            print_processing_steps(result.processing_steps)
+
+        # Enhanced format: Validation Checks
+        if result.validation_checks:
+            print_validation_checks(result.validation_checks)
+
+        # Enhanced format: Metrics Table
+        if result.metrics_table:
+            print_metrics_table(result.metrics_table)
+
+        # Enhanced format: Interpretation
+        if result.interpretation:
+            title = f"{result.step_name} Analysis"
+            print_interpretation(title, result.interpretation)
+
+        # Enhanced format: Result
+        if result.result_message:
+            print_step_result(result.status, f"{result.result_message} ({result.duration_seconds:.1f}s)")
+
+        # Fallback: Print key metrics if no enhanced data
+        if not result.metrics_table and result.key_metrics:
             print("\n  Key Metrics:")
             for key, value in result.key_metrics.items():
                 if isinstance(value, float):
@@ -641,8 +683,8 @@ def print_detailed_summary(
                 else:
                     print(f"    • {key}: {value}")
 
-        # Print step-specific details
-        if result.details:
+        # Fallback: Print details if no enhanced data
+        if not result.input_summary and result.details:
             print("\n  Details:")
             for key, value in result.details.items():
                 if isinstance(value, dict):
