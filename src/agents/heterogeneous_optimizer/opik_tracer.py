@@ -588,9 +588,11 @@ class HeterogeneousOptimizerOpikTracer:
 
         try:
             # Create Opik trace if enabled and sampled
+            opik_span = None
             if self.is_enabled and self._should_trace():
                 try:
-                    async with self._opik_connector.trace_agent(
+                    # Enter the Opik context manager manually to avoid nested yield issues
+                    opik_cm = self._opik_connector.trace_agent(
                         agent_name="heterogeneous_optimizer",
                         operation="analyze",
                         trace_id=trace_id,
@@ -608,14 +610,15 @@ class HeterogeneousOptimizerOpikTracer:
                             "segment_vars": (segment_vars or [])[:10],
                         },
                         force_new_trace=True,
-                    ) as span:
-                        trace_ctx._opik_span = span
-                        yield trace_ctx
-                        return
+                    )
+                    opik_span = await opik_cm.__aenter__()
+                    trace_ctx._opik_span = opik_span
                 except Exception as e:
                     logger.debug(f"Opik tracing failed, continuing without: {e}")
+                    opik_span = None
+                    opik_cm = None
 
-            # Fall through to non-traced version
+            # Single yield point - avoids "generator didn't stop after athrow()" errors
             yield trace_ctx
 
         except Exception as e:
@@ -624,6 +627,13 @@ class HeterogeneousOptimizerOpikTracer:
             raise
 
         finally:
+            # Clean up Opik context manager if it was entered
+            if opik_span is not None and opik_cm is not None:
+                try:
+                    await opik_cm.__aexit__(None, None, None)
+                except Exception as e:
+                    logger.debug(f"Opik cleanup failed (non-fatal): {e}")
+
             # Record final timing
             end_time = datetime.now(timezone.utc)
             trace_ctx.end_time = end_time
