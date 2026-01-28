@@ -929,6 +929,50 @@ def print_detailed_summary(
             print(f"    3. Collect more minority class samples")
             print(f"    4. Try ensemble methods (RandomForest, XGBoost)")
             print(f"\n  ❌ VERDICT: FAIL - Model should NOT be deployed")
+        elif total_pred > 0:
+            # Model makes positive predictions - evaluate usefulness
+            val_metrics = accuracy_data.get("val_metrics", {}) if accuracy_data else {}
+            auc_roc = val_metrics.get("roc_auc", 0)
+            recall = val_metrics.get("recall", 0)
+            precision = val_metrics.get("precision", 0)
+            f1 = val_metrics.get("f1", 0)
+
+            # Determine verdict based on metrics
+            if auc_roc >= 0.85 and recall >= 0.7:
+                verdict = "EXCELLENT"
+                icon = "🌟"
+                description = "Model has strong discrimination and high recall"
+                deploy_recommendation = "Ready for production deployment"
+            elif auc_roc >= 0.75 and recall >= 0.5:
+                verdict = "GOOD"
+                icon = "✅"
+                description = "Model has good discrimination and acceptable recall"
+                deploy_recommendation = "Suitable for staging/production with monitoring"
+            elif auc_roc >= 0.65 and recall >= 0.3:
+                verdict = "ACCEPTABLE"
+                icon = "⚡"
+                description = "Model has moderate performance, meets minimum thresholds"
+                deploy_recommendation = "Deploy with caution, monitor closely"
+            elif auc_roc >= 0.55:
+                verdict = "MARGINAL"
+                icon = "⚠️"
+                description = "Model barely exceeds random chance"
+                deploy_recommendation = "Consider retraining with more data or different approach"
+            else:
+                verdict = "POOR"
+                icon = "❌"
+                description = "Model performs near or below random chance"
+                deploy_recommendation = "Do not deploy, requires significant improvement"
+
+            print(f"\n  {icon} VERDICT: {verdict}")
+            print(f"\n  Assessment: {description}")
+            print(f"\n  Key Metrics:")
+            print(f"    • AUC-ROC:   {auc_roc:.4f}")
+            print(f"    • Recall:    {recall:.4f} ({recall*100:.1f}% of positives detected)")
+            print(f"    • Precision: {precision:.4f} ({precision*100:.1f}% of predictions correct)")
+            print(f"    • F1 Score:  {f1:.4f}")
+            print(f"    • Positive Predictions: {n_pos_pred}/{total_pred} ({n_pos_pred/total_pred*100:.1f}%)")
+            print(f"\n  Recommendation: {deploy_recommendation}")
 
     # Deployment Info
     deployment_manifest = state.get("deployment_manifest", {})
