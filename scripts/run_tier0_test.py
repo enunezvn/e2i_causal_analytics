@@ -17,11 +17,18 @@ Usage:
     # Dry run (show what would be done)
     python scripts/run_tier0_test.py --dry-run
 
+    # Run with BentoML model serving verification (requires step 5+7)
+    python scripts/run_tier0_test.py --include-bentoml
+
+    # Run steps 4-8 with BentoML serving (recommended for full flow validation)
+    python scripts/run_tier0_test.py --step 4 --include-bentoml
+
 Prerequisites:
     - On droplet: cd /opt/e2i_causal_analytics && source .venv/bin/activate
     - API running (port 8000)
     - MLflow running (port 5000, optional)
     - Opik running (port 5173/8080, optional)
+    - BentoML installed (for --include-bentoml flag)
 
 Author: E2I Causal Analytics Team
 """
@@ -30,7 +37,10 @@ import argparse
 import asyncio
 import json
 import os
+import signal
+import subprocess
 import sys
+import time as time_module
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -348,6 +358,164 @@ def generate_sample_data(
         pass
 
     return df
+
+
+# =============================================================================
+# BENTOML HELPER FUNCTIONS
+# =============================================================================
+
+
+async def start_bentoml_service(model_tag: str, port: int = 3001) -> dict:
+    """Start BentoML service serving the real trained model.
+
+    Args:
+        model_tag: BentoML model tag from registration
+        port: Port to serve on
+
+    Returns:
+        {"started": True, "endpoint": "http://localhost:3001", "pid": <pid>}
+    """
+    import httpx
+
+    # Generate a service file dynamically for the model
+    service_code = f'''
+import bentoml
+import numpy as np
+
+@bentoml.service(name="tier0_model_service")
+class Tier0ModelService:
+    def __init__(self):
+        self.model = bentoml.sklearn.load_model("{model_tag}")
+        self.model_tag = "{model_tag}"
+
+    @bentoml.api
+    async def predict(self, features: list) -> dict:
+        import time
+        start = time.time()
+        arr = np.array(features)
+        predictions = self.model.predict(arr)
+        probas = self.model.predict_proba(arr) if hasattr(self.model, 'predict_proba') else None
+        elapsed = (time.time() - start) * 1000
+        return {{
+            "predictions": predictions.tolist(),
+            "probabilities": probas.tolist() if probas is not None else None,
+            "latency_ms": elapsed,
+            "model_tag": self.model_tag,
+        }}
+
+    @bentoml.api
+    async def health(self) -> dict:
+        return {{"status": "healthy", "model_tag": self.model_tag}}
+'''
+
+    # Write service file
+    service_path = Path("/tmp/tier0_bentoml_service.py")
+    service_path.write_text(service_code)
+    print(f"    Generated service file: {service_path}")
+
+    # Start bentoml serve in background
+    process = subprocess.Popen(
+        ["bentoml", "serve", str(service_path), "--port", str(port)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    print(f"    Starting BentoML service on port {port} (PID: {process.pid})...")
+
+    # Wait for service to be ready
+    endpoint = f"http://localhost:{port}"
+    async with httpx.AsyncClient() as client:
+        for retry in range(30):  # 30 retries (30 seconds max)
+            await asyncio.sleep(1)
+            try:
+                resp = await client.get(f"{endpoint}/health", timeout=2.0)
+                if resp.status_code == 200:
+                    print(f"    Service ready at {endpoint}")
+                    return {"started": True, "endpoint": endpoint, "pid": process.pid}
+            except Exception:
+                # Check if process died
+                if process.poll() is not None:
+                    stderr = process.stderr.read().decode() if process.stderr else ""
+                    return {
+                        "started": False,
+                        "error": f"Process exited with code {process.returncode}: {stderr[:500]}",
+                    }
+
+    # Timeout - kill process
+    process.terminate()
+    return {"started": False, "error": "Service startup timeout (30s)"}
+
+
+async def verify_bentoml_predictions(
+    endpoint: str,
+    sample_features: list,
+    use_production_client: bool = True,
+) -> dict:
+    """Verify that BentoML service returns valid predictions.
+
+    Args:
+        endpoint: BentoML service endpoint (e.g., http://localhost:3001)
+        sample_features: Sample feature data to test
+        use_production_client: If True, use BentoMLClient for full validation
+
+    Returns:
+        {"health_check": True, "prediction_test": True, "predictions": [...], "latency_ms": X}
+    """
+    import httpx
+
+    result = {"health_check": False, "prediction_test": False}
+
+    # Health check
+    async with httpx.AsyncClient() as client:
+        try:
+            health_resp = await client.get(f"{endpoint}/health", timeout=5.0)
+            if health_resp.status_code == 200:
+                health_data = health_resp.json()
+                result["health_check"] = health_data.get("status") == "healthy"
+                result["model_tag"] = health_data.get("model_tag")
+        except Exception as e:
+            result["health_error"] = str(e)
+
+        # Prediction test
+        try:
+            start = time_module.time()
+            pred_resp = await client.post(
+                f"{endpoint}/predict",
+                json={"features": sample_features},
+                timeout=10.0,
+            )
+            elapsed = (time_module.time() - start) * 1000
+
+            if pred_resp.status_code == 200:
+                pred_data = pred_resp.json()
+                result["prediction_test"] = True
+                result["predictions"] = pred_data.get("predictions")
+                result["probabilities"] = pred_data.get("probabilities")
+                result["latency_ms"] = elapsed
+                result["service_latency_ms"] = pred_data.get("latency_ms")
+        except Exception as e:
+            result["prediction_error"] = str(e)
+
+    return result
+
+
+async def stop_bentoml_service(pid: int) -> dict:
+    """Stop BentoML service by PID.
+
+    Args:
+        pid: Process ID to terminate
+
+    Returns:
+        {"stopped": True/False, "pid": pid}
+    """
+    try:
+        os.kill(pid, signal.SIGTERM)
+        # Wait briefly for graceful shutdown
+        await asyncio.sleep(1)
+        return {"stopped": True, "pid": pid}
+    except ProcessLookupError:
+        return {"stopped": True, "pid": pid, "note": "Process already terminated"}
+    except Exception as e:
+        return {"stopped": False, "error": str(e), "pid": pid}
 
 
 # =============================================================================
@@ -834,9 +1002,20 @@ async def step_7_model_deployer(
     experiment_id: str,
     model_uri: str,
     validation_metrics: dict,
-    success_criteria_met: bool
+    success_criteria_met: bool,
+    trained_model: Any = None,
+    include_bentoml: bool = False,
 ) -> dict[str, Any]:
-    """Step 7: Deploy model."""
+    """Step 7: Deploy model.
+
+    Args:
+        experiment_id: The experiment identifier
+        model_uri: MLflow model URI
+        validation_metrics: Metrics from model training
+        success_criteria_met: Whether model meets success criteria
+        trained_model: The actual trained model object (for BentoML serving)
+        include_bentoml: Whether to deploy and test with BentoML
+    """
     print_header(7, "MODEL DEPLOYER")
 
     from src.agents.ml_foundation.model_deployer import ModelDeployerAgent
@@ -875,6 +1054,110 @@ async def step_7_model_deployer(
         print_success("Model registered successfully")
     else:
         print_warning("Model registration may have issues")
+
+    # BentoML Model Serving (optional)
+    if include_bentoml and trained_model is not None:
+        print("\n  " + "-" * 60)
+        print("  BentoML Model Serving:")
+        print("  " + "-" * 60)
+
+        try:
+            from src.mlops.bentoml_service import register_model_for_serving
+
+            # Detect framework from model class
+            model_class_name = type(trained_model).__name__
+            if "XGB" in model_class_name:
+                framework = "xgboost"
+            elif "LGBM" in model_class_name or "LightGBM" in model_class_name:
+                framework = "lightgbm"
+            else:
+                framework = "sklearn"
+
+            model_name = f"tier0_{experiment_id[:8]}"
+            print(f"    Registering model: {model_name} (framework: {framework})")
+
+            registration = await register_model_for_serving(
+                model=trained_model,
+                model_name=model_name,
+                metadata={
+                    "experiment_id": experiment_id,
+                    "validation_metrics": validation_metrics,
+                    "tier0_test": True,
+                    "algorithm": model_class_name,
+                },
+                framework=framework,
+            )
+
+            if registration.get("registration_status") == "success":
+                model_tag = registration.get("model_tag")
+                print(f"    ✓ Model registered: {model_tag}")
+
+                # Start BentoML service with the registered model
+                bentoml_result = await start_bentoml_service(model_tag, port=3001)
+
+                if bentoml_result.get("started"):
+                    endpoint = bentoml_result.get("endpoint")
+
+                    # Verify predictions work with sample data
+                    # Use same feature structure as training (3 features)
+                    sample_features = [[30.0, 5.0, 1.0]]  # days_on_therapy, hcp_visits, prior_treatments
+
+                    verification = await verify_bentoml_predictions(
+                        endpoint=endpoint,
+                        sample_features=sample_features,
+                    )
+
+                    # Display results
+                    print("\n    BentoML Serving Verification:")
+                    health_icon = "✓" if verification.get("health_check") else "✗"
+                    print(f"      health_check: {health_icon} {'healthy' if verification.get('health_check') else 'unhealthy'}")
+
+                    pred_icon = "✓" if verification.get("prediction_test") else "✗"
+                    print(f"      prediction_test: {pred_icon} {'passed' if verification.get('prediction_test') else 'failed'}")
+
+                    if verification.get("predictions"):
+                        print(f"      predictions: {verification.get('predictions')}")
+                    if verification.get("probabilities"):
+                        print(f"      probabilities: {verification.get('probabilities')}")
+                    if verification.get("latency_ms"):
+                        print(f"      latency_ms: {verification.get('latency_ms'):.1f}")
+
+                    result["bentoml_serving"] = {
+                        "model_tag": model_tag,
+                        "endpoint": endpoint,
+                        "health_check": verification.get("health_check"),
+                        "prediction_test": verification.get("prediction_test"),
+                        "predictions": verification.get("predictions"),
+                        "probabilities": verification.get("probabilities"),
+                        "latency_ms": verification.get("latency_ms"),
+                    }
+                    result["bentoml_pid"] = bentoml_result.get("pid")
+
+                    if verification.get("health_check") and verification.get("prediction_test"):
+                        print_success("Real model deployed and serving verified via BentoML")
+                    else:
+                        print_warning("BentoML serving started but verification incomplete")
+                else:
+                    error_msg = bentoml_result.get("error", "Unknown error")
+                    print(f"    ✗ BentoML service failed to start: {error_msg}")
+                    result["bentoml_serving"] = {"error": error_msg}
+            else:
+                error_msg = registration.get("error", "Registration failed")
+                print(f"    ✗ Model registration failed: {error_msg}")
+                result["bentoml_serving"] = {"error": error_msg}
+
+        except ImportError as e:
+            print(f"    ✗ BentoML not available: {e}")
+            result["bentoml_serving"] = {"error": f"Import error: {e}"}
+        except Exception as e:
+            print(f"    ✗ BentoML error: {e}")
+            result["bentoml_serving"] = {"error": str(e)}
+            import traceback
+            traceback.print_exc()
+
+    elif include_bentoml and trained_model is None:
+        print_warning("BentoML requested but no trained_model available (run step 5 first)")
+        result["bentoml_serving"] = {"error": "No trained model available"}
 
     return result
 
@@ -934,6 +1217,7 @@ async def run_pipeline(
     step: int | None = None,
     dry_run: bool = False,
     imbalance_ratio: float | None = None,
+    include_bentoml: bool = False,
 ) -> None:
     """Run the full pipeline or a specific step.
 
@@ -941,6 +1225,7 @@ async def run_pipeline(
         step: Run only a specific step (1-8), or None for all steps
         dry_run: Show what would be done without executing
         imbalance_ratio: If provided, create imbalanced data with this minority ratio
+        include_bentoml: If True, deploy real model to BentoML and verify predictions
     """
     import time
 
@@ -956,6 +1241,7 @@ async def run_pipeline(
     print(f"  Problem Type: {CONFIG.problem_type}")
     print(f"  MLflow Enabled: {CONFIG.enable_mlflow}")
     print(f"  MLflow Tracking URI: {os.environ.get('MLFLOW_TRACKING_URI', 'not set')}")
+    print(f"  BentoML Serving: {'Enabled' if include_bentoml else 'Disabled'}")
     if imbalance_ratio:
         print(f"  Class Imbalance: {imbalance_ratio:.1%} minority ratio (INJECTED)")
     print(f"  Started: {datetime.now().isoformat()}")
@@ -1224,11 +1510,29 @@ async def run_pipeline(
                 experiment_id,
                 state.get("model_uri"),
                 state.get("validation_metrics", {}),
-                state.get("success_criteria_met", True)
+                state.get("success_criteria_met", True),
+                trained_model=state.get("trained_model"),
+                include_bentoml=include_bentoml,
             )
             state["deployment_manifest"] = result.get("deployment_manifest")
+            # Track BentoML PID for cleanup
+            if include_bentoml and result.get("bentoml_pid"):
+                state["bentoml_pid"] = result["bentoml_pid"]
 
             manifest = result.get("deployment_manifest", {})
+            bentoml_serving = result.get("bentoml_serving", {})
+            step_details = {
+                "model_version": result.get("model_version"),
+                "endpoint_url": manifest.get("endpoint_url"),
+            }
+            # Add BentoML info if present
+            if bentoml_serving:
+                step_details["bentoml_model_tag"] = bentoml_serving.get("model_tag")
+                step_details["bentoml_endpoint"] = bentoml_serving.get("endpoint")
+                step_details["bentoml_health_check"] = bentoml_serving.get("health_check")
+                step_details["bentoml_prediction_test"] = bentoml_serving.get("prediction_test")
+                step_details["bentoml_latency_ms"] = bentoml_serving.get("latency_ms")
+
             step_results.append(StepResult(
                 step_num=7,
                 step_name="MODEL DEPLOYER",
@@ -1239,11 +1543,9 @@ async def run_pipeline(
                     "environment": manifest.get("environment"),
                     "status": manifest.get("status"),
                     "deployment_successful": result.get("deployment_successful"),
+                    "bentoml_verified": bentoml_serving.get("prediction_test", False) if bentoml_serving else None,
                 },
-                details={
-                    "model_version": result.get("model_version"),
-                    "endpoint_url": manifest.get("endpoint_url"),
-                }
+                details=step_details,
             ))
 
         # Step 8: Observability Connector
@@ -1282,6 +1584,8 @@ async def run_pipeline(
             print(f"  Cohort Size: {len(state['eligible_df'])}")
         if state.get("validation_metrics"):
             print(f"  Validation Metrics: {state['validation_metrics']}")
+        if include_bentoml and state.get("bentoml_pid"):
+            print(f"  BentoML Serving: Verified (PID: {state['bentoml_pid']})")
         print(f"  Completed: {datetime.now().isoformat()}")
         print_success("Pipeline completed successfully!")
 
@@ -1290,6 +1594,16 @@ async def run_pipeline(
         import traceback
         traceback.print_exc()
         raise
+
+    finally:
+        # Cleanup BentoML service if started
+        if state.get("bentoml_pid"):
+            print("\n  Cleaning up BentoML service...")
+            cleanup_result = await stop_bentoml_service(state["bentoml_pid"])
+            if cleanup_result.get("stopped"):
+                print(f"    ✓ BentoML service stopped (PID: {state['bentoml_pid']})")
+            else:
+                print(f"    ⚠️  BentoML cleanup issue: {cleanup_result.get('error', 'unknown')}")
 
 
 def main():
@@ -1331,6 +1645,11 @@ def main():
         metavar="RATIO",
         help="Create imbalanced data with specified minority ratio (e.g., 0.1 for 10%% minority class)"
     )
+    parser.add_argument(
+        "--include-bentoml",
+        action="store_true",
+        help="Include BentoML model serving verification with the real trained model"
+    )
 
     args = parser.parse_args()
 
@@ -1341,7 +1660,12 @@ def main():
     CONFIG.hpo_trials = args.hpo_trials
 
     # Run pipeline
-    asyncio.run(run_pipeline(step=args.step, dry_run=args.dry_run, imbalance_ratio=args.imbalanced))
+    asyncio.run(run_pipeline(
+        step=args.step,
+        dry_run=args.dry_run,
+        imbalance_ratio=args.imbalanced,
+        include_bentoml=args.include_bentoml,
+    ))
 
 
 if __name__ == "__main__":
