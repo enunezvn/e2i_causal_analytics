@@ -440,8 +440,8 @@ class ModelTrainerAgent:
     async def _persist_training_run(self, output: Dict[str, Any]) -> bool:
         """Persist training run to ml_training_runs table.
 
-        Graceful degradation: If repository is unavailable,
-        logs a debug message and continues without error.
+        Graceful degradation: If repository is unavailable or the parent
+        experiment doesn't exist, logs a message and continues without error.
 
         Args:
             output: Agent output containing training run details
@@ -449,7 +449,7 @@ class ModelTrainerAgent:
         Returns:
             True if persisted successfully, False otherwise
         """
-        from uuid import UUID, uuid4
+        from uuid import uuid4
 
         try:
             repo = await _get_training_run_repository()
@@ -457,18 +457,41 @@ class ModelTrainerAgent:
                 logger.debug("Skipping training run persistence (no repository)")
                 return False
 
-            # Convert experiment_id to UUID if it's a string
+            # Look up the experiment by its mlflow_experiment_id to get the actual UUID
             experiment_id_str = output.get("experiment_id", "")
-            try:
-                experiment_id = UUID(experiment_id_str) if experiment_id_str else uuid4()
-            except (ValueError, TypeError):
-                # If not a valid UUID string, generate a new one
-                experiment_id = uuid4()
+            experiment_uuid = None
+
+            if experiment_id_str:
+                try:
+                    # Get the experiment repository to look up by mlflow_id
+                    from src.repositories.ml_experiment import MLExperimentRepository
+                    from src.memory.services.factories import get_async_supabase_client
+
+                    client = await get_async_supabase_client()
+                    exp_repo = MLExperimentRepository(supabase_client=client)
+                    experiment = await exp_repo.get_by_mlflow_id(experiment_id_str)
+
+                    if experiment and experiment.id:
+                        experiment_uuid = experiment.id
+                        logger.debug(f"Found experiment {experiment_id_str} with UUID {experiment_uuid}")
+                    else:
+                        logger.debug(
+                            f"Experiment {experiment_id_str} not found in database, "
+                            "skipping training run persistence"
+                        )
+                        return False
+                except Exception as lookup_err:
+                    logger.debug(f"Could not look up experiment: {lookup_err}")
+                    return False
+
+            if not experiment_uuid:
+                logger.debug("No valid experiment UUID, skipping training run persistence")
+                return False
 
             # Create training run record using create_run_with_hpo
             # which accepts HPO-related parameters
             result = await repo.create_run_with_hpo(
-                experiment_id=experiment_id,
+                experiment_id=experiment_uuid,
                 run_name=output.get("training_run_id", f"run_{uuid4().hex[:8]}"),
                 mlflow_run_id=output.get("mlflow_run_id", ""),
                 algorithm=output.get("algorithm_name", "unknown"),
@@ -493,7 +516,7 @@ class ModelTrainerAgent:
 
                 logger.info(
                     f"Persisted training run: {result.run_name} "
-                    f"for experiment {experiment_id}"
+                    f"for experiment {experiment_uuid}"
                 )
                 return True
 
