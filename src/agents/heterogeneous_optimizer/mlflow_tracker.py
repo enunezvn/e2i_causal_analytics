@@ -198,10 +198,15 @@ class HeterogeneousOptimizerMLflowTracker:
                 run_name or f"cate_analysis_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
             )
 
-            with mlflow.start_run(
+            # Manually manage MLflow run to avoid mixing sync/async context managers
+            # This prevents "generator didn't stop after athrow()" errors
+            run = mlflow.start_run(
                 experiment_id=experiment_id,
                 run_name=run_name,
-            ) as run:
+            )
+            run.__enter__()
+
+            try:
                 # Log standard tags
                 mlflow.set_tag("agent_type", "heterogeneous_optimizer")
                 mlflow.set_tag("agent_tier", "2")
@@ -235,10 +240,16 @@ class HeterogeneousOptimizerMLflowTracker:
                     query_id=query_id,
                 )
 
-                try:
-                    yield self._current_context
-                finally:
-                    self._current_context = None
+                yield self._current_context
+            except BaseException as exc:
+                # Properly exit MLflow run on exception
+                run.__exit__(type(exc), exc, exc.__traceback__)
+                self._current_context = None
+                raise
+            else:
+                # Clean exit - close MLflow run
+                run.__exit__(None, None, None)
+                self._current_context = None
         else:
             # Fallback: create dummy context
             from uuid import uuid4

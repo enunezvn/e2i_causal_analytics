@@ -1249,7 +1249,7 @@ async def run_pipeline(
     dry_run: bool = False,
     imbalance_ratio: float | None = None,
     include_bentoml: bool = False,
-) -> None:
+) -> dict[str, Any]:
     """Run the full pipeline or a specific step.
 
     Args:
@@ -1257,6 +1257,9 @@ async def run_pipeline(
         dry_run: Show what would be done without executing
         imbalance_ratio: If provided, create imbalanced data with this minority ratio
         include_bentoml: If True, deploy real model to BentoML and verify predictions
+
+    Returns:
+        State dictionary containing all pipeline outputs
     """
     import time
 
@@ -1635,6 +1638,8 @@ async def run_pipeline(
                 print(f"    ✓ BentoML service stopped (PID: {state['bentoml_pid']})")
             else:
                 print(f"    ⚠️  BentoML cleanup issue: {cleanup_result.get('error', 'unknown')}")
+
+    return state
 
 
 def main():
