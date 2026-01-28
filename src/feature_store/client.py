@@ -64,9 +64,9 @@ class FeatureStoreClient:
 
     def __init__(
         self,
-        supabase_url: str,
-        supabase_key: str,
-        redis_url: str,
+        supabase_url: Optional[str] = None,
+        supabase_key: Optional[str] = None,
+        redis_url: Optional[str] = None,
         mlflow_tracking_uri: Optional[str] = None,
         cache_ttl_seconds: int = 3600,
         enable_cache: bool = True,
@@ -75,13 +75,24 @@ class FeatureStoreClient:
         Initialize Feature Store Client.
 
         Args:
-            supabase_url: Supabase project URL
-            supabase_key: Supabase anon/service key
-            redis_url: Redis connection URL
+            supabase_url: Supabase project URL (defaults to SUPABASE_URL env var)
+            supabase_key: Supabase anon/service key (defaults to SUPABASE_KEY env var)
+            redis_url: Redis connection URL (defaults to REDIS_URL env var)
             mlflow_tracking_uri: MLflow tracking server URI
             cache_ttl_seconds: Default TTL for cached features (default: 1 hour)
             enable_cache: Enable Redis caching (default: True)
         """
+        # Read from environment variables if not provided
+        supabase_url = supabase_url or os.environ.get("SUPABASE_URL")
+        supabase_key = supabase_key or os.environ.get("SUPABASE_KEY") or os.environ.get("SUPABASE_SERVICE_KEY")
+        redis_url = redis_url or os.environ.get("REDIS_URL", "redis://localhost:6382")
+
+        if not supabase_url or not supabase_key:
+            raise ValueError(
+                "Supabase URL and key are required. "
+                "Provide them as arguments or set SUPABASE_URL and SUPABASE_KEY environment variables."
+            )
+
         # Initialize Supabase client
         self.supabase: Client = create_client(supabase_url, supabase_key)
 
