@@ -367,10 +367,39 @@ def create_bentofile(
     return bentofile_path
 
 
+def _bento_exists(bento_name: str, version: Optional[str] = None) -> bool:
+    """Check if a Bento with given name and version exists.
+
+    Args:
+        bento_name: Name of the bento
+        version: Optional specific version to check
+
+    Returns:
+        True if the bento exists, False otherwise
+    """
+    try:
+        check_target = f"{bento_name}:{version}" if version else bento_name
+        result = subprocess.run(
+            ["bentoml", "list", check_target, "-o", "json", "--quiet"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            # Parse JSON output to verify it's not empty
+            import json
+            bentos = json.loads(result.stdout)
+            return len(bentos) > 0
+        return False
+    except Exception as e:
+        logger.debug(f"Error checking bento existence: {e}")
+        return False
+
+
 def build_bento(
     service_dir: Union[str, Path],
     bento_name: Optional[str] = None,
     version: Optional[str] = None,
+    force_unique_version: bool = True,
 ) -> str:
     """Build a Bento from a service directory.
 
@@ -378,6 +407,8 @@ def build_bento(
         service_dir: Directory containing service and bentofile.yaml
         bento_name: Optional name override
         version: Optional version override
+        force_unique_version: If True and bento already exists, append timestamp
+            to version to ensure uniqueness (default: True)
 
     Returns:
         Bento tag string
@@ -386,6 +417,18 @@ def build_bento(
         raise ImportError("BentoML is not installed")
 
     service_dir = Path(service_dir)
+
+    # Check if bento with this name+version already exists
+    if force_unique_version and bento_name and version:
+        if _bento_exists(bento_name, version):
+            # Append timestamp to make version unique
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+            original_version = version
+            version = f"{version}_{timestamp}"
+            logger.info(
+                f"Bento '{bento_name}:{original_version}' already exists. "
+                f"Using unique version: {version}"
+            )
 
     # Build using bentoml CLI
     cmd = ["bentoml", "build", str(service_dir)]
@@ -398,19 +441,68 @@ def build_bento(
     result = subprocess.run(cmd, capture_output=True, text=True)
 
     if result.returncode != 0:
-        logger.error(f"Bento build failed: {result.stderr}")
-        raise RuntimeError(f"Bento build failed: {result.stderr}")
+        error_msg = result.stderr.strip()
 
-    # Extract tag from output
-    for line in result.stdout.split("\n"):
+        # Check if it's an "already exists" error despite our check
+        if "already exists" in error_msg.lower():
+            # Try one more time with a more unique version
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
+            version = f"{version or 'v1'}_{timestamp}"
+            cmd = ["bentoml", "build", str(service_dir)]
+            if bento_name:
+                cmd.extend(["--name", bento_name])
+            cmd.extend(["--version", version])
+
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                logger.error(f"Bento build failed (retry): {result.stderr}")
+                raise RuntimeError(f"Bento build failed: {result.stderr}")
+        else:
+            logger.error(f"Bento build failed: {error_msg}")
+            raise RuntimeError(f"Bento build failed: {error_msg}")
+
+    # Extract tag from output using multiple patterns
+    stdout = result.stdout
+    stderr = result.stderr
+
+    # Pattern 1: "Successfully built Bento(name:version)"
+    for line in stdout.split("\n"):
         if "Successfully built Bento" in line:
-            # Parse tag from output
-            tag = line.split(":")[-1].strip()
-            logger.info(f"Built Bento: {tag}")
+            # Try to extract tag from line
+            # Format: "Successfully built Bento(name:version)."
+            import re
+            match = re.search(r"Bento\(([^)]+)\)", line)
+            if match:
+                tag = match.group(1)
+                logger.info(f"Built Bento: {tag}")
+                return tag
+            # Fallback: split on Bento and take what's after
+            parts = line.split("Bento")
+            if len(parts) > 1:
+                tag = parts[-1].strip(" (.)").strip()
+                if ":" in tag:
+                    logger.info(f"Built Bento: {tag}")
+                    return tag
+
+    # Pattern 2: Look for tag in any output containing name:version
+    combined_output = stdout + "\n" + stderr
+    if bento_name:
+        import re
+        pattern = rf"{re.escape(bento_name)}:[^\s\)\]]+"
+        match = re.search(pattern, combined_output)
+        if match:
+            tag = match.group(0).rstrip(".")
+            logger.info(f"Built Bento (parsed): {tag}")
             return tag
 
-    logger.warning("Could not parse Bento tag from output")
-    return "unknown"
+    # Pattern 3: Construct tag from inputs if build succeeded
+    if result.returncode == 0 and bento_name and version:
+        tag = f"{bento_name}:{version}"
+        logger.info(f"Built Bento (constructed): {tag}")
+        return tag
+
+    logger.warning("Could not parse Bento tag from output, build may have succeeded")
+    return f"{bento_name}:{version}" if bento_name and version else "unknown"
 
 
 def containerize_bento(
