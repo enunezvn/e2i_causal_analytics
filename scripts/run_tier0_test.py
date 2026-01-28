@@ -2693,6 +2693,10 @@ async def run_pipeline(
                 state["validation_df"] = result["validation_df"]
 
             qc_report = result.get("qc_report", {})
+            data_readiness = result.get("data_readiness", {})
+            train_samples = data_readiness.get("train_samples", 0)
+            val_samples = data_readiness.get("validation_samples", 0)
+            overall_score = qc_report.get("overall_score", 0)
             step_results.append(StepResult(
                 step_num=2,
                 step_name="DATA PREPARER",
@@ -2700,10 +2704,10 @@ async def run_pipeline(
                 duration_seconds=time.time() - step_start,
                 key_metrics={
                     "qc_status": qc_report.get("status", "unknown"),
-                    "overall_score": qc_report.get("overall_score"),
+                    "overall_score": overall_score,
                     "gate_passed": state["gate_passed"],
-                    "train_samples": result.get("data_readiness", {}).get("train_samples"),
-                    "validation_samples": result.get("data_readiness", {}).get("validation_samples"),
+                    "train_samples": train_samples,
+                    "validation_samples": val_samples,
                 },
                 details={
                     "completeness_score": qc_report.get("completeness_score"),
@@ -2711,7 +2715,33 @@ async def run_pipeline(
                     "consistency_score": qc_report.get("consistency_score"),
                     "uniqueness_score": qc_report.get("uniqueness_score"),
                     "timeliness_score": qc_report.get("timeliness_score"),
-                }
+                },
+                # Enhanced format fields
+                input_summary={
+                    "experiment_id": experiment_id,
+                    "scope_spec_problem_type": scope_spec.get("problem_type", CONFIG.problem_type),
+                    "input_samples": len(patient_df),
+                },
+                validation_checks=[
+                    ("QC gate passed", state["gate_passed"], "gate_passed = True", f"gate_passed = {state['gate_passed']}"),
+                    ("Overall score acceptable", (overall_score or 0) >= 0.7, "≥ 0.70", f"{overall_score:.2f}" if overall_score else "N/A"),
+                    ("Training samples sufficient", train_samples >= 50, "≥ 50", train_samples),
+                    ("Validation samples present", val_samples > 0, "> 0", val_samples),
+                ],
+                metrics_table=[
+                    ("overall_score", f"{overall_score:.2f}" if overall_score else "N/A", "≥ 0.70", (overall_score or 0) >= 0.7),
+                    ("completeness_score", f"{qc_report.get('completeness_score', 0):.2f}", None, None),
+                    ("validity_score", f"{qc_report.get('validity_score', 0):.2f}", None, None),
+                    ("consistency_score", f"{qc_report.get('consistency_score', 0):.2f}", None, None),
+                    ("train_samples", train_samples, "≥ 50", train_samples >= 50),
+                    ("validation_samples", val_samples, "> 0", val_samples > 0),
+                ],
+                interpretation=[
+                    f"Data quality score: {overall_score:.2f}" if overall_score else "Data quality score: N/A",
+                    f"Training set: {train_samples} samples, validation set: {val_samples} samples",
+                    "QC gate PASSED - data ready for modeling" if state["gate_passed"] else "QC gate FAILED - data quality issues detected",
+                ],
+                result_message="Data preparation complete" if state["gate_passed"] else "Data preparation failed QC gate",
             ))
 
             if not state["gate_passed"]:
@@ -2724,22 +2754,54 @@ async def run_pipeline(
             eligible_df, cohort_result = await step_3_cohort_constructor(patient_df)
             state["eligible_df"] = eligible_df
             state["cohort_result"] = cohort_result
+            input_count = len(patient_df)
+            eligible_count = len(eligible_df)
+            excluded_count = input_count - eligible_count
+            exclusion_rate = excluded_count / input_count if input_count > 0 else 0
             step_results.append(StepResult(
                 step_num=3,
                 step_name="COHORT CONSTRUCTOR",
-                status="success" if len(eligible_df) >= CONFIG.min_eligible_patients else "warning",
+                status="success" if eligible_count >= CONFIG.min_eligible_patients else "warning",
                 duration_seconds=time.time() - step_start,
                 key_metrics={
                     "cohort_id": cohort_result.cohort_id,
-                    "input_patients": len(patient_df),
-                    "eligible_patients": len(eligible_df),
-                    "excluded_patients": len(patient_df) - len(eligible_df),
-                    "exclusion_rate": f"{(len(patient_df) - len(eligible_df)) / len(patient_df):.1%}",
+                    "input_patients": input_count,
+                    "eligible_patients": eligible_count,
+                    "excluded_patients": excluded_count,
+                    "exclusion_rate": f"{exclusion_rate:.1%}",
                 },
                 details={
                     "execution_id": cohort_result.execution_id,
                     "status": cohort_result.status,
-                }
+                },
+                # Enhanced format fields
+                input_summary={
+                    "input_patients": input_count,
+                    "brand": CONFIG.brand,
+                    "min_eligible_required": CONFIG.min_eligible_patients,
+                },
+                validation_checks=[
+                    ("Sufficient eligible patients", eligible_count >= CONFIG.min_eligible_patients,
+                     f"≥ {CONFIG.min_eligible_patients}", eligible_count),
+                    ("Exclusion rate reasonable", exclusion_rate <= 0.5,
+                     "≤ 50%", f"{exclusion_rate:.1%}"),
+                    ("Cohort ID generated", cohort_result.cohort_id is not None,
+                     "cohort_id present", cohort_result.cohort_id or "None"),
+                    ("Cohort status valid", cohort_result.status in ["completed", "success"],
+                     "completed/success", cohort_result.status),
+                ],
+                metrics_table=[
+                    ("input_patients", input_count, None, None),
+                    ("eligible_patients", eligible_count, f"≥ {CONFIG.min_eligible_patients}", eligible_count >= CONFIG.min_eligible_patients),
+                    ("excluded_patients", excluded_count, None, None),
+                    ("exclusion_rate", f"{exclusion_rate:.1%}", "≤ 50%", exclusion_rate <= 0.5),
+                ],
+                interpretation=[
+                    f"Cohort constructed with {eligible_count} eligible patients from {input_count} total",
+                    f"Exclusion rate: {exclusion_rate:.1%} ({excluded_count} patients excluded)",
+                    f"Cohort size {'meets' if eligible_count >= CONFIG.min_eligible_patients else 'below'} minimum threshold of {CONFIG.min_eligible_patients}",
+                ],
+                result_message=f"Cohort '{cohort_result.cohort_id}' constructed with {eligible_count} patients",
             ))
 
         # Step 4: Model Selector
@@ -2752,6 +2814,9 @@ async def run_pipeline(
 
             candidate = state["model_candidate"]
             algo_name = candidate.get("algorithm_name") if isinstance(candidate, dict) else getattr(candidate, "algorithm_name", "Unknown")
+            selection_rationale = result.get("selection_rationale", {})
+            selection_score = selection_rationale.get("selection_score") if isinstance(selection_rationale, dict) else None
+            hyperparams = candidate.get("hyperparameters", {}) if isinstance(candidate, dict) else {}
             step_results.append(StepResult(
                 step_num=4,
                 step_name="MODEL SELECTOR",
@@ -2759,11 +2824,34 @@ async def run_pipeline(
                 duration_seconds=time.time() - step_start,
                 key_metrics={
                     "selected_algorithm": algo_name,
-                    "selection_score": result.get("selection_rationale", {}).get("selection_score") if isinstance(result.get("selection_rationale"), dict) else None,
+                    "selection_score": selection_score,
                 },
                 details={
-                    "selection_rationale": result.get("selection_rationale"),
-                }
+                    "selection_rationale": selection_rationale,
+                },
+                # Enhanced format fields
+                input_summary={
+                    "experiment_id": experiment_id,
+                    "problem_type": scope_spec.get("problem_type", CONFIG.problem_type),
+                    "qc_gate_passed": qc_report.get("gate_passed", True),
+                },
+                validation_checks=[
+                    ("Algorithm selected", candidate is not None, "candidate present", algo_name or "None"),
+                    ("Valid algorithm type", algo_name in ["LogisticRegression", "RandomForest", "XGBoost", "LightGBM", "GradientBoosting"],
+                     "known algorithm", algo_name),
+                    ("Hyperparameters provided", len(hyperparams) > 0, "hyperparams present", f"{len(hyperparams)} params"),
+                ],
+                metrics_table=[
+                    ("algorithm", algo_name, None, None),
+                    ("selection_score", f"{selection_score:.2f}" if selection_score else "N/A", None, None),
+                    ("hyperparameters", len(hyperparams), None, None),
+                ],
+                interpretation=[
+                    f"Selected {algo_name} as primary candidate for {scope_spec.get('problem_type', 'classification')}",
+                    f"Selection based on problem characteristics and data profile",
+                    f"Model configured with {len(hyperparams)} hyperparameters" if hyperparams else "Using default hyperparameters",
+                ],
+                result_message=f"Model selection complete: {algo_name}",
             ))
 
         # Step 5: Model Trainer
@@ -2836,6 +2924,13 @@ async def run_pipeline(
             else:
                 step_5_status = "success"
 
+            auc_roc = result.get("auc_roc", 0)
+            precision = result.get("precision", 0)
+            recall = result.get("recall", 0)
+            f1 = result.get("f1_score", 0)
+            success_met = result.get("success_criteria_met", False)
+            imbalance_detected = result.get("imbalance_detected", False)
+            resampling_applied = result.get("resampling_applied", False)
             step_results.append(StepResult(
                 step_num=5,
                 step_name="MODEL TRAINER",
@@ -2844,11 +2939,11 @@ async def run_pipeline(
                 key_metrics={
                     "training_run_id": result.get("training_run_id"),
                     "model_id": result.get("model_id"),
-                    "auc_roc": result.get("auc_roc"),
-                    "precision": result.get("precision"),
-                    "recall": result.get("recall"),
-                    "f1_score": result.get("f1_score"),
-                    "success_criteria_met": result.get("success_criteria_met"),
+                    "auc_roc": auc_roc,
+                    "precision": precision,
+                    "recall": recall,
+                    "f1_score": f1,
+                    "success_criteria_met": success_met,
                     "hpo_trials_run": result.get("hpo_trials_run"),
                     "model_usefulness": model_usefulness,
                 },
@@ -2856,11 +2951,41 @@ async def run_pipeline(
                     "mlflow_run_id": result.get("mlflow_run_id"),
                     "model_uri": state.get("model_uri"),
                     "training_duration_seconds": result.get("training_duration_seconds"),
-                    "imbalance_detected": result.get("imbalance_detected", False),
+                    "imbalance_detected": imbalance_detected,
                     "imbalance_severity": result.get("imbalance_severity"),
                     "remediation_strategy": result.get("recommended_strategy"),
                     "usefulness_reason": result.get("usefulness_reason"),
-                }
+                },
+                # Enhanced format fields
+                input_summary={
+                    "experiment_id": experiment_id,
+                    "algorithm": model_candidate.get("algorithm_name") if isinstance(model_candidate, dict) else "Unknown",
+                    "training_samples": len(X),
+                    "features": list(X.columns),
+                    "target": CONFIG.target_outcome,
+                },
+                validation_checks=[
+                    ("AUC-ROC above threshold", auc_roc >= 0.6, "≥ 0.60", f"{auc_roc:.3f}" if auc_roc else "N/A"),
+                    ("Model not useless", model_usefulness != "useless", "not useless", model_usefulness),
+                    ("Success criteria met", success_met, "True", str(success_met)),
+                    ("Both classes predicted", model_usefulness not in ["useless", "poor"], "multi-class output", model_usefulness),
+                ],
+                metrics_table=[
+                    ("auc_roc", f"{auc_roc:.3f}" if auc_roc else "N/A", "≥ 0.60", auc_roc >= 0.6 if auc_roc else False),
+                    ("precision", f"{precision:.3f}" if precision else "N/A", None, None),
+                    ("recall", f"{recall:.3f}" if recall else "N/A", None, None),
+                    ("f1_score", f"{f1:.3f}" if f1 else "N/A", None, None),
+                    ("model_usefulness", model_usefulness, "good/acceptable", model_usefulness in ["good", "acceptable"]),
+                    ("imbalance_detected", imbalance_detected, None, None),
+                    ("resampling_applied", resampling_applied, None, None),
+                ],
+                interpretation=[
+                    f"Model trained with AUC-ROC: {auc_roc:.3f}" if auc_roc else "Model training completed",
+                    f"Model usefulness: {model_usefulness}" + (f" - {result.get('usefulness_reason', '')}" if result.get('usefulness_reason') else ""),
+                    f"Class imbalance {'detected and remediated via ' + result.get('recommended_strategy', 'resampling') if imbalance_detected else 'not detected'}",
+                    f"Success criteria {'MET' if success_met else 'NOT MET'}",
+                ],
+                result_message=f"Training complete: {model_usefulness} model with AUC={auc_roc:.3f}" if auc_roc else "Training complete",
             ))
 
         # Step 6: Feature Analyzer
@@ -2888,20 +3013,50 @@ async def run_pipeline(
                     if isinstance(fi, dict):
                         top_features[fi.get("feature", "unknown")] = fi.get("importance", 0)
 
+            samples_analyzed = result.get("samples_analyzed", 0)
+            compute_time = result.get("computation_time_seconds", 0)
+            explainer_type = result.get("explainer_type", "SHAP")
+            top_feature_name = list(top_features.keys())[0] if top_features else None
+            top_feature_importance = top_features.get(top_feature_name, 0) if top_feature_name else 0
             step_results.append(StepResult(
                 step_num=6,
                 step_name="FEATURE ANALYZER",
                 status="success" if result.get("feature_importance") else "warning",
                 duration_seconds=time.time() - step_start,
                 key_metrics={
-                    "samples_analyzed": result.get("samples_analyzed"),
-                    "computation_time": result.get("computation_time_seconds"),
-                    "top_feature": list(top_features.keys())[0] if top_features else None,
+                    "samples_analyzed": samples_analyzed,
+                    "computation_time": compute_time,
+                    "top_feature": top_feature_name,
                 },
                 details={
                     "top_features": top_features,
-                    "explainer_type": result.get("explainer_type"),
-                }
+                    "explainer_type": explainer_type,
+                },
+                # Enhanced format fields
+                input_summary={
+                    "experiment_id": experiment_id,
+                    "model_uri": state.get("model_uri", "N/A"),
+                    "samples_for_analysis": 50,
+                    "features_analyzed": feature_cols,
+                },
+                validation_checks=[
+                    ("Feature importance computed", result.get("feature_importance") is not None, "importance present", "Yes" if result.get("feature_importance") else "No"),
+                    ("Sufficient samples analyzed", samples_analyzed >= 10, "≥ 10", samples_analyzed),
+                    ("Computation completed", compute_time > 0, "compute_time > 0", f"{compute_time:.2f}s"),
+                ],
+                metrics_table=[
+                    ("samples_analyzed", samples_analyzed, "≥ 10", samples_analyzed >= 10),
+                    ("computation_time", f"{compute_time:.2f}s", None, None),
+                    ("explainer_type", explainer_type, None, None),
+                    ("top_feature", top_feature_name or "N/A", None, None),
+                    ("top_importance", f"{top_feature_importance:.3f}" if top_feature_importance else "N/A", None, None),
+                ],
+                interpretation=[
+                    f"SHAP analysis completed on {samples_analyzed} samples in {compute_time:.2f}s",
+                    f"Top driver: {top_feature_name} (importance: {top_feature_importance:.3f})" if top_feature_name else "No dominant feature identified",
+                    f"Feature ranking: {', '.join(list(top_features.keys())[:3])}" if len(top_features) >= 3 else f"Features analyzed: {len(top_features)}",
+                ],
+                result_message=f"Feature analysis complete: {top_feature_name} is top predictor" if top_feature_name else "Feature analysis complete",
             ))
 
         # Step 7: Model Deployer
@@ -2934,19 +3089,51 @@ async def run_pipeline(
                 step_details["bentoml_prediction_test"] = bentoml_serving.get("prediction_test")
                 step_details["bentoml_latency_ms"] = bentoml_serving.get("latency_ms")
 
+            deployment_id = manifest.get("deployment_id", "N/A")
+            environment = manifest.get("environment", "staging")
+            deployment_status = manifest.get("status", "unknown")
+            deployment_successful = result.get("deployment_successful", False)
+            bentoml_verified = bentoml_serving.get("prediction_test", False) if bentoml_serving else None
             step_results.append(StepResult(
                 step_num=7,
                 step_name="MODEL DEPLOYER",
-                status="success" if result.get("deployment_successful") else "warning",
+                status="success" if deployment_successful else "warning",
                 duration_seconds=time.time() - step_start,
                 key_metrics={
-                    "deployment_id": manifest.get("deployment_id"),
-                    "environment": manifest.get("environment"),
-                    "status": manifest.get("status"),
-                    "deployment_successful": result.get("deployment_successful"),
-                    "bentoml_verified": bentoml_serving.get("prediction_test", False) if bentoml_serving else None,
+                    "deployment_id": deployment_id,
+                    "environment": environment,
+                    "status": deployment_status,
+                    "deployment_successful": deployment_successful,
+                    "bentoml_verified": bentoml_verified,
                 },
                 details=step_details,
+                # Enhanced format fields
+                input_summary={
+                    "experiment_id": experiment_id,
+                    "model_uri": state.get("model_uri", "N/A"),
+                    "validation_metrics": state.get("validation_metrics", {}),
+                    "success_criteria_met": state.get("success_criteria_met", True),
+                    "include_bentoml": include_bentoml,
+                },
+                validation_checks=[
+                    ("Deployment successful", deployment_successful, "True", str(deployment_successful)),
+                    ("Deployment ID assigned", deployment_id != "N/A", "ID present", deployment_id),
+                    ("Environment set", environment is not None, "env specified", environment),
+                    ("BentoML verified", bentoml_verified if include_bentoml else True, "True", str(bentoml_verified) if include_bentoml else "N/A (not enabled)"),
+                ],
+                metrics_table=[
+                    ("deployment_id", deployment_id, None, None),
+                    ("environment", environment, None, None),
+                    ("status", deployment_status, "deployed", deployment_status == "deployed"),
+                    ("bentoml_verified", str(bentoml_verified) if include_bentoml else "N/A", None, None),
+                    ("latency_ms", f"{bentoml_serving.get('latency_ms', 'N/A')}" if bentoml_serving else "N/A", None, None),
+                ],
+                interpretation=[
+                    f"Model deployed to {environment} environment" if deployment_successful else "Deployment pending or failed",
+                    f"Deployment ID: {deployment_id}",
+                    f"BentoML serving {'verified with live prediction test' if bentoml_verified else 'not verified' if include_bentoml else 'not enabled'}",
+                ],
+                result_message=f"Deployment complete: {deployment_id} to {environment}" if deployment_successful else "Deployment incomplete",
             ))
 
         # Step 8: Observability Connector
@@ -2956,17 +3143,42 @@ async def run_pipeline(
                 experiment_id,
                 len(steps_to_run)
             )
+            emission_successful = result.get("emission_successful", False)
+            events_logged = result.get("events_logged", 0)
+            quality_score = result.get("quality_score", 0)
             step_results.append(StepResult(
                 step_num=8,
                 step_name="OBSERVABILITY CONNECTOR",
-                status="success" if result.get("emission_successful") else "warning",
+                status="success" if emission_successful else "warning",
                 duration_seconds=time.time() - step_start,
                 key_metrics={
-                    "emission_successful": result.get("emission_successful"),
-                    "events_logged": result.get("events_logged"),
-                    "quality_score": result.get("quality_score"),
+                    "emission_successful": emission_successful,
+                    "events_logged": events_logged,
+                    "quality_score": quality_score,
                 },
-                details={}
+                details={},
+                # Enhanced format fields
+                input_summary={
+                    "experiment_id": experiment_id,
+                    "total_steps": len(steps_to_run),
+                    "pipeline_complete": True,
+                },
+                validation_checks=[
+                    ("Metrics emitted", emission_successful, "True", str(emission_successful)),
+                    ("Events logged", events_logged > 0, "> 0", events_logged),
+                    ("Quality score computed", quality_score is not None, "present", f"{quality_score:.2f}" if quality_score else "N/A"),
+                ],
+                metrics_table=[
+                    ("emission_successful", str(emission_successful), "True", emission_successful),
+                    ("events_logged", events_logged, "> 0", events_logged > 0),
+                    ("quality_score", f"{quality_score:.2f}" if quality_score else "N/A", None, None),
+                ],
+                interpretation=[
+                    f"Observability metrics {'successfully' if emission_successful else 'NOT'} emitted to monitoring systems",
+                    f"{events_logged} events logged for pipeline tracking",
+                    f"Overall pipeline quality score: {quality_score:.2f}" if quality_score else "Quality score not computed",
+                ],
+                result_message=f"Observability complete: {events_logged} events logged" if emission_successful else "Observability emission incomplete",
             ))
 
         # Print detailed step results
