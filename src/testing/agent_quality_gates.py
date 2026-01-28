@@ -29,6 +29,16 @@ class DataQualityCheck(TypedDict, total=False):
     not_contains: list[str]  # String must not contain these substrings (for error detection)
 
 
+class DataSourceRequirement(TypedDict, total=False):
+    """Data source validation configuration for an agent.
+
+    Used to enforce that agents use real data sources instead of mocks.
+    """
+
+    reject_mock: bool  # If True, reject mock data sources
+    acceptable_sources: list[str]  # List of acceptable source types (e.g., ["supabase", "tier0"])
+
+
 class AgentQualityGate(TypedDict, total=False):
     """Quality gate configuration for a single agent."""
 
@@ -46,6 +56,9 @@ class AgentQualityGate(TypedDict, total=False):
 
     # Custom description for documentation
     description: str
+
+    # Data source validation requirements
+    data_source_requirement: DataSourceRequirement
 
 
 # Per-agent quality gate definitions
@@ -128,6 +141,15 @@ AGENT_QUALITY_GATES: dict[str, AgentQualityGate] = {
                 "not_null": True,
                 "min_value": 0.0,
                 "max_value": 100.0,
+                # Reject perfect 100.0 scores - indicates mock data usage
+                # Real systems always have some variance in health checks
+                "must_not_be": 100.0,
+            },
+            "component_health_score": {
+                "type": "float",
+                # Reject perfect 1.0 component scores - indicates mock data
+                # Real component health checks have latency variance
+                "must_not_be": 1.0,
             },
         },
         "fail_on_status": ["error", "failed"],
