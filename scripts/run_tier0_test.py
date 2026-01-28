@@ -1589,13 +1589,13 @@ async def step_4_model_selector(experiment_id: str, scope_spec: dict, qc_report:
     input_data = {
         "scope_spec": scope_spec,
         "qc_report": normalized_qc_report,
-        "skip_benchmarks": True,
+        "skip_benchmarks": False,  # Enable benchmarks to evaluate alternatives
     }
 
     print_input_section({
         "problem_type": scope_spec.get("problem_type", "binary_classification"),
         "qc_passed": normalized_qc_report.get("qc_passed"),
-        "skip_benchmarks": True,
+        "skip_benchmarks": False,
     })
 
     # Processing
@@ -1607,29 +1607,42 @@ async def step_4_model_selector(experiment_id: str, scope_spec: dict, qc_report:
 
     result = await agent.run(input_data)
 
-    # Extract candidate info
-    candidate = result.get("model_candidate") or result.get("primary_candidate")
+    # Extract candidate info - model_candidate has the structured output
+    candidate = result.get("model_candidate", {})
     if candidate:
-        if hasattr(candidate, "algorithm_name"):
-            algo_name = candidate.algorithm_name
-            hyperparams = getattr(candidate, "hyperparameters", {})
-        elif isinstance(candidate, dict):
-            algo_name = candidate.get("algorithm_name", candidate.get("algorithm", "Unknown"))
-            hyperparams = candidate.get("hyperparameters", {})
-        else:
-            algo_name = "Unknown"
-            hyperparams = {}
+        algo_name = candidate.get("algorithm_name", "Unknown")
+        # Use default_hyperparameters from agent output
+        hyperparams = candidate.get("default_hyperparameters", {})
+        selection_score = candidate.get("selection_score", 0)
+        interpretability = candidate.get("interpretability_score", 0)
         processing_steps.append(("Model selection executed", True, algo_name))
     else:
         algo_name = "LogisticRegression (fallback)"
         hyperparams = {}
+        selection_score = 0
+        interpretability = 0
         processing_steps.append(("Model selection executed", False, "Using fallback"))
+
+    # Extract alternative candidates
+    alternatives = result.get("alternative_candidates", [])
+    if alternatives:
+        alt_names = [alt.get("algorithm_name", "Unknown") for alt in alternatives[:3]]
+        processing_steps.append(("Alternatives evaluated", True, f"{len(alternatives)} candidates"))
+    else:
+        alt_names = []
+
+    # Extract selection rationale
+    rationale_dict = result.get("selection_rationale", {})
+    primary_reason = rationale_dict.get("primary_reason", "")
+    supporting_factors = rationale_dict.get("supporting_factors", [])
+    alternatives_considered = rationale_dict.get("alternatives_considered", [])
 
     print_processing_steps(processing_steps)
 
     # Validation checks
-    has_candidate = candidate is not None
+    has_candidate = bool(candidate and algo_name != "Unknown")
     has_error = bool(result.get("error"))
+    has_rationale = bool(primary_reason)
 
     checks = [
         (
@@ -1637,6 +1650,18 @@ async def step_4_model_selector(experiment_id: str, scope_spec: dict, qc_report:
             has_candidate,
             "candidate present",
             algo_name if has_candidate else "missing (will use fallback)"
+        ),
+        (
+            "Selection rationale provided",
+            has_rationale,
+            "rationale present",
+            primary_reason[:50] if primary_reason else "none"
+        ),
+        (
+            "Alternatives evaluated",
+            len(alternatives) > 0 or len(alternatives_considered) > 0,
+            "> 0 alternatives",
+            f"{max(len(alternatives), len(alternatives_considered))} evaluated"
         ),
         (
             "No selection errors",
@@ -1648,24 +1673,63 @@ async def step_4_model_selector(experiment_id: str, scope_spec: dict, qc_report:
 
     print_validation_checks(checks)
 
-    # Metrics
+    # Metrics table
     metrics = [
         ("algorithm", algo_name, None, None),
-        ("hyperparameters", f"{len(hyperparams)} params", None, None),
-        ("selection_score", result.get("selection_rationale", {}).get("selection_score") if isinstance(result.get("selection_rationale"), dict) else None, None, None),
+        ("selection_score", f"{selection_score:.3f}" if selection_score else "N/A", "> 0.5", selection_score > 0.5 if selection_score else None),
+        ("interpretability_score", f"{interpretability:.2f}" if interpretability else "N/A", None, None),
+        ("hyperparameters", f"{len(hyperparams)} default params", None, None),
+        ("alternatives_evaluated", len(alternatives) if alternatives else len(alternatives_considered), "> 0", len(alternatives) > 0 or len(alternatives_considered) > 0),
     ]
 
     print_metrics_table(metrics)
 
-    # Interpretation
+    # Print alternatives table if available
+    if alternatives or alternatives_considered:
+        print("\n  📋 Candidates Evaluated:")
+        print("    " + "-" * 60)
+        print(f"    {'Rank':<6}{'Algorithm':<25}{'Score':<12}{'Status':<15}")
+        print("    " + "-" * 60)
+        score_str = f"{selection_score:.3f}" if selection_score else "N/A"
+        print(f"    {'1':<6}{algo_name:<25}{score_str:<12}{'✅ SELECTED':<15}")
+
+        # Show alternatives
+        alt_list = alternatives if alternatives else alternatives_considered
+        for i, alt in enumerate(alt_list[:4], start=2):
+            if isinstance(alt, dict):
+                alt_name = alt.get("algorithm_name", alt.get("name", "Unknown"))
+                alt_score = alt.get("selection_score", alt.get("score", 0))
+                alt_reason = alt.get("rejection_reason", "Not selected")[:20]
+            else:
+                alt_name = str(alt)
+                alt_score = 0
+                alt_reason = "Evaluated"
+            score_str = f"{alt_score:.3f}" if alt_score else "N/A"
+            print(f"    {i:<6}{alt_name:<25}{score_str:<12}{alt_reason:<15}")
+        print("    " + "-" * 60)
+
+    # Interpretation with selection justification
     observations = []
     recommendations = []
 
     if has_candidate:
-        observations.append(f"Selected algorithm: {algo_name}")
+        observations.append(f"Selected: {algo_name} (score: {selection_score:.3f})" if selection_score else f"Selected: {algo_name}")
+
+        # Primary selection reason
+        if primary_reason:
+            observations.append(f"Primary reason: {primary_reason}")
+
+        # Supporting factors
+        if supporting_factors:
+            factors_str = ", ".join(supporting_factors[:3])
+            observations.append(f"Supporting factors: {factors_str}")
+
+        # Hyperparameters to tune
         if hyperparams:
-            observations.append(f"Initial hyperparameters: {hyperparams}")
-        observations.append("HPO will tune these parameters in Step 5")
+            param_names = list(hyperparams.keys())[:4]
+            observations.append(f"HPO will tune: {', '.join(param_names)}")
+        else:
+            observations.append("HPO will use default search space in Step 5")
     else:
         observations.append("⚠️  No model candidate returned by selector")
         observations.append("Falling back to LogisticRegression as default")
@@ -1673,15 +1737,13 @@ async def step_4_model_selector(experiment_id: str, scope_spec: dict, qc_report:
 
     # Algorithm-specific observations
     if "Logistic" in algo_name:
-        observations.append("LogisticRegression: Good baseline for binary classification")
-        observations.append("Interpretable coefficients, fast training")
-    elif "RandomForest" in algo_name or "XGB" in algo_name:
-        observations.append(f"{algo_name}: Ensemble method, handles non-linear patterns")
-        observations.append("May overfit on small datasets, check validation metrics")
-
-    rationale = result.get("selection_rationale")
-    if rationale and isinstance(rationale, str):
-        observations.append(f"Selection rationale: {rationale[:100]}")
+        observations.append("LogisticRegression: Interpretable, fast, good baseline")
+    elif "RandomForest" in algo_name:
+        observations.append("RandomForest: Robust ensemble, handles non-linearity")
+    elif "XGB" in algo_name or "Gradient" in algo_name:
+        observations.append(f"{algo_name}: High performance, may need regularization")
+    elif "LightGBM" in algo_name:
+        observations.append("LightGBM: Fast training, memory efficient")
 
     print_interpretation("Model Selection Analysis", observations, recommendations if recommendations else None)
 
@@ -2814,9 +2876,22 @@ async def run_pipeline(
 
             candidate = state["model_candidate"]
             algo_name = candidate.get("algorithm_name") if isinstance(candidate, dict) else getattr(candidate, "algorithm_name", "Unknown")
+            # Extract selection_score from model_candidate (not selection_rationale)
+            selection_score = candidate.get("selection_score", 0) if isinstance(candidate, dict) else 0
+            # Use default_hyperparameters from agent output
+            hyperparams = candidate.get("default_hyperparameters", {}) if isinstance(candidate, dict) else {}
+            interpretability = candidate.get("interpretability_score", 0) if isinstance(candidate, dict) else 0
+
+            # Extract selection rationale details
             selection_rationale = result.get("selection_rationale", {})
-            selection_score = selection_rationale.get("selection_score") if isinstance(selection_rationale, dict) else None
-            hyperparams = candidate.get("hyperparameters", {}) if isinstance(candidate, dict) else {}
+            primary_reason = selection_rationale.get("primary_reason", "") if isinstance(selection_rationale, dict) else ""
+            supporting_factors = selection_rationale.get("supporting_factors", []) if isinstance(selection_rationale, dict) else []
+
+            # Extract alternative candidates
+            alternatives = result.get("alternative_candidates", [])
+            alternatives_considered = selection_rationale.get("alternatives_considered", []) if isinstance(selection_rationale, dict) else []
+            all_alternatives = alternatives if alternatives else alternatives_considered
+
             step_results.append(StepResult(
                 step_num=4,
                 step_name="MODEL SELECTOR",
@@ -2825,9 +2900,11 @@ async def run_pipeline(
                 key_metrics={
                     "selected_algorithm": algo_name,
                     "selection_score": selection_score,
+                    "alternatives_evaluated": len(all_alternatives),
                 },
                 details={
                     "selection_rationale": selection_rationale,
+                    "alternative_candidates": all_alternatives,
                 },
                 # Enhanced format fields
                 input_summary={
@@ -2837,21 +2914,24 @@ async def run_pipeline(
                 },
                 validation_checks=[
                     ("Algorithm selected", candidate is not None, "candidate present", algo_name or "None"),
-                    ("Valid algorithm type", algo_name in ["LogisticRegression", "RandomForest", "XGBoost", "LightGBM", "GradientBoosting"],
-                     "known algorithm", algo_name),
-                    ("Hyperparameters provided", len(hyperparams) > 0, "hyperparams present", f"{len(hyperparams)} params"),
+                    ("Selection score computed", selection_score > 0, "> 0", f"{selection_score:.3f}" if selection_score else "N/A"),
+                    ("Rationale provided", bool(primary_reason), "reason present", primary_reason[:30] if primary_reason else "None"),
+                    ("Alternatives evaluated", len(all_alternatives) > 0, "> 0", f"{len(all_alternatives)} candidates"),
                 ],
                 metrics_table=[
                     ("algorithm", algo_name, None, None),
-                    ("selection_score", f"{selection_score:.2f}" if selection_score else "N/A", None, None),
-                    ("hyperparameters", len(hyperparams), None, None),
+                    ("selection_score", f"{selection_score:.3f}" if selection_score else "N/A", "> 0.5", selection_score > 0.5 if selection_score else None),
+                    ("interpretability", f"{interpretability:.2f}" if interpretability else "N/A", None, None),
+                    ("default_hyperparameters", len(hyperparams), None, None),
+                    ("alternatives_evaluated", len(all_alternatives), "> 0", len(all_alternatives) > 0),
                 ],
                 interpretation=[
-                    f"Selected {algo_name} as primary candidate for {scope_spec.get('problem_type', 'classification')}",
-                    f"Selection based on problem characteristics and data profile",
-                    f"Model configured with {len(hyperparams)} hyperparameters" if hyperparams else "Using default hyperparameters",
+                    f"Selected {algo_name} (score: {selection_score:.3f})" if selection_score else f"Selected {algo_name}",
+                    f"Reason: {primary_reason}" if primary_reason else "Selection based on problem type and data characteristics",
+                    f"Evaluated {len(all_alternatives)} alternative{'s' if len(all_alternatives) != 1 else ''}: {', '.join([a.get('algorithm_name', str(a)) if isinstance(a, dict) else str(a) for a in all_alternatives[:3]])}" if all_alternatives else "No alternatives evaluated",
+                    f"HPO will tune {len(hyperparams)} hyperparameters in Step 5" if hyperparams else "HPO will use default search space",
                 ],
-                result_message=f"Model selection complete: {algo_name}",
+                result_message=f"Model selection complete: {algo_name} (score={selection_score:.3f})" if selection_score else f"Model selection complete: {algo_name}",
             ))
 
         # Step 5: Model Trainer
