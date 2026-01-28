@@ -135,6 +135,300 @@ def print_result(key: str, value: Any, indent: int = 2) -> None:
         print(f"{prefix}{key}: {value}")
 
 
+# =============================================================================
+# STANDARDIZED STEP OUTPUT HELPERS
+# =============================================================================
+
+def print_step_banner(step_num: int, title: str, duration: float = 0.0) -> None:
+    """Print standardized step banner with duration."""
+    print("\n" + "=" * 70)
+    duration_str = f"Duration: {duration:.1f}s" if duration > 0 else ""
+    print(f"STEP {step_num}: {title:<40} {duration_str:>20}")
+    print("=" * 70)
+
+
+def print_input_section(inputs: dict[str, Any]) -> None:
+    """Print standardized input summary section."""
+    print("\n  📥 Input Summary:")
+    for key, value in inputs.items():
+        if isinstance(value, (pd.DataFrame,)):
+            print(f"    • {key}: DataFrame ({len(value)} rows)")
+        elif isinstance(value, dict):
+            print(f"    • {key}: {{{len(value)} keys}}")
+        elif isinstance(value, list) and len(value) > 3:
+            print(f"    • {key}: [{len(value)} items]")
+        else:
+            print(f"    • {key}: {value}")
+
+
+def print_processing_steps(steps: list[tuple[str, bool, str | None]]) -> None:
+    """Print processing steps with status.
+
+    Args:
+        steps: List of (description, success, optional_detail)
+    """
+    print("\n  ⚙️  Processing:")
+    for desc, success, detail in steps:
+        icon = "✅" if success else "❌"
+        detail_str = f" ({detail})" if detail else ""
+        print(f"    {icon} {desc}{detail_str}")
+
+
+def print_validation_checks(checks: list[tuple[str, bool, str, str]]) -> None:
+    """Print validation checks with expected vs actual.
+
+    Args:
+        checks: List of (check_name, passed, expected, actual)
+    """
+    print("\n  🔍 Validation Checks:")
+    for name, passed, expected, actual in checks:
+        icon = "✅ PASS" if passed else "❌ FAIL"
+        print(f"    • {name}: {icon}")
+        print(f"        Expected: {expected}")
+        print(f"        Actual:   {actual}")
+
+
+def print_metrics_table(metrics: list[tuple[str, Any, str | None, bool | None]]) -> None:
+    """Print metrics as a formatted table.
+
+    Args:
+        metrics: List of (metric_name, value, threshold, passed)
+                threshold and passed are optional (None to skip)
+    """
+    print("\n  📊 Key Metrics:")
+    print(f"    {'Metric':<25} {'Value':<15} {'Threshold':<15} {'Status':<10}")
+    print(f"    {'-'*65}")
+
+    for name, value, threshold, passed in metrics:
+        # Format value
+        if isinstance(value, float):
+            value_str = f"{value:.4f}"
+        elif value is None:
+            value_str = "N/A"
+        else:
+            value_str = str(value)
+
+        # Format threshold and status
+        if threshold is not None and passed is not None:
+            threshold_str = str(threshold)
+            status_str = "✅" if passed else "❌"
+        else:
+            threshold_str = "-"
+            status_str = "-"
+
+        print(f"    {name:<25} {value_str:<15} {threshold_str:<15} {status_str:<10}")
+
+
+def print_interpretation(title: str, observations: list[str], recommendations: list[str] = None) -> None:
+    """Print interpretation section with observations and recommendations.
+
+    Args:
+        title: Section title
+        observations: List of observation strings
+        recommendations: Optional list of recommendations
+    """
+    print(f"\n  💡 {title}:")
+    for obs in observations:
+        print(f"    • {obs}")
+
+    if recommendations:
+        print("\n    Recommendations:")
+        for i, rec in enumerate(recommendations, 1):
+            print(f"      {i}. {rec}")
+
+
+def print_step_result(status: str, message: str) -> None:
+    """Print final step result with status.
+
+    Args:
+        status: "success", "warning", or "failed"
+        message: Result message
+    """
+    print("\n  " + "-" * 60)
+    if status == "success":
+        print(f"  ✅ RESULT: PASS - {message}")
+    elif status == "warning":
+        print(f"  ⚠️  RESULT: WARNING - {message}")
+    else:
+        print(f"  ❌ RESULT: FAIL - {message}")
+    print("  " + "-" * 60)
+
+
+def interpret_qc_scores(qc_report: dict) -> tuple[list[str], list[str]]:
+    """Generate interpretation for QC dimension scores.
+
+    Returns:
+        Tuple of (observations, recommendations)
+    """
+    observations = []
+    recommendations = []
+
+    completeness = qc_report.get("completeness_score", 0)
+    validity = qc_report.get("validity_score", 0)
+    consistency = qc_report.get("consistency_score", 0)
+    uniqueness = qc_report.get("uniqueness_score", 0)
+    timeliness = qc_report.get("timeliness_score", 0)
+
+    # Analyze each dimension
+    if completeness < 0.9:
+        observations.append(f"Completeness ({completeness:.2f}) indicates missing data")
+        recommendations.append("Review data pipeline for incomplete records")
+
+    if validity < 0.9:
+        observations.append(f"Validity ({validity:.2f}) suggests data quality issues")
+        recommendations.append("Check for outliers and invalid values")
+
+    if consistency < 0.9:
+        observations.append(f"Consistency ({consistency:.2f}) shows conflicting values")
+        recommendations.append("Verify data source synchronization")
+
+    if uniqueness < 0.95:
+        observations.append(f"Uniqueness ({uniqueness:.2f}) indicates potential duplicates")
+        recommendations.append("Run deduplication before training")
+
+    if timeliness < 0.8:
+        observations.append(f"Timeliness ({timeliness:.2f}) shows stale data")
+        recommendations.append("Refresh data from source systems")
+
+    if not observations:
+        observations.append("All QC dimensions meet quality thresholds")
+
+    return observations, recommendations
+
+
+def interpret_class_imbalance(imbalance_info: dict) -> tuple[list[str], list[str]]:
+    """Generate interpretation for class imbalance.
+
+    Returns:
+        Tuple of (observations, recommendations)
+    """
+    observations = []
+    recommendations = []
+
+    if not imbalance_info.get("imbalance_detected"):
+        observations.append("No significant class imbalance detected")
+        return observations, recommendations
+
+    minority_ratio = imbalance_info.get("minority_ratio", 0)
+    severity = imbalance_info.get("imbalance_severity", "unknown")
+    strategy = imbalance_info.get("recommended_strategy", "none")
+
+    observations.append(f"Class imbalance detected: {minority_ratio:.1%} minority class")
+    observations.append(f"Severity: {severity.upper()}")
+    observations.append(f"Applied remediation: {strategy}")
+
+    if severity == "severe" and minority_ratio < 0.10:
+        observations.append("⚠️  Severe imbalance may cause model to ignore minority class")
+        recommendations.append("Consider combining SMOTE with class_weight='balanced'")
+        recommendations.append("Lower prediction threshold below 0.5 for deployment")
+    elif severity == "moderate":
+        observations.append("Moderate imbalance handled by resampling/class_weight")
+
+    return observations, recommendations
+
+
+def interpret_model_performance(
+    metrics: dict,
+    accuracy_analysis: dict,
+    min_recall: float,
+    min_precision: float
+) -> tuple[list[str], list[str]]:
+    """Generate interpretation for model performance.
+
+    Returns:
+        Tuple of (observations, recommendations)
+    """
+    observations = []
+    recommendations = []
+
+    auc = metrics.get("roc_auc") or metrics.get("auc_roc", 0)
+    recall = accuracy_analysis.get("val_metrics", {}).get("recall", 0)
+    precision = accuracy_analysis.get("val_metrics", {}).get("precision", 0)
+
+    # AUC interpretation
+    if auc >= 0.80:
+        observations.append(f"AUC-ROC ({auc:.3f}) indicates good discrimination ability")
+    elif auc >= 0.70:
+        observations.append(f"AUC-ROC ({auc:.3f}) indicates acceptable discrimination")
+    elif auc >= 0.60:
+        observations.append(f"AUC-ROC ({auc:.3f}) indicates weak discrimination")
+        recommendations.append("Consider feature engineering to improve predictive power")
+    else:
+        observations.append(f"AUC-ROC ({auc:.3f}) indicates poor discrimination")
+        recommendations.append("Review feature relevance and data quality")
+
+    # Recall interpretation (critical for imbalanced problems)
+    y_pred = accuracy_analysis.get("y_pred", [])
+    n_pos = sum(y_pred) if y_pred else 0
+
+    if n_pos == 0:
+        observations.append("⚠️  CRITICAL: Model predicts ALL samples as negative")
+        observations.append("    This model will miss 100% of actual discontinuation cases")
+        recommendations.append("Use optimal threshold (not 0.5) for predictions")
+        recommendations.append("Verify class_weight='balanced' is applied during training")
+    elif recall < min_recall:
+        observations.append(f"Recall ({recall:.2%}) below minimum threshold ({min_recall:.0%})")
+        observations.append(f"    Model will miss {(1-recall)*100:.0f}% of actual positives")
+        recommendations.append("Lower prediction threshold to catch more positives")
+    else:
+        observations.append(f"Recall ({recall:.2%}) meets threshold ({min_recall:.0%})")
+
+    # Precision interpretation
+    if precision < min_precision:
+        observations.append(f"Precision ({precision:.2%}) below threshold ({min_precision:.0%})")
+        recommendations.append("Consider raising threshold to reduce false positives")
+    elif n_pos > 0:
+        observations.append(f"Precision ({precision:.2%}) acceptable")
+
+    return observations, recommendations
+
+
+def interpret_confusion_matrix(cm_data: dict) -> list[str]:
+    """Generate interpretation for confusion matrix.
+
+    Args:
+        cm_data: Dict with tn, fp, fn, tp keys
+
+    Returns:
+        List of observation strings
+    """
+    observations = []
+
+    tn = cm_data.get("tn", 0)
+    fp = cm_data.get("fp", 0)
+    fn = cm_data.get("fn", 0)
+    tp = cm_data.get("tp", 0)
+
+    total = tn + fp + fn + tp
+    if total == 0:
+        return ["No predictions available for analysis"]
+
+    # Overall accuracy
+    accuracy = (tp + tn) / total
+    observations.append(f"Overall accuracy: {accuracy:.1%} ({tp + tn}/{total} correct)")
+
+    # Class-specific analysis
+    actual_pos = tp + fn
+    actual_neg = tn + fp
+    pred_pos = tp + fp
+    pred_neg = tn + fn
+
+    if actual_pos > 0:
+        recall = tp / actual_pos
+        if tp == 0:
+            observations.append(f"⚠️  Minority class: 0/{actual_pos} detected (0% recall)")
+        else:
+            observations.append(f"Minority class: {tp}/{actual_pos} detected ({recall:.1%} recall)")
+
+    if pred_pos > 0:
+        precision = tp / pred_pos
+        observations.append(f"Of {pred_pos} predicted positives, {tp} correct ({precision:.1%} precision)")
+    elif tp == 0 and fn > 0:
+        observations.append(f"⚠️  No positive predictions made (all {fn} positives missed)")
+
+    return observations
+
+
 def print_success(message: str) -> None:
     """Print success message."""
     print(f"\n  ✅ {message}")
@@ -837,13 +1131,14 @@ async def stop_bentoml_service(pid: int) -> dict:
 
 async def step_1_scope_definer(experiment_id: str) -> dict[str, Any]:
     """Step 1: Define ML problem scope."""
+    import time as time_mod
+    step_start = time_mod.time()
+
     print_header(1, "SCOPE DEFINER")
 
     from src.agents.ml_foundation.scope_definer import ScopeDefinerAgent
 
-    print("\n  Creating ScopeDefinerAgent...")
-    agent = ScopeDefinerAgent()
-
+    # Input preparation
     input_data = {
         "problem_description": f"Predict patient discontinuation risk for {CONFIG.brand}",
         "business_objective": "Identify high-risk patients early for intervention",
@@ -852,23 +1147,87 @@ async def step_1_scope_definer(experiment_id: str) -> dict[str, Any]:
         "brand": CONFIG.brand,
     }
 
-    print("  Input:")
-    for k, v in input_data.items():
-        print(f"    {k}: {v}")
+    print_input_section(input_data)
 
-    print("\n  Running agent...")
+    # Processing
+    processing_steps = []
+    processing_steps.append(("Creating ScopeDefinerAgent", True, None))
+
+    agent = ScopeDefinerAgent()
+    processing_steps.append(("Agent initialized", True, None))
+
     result = await agent.run(input_data)
+    processing_steps.append(("Scope definition executed", True, None))
 
-    print("\n  Output:")
-    print_result("experiment_id", result.get("experiment_id", experiment_id))
-    print_result("scope_spec", result.get("scope_spec", {}))
-    print_result("success_criteria", result.get("success_criteria", {}))
-    print_result("validation_passed", result.get("validation_passed", True))
+    print_processing_steps(processing_steps)
 
-    if result.get("validation_passed", True):
-        print_success("Scope definition completed successfully")
+    # Validation checks
+    scope_spec = result.get("scope_spec", {})
+    validation_passed = result.get("validation_passed", True)
+
+    checks = [
+        (
+            "Problem type defined",
+            bool(scope_spec.get("problem_type")),
+            "problem_type present",
+            scope_spec.get("problem_type", "missing")
+        ),
+        (
+            "Prediction target set",
+            bool(scope_spec.get("prediction_target")),
+            "prediction_target present",
+            scope_spec.get("prediction_target", "missing")
+        ),
+        (
+            "Minimum samples specified",
+            bool(scope_spec.get("minimum_samples")),
+            "minimum_samples > 0",
+            str(scope_spec.get("minimum_samples", "missing"))
+        ),
+        (
+            "Scope validation",
+            validation_passed,
+            "validation_passed = True",
+            f"validation_passed = {validation_passed}"
+        ),
+    ]
+
+    print_validation_checks(checks)
+
+    # Metrics
+    metrics = [
+        ("experiment_id", result.get("experiment_id", experiment_id), None, None),
+        ("problem_type", scope_spec.get("problem_type"), None, None),
+        ("prediction_target", scope_spec.get("prediction_target"), None, None),
+        ("minimum_samples", scope_spec.get("minimum_samples"), None, None),
+    ]
+
+    print_metrics_table(metrics)
+
+    # Interpretation
+    observations = []
+    recommendations = []
+
+    if scope_spec.get("problem_type") == "binary_classification":
+        observations.append("Binary classification scope defined for patient risk prediction")
+        observations.append(f"Target outcome: {scope_spec.get('prediction_target', 'N/A')}")
     else:
-        print_warning("Scope validation had warnings")
+        observations.append(f"Problem type: {scope_spec.get('problem_type', 'unknown')}")
+
+    if scope_spec.get("minimum_samples", 0) < 100:
+        observations.append("⚠️  Minimum samples is low for reliable ML training")
+        recommendations.append("Consider increasing minimum_samples to 500+")
+    else:
+        observations.append(f"Sample requirement ({scope_spec.get('minimum_samples')}) appropriate for ML")
+
+    print_interpretation("Scope Analysis", observations, recommendations if recommendations else None)
+
+    # Final result
+    duration = time_mod.time() - step_start
+    if validation_passed:
+        print_step_result("success", f"Scope definition complete ({duration:.1f}s)")
+    else:
+        print_step_result("warning", f"Scope has validation warnings ({duration:.1f}s)")
 
     return result
 
@@ -877,15 +1236,14 @@ async def step_2_data_preparer(
     experiment_id: str, scope_spec: dict, sample_df: pd.DataFrame
 ) -> dict[str, Any]:
     """Step 2: Load and prepare data with QC."""
+    import time as time_mod
+    step_start = time_mod.time()
+
     print_header(2, "DATA PREPARER")
 
     from src.agents.ml_foundation.data_preparer import DataPreparerAgent
 
-    print("\n  Creating DataPreparerAgent...")
-    agent = DataPreparerAgent()
-
     # Override required_features with actual columns from sample data
-    # This ensures we don't fail QC for features that don't exist
     available_features = [
         col for col in sample_df.columns
         if col not in ["patient_journey_id", CONFIG.target_outcome, "brand"]
@@ -898,10 +1256,7 @@ async def step_2_data_preparer(
         "sample_size": 500,
         "prediction_target": CONFIG.target_outcome,
         "problem_type": CONFIG.problem_type,
-        # Override required_features with actual available features
         "required_features": available_features,
-        # Allow 90 days staleness since sample data spans 90 days
-        # and temporal splitting puts older data in training set
         "max_staleness_days": 90,
     })
 
@@ -911,75 +1266,131 @@ async def step_2_data_preparer(
         "brand": CONFIG.brand,
     }
 
-    print("  Input:")
-    print(f"    data_source: patient_journeys")
-    print(f"    brand: {CONFIG.brand}")
-    print(f"    use_sample_data: True")
+    print_input_section({
+        "data_source": "patient_journeys",
+        "brand": CONFIG.brand,
+        "sample_size": len(sample_df),
+        "features": f"{len(available_features)} available",
+    })
 
-    print("\n  Running agent...")
+    # Processing
+    processing_steps = []
+    processing_steps.append(("Creating DataPreparerAgent", True, None))
+
+    agent = DataPreparerAgent()
+    processing_steps.append(("Agent initialized", True, None))
+
     result = await agent.run(input_data)
+    processing_steps.append(("Data preparation executed", True, None))
 
     # Extract nested results
     qc_report = result.get("qc_report", {})
     data_readiness = result.get("data_readiness", {})
     remediation = result.get("remediation", {})
 
-    print("\n  Output:")
-    print_result("qc_status", qc_report.get("status", "unknown"))
-    print_result("overall_score", qc_report.get("overall_score", "N/A"))
-    print_result("gate_passed", result.get("gate_passed", False))
-    print_result("train_samples", data_readiness.get("train_samples", "N/A"))
-    print_result("validation_samples", data_readiness.get("validation_samples", "N/A"))
+    processing_steps.append(("QC analysis complete", True, qc_report.get("status", "unknown")))
 
-    # Display QC dimension scores
-    print("\n  QC Dimension Scores:")
-    print_result("completeness", qc_report.get("completeness_score", "N/A"))
-    print_result("validity", qc_report.get("validity_score", "N/A"))
-    print_result("consistency", qc_report.get("consistency_score", "N/A"))
-    print_result("uniqueness", qc_report.get("uniqueness_score", "N/A"))
-    print_result("timeliness", qc_report.get("timeliness_score", "N/A"))
+    if remediation.get("status") and remediation.get("status") != "not_needed":
+        processing_steps.append(("Remediation applied", True, remediation.get("status")))
 
-    # Display remediation information if QC failed
-    remediation_status = remediation.get("status", "not_needed")
-    if remediation_status and remediation_status != "not_needed":
-        print("\n  QC Remediation:")
-        print_result("remediation_status", remediation_status)
-        print_result("remediation_attempts", remediation.get("attempts", 0))
+    print_processing_steps(processing_steps)
 
-        if remediation.get("llm_analysis"):
-            print_result("llm_analysis", remediation.get("llm_analysis"))
+    # Validation checks
+    gate_passed = result.get("gate_passed", False)
+    overall_score = qc_report.get("overall_score", 0)
+    train_samples = data_readiness.get("train_samples", 0)
+    val_samples = data_readiness.get("validation_samples", 0)
 
-        if remediation.get("root_causes"):
-            print("\n    Root Causes:")
-            for i, cause in enumerate(remediation.get("root_causes", [])[:5], 1):
-                print(f"      {i}. {cause}")
+    checks = [
+        (
+            "QC Gate",
+            gate_passed,
+            "gate_passed = True",
+            f"gate_passed = {gate_passed}"
+        ),
+        (
+            "Overall QC Score",
+            overall_score >= 0.7 if isinstance(overall_score, (int, float)) else False,
+            ">= 0.70",
+            f"{overall_score:.2f}" if isinstance(overall_score, (int, float)) else str(overall_score)
+        ),
+        (
+            "Training samples",
+            train_samples >= 100,
+            ">= 100",
+            str(train_samples)
+        ),
+        (
+            "Validation samples",
+            val_samples >= 30,
+            ">= 30",
+            str(val_samples)
+        ),
+    ]
 
-        if remediation.get("recommended_actions"):
-            print("\n    Recommended Actions:")
-            for i, action in enumerate(remediation.get("recommended_actions", [])[:5], 1):
-                print(f"      {i}. {action}")
+    print_validation_checks(checks)
 
+    # Metrics table - QC dimension scores
+    completeness = qc_report.get("completeness_score", 0)
+    validity = qc_report.get("validity_score", 0)
+    consistency = qc_report.get("consistency_score", 0)
+    uniqueness = qc_report.get("uniqueness_score", 0)
+    timeliness = qc_report.get("timeliness_score", 0)
+
+    metrics = [
+        ("overall_score", overall_score, ">= 0.70", overall_score >= 0.7 if isinstance(overall_score, (int, float)) else None),
+        ("completeness", completeness, ">= 0.90", completeness >= 0.9 if isinstance(completeness, (int, float)) else None),
+        ("validity", validity, ">= 0.90", validity >= 0.9 if isinstance(validity, (int, float)) else None),
+        ("consistency", consistency, ">= 0.90", consistency >= 0.9 if isinstance(consistency, (int, float)) else None),
+        ("uniqueness", uniqueness, ">= 0.95", uniqueness >= 0.95 if isinstance(uniqueness, (int, float)) else None),
+        ("timeliness", timeliness, ">= 0.80", timeliness >= 0.8 if isinstance(timeliness, (int, float)) else None),
+        ("train_samples", train_samples, ">= 100", train_samples >= 100 if isinstance(train_samples, (int, float)) else None),
+        ("validation_samples", val_samples, ">= 30", val_samples >= 30 if isinstance(val_samples, (int, float)) else None),
+    ]
+
+    print_metrics_table(metrics)
+
+    # Interpretation
+    observations, recommendations = interpret_qc_scores(qc_report)
+
+    # Add data readiness observations
+    if train_samples and val_samples:
+        total = train_samples + val_samples
+        train_pct = train_samples / total * 100 if total > 0 else 0
+        observations.insert(0, f"Data split: {train_samples} train ({train_pct:.0f}%), {val_samples} validation")
+
+    # Add remediation info if present
+    if remediation.get("status") and remediation.get("status") != "not_needed":
+        observations.append(f"Remediation was applied: {remediation.get('status')}")
         if remediation.get("actions_taken"):
-            print("\n    Actions Taken:")
-            for action in remediation.get("actions_taken", []):
-                print(f"      - {action}")
+            for action in remediation.get("actions_taken", [])[:2]:
+                observations.append(f"  - {action}")
 
-    if result.get("gate_passed", False):
-        print_success("QC GATE PASSED - Training can proceed")
-    else:
-        print_failure("QC GATE FAILED - Training blocked")
-        # Show blocking issues
+    print_interpretation("Data Quality Analysis", observations, recommendations if recommendations else None)
+
+    # Show blocking issues if gate failed
+    if not gate_passed:
         blocking_issues = qc_report.get("blocking_issues", [])
         if blocking_issues:
-            print("\n    Blocking Issues:")
+            print("\n  🚫 Blocking Issues:")
             for issue in blocking_issues[:5]:
-                print(f"      - {issue}")
+                print(f"    • {issue}")
+
+    # Final result
+    duration = time_mod.time() - step_start
+    if gate_passed:
+        print_step_result("success", f"QC Gate PASSED - Training can proceed ({duration:.1f}s)")
+    else:
+        print_step_result("failed", f"QC Gate FAILED - Training blocked ({duration:.1f}s)")
 
     return result
 
 
 async def step_3_cohort_constructor(patient_df: pd.DataFrame) -> tuple[pd.DataFrame, Any]:
     """Step 3: Build patient cohort."""
+    import time as time_mod
+    step_start = time_mod.time()
+
     print_header(3, "COHORT CONSTRUCTOR")
 
     from src.agents.cohort_constructor import CohortConstructorAgent
@@ -991,15 +1402,21 @@ async def step_3_cohort_constructor(patient_df: pd.DataFrame) -> tuple[pd.DataFr
         TemporalRequirements,
     )
 
-    print("\n  Creating CohortConstructorAgent...")
-    agent = CohortConstructorAgent(enable_observability=CONFIG.enable_opik)
+    print_input_section({
+        "input_patients": len(patient_df),
+        "brand": CONFIG.brand,
+        "inclusion_criteria": "data_quality_score >= 0.5",
+        "exclusion_criteria": "None (maximize sample size)",
+    })
 
-    # Create a test-specific CohortConfig using fields that exist in sample data
-    # Sample data columns: patient_journey_id, patient_id, brand, geographic_region,
-    # journey_status, data_quality_score, days_on_therapy, hcp_visits, prior_treatments,
-    # age_group, discontinuation_flag
-    # For test purposes, use all brands to get sufficient sample size
-    # The sample data has ~200 patients split across 3 brands
+    # Processing
+    processing_steps = []
+    processing_steps.append(("Creating CohortConstructorAgent", True, None))
+
+    agent = CohortConstructorAgent(enable_observability=CONFIG.enable_opik)
+    processing_steps.append(("Agent initialized", True, None))
+
+    # Create test config
     test_config = CohortConfig(
         cohort_name=f"{CONFIG.brand} Test Cohort",
         brand=CONFIG.brand.lower(),
@@ -1013,14 +1430,9 @@ async def step_3_cohort_constructor(patient_df: pd.DataFrame) -> tuple[pd.DataFr
                 description="Minimum data quality score",
                 clinical_rationale="Ensure data quality for reliable ML predictions",
             ),
-            # Note: Not filtering by brand for test to ensure sufficient sample size
-            # Sample data has ~60-70 patients per brand, filtering further would leave too few
         ],
-        exclusion_criteria=[
-            # Don't exclude any journey status - sample data has limited records
-            # Excluding 'completed' would remove ~25% of samples
-        ],
-        temporal_requirements=None,  # Skip temporal requirements for sample data
+        exclusion_criteria=[],
+        temporal_requirements=None,
         required_fields=["patient_journey_id", "brand", "data_quality_score"],
         version="1.0.0-test",
         status="active",
@@ -1028,46 +1440,104 @@ async def step_3_cohort_constructor(patient_df: pd.DataFrame) -> tuple[pd.DataFr
         regulatory_justification="Test configuration for MLOps workflow validation",
     )
 
-    print(f"  Input patient count: {len(patient_df)}")
-    print(f"  Brand: {CONFIG.brand}")
-    print(f"  Using custom test config (sample data compatible)")
-    print(f"  Inclusion: data_quality_score >= 0.5")
-    print(f"  No exclusion criteria (to maximize test sample size)")
+    processing_steps.append(("Cohort config created", True, "data_quality_score >= 0.5"))
 
-    print("\n  Running agent...")
     eligible_df, result = await agent.run(
         patient_df=patient_df,
-        config=test_config,  # Use custom config instead of brand
+        config=test_config,
     )
+    processing_steps.append(("Cohort construction executed", True, f"{len(eligible_df)} eligible"))
 
-    print("\n  Output:")
-    print_result("cohort_id", result.cohort_id)
-    print_result("execution_id", result.execution_id)
-    print_result("eligible_count", len(result.eligible_patient_ids))
-    print_result("status", result.status)
+    print_processing_steps(processing_steps)
 
-    if result.eligibility_stats:
-        print_result("eligibility_stats", result.eligibility_stats)
+    # Validation checks
+    eligible_count = len(eligible_df)
+    input_count = len(patient_df)
+    excluded_count = input_count - eligible_count
+    retention_rate = eligible_count / input_count if input_count > 0 else 0
 
-    if len(eligible_df) >= CONFIG.min_eligible_patients:
-        print_success(f"Cohort size ({len(eligible_df)}) meets minimum ({CONFIG.min_eligible_patients})")
+    checks = [
+        (
+            "Minimum cohort size",
+            eligible_count >= CONFIG.min_eligible_patients,
+            f">= {CONFIG.min_eligible_patients}",
+            str(eligible_count)
+        ),
+        (
+            "Retention rate",
+            retention_rate >= 0.5,
+            ">= 50%",
+            f"{retention_rate:.1%}"
+        ),
+        (
+            "Cohort status",
+            result.status == "completed",
+            "completed",
+            result.status
+        ),
+    ]
+
+    print_validation_checks(checks)
+
+    # Metrics
+    metrics = [
+        ("input_patients", input_count, None, None),
+        ("eligible_patients", eligible_count, f">= {CONFIG.min_eligible_patients}", eligible_count >= CONFIG.min_eligible_patients),
+        ("excluded_patients", excluded_count, None, None),
+        ("retention_rate", retention_rate, ">= 0.50", retention_rate >= 0.5),
+        ("cohort_id", result.cohort_id, None, None),
+    ]
+
+    print_metrics_table(metrics)
+
+    # Interpretation
+    observations = []
+    recommendations = []
+
+    observations.append(f"Patient flow: {input_count} → {eligible_count} ({retention_rate:.1%} retention)")
+    observations.append(f"Excluded {excluded_count} patients based on eligibility criteria")
+
+    if eligible_count < CONFIG.min_eligible_patients:
+        observations.append(f"⚠️  Cohort size ({eligible_count}) below minimum ({CONFIG.min_eligible_patients})")
+        recommendations.append("Relax eligibility criteria or generate more sample data")
+        recommendations.append("Consider lowering data_quality_score threshold")
     else:
-        print_failure(f"Cohort size ({len(eligible_df)}) below minimum ({CONFIG.min_eligible_patients})")
+        observations.append(f"Cohort size ({eligible_count}) sufficient for ML training")
+
+    if retention_rate < 0.5:
+        observations.append(f"⚠️  High exclusion rate ({1-retention_rate:.1%}) may indicate data quality issues")
+        recommendations.append("Review exclusion criteria for potential over-filtering")
+
+    # Target distribution in cohort
+    if CONFIG.target_outcome in eligible_df.columns:
+        target_dist = eligible_df[CONFIG.target_outcome].value_counts()
+        minority_ratio = target_dist.min() / target_dist.sum() if target_dist.sum() > 0 else 0
+        observations.append(f"Target class distribution: {dict(target_dist)}")
+        if minority_ratio < 0.2:
+            observations.append(f"⚠️  Class imbalance detected ({minority_ratio:.1%} minority)")
+
+    print_interpretation("Cohort Analysis", observations, recommendations if recommendations else None)
+
+    # Final result
+    duration = time_mod.time() - step_start
+    if eligible_count >= CONFIG.min_eligible_patients:
+        print_step_result("success", f"Cohort constructed ({eligible_count} patients, {duration:.1f}s)")
+    else:
+        print_step_result("warning", f"Cohort below minimum size ({eligible_count}/{CONFIG.min_eligible_patients}, {duration:.1f}s)")
 
     return eligible_df, result
 
 
 async def step_4_model_selector(experiment_id: str, scope_spec: dict, qc_report: dict) -> dict[str, Any]:
     """Step 4: Select model candidate."""
+    import time as time_mod
+    step_start = time_mod.time()
+
     print_header(4, "MODEL SELECTOR")
 
     from src.agents.ml_foundation.model_selector import ModelSelectorAgent
 
-    print("\n  Creating ModelSelectorAgent...")
-    agent = ModelSelectorAgent()
-
-    # Ensure qc_report has both gate_passed and qc_passed for compatibility
-    # data_preparer uses gate_passed, model_selector expects qc_passed
+    # Normalize qc_report for compatibility
     normalized_qc_report = qc_report.copy()
     if "qc_passed" not in normalized_qc_report:
         normalized_qc_report["qc_passed"] = normalized_qc_report.get("gate_passed", True)
@@ -1077,35 +1547,108 @@ async def step_4_model_selector(experiment_id: str, scope_spec: dict, qc_report:
     input_data = {
         "scope_spec": scope_spec,
         "qc_report": normalized_qc_report,
-        "skip_benchmarks": True,  # Skip for faster testing
+        "skip_benchmarks": True,
     }
 
-    print("  Input:")
-    print(f"    problem_type: {scope_spec.get('problem_type', 'binary_classification')}")
-    print(f"    qc_passed: {normalized_qc_report.get('qc_passed')}")
-    print(f"    skip_benchmarks: True")
+    print_input_section({
+        "problem_type": scope_spec.get("problem_type", "binary_classification"),
+        "qc_passed": normalized_qc_report.get("qc_passed"),
+        "skip_benchmarks": True,
+    })
 
-    print("\n  Running agent...")
+    # Processing
+    processing_steps = []
+    processing_steps.append(("Creating ModelSelectorAgent", True, None))
+
+    agent = ModelSelectorAgent()
+    processing_steps.append(("Agent initialized", True, None))
+
     result = await agent.run(input_data)
 
-    # Check for errors
-    if result.get("error"):
-        print_failure(f"Model selection error: {result.get('error')}")
-
-    print("\n  Output:")
+    # Extract candidate info
     candidate = result.get("model_candidate") or result.get("primary_candidate")
     if candidate:
         if hasattr(candidate, "algorithm_name"):
-            print_result("algorithm", candidate.algorithm_name)
-            print_result("hyperparameters", getattr(candidate, "hyperparameters", {}))
+            algo_name = candidate.algorithm_name
+            hyperparams = getattr(candidate, "hyperparameters", {})
         elif isinstance(candidate, dict):
-            print_result("algorithm", candidate.get("algorithm_name", candidate.get("algorithm")))
-            print_result("hyperparameters", candidate.get("hyperparameters", {}))
-        print_success("Model candidate selected")
+            algo_name = candidate.get("algorithm_name", candidate.get("algorithm", "Unknown"))
+            hyperparams = candidate.get("hyperparameters", {})
+        else:
+            algo_name = "Unknown"
+            hyperparams = {}
+        processing_steps.append(("Model selection executed", True, algo_name))
     else:
-        print_warning("No model candidate returned, will use fallback")
+        algo_name = "LogisticRegression (fallback)"
+        hyperparams = {}
+        processing_steps.append(("Model selection executed", False, "Using fallback"))
 
-    print_result("selection_rationale", result.get("selection_rationale", "N/A"))
+    print_processing_steps(processing_steps)
+
+    # Validation checks
+    has_candidate = candidate is not None
+    has_error = bool(result.get("error"))
+
+    checks = [
+        (
+            "Model candidate selected",
+            has_candidate,
+            "candidate present",
+            algo_name if has_candidate else "missing (will use fallback)"
+        ),
+        (
+            "No selection errors",
+            not has_error,
+            "no errors",
+            result.get("error", "none")[:50] if has_error else "none"
+        ),
+    ]
+
+    print_validation_checks(checks)
+
+    # Metrics
+    metrics = [
+        ("algorithm", algo_name, None, None),
+        ("hyperparameters", f"{len(hyperparams)} params", None, None),
+        ("selection_score", result.get("selection_rationale", {}).get("selection_score") if isinstance(result.get("selection_rationale"), dict) else None, None, None),
+    ]
+
+    print_metrics_table(metrics)
+
+    # Interpretation
+    observations = []
+    recommendations = []
+
+    if has_candidate:
+        observations.append(f"Selected algorithm: {algo_name}")
+        if hyperparams:
+            observations.append(f"Initial hyperparameters: {hyperparams}")
+        observations.append("HPO will tune these parameters in Step 5")
+    else:
+        observations.append("⚠️  No model candidate returned by selector")
+        observations.append("Falling back to LogisticRegression as default")
+        recommendations.append("Review selector agent logs for issues")
+
+    # Algorithm-specific observations
+    if "Logistic" in algo_name:
+        observations.append("LogisticRegression: Good baseline for binary classification")
+        observations.append("Interpretable coefficients, fast training")
+    elif "RandomForest" in algo_name or "XGB" in algo_name:
+        observations.append(f"{algo_name}: Ensemble method, handles non-linear patterns")
+        observations.append("May overfit on small datasets, check validation metrics")
+
+    rationale = result.get("selection_rationale")
+    if rationale and isinstance(rationale, str):
+        observations.append(f"Selection rationale: {rationale[:100]}")
+
+    print_interpretation("Model Selection Analysis", observations, recommendations if recommendations else None)
+
+    # Final result
+    duration = time_mod.time() - step_start
+    if has_candidate:
+        print_step_result("success", f"Model selected: {algo_name} ({duration:.1f}s)")
+    else:
+        print_step_result("warning", f"Using fallback model ({duration:.1f}s)")
 
     return result
 
@@ -1118,28 +1661,17 @@ async def step_5_model_trainer(
     y: pd.Series
 ) -> dict[str, Any]:
     """Step 5: Train model."""
+    import time as time_mod
+    step_start = time_mod.time()
+
     print_header(5, "MODEL TRAINER")
 
     from src.agents.ml_foundation.model_trainer import ModelTrainerAgent
     from sklearn.linear_model import LogisticRegression
 
-    print("\n  Creating ModelTrainerAgent...")
-    agent = ModelTrainerAgent()
-
-    # Ensure model_candidate has all required fields for model_trainer
-    # Required: algorithm_name, algorithm_class, hyperparameter_search_space, default_hyperparameters
+    # Ensure model_candidate has all required fields
     if model_candidate is None or not isinstance(model_candidate, dict):
-        print_warning("No valid model_candidate from selector, using LogisticRegression fallback")
         model_candidate = {}
-
-    # Check if causal model - these are now supported in model_trainer
-    causal_models = ["LinearDML", "CausalForest", "DoubleLasso", "SparseLinearDML", "DML",
-                     "DRLearner", "SLearner", "TLearner", "XLearner"]
-    algo_name = model_candidate.get("algorithm_name", "")
-    if algo_name in causal_models:
-        print_info(f"Causal model '{algo_name}' selected - treatment indicator required for full causal inference")
-        # Note: For true causal inference, treatment must come from data
-        # Causal models can still train on classification tasks for demonstration
 
     # Ensure all required fields exist
     if "algorithm_name" not in model_candidate:
@@ -1164,37 +1696,37 @@ async def step_5_model_trainer(
     train_size = int(0.60 * n)
     val_size = int(0.20 * n)
     test_size = int(0.15 * n)
-    holdout_size = n - train_size - val_size - test_size  # Remaining ~5%
+    holdout_size = n - train_size - val_size - test_size
 
-    # Create split indices
     train_end = train_size
     val_end = train_end + val_size
     test_end = val_end + test_size
 
-    # Build split dicts with required keys: X, y, row_count
-    train_data = {
-        "X": X.iloc[:train_end],
-        "y": y.iloc[:train_end],
-        "row_count": train_size,
-    }
-    validation_data = {
-        "X": X.iloc[train_end:val_end],
-        "y": y.iloc[train_end:val_end],
-        "row_count": val_size,
-    }
-    test_data = {
-        "X": X.iloc[val_end:test_end],
-        "y": y.iloc[val_end:test_end],
-        "row_count": test_size,
-    }
-    holdout_data = {
-        "X": X.iloc[test_end:],
-        "y": y.iloc[test_end:],
-        "row_count": holdout_size,
-    }
+    train_data = {"X": X.iloc[:train_end], "y": y.iloc[:train_end], "row_count": train_size}
+    validation_data = {"X": X.iloc[train_end:val_end], "y": y.iloc[train_end:val_end], "row_count": val_size}
+    test_data = {"X": X.iloc[val_end:test_end], "y": y.iloc[val_end:test_end], "row_count": test_size}
+    holdout_data = {"X": X.iloc[test_end:], "y": y.iloc[test_end:], "row_count": holdout_size}
 
-    # Extract feature columns for downstream SHAP computation
     feature_columns = list(X.columns)
+
+    # Input section
+    print_input_section({
+        "algorithm": model_candidate["algorithm_name"],
+        "total_samples": n,
+        "train_samples": f"{train_size} ({train_size / n:.0%})",
+        "validation_samples": f"{val_size} ({val_size / n:.0%})",
+        "test_samples": f"{test_size} ({test_size / n:.0%})",
+        "holdout_samples": f"{holdout_size} ({holdout_size / n:.0%})",
+        "hpo_trials": CONFIG.hpo_trials,
+        "enable_mlflow": CONFIG.enable_mlflow,
+    })
+
+    # Processing
+    processing_steps = []
+    processing_steps.append(("Creating ModelTrainerAgent", True, None))
+
+    agent = ModelTrainerAgent()
+    processing_steps.append(("Agent initialized", True, None))
 
     input_data = {
         "experiment_id": experiment_id,
@@ -1207,75 +1739,53 @@ async def step_5_model_trainer(
         "validation_data": validation_data,
         "test_data": test_data,
         "holdout_data": holdout_data,
-        "enable_mlflow": CONFIG.enable_mlflow,  # Explicit MLflow control
-        "feature_columns": feature_columns,  # Pass feature names for SHAP
+        "enable_mlflow": CONFIG.enable_mlflow,
+        "feature_columns": feature_columns,
     }
 
-    print("  Input:")
-    print(f"    algorithm: {model_candidate['algorithm_name']}")
-    print(f"    train_samples: {train_size} ({train_size / n:.0%})")
-    print(f"    validation_samples: {val_size} ({val_size / n:.0%})")
-    print(f"    test_samples: {test_size} ({test_size / n:.0%})")
-    print(f"    holdout_samples: {holdout_size} ({holdout_size / n:.0%})")
-    print(f"    total_samples: {n}")
-    print(f"    hpo_trials: {CONFIG.hpo_trials}")
-    print(f"    enable_hpo: True")
-
-    print("\n  Running agent (this may take a few minutes with HPO)...")
+    processing_steps.append(("HPO optimization", True, f"{CONFIG.hpo_trials} trials"))
     result = await agent.run(input_data)
 
-    print("\n  Output:")
-    print_result("training_run_id", result.get("training_run_id", "N/A"))
-    print_result("model_id", result.get("model_id", "N/A"))
-    print_result("auc_roc", result.get("auc_roc", "N/A"))
-    print_result("precision", result.get("precision", "N/A"))
-    print_result("recall", result.get("recall", "N/A"))
-    print_result("f1_score", result.get("f1_score", "N/A"))
-    print_result("success_criteria_met", result.get("success_criteria_met", "N/A"))
-    print_result("hpo_trials_run", result.get("hpo_trials_run", "N/A"))
-    print_result("training_duration_seconds", result.get("training_duration_seconds", "N/A"))
+    # Check class imbalance
+    imbalance_detected = result.get("imbalance_detected", False)
+    if imbalance_detected:
+        processing_steps.append(("Class imbalance detected", True, result.get("imbalance_severity", "unknown")))
+        processing_steps.append(("Remediation applied", True, result.get("recommended_strategy", "N/A")))
 
-    # MLflow logging outputs (critical for model_uri handoff to Feature Analyzer)
-    print_result("mlflow_status", result.get("mlflow_status", "N/A"))
-    print_result("mlflow_run_id", result.get("mlflow_run_id", "N/A"))
+    processing_steps.append(("Model training complete", True, f"AUC={result.get('auc_roc', 'N/A')}"))
+
     model_uri = result.get("model_artifact_uri") or result.get("mlflow_model_uri")
-    print_result("model_uri", model_uri or "NOT AVAILABLE")
-    if not model_uri:
-        print_warning("model_uri is None - Feature Analyzer SHAP computation will be skipped")
+    if CONFIG.enable_mlflow and model_uri:
+        processing_steps.append(("MLflow artifact logged", True, "model_uri available"))
+    elif CONFIG.enable_mlflow:
+        processing_steps.append(("MLflow artifact logged", False, "model_uri missing"))
 
-    if result.get("validation_metrics"):
-        print_result("validation_metrics", result["validation_metrics"])
-
-    auc = result.get("auc_roc", 0)
-    if auc and auc >= CONFIG.min_auc_threshold:
-        print_success(f"Model AUC ({auc:.3f}) meets threshold ({CONFIG.min_auc_threshold})")
-    elif auc:
-        print_warning(f"Model AUC ({auc:.3f}) below threshold ({CONFIG.min_auc_threshold})")
+    print_processing_steps(processing_steps)
 
     # =========================================================================
     # ENHANCED ACCURACY DATA COLLECTION
     # =========================================================================
-    # Capture detailed accuracy data for enhanced summary
     trained_model = result.get("trained_model")
-    if trained_model is not None:
-        from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
+    val_metrics = {}
+    train_metrics = {}
+    y_val_pred = []
+    n_positive_predictions = 0
+    optimal_threshold = result.get("optimal_threshold", 0.5)
 
-        # Get data - CRITICAL: Use PREPROCESSED data for model predictions
-        # Raw data won't work correctly with models trained on scaled features
+    if trained_model is not None:
+        from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score as sklearn_f1_score, roc_auc_score
+
+        # Get preprocessed data
         X_val_preprocessed = result.get("X_validation_preprocessed")
         X_test_preprocessed = result.get("X_test_preprocessed")
         fitted_preprocessor = result.get("fitted_preprocessor")
 
-        # Use preprocessed data if available, otherwise preprocess raw data
         if X_val_preprocessed is not None:
             X_val = X_val_preprocessed
-            print_info("Using preprocessed validation data for predictions")
         elif fitted_preprocessor is not None:
             X_val = fitted_preprocessor.transform(validation_data["X"])
-            print_info("Preprocessed validation data using fitted_preprocessor")
         else:
             X_val = validation_data["X"]
-            print_warning("Using RAW validation data - predictions may be incorrect!")
 
         y_val = validation_data["y"]
 
@@ -1288,52 +1798,33 @@ async def step_5_model_trainer(
 
         y_test = test_data["y"]
 
-        # Training data - preprocess if needed
         if fitted_preprocessor is not None:
             X_train = fitted_preprocessor.transform(train_data["X"])
         else:
             X_train = train_data["X"]
         y_train = train_data["y"]
 
-        # Get optimal threshold from evaluator (default to 0.5 if not available)
-        optimal_threshold = result.get("optimal_threshold", 0.5)
-        print_info(f"Initial optimal threshold from evaluator: {optimal_threshold:.4f}")
-
         # Generate probability predictions
         y_val_proba = None
-        if hasattr(trained_model, 'predict_proba'):
-            y_val_proba = trained_model.predict_proba(X_val)[:, 1]
-
         y_train_proba = None
         if hasattr(trained_model, 'predict_proba'):
+            y_val_proba = trained_model.predict_proba(X_val)[:, 1]
             y_train_proba = trained_model.predict_proba(X_train)[:, 1]
 
-        # ADAPTIVE THRESHOLD: If optimal threshold produces 0 positives, find a better one
-        # This handles cases where ROC-based optimal threshold is too high for imbalanced data
+        # Adaptive threshold handling
         if y_val_proba is not None:
             n_pos_at_optimal = ((y_val_proba >= optimal_threshold).astype(int)).sum()
             if n_pos_at_optimal == 0:
-                print_warning(f"Optimal threshold {optimal_threshold:.4f} produces 0 positive predictions")
-                # Find threshold that produces at least target_minority_ratio positives
-                target_minority_ratio = 0.10  # Target at least 10% positive predictions
-                target_n_pos = max(1, int(len(y_val) * target_minority_ratio))
-                # Sort probabilities descending and find threshold
+                target_n_pos = max(1, int(len(y_val) * 0.10))
                 sorted_proba = np.sort(y_val_proba)[::-1]
                 if target_n_pos <= len(sorted_proba):
-                    adaptive_threshold = sorted_proba[target_n_pos - 1] - 0.001  # Just below Nth highest
-                    adaptive_threshold = max(0.01, adaptive_threshold)  # Don't go below 0.01
-                    print_info(f"Using adaptive threshold: {adaptive_threshold:.4f} (targets {target_n_pos} positives)")
+                    adaptive_threshold = max(0.01, sorted_proba[target_n_pos - 1] - 0.001)
                     optimal_threshold = adaptive_threshold
-                    result["optimal_threshold"] = adaptive_threshold  # Update result for downstream
+                    result["optimal_threshold"] = adaptive_threshold
 
-        print_info(f"Final threshold for predictions: {optimal_threshold:.4f}")
-
-        # CRITICAL: Use optimal threshold for predictions (not default 0.5)
-        # This fixes models that predict all negatives at 0.5 but are useful at optimal threshold
+        # Make predictions at optimal threshold
         if y_val_proba is not None:
             y_val_pred = (y_val_proba >= optimal_threshold).astype(int)
-            n_pos_pred = y_val_pred.sum()
-            print_info(f"Validation predictions at threshold {optimal_threshold:.4f}: {n_pos_pred} positives")
         else:
             y_val_pred = trained_model.predict(X_val)
 
@@ -1342,12 +1833,14 @@ async def step_5_model_trainer(
         else:
             y_train_pred = trained_model.predict(X_train)
 
-        # Calculate train metrics
+        n_positive_predictions = sum(y_val_pred)
+
+        # Calculate metrics
         train_metrics = {
             "accuracy": accuracy_score(y_train, y_train_pred),
             "precision": precision_score(y_train, y_train_pred, zero_division=0),
             "recall": recall_score(y_train, y_train_pred, zero_division=0),
-            "f1": f1_score(y_train, y_train_pred, zero_division=0),
+            "f1": sklearn_f1_score(y_train, y_train_pred, zero_division=0),
         }
         if y_train_proba is not None:
             try:
@@ -1355,12 +1848,11 @@ async def step_5_model_trainer(
             except ValueError:
                 pass
 
-        # Calculate validation metrics
         val_metrics = {
             "accuracy": accuracy_score(y_val, y_val_pred),
             "precision": precision_score(y_val, y_val_pred, zero_division=0),
             "recall": recall_score(y_val, y_val_pred, zero_division=0),
-            "f1": f1_score(y_val, y_val_pred, zero_division=0),
+            "f1": sklearn_f1_score(y_val, y_val_pred, zero_division=0),
         }
         if y_val_proba is not None:
             try:
@@ -1368,7 +1860,7 @@ async def step_5_model_trainer(
             except ValueError:
                 pass
 
-        # Store accuracy analysis data in result for state capture
+        # Store accuracy analysis data
         result["accuracy_analysis"] = {
             "y_true": y_val.tolist() if hasattr(y_val, 'tolist') else list(y_val),
             "y_pred": y_val_pred.tolist() if hasattr(y_val_pred, 'tolist') else list(y_val_pred),
@@ -1381,33 +1873,158 @@ async def step_5_model_trainer(
             "feature_columns": feature_columns,
         }
 
-        print_info(f"Captured accuracy analysis data: {len(y_val)} validation samples")
+    # =========================================================================
+    # VALIDATION CHECKS
+    # =========================================================================
+    auc = result.get("auc_roc", 0) or val_metrics.get("roc_auc", 0)
+    minority_recall = val_metrics.get("recall", 0)
+    minority_precision = val_metrics.get("precision", 0)
 
-        # =========================================================================
-        # VALIDATE MODEL USEFULNESS (not just AUC)
-        # =========================================================================
-        # A model that predicts all 0s is useless even if AUC looks good
-        minority_recall = val_metrics.get("recall", 0)
-        minority_precision = val_metrics.get("precision", 0)
+    checks = [
+        (
+            "Model trained successfully",
+            trained_model is not None,
+            "trained_model present",
+            "present" if trained_model is not None else "missing"
+        ),
+        (
+            "AUC-ROC threshold",
+            auc >= CONFIG.min_auc_threshold if auc else False,
+            f">= {CONFIG.min_auc_threshold}",
+            f"{auc:.3f}" if auc else "N/A"
+        ),
+        (
+            "Minority recall threshold",
+            minority_recall >= CONFIG.min_minority_recall,
+            f">= {CONFIG.min_minority_recall:.0%}",
+            f"{minority_recall:.2%}"
+        ),
+        (
+            "Minority precision threshold",
+            minority_precision >= CONFIG.min_minority_precision,
+            f">= {CONFIG.min_minority_precision:.0%}",
+            f"{minority_precision:.2%}"
+        ),
+        (
+            "Positive predictions made",
+            n_positive_predictions > 0,
+            "> 0",
+            str(n_positive_predictions)
+        ),
+    ]
 
-        # Check if model is actually making positive predictions
-        n_positive_predictions = sum(y_val_pred)
+    print_validation_checks(checks)
+
+    # =========================================================================
+    # METRICS TABLE
+    # =========================================================================
+    metrics_list = [
+        ("auc_roc", auc, f">= {CONFIG.min_auc_threshold}", auc >= CONFIG.min_auc_threshold if auc else None),
+        ("accuracy", val_metrics.get("accuracy"), None, None),
+        ("precision", minority_precision, f">= {CONFIG.min_minority_precision:.0%}", minority_precision >= CONFIG.min_minority_precision),
+        ("recall", minority_recall, f">= {CONFIG.min_minority_recall:.0%}", minority_recall >= CONFIG.min_minority_recall),
+        ("f1_score", val_metrics.get("f1"), None, None),
+        ("optimal_threshold", optimal_threshold, None, None),
+        ("positive_predictions", n_positive_predictions, "> 0", n_positive_predictions > 0),
+        ("hpo_trials_run", result.get("hpo_trials_run"), None, None),
+    ]
+
+    print_metrics_table(metrics_list)
+
+    # =========================================================================
+    # CONFUSION MATRIX DISPLAY (if available)
+    # =========================================================================
+    if result.get("accuracy_analysis") and trained_model is not None:
+        y_true_list = result["accuracy_analysis"]["y_true"]
+        y_pred_list = result["accuracy_analysis"]["y_pred"]
+        y_proba_list = result["accuracy_analysis"].get("y_proba")
+
+        cm_data = print_confusion_matrix(
+            np.array(y_true_list),
+            np.array(y_pred_list),
+            np.array(y_proba_list) if y_proba_list else None,
+            "Validation Confusion Matrix"
+        )
+
+        # Threshold analysis
+        if y_proba_list:
+            print_threshold_analysis(np.array(y_true_list), np.array(y_proba_list), optimal_threshold)
+
+    # =========================================================================
+    # INTERPRETATION
+    # =========================================================================
+    observations = []
+    recommendations = []
+
+    # Model performance interpretation
+    if trained_model is not None:
+        perf_obs, perf_rec = interpret_model_performance(
+            {"roc_auc": auc},
+            result.get("accuracy_analysis", {}),
+            CONFIG.min_minority_recall,
+            CONFIG.min_minority_precision
+        )
+        observations.extend(perf_obs)
+        recommendations.extend(perf_rec)
+
+        # Class imbalance interpretation
+        if imbalance_detected:
+            imb_obs, imb_rec = interpret_class_imbalance({
+                "imbalance_detected": True,
+                "minority_ratio": result.get("minority_ratio", 0),
+                "imbalance_severity": result.get("imbalance_severity", "unknown"),
+                "recommended_strategy": result.get("recommended_strategy", "none"),
+            })
+            observations.extend(imb_obs)
+            recommendations.extend(imb_rec)
+
+        # Confusion matrix interpretation
+        if result.get("accuracy_analysis"):
+            y_pred_list = result["accuracy_analysis"]["y_pred"]
+            y_true_list = result["accuracy_analysis"]["y_true"]
+            cm_obs = interpret_confusion_matrix({
+                "tp": sum(1 for t, p in zip(y_true_list, y_pred_list) if t == 1 and p == 1),
+                "tn": sum(1 for t, p in zip(y_true_list, y_pred_list) if t == 0 and p == 0),
+                "fp": sum(1 for t, p in zip(y_true_list, y_pred_list) if t == 0 and p == 1),
+                "fn": sum(1 for t, p in zip(y_true_list, y_pred_list) if t == 1 and p == 0),
+            })
+            observations.extend(cm_obs)
+    else:
+        observations.append("⚠️  No trained model returned - training may have failed")
+        recommendations.append("Check agent logs for training errors")
+
+    print_interpretation("Model Training Analysis", observations, recommendations if recommendations else None)
+
+    # =========================================================================
+    # DETERMINE MODEL USEFULNESS
+    # =========================================================================
+    if trained_model is not None:
         if n_positive_predictions == 0:
-            print_warning(f"MODEL PREDICTS ALL NEGATIVES - No positive predictions made!")
-            print_warning(f"This model will miss 100% of actual discontinuation cases")
             result["model_usefulness"] = "useless"
             result["usefulness_reason"] = "predicts_all_negative"
         elif minority_recall < CONFIG.min_minority_recall:
-            print_warning(f"Minority recall ({minority_recall:.2%}) below threshold ({CONFIG.min_minority_recall:.2%})")
             result["model_usefulness"] = "poor"
             result["usefulness_reason"] = f"low_recall_{minority_recall:.2%}"
         elif minority_precision < CONFIG.min_minority_precision:
-            print_warning(f"Minority precision ({minority_precision:.2%}) below threshold ({CONFIG.min_minority_precision:.2%})")
             result["model_usefulness"] = "poor"
             result["usefulness_reason"] = f"low_precision_{minority_precision:.2%}"
         else:
-            print_success(f"Model usefulness validated: recall={minority_recall:.2%}, precision={minority_precision:.2%}")
             result["model_usefulness"] = "acceptable"
+
+    # =========================================================================
+    # FINAL RESULT
+    # =========================================================================
+    duration = time_mod.time() - step_start
+    model_usefulness = result.get("model_usefulness", "unknown")
+
+    if model_usefulness == "useless":
+        print_step_result("failed", f"Model USELESS - predicts all negatives ({duration:.1f}s)")
+    elif model_usefulness == "poor":
+        print_step_result("warning", f"Model has poor metrics ({result.get('usefulness_reason', '')}) ({duration:.1f}s)")
+    elif model_usefulness == "acceptable":
+        print_step_result("success", f"Model trained successfully - usefulness validated ({duration:.1f}s)")
+    else:
+        print_step_result("warning", f"Model training completed with unknown status ({duration:.1f}s)")
 
     return result
 
@@ -1420,15 +2037,28 @@ async def step_6_feature_analyzer(
     model_uri: Optional[str] = None
 ) -> dict[str, Any]:
     """Step 6: Analyze feature importance."""
+    import time as time_mod
+    step_start = time_mod.time()
+
     print_header(6, "FEATURE ANALYZER")
 
     from src.agents.ml_foundation.feature_analyzer import FeatureAnalyzerAgent
 
-    print("\n  Creating FeatureAnalyzerAgent...")
-    agent = FeatureAnalyzerAgent()
-
-    # Use actual feature names from DataFrame columns for SHAP output
     feature_columns = list(X_sample.columns)
+
+    print_input_section({
+        "sample_size": len(X_sample),
+        "features": feature_columns,
+        "max_samples": min(100, len(X_sample)),
+        "model_uri": model_uri[:50] + "..." if model_uri and len(model_uri) > 50 else model_uri,
+    })
+
+    # Processing
+    processing_steps = []
+    processing_steps.append(("Creating FeatureAnalyzerAgent", True, None))
+
+    agent = FeatureAnalyzerAgent()
+    processing_steps.append(("Agent initialized", True, None))
 
     input_data = {
         "experiment_id": experiment_id,
@@ -1437,33 +2067,95 @@ async def step_6_feature_analyzer(
         "X_sample": X_sample,
         "y_sample": y_sample,
         "max_samples": min(100, len(X_sample)),
-        "feature_columns": feature_columns,  # Pass feature names for SHAP
+        "feature_columns": feature_columns,
     }
 
-    print("  Input:")
-    print(f"    sample_size: {len(X_sample)}")
-    print(f"    features: {list(X_sample.columns)}")
-
-    print("\n  Running agent...")
     try:
         result = await agent.run(input_data)
-
-        print("\n  Output:")
-        if result.get("feature_importance"):
-            print("  Feature Importance:")
-            for fi in result["feature_importance"][:5]:  # Top 5
-                if isinstance(fi, dict):
-                    print(f"    {fi.get('feature', 'unknown')}: {fi.get('importance', 0):.4f}")
-                else:
-                    print(f"    {fi}")
-
-        print_result("samples_analyzed", result.get("samples_analyzed", "N/A"))
-        print_result("computation_time_seconds", result.get("computation_time_seconds", "N/A"))
-
-        print_success("Feature analysis completed")
+        processing_steps.append(("SHAP analysis executed", True, None))
+        analysis_success = True
     except Exception as e:
-        print_warning(f"Feature analysis failed (optional): {e}")
         result = {"feature_importance": None, "error": str(e)}
+        processing_steps.append(("SHAP analysis executed", False, str(e)[:50]))
+        analysis_success = False
+
+    print_processing_steps(processing_steps)
+
+    # Validation checks
+    has_importance = result.get("feature_importance") is not None
+    samples_analyzed = result.get("samples_analyzed", 0)
+
+    checks = [
+        (
+            "Feature importance computed",
+            has_importance,
+            "feature_importance present",
+            "present" if has_importance else "missing"
+        ),
+        (
+            "Samples analyzed",
+            samples_analyzed > 0 if samples_analyzed else False,
+            "> 0",
+            str(samples_analyzed) if samples_analyzed else "0"
+        ),
+    ]
+
+    print_validation_checks(checks)
+
+    # Metrics - Feature importance table
+    if has_importance:
+        print("\n  📊 Feature Importance (SHAP):")
+        print(f"    {'Feature':<25} {'Importance':<15} {'Rank':<10}")
+        print(f"    {'-'*50}")
+
+        for i, fi in enumerate(result["feature_importance"][:10], 1):
+            if isinstance(fi, dict):
+                name = fi.get("feature", f"feature_{i}")[:25]
+                imp = fi.get("importance", 0)
+                print(f"    {name:<25} {imp:<15.4f} #{i:<10}")
+            else:
+                print(f"    {str(fi):<25} {'N/A':<15} #{i:<10}")
+
+    # Interpretation
+    observations = []
+    recommendations = []
+
+    if has_importance:
+        top_features = result["feature_importance"][:3]
+        if top_features:
+            top_names = [fi.get("feature", "unknown") if isinstance(fi, dict) else str(fi) for fi in top_features]
+            observations.append(f"Top predictive features: {', '.join(top_names)}")
+
+            # Feature-specific insights
+            for fi in top_features:
+                if isinstance(fi, dict):
+                    name = fi.get("feature", "")
+                    imp = fi.get("importance", 0)
+                    if "days_on_therapy" in name.lower():
+                        observations.append(f"  • Duration on therapy ({imp:.3f}) is a strong predictor")
+                    elif "hcp_visits" in name.lower():
+                        observations.append(f"  • HCP engagement ({imp:.3f}) influences discontinuation")
+                    elif "prior_treatments" in name.lower():
+                        observations.append(f"  • Treatment history ({imp:.3f}) affects outcomes")
+
+        observations.append(f"Analysis based on {samples_analyzed} samples using SHAP explainer")
+    else:
+        observations.append("⚠️  Feature importance analysis failed or skipped")
+        if result.get("error"):
+            observations.append(f"    Error: {result['error'][:100]}")
+        recommendations.append("Verify model is compatible with SHAP explainer")
+        recommendations.append("Check if model_uri is valid and accessible")
+
+    print_interpretation("Feature Analysis", observations, recommendations if recommendations else None)
+
+    # Final result
+    duration = time_mod.time() - step_start
+    if analysis_success and has_importance:
+        print_step_result("success", f"Feature importance computed ({duration:.1f}s)")
+    elif analysis_success:
+        print_step_result("warning", f"Analysis completed but no importance data ({duration:.1f}s)")
+    else:
+        print_step_result("warning", f"Feature analysis failed (optional step) ({duration:.1f}s)")
 
     return result
 
@@ -1476,24 +2168,30 @@ async def step_7_model_deployer(
     trained_model: Any = None,
     include_bentoml: bool = False,
 ) -> dict[str, Any]:
-    """Step 7: Deploy model.
+    """Step 7: Deploy model."""
+    import time as time_mod
+    step_start = time_mod.time()
 
-    Args:
-        experiment_id: The experiment identifier
-        model_uri: MLflow model URI
-        validation_metrics: Metrics from model training
-        success_criteria_met: Whether model meets success criteria
-        trained_model: The actual trained model object (for BentoML serving)
-        include_bentoml: Whether to deploy and test with BentoML
-    """
     print_header(7, "MODEL DEPLOYER")
 
     from src.agents.ml_foundation.model_deployer import ModelDeployerAgent
 
-    print("\n  Creating ModelDeployerAgent...")
-    agent = ModelDeployerAgent()
-
     deployment_name = f"kisqali_discontinuation_{experiment_id[:8]}"
+
+    print_input_section({
+        "deployment_name": deployment_name,
+        "model_uri": model_uri[:50] + "..." if model_uri and len(model_uri) > 50 else model_uri,
+        "success_criteria_met": success_criteria_met,
+        "deployment_action": "register",
+        "include_bentoml": include_bentoml,
+    })
+
+    # Processing
+    processing_steps = []
+    processing_steps.append(("Creating ModelDeployerAgent", True, None))
+
+    agent = ModelDeployerAgent()
+    processing_steps.append(("Agent initialized", True, None))
 
     input_data = {
         "experiment_id": experiment_id,
@@ -1501,23 +2199,18 @@ async def step_7_model_deployer(
         "validation_metrics": validation_metrics,
         "success_criteria_met": success_criteria_met,
         "deployment_name": deployment_name,
-        "deployment_action": "register",  # Just register for testing
+        "deployment_action": "register",
     }
 
-    print("  Input:")
-    print(f"    deployment_name: {deployment_name}")
-    print(f"    success_criteria_met: {success_criteria_met}")
-    print(f"    deployment_action: register")
-
-    print("\n  Running agent...")
     try:
         result = await agent.run(input_data)
+        processing_steps.append(("Model registration", True, result.get("status", "unknown")))
+        agent_success = True
     except Exception as agent_error:
-        # Handle agent errors gracefully so BentoML serving can still run
         error_type = getattr(agent_error, "error_type", None) or type(agent_error).__name__
-        print_warning(f"Agent error ({error_type}): {agent_error}")
+        processing_steps.append(("Model registration", False, error_type))
+        agent_success = False
 
-        # Create a minimal result so we can continue
         result = {
             "status": "error",
             "deployment_successful": False,
@@ -1530,20 +2223,44 @@ async def step_7_model_deployer(
             },
         }
 
-    print("\n  Output:")
-    print_result("status", result.get("status", "N/A"))
-    print_result("deployment_successful", result.get("deployment_successful", "N/A"))
-    print_result("model_version", result.get("model_version", "N/A"))
+    print_processing_steps(processing_steps)
 
-    if result.get("deployment_manifest"):
-        print_result("deployment_manifest", result["deployment_manifest"])
+    # Validation checks
+    deployment_successful = result.get("deployment_successful", False) or result.get("status") == "completed"
+    manifest = result.get("deployment_manifest", {})
 
-    if result.get("deployment_successful", False) or result.get("status") == "completed":
-        print_success("Model registered successfully")
-    elif result.get("error"):
-        print_warning(f"Agent had errors but continuing: {result.get('error_type', 'unknown')}")
-    else:
-        print_warning("Model registration may have issues")
+    checks = [
+        (
+            "Deployment successful",
+            deployment_successful,
+            "deployment_successful = True",
+            f"{result.get('status', 'unknown')}"
+        ),
+        (
+            "Deployment manifest",
+            bool(manifest),
+            "manifest present",
+            "present" if manifest else "missing"
+        ),
+        (
+            "Success criteria met",
+            success_criteria_met,
+            "success_criteria_met = True",
+            str(success_criteria_met)
+        ),
+    ]
+
+    print_validation_checks(checks)
+
+    # Metrics
+    metrics_list = [
+        ("deployment_id", manifest.get("deployment_id"), None, None),
+        ("environment", manifest.get("environment"), None, None),
+        ("status", manifest.get("status"), None, None),
+        ("model_version", result.get("model_version"), None, None),
+    ]
+
+    print_metrics_table(metrics_list)
 
     # BentoML Model Serving (optional)
     if include_bentoml and trained_model is not None:
@@ -1646,20 +2363,61 @@ async def step_7_model_deployer(
             traceback.print_exc()
 
     elif include_bentoml and trained_model is None:
-        print_warning("BentoML requested but no trained_model available (run step 5 first)")
         result["bentoml_serving"] = {"error": "No trained model available"}
+
+    # Interpretation
+    observations = []
+    recommendations = []
+
+    if deployment_successful:
+        observations.append(f"Model registered with deployment ID: {manifest.get('deployment_id', 'N/A')}")
+        observations.append(f"Environment: {manifest.get('environment', 'staging')}")
+    else:
+        observations.append("⚠️  Model deployment encountered issues")
+        if result.get("error"):
+            observations.append(f"    Error: {result['error'][:100]}")
+        recommendations.append("Review deployment agent logs for details")
+
+    if not success_criteria_met:
+        observations.append("⚠️  Model did not meet success criteria")
+        recommendations.append("Review model metrics before production deployment")
+
+    # BentoML observations
+    bentoml_serving = result.get("bentoml_serving", {})
+    if bentoml_serving.get("health_check") and bentoml_serving.get("prediction_test"):
+        observations.append("BentoML serving verified: health check passed, predictions working")
+        observations.append(f"    Model tag: {bentoml_serving.get('model_tag', 'N/A')}")
+        observations.append(f"    Endpoint: {bentoml_serving.get('endpoint', 'N/A')}")
+        if bentoml_serving.get("latency_ms"):
+            observations.append(f"    Inference latency: {bentoml_serving['latency_ms']:.1f}ms")
+    elif include_bentoml and bentoml_serving.get("error"):
+        observations.append(f"⚠️  BentoML serving failed: {bentoml_serving['error'][:50]}")
+        recommendations.append("Check BentoML installation and model compatibility")
+
+    print_interpretation("Deployment Analysis", observations, recommendations if recommendations else None)
+
+    # Final result
+    duration = time_mod.time() - step_start
+    bentoml_ok = bentoml_serving.get("health_check") and bentoml_serving.get("prediction_test") if include_bentoml else True
+
+    if deployment_successful and bentoml_ok:
+        print_step_result("success", f"Model deployed successfully ({duration:.1f}s)")
+    elif deployment_successful:
+        print_step_result("warning", f"Deployment OK but BentoML issues ({duration:.1f}s)")
+    else:
+        print_step_result("warning", f"Deployment had issues ({duration:.1f}s)")
 
     return result
 
 
 async def step_8_observability_connector(experiment_id: str, stages_completed: int) -> dict[str, Any]:
     """Step 8: Log to observability."""
+    import time as time_mod
+    step_start = time_mod.time()
+
     print_header(8, "OBSERVABILITY CONNECTOR")
 
     from src.agents.ml_foundation.observability_connector import ObservabilityConnectorAgent
-
-    print("\n  Creating ObservabilityConnectorAgent...")
-    agent = ObservabilityConnectorAgent()
 
     events = [
         {
@@ -1674,27 +2432,85 @@ async def step_8_observability_connector(experiment_id: str, stages_completed: i
         }
     ]
 
+    print_input_section({
+        "events_to_log": 1,
+        "event_type": "pipeline_completed",
+        "experiment_id": experiment_id,
+        "stages_completed": stages_completed,
+        "time_window": "1h",
+    })
+
+    # Processing
+    processing_steps = []
+    processing_steps.append(("Creating ObservabilityConnectorAgent", True, None))
+
+    agent = ObservabilityConnectorAgent()
+    processing_steps.append(("Agent initialized", True, None))
+
     input_data = {
         "events_to_log": events,
         "time_window": "1h",
     }
 
-    print("  Input:")
-    print(f"    events_to_log: 1 event")
-    print(f"    time_window: 1h")
-
-    print("\n  Running agent...")
     result = await agent.run(input_data)
 
-    print("\n  Output:")
-    print_result("emission_successful", result.get("emission_successful", "N/A"))
-    print_result("events_logged", result.get("events_logged", "N/A"))
-    print_result("quality_score", result.get("quality_score", "N/A"))
+    emission_successful = result.get("emission_successful", False)
+    processing_steps.append(("Event emission", emission_successful, f"{result.get('events_logged', 0)} events"))
 
-    if result.get("emission_successful", False):
-        print_success("Events logged to observability")
+    print_processing_steps(processing_steps)
+
+    # Validation checks
+    events_logged = result.get("events_logged", 0)
+    quality_score = result.get("quality_score", 0)
+
+    checks = [
+        (
+            "Emission successful",
+            emission_successful,
+            "emission_successful = True",
+            str(emission_successful)
+        ),
+        (
+            "Events logged",
+            events_logged > 0 if events_logged else False,
+            "> 0",
+            str(events_logged) if events_logged else "0"
+        ),
+    ]
+
+    print_validation_checks(checks)
+
+    # Metrics
+    metrics_list = [
+        ("emission_successful", emission_successful, None, None),
+        ("events_logged", events_logged, "> 0", events_logged > 0 if events_logged else None),
+        ("quality_score", quality_score, None, None),
+    ]
+
+    print_metrics_table(metrics_list)
+
+    # Interpretation
+    observations = []
+    recommendations = []
+
+    if emission_successful:
+        observations.append(f"Pipeline completion event logged to observability system")
+        observations.append(f"Experiment {experiment_id} with {stages_completed} stages recorded")
+        if quality_score:
+            observations.append(f"Event quality score: {quality_score}")
     else:
-        print_warning("Observability logging may have issues")
+        observations.append("⚠️  Observability logging encountered issues")
+        recommendations.append("Check observability service connectivity")
+        recommendations.append("Verify event schema compliance")
+
+    print_interpretation("Observability Analysis", observations, recommendations if recommendations else None)
+
+    # Final result
+    duration = time_mod.time() - step_start
+    if emission_successful:
+        print_step_result("success", f"Observability logging complete ({duration:.1f}s)")
+    else:
+        print_step_result("warning", f"Observability logging had issues ({duration:.1f}s)")
 
     return result
 
