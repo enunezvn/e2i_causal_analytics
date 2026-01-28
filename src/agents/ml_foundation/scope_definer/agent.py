@@ -24,13 +24,13 @@ from .state import ScopeDefinerState
 logger = logging.getLogger(__name__)
 
 
-def _get_experiment_repository():
-    """Get MLExperimentRepository (lazy import to avoid circular deps)."""
+async def _get_experiment_repository():
+    """Get MLExperimentRepository with async client (lazy import to avoid circular deps)."""
     try:
         from src.repositories.ml_experiment import MLExperimentRepository
-        from src.memory.services.factories import get_supabase_client
+        from src.memory.services.factories import get_async_supabase_client
 
-        client = get_supabase_client()
+        client = await get_async_supabase_client()
         return MLExperimentRepository(supabase_client=client)
     except Exception as e:
         logger.warning(f"Could not get experiment repository: {e}")
@@ -236,7 +236,7 @@ class ScopeDefinerAgent:
             output: Agent output containing scope_spec and success_criteria
         """
         try:
-            repo = _get_experiment_repository()
+            repo = await _get_experiment_repository()
             if repo is None:
                 logger.debug("Skipping experiment persistence (no repository)")
                 return
