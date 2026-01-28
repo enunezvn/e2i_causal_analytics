@@ -563,7 +563,7 @@ class MLflowConnector:
                 # Update tags if provided
                 if tags:
                     for key, value in tags.items():
-                        self._mlflow.set_experiment_tag(experiment_id, key, value)
+                        self._client.set_experiment_tag(experiment_id, key, value)
                 logger.debug(f"Using existing experiment '{full_name}' with ID: {experiment_id}")
 
             self.circuit_breaker.record_success()
