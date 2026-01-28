@@ -408,6 +408,14 @@ class Tier0ModelService:
         return {{"status": "healthy", "model_tag": self.model_tag}}
 '''
 
+    # Clean up any Python files in /tmp that might shadow built-in modules
+    # This prevents circular import errors when BentoML runs from /tmp
+    builtin_shadow_files = ["types.py", "enum.py", "re.py", "functools.py", "dataclasses.py"]
+    for shadow_file in builtin_shadow_files:
+        shadow_path = Path("/tmp") / shadow_file
+        if shadow_path.exists():
+            shadow_path.unlink()
+
     # Write service file
     service_path = Path("/tmp/tier0_bentoml_service.py")
     service_path.write_text(service_code)
