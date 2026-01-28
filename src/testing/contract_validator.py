@@ -49,26 +49,25 @@ class ContractValidator:
             print("Output matches contract")
         else:
             print(f"Validation errors: {result.errors}")
+
+    NOTE: The 'lenient' mode has been removed. Missing required fields are ALWAYS
+    errors. Use QualityGateValidator for per-agent quality thresholds that define
+    what fields are truly required for each agent's output.
     """
 
-    def __init__(self, strict: bool = False, lenient: bool = False):
+    def __init__(self, strict: bool = False):
         """Initialize validator.
 
         Args:
             strict: If True, treat warnings as errors
-            lenient: If True, only validate fields present in output (don't require
-                    all required fields). Useful for output validation where agents
-                    return output-focused dicts, not echoing all input fields.
         """
         self.strict = strict
-        self.lenient = lenient
 
     def validate_state(
         self,
         state: dict[str, Any],
         state_class: type,
         strict: bool | None = None,
-        lenient: bool | None = None,
     ) -> ValidationResult:
         """Validate a state dictionary against a TypedDict class.
 
@@ -76,16 +75,11 @@ class ContractValidator:
             state: The state dictionary to validate
             state_class: The TypedDict class defining the contract
             strict: Override instance-level strict setting
-            lenient: Override instance-level lenient setting. If True, only validates
-                    fields that are present in state (doesn't require all required fields).
-                    Useful for output validation where agents return output-focused
-                    dicts, not echoing all input fields.
 
         Returns:
             ValidationResult with validation details
         """
         use_strict = strict if strict is not None else self.strict
-        use_lenient = lenient if lenient is not None else self.lenient
 
         errors: list[str] = []
         warnings: list[str] = []
@@ -108,11 +102,8 @@ class ContractValidator:
         required_present = 0
         for field_name in required_keys:
             if field_name not in state:
-                # In lenient mode, missing required fields are warnings, not errors
-                if use_lenient:
-                    warnings.append(f"Missing required field (lenient): {field_name}")
-                else:
-                    errors.append(f"Missing required field: {field_name}")
+                # Missing required fields are ALWAYS errors
+                errors.append(f"Missing required field: {field_name}")
             else:
                 required_present += 1
                 # Type check

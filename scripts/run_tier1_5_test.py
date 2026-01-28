@@ -126,6 +126,23 @@ class PerformanceDetail:
 
 
 @dataclass
+class QualityGateDetail:
+    """Detailed quality gate validation results."""
+
+    passed: bool
+    total_checks: int = 0
+    checks_passed: int = 0
+    checks_failed: int = 0
+    failed_check_names: list[str] = field(default_factory=list)
+    failed_check_messages: list[str] = field(default_factory=list)
+    required_output_fields_present: list[str] = field(default_factory=list)
+    required_output_fields_missing: list[str] = field(default_factory=list)
+    status_failure: bool = False
+    status_value: str | None = None
+    warnings: list[str] = field(default_factory=list)
+
+
+@dataclass
 class AgentTestResult:
     """Complete result of testing a single agent."""
 
@@ -148,6 +165,9 @@ class AgentTestResult:
 
     # Contract Validation Details
     contract_validation: ContractValidationDetail | None = None
+
+    # Quality Gate Details
+    quality_gate: QualityGateDetail | None = None
 
     # Observability Details
     trace_verification: TraceVerificationDetail | None = None
@@ -681,6 +701,7 @@ async def test_agent(
     config: dict[str, Any],
     mapper: Any,  # Tier0OutputMapper
     validator: Any,  # ContractValidator
+    quality_validator: Any,  # QualityGateValidator
     trace_verifier: Any | None,  # OpikTraceVerifier
     timeout_seconds: float = 30.0,
 ) -> AgentTestResult:
@@ -691,6 +712,7 @@ async def test_agent(
         config: Agent configuration dict
         mapper: Tier0OutputMapper instance
         validator: ContractValidator instance
+        quality_validator: QualityGateValidator instance
         trace_verifier: OpikTraceVerifier instance (or None to skip)
         timeout_seconds: Maximum execution time
 
@@ -853,7 +875,41 @@ async def test_agent(
                 warnings=[f"Contract validation failed: {e}"],
             )
 
-        # 6. Verify observability (if verifier provided)
+        # 6. Validate quality gate
+        try:
+            # Calculate contract required fields percentage
+            contract_req_pct = 0.0
+            if result.contract_validation:
+                cv = result.contract_validation
+                if cv.required_total > 0:
+                    contract_req_pct = len(cv.required_fields_present) / cv.required_total
+
+            quality_result = quality_validator.validate(
+                agent_name=agent_name,
+                output=result.agent_output,
+                contract_required_fields_pct=contract_req_pct,
+            )
+
+            result.quality_gate = QualityGateDetail(
+                passed=quality_result.passed,
+                total_checks=quality_result.total_checks,
+                checks_passed=quality_result.checks_passed,
+                checks_failed=quality_result.checks_failed,
+                failed_check_names=[c.check_name for c in quality_result.failed_checks],
+                failed_check_messages=[c.message for c in quality_result.failed_checks],
+                required_output_fields_present=quality_result.required_output_fields_present,
+                required_output_fields_missing=quality_result.required_output_fields_missing,
+                status_failure=quality_result.status_failure,
+                status_value=quality_result.status_value,
+                warnings=quality_result.warnings,
+            )
+        except Exception as e:
+            result.quality_gate = QualityGateDetail(
+                passed=False,
+                warnings=[f"Quality gate validation failed: {e}"],
+            )
+
+        # 7. Verify observability (if verifier provided)
         if trace_verifier is not None:
             trace_id = result.agent_output.get("trace_id")
             if trace_id:
@@ -881,12 +937,15 @@ async def test_agent(
                         trace_id=trace_id,
                     )
 
-        # 7. Determine overall success
-        result.success = True
-        if result.contract_validation and not result.contract_validation.valid:
-            # Contract validation failures with missing required fields are errors
-            if result.contract_validation.missing_required:
-                result.success = False
+        # 8. Determine overall success
+        # Success requires ALL of:
+        # 1. No execution errors
+        # 2. Quality gate passes (primary check - agent-specific)
+        result.success = (
+            result.error is None
+            and result.quality_gate is not None
+            and result.quality_gate.passed
+        )
 
     except Exception as e:
         result.error = str(e)
@@ -917,12 +976,17 @@ def print_agent_result(result: AgentTestResult, verbose: bool = True) -> None:
     processing_steps = [
         (f"Agent {result.agent_name} instantiated", True),
         (f"Input validation passed", not result.error or "input" not in (result.error or "").lower()),
-        (f"Agent execution {'completed' if result.success else 'failed'}", result.success),
+        (f"Agent execution completed", result.error is None),
     ]
     if result.contract_validation:
         processing_steps.append(
             (f"Contract validation ({result.contract_validation.state_class})",
              result.contract_validation.valid)
+        )
+    if result.quality_gate:
+        processing_steps.append(
+            (f"Quality gate validation",
+             result.quality_gate.passed)
         )
     if result.trace_verification:
         processing_steps.append(
@@ -948,11 +1012,26 @@ def print_agent_result(result: AgentTestResult, verbose: bool = True) -> None:
             "no type errors",
             f"{len(cv.type_errors)} type errors" if cv.type_errors else "all types valid"
         ))
+    if result.quality_gate:
+        qg = result.quality_gate
+        checks.append((
+            "Quality gate",
+            qg.passed,
+            f"{qg.total_checks} checks pass",
+            f"{qg.checks_passed}/{qg.total_checks} passed" if qg.total_checks > 0 else "no checks"
+        ))
+        if qg.status_failure:
+            checks.append((
+                "Status check",
+                False,
+                "no failure status",
+                f"status={qg.status_value}"
+            ))
     checks.append((
-        "Execution completed",
+        "Overall result",
         result.success,
-        "success without errors",
-        "success" if result.success else f"failed: {(result.error or 'unknown')[:40]}"
+        "success",
+        "PASS" if result.success else f"FAIL: {(result.error or 'quality gate failed')[:40]}"
     ))
     if result.trace_verification:
         tv = result.trace_verification
@@ -1025,6 +1104,27 @@ def print_agent_result(result: AgentTestResult, verbose: bool = True) -> None:
         remaining = total_fields - shown_total
         if remaining > 0:
             print(f"    ... and {remaining} more fields")
+
+    # Quality gate details (verbose)
+    if verbose and result.quality_gate:
+        qg = result.quality_gate
+        print("\n  📊 Quality Gate:")
+        print(f"    • Checks: {qg.checks_passed}/{qg.total_checks} passed")
+        if qg.required_output_fields_present:
+            print(f"    • Required output fields: {', '.join(qg.required_output_fields_present)}")
+        if qg.required_output_fields_missing:
+            print(f"    • Missing output fields: {', '.join(qg.required_output_fields_missing)}")
+        if qg.status_failure:
+            print(f"    • ❌ Status failure: {qg.status_value}")
+        if qg.failed_check_messages:
+            print(f"    • Failed checks:")
+            for msg in qg.failed_check_messages[:3]:
+                msg_display = msg[:70] + "..." if len(msg) > 70 else msg
+                print(f"      - {msg_display}")
+        if qg.passed:
+            print(f"    • QUALITY GATE: ✅ PASS")
+        else:
+            print(f"    • QUALITY GATE: ❌ FAIL")
 
     # Contract validation details (verbose)
     if verbose and result.contract_validation:
@@ -1234,6 +1334,37 @@ def print_summary(
                 last_line = r.error_traceback.strip().split("\n")[-1]
                 print(f"     Last line: {last_line[:70]}")
 
+    # Quality gate summary
+    quality_gates_passed = sum(
+        1 for r in results if r.quality_gate and r.quality_gate.passed
+    )
+    quality_gates_failed = sum(
+        1 for r in results if r.quality_gate and not r.quality_gate.passed
+    )
+    status_failures = sum(
+        1 for r in results if r.quality_gate and r.quality_gate.status_failure
+    )
+
+    print("\nQUALITY GATES:")
+    print(f"  Passed: \033[92m{quality_gates_passed}\033[0m/{total}")
+    print(f"  Failed: \033[91m{quality_gates_failed}\033[0m/{total}")
+    if status_failures > 0:
+        print(f"  Status Failures: {status_failures} (agents returned error/failed status)")
+
+    # Quality gate failure details
+    qg_failed = [r for r in results if r.quality_gate and not r.quality_gate.passed]
+    if qg_failed:
+        print("\n  Quality Gate Failures:")
+        for r in qg_failed:
+            qg = r.quality_gate
+            if qg.status_failure:
+                print(f"    • {r.agent_name}: status={qg.status_value}")
+            elif qg.failed_check_messages:
+                msg = qg.failed_check_messages[0][:50]
+                print(f"    • {r.agent_name}: {msg}")
+            else:
+                print(f"    • {r.agent_name}: {qg.checks_failed} checks failed")
+
     # Contract validation summary
     contracts_valid = sum(
         1 for r in results if r.contract_validation and r.contract_validation.valid
@@ -1295,7 +1426,12 @@ async def run_tests(
     Returns:
         Full test results dict
     """
-    from src.testing import Tier0OutputMapper, ContractValidator, OpikTraceVerifier
+    from src.testing import (
+        Tier0OutputMapper,
+        ContractValidator,
+        OpikTraceVerifier,
+        QualityGateValidator,
+    )
 
     print_header("TIER 1-5 AGENT TESTING FRAMEWORK")
 
@@ -1319,9 +1455,10 @@ async def run_tests(
 
     # Initialize components
     mapper = Tier0OutputMapper(tier0_state)
-    # Use lenient mode: agents return output-focused dicts, not echoing all input fields
-    # In lenient mode, missing required fields are warnings, not errors
-    validator = ContractValidator(lenient=True)
+    # ContractValidator validates TypedDict structure
+    # QualityGateValidator enforces per-agent quality thresholds
+    validator = ContractValidator()
+    quality_validator = QualityGateValidator()
 
     trace_verifier = None
     if not skip_observability:
@@ -1376,6 +1513,7 @@ async def run_tests(
             config=config,
             mapper=mapper,
             validator=validator,
+            quality_validator=quality_validator,
             trace_verifier=trace_verifier,
             timeout_seconds=agent_timeout,
         )
@@ -1405,6 +1543,20 @@ async def run_tests(
         },
         "tier_breakdown": {},
         "results": [asdict(r) for r in results],
+        "quality_gate_summary": {
+            "passed": sum(1 for r in results if r.quality_gate and r.quality_gate.passed),
+            "failed": sum(1 for r in results if r.quality_gate and not r.quality_gate.passed),
+            "status_failures": sum(1 for r in results if r.quality_gate and r.quality_gate.status_failure),
+            "failed_agents": [
+                {
+                    "agent": r.agent_name,
+                    "status_failure": r.quality_gate.status_failure if r.quality_gate else False,
+                    "status_value": r.quality_gate.status_value if r.quality_gate else None,
+                    "failed_checks": r.quality_gate.failed_check_names if r.quality_gate else [],
+                }
+                for r in results if r.quality_gate and not r.quality_gate.passed
+            ],
+        },
         "observability_summary": {
             "traces_created": sum(
                 1 for r in results if r.trace_verification and r.trace_verification.trace_exists
