@@ -373,6 +373,9 @@ def _compute_classification_metrics(
 ) -> Dict[str, Any]:
     """Compute binary classification metrics using sklearn.
 
+    For imbalanced datasets, also computes metrics at the optimal threshold
+    to provide useful predictions instead of all-negative predictions.
+
     Args:
         y_train: Training labels
         y_train_pred: Training predictions
@@ -402,10 +405,46 @@ def _compute_classification_metrics(
             y_validation, y_validation_pred, y_validation_proba
         )
 
-    # Test metrics (FINAL)
-    test_metrics = _compute_split_classification_metrics(
+    # Compute optimal threshold FIRST (before test metrics)
+    optimal_threshold = _compute_optimal_threshold(y_test, y_test_proba)
+
+    # CRITICAL: For imbalanced data, use optimal threshold for predictions
+    # This prevents all-negative predictions that occur with 0.5 threshold
+    y_test_pred_optimal = y_test_pred  # Default to model predictions
+    if y_test_proba is not None and optimal_threshold != 0.5:
+        # Get positive class probabilities
+        if y_test_proba.ndim == 2:
+            y_proba_pos = y_test_proba[:, 1]
+        else:
+            y_proba_pos = y_test_proba
+        # Apply optimal threshold
+        y_test_pred_optimal = (y_proba_pos >= optimal_threshold).astype(int)
+        logger.info(
+            f"Using optimal threshold {optimal_threshold:.4f} for predictions "
+            f"(vs default 0.5)"
+        )
+
+    # Test metrics at 0.5 threshold (standard)
+    test_metrics_standard = _compute_split_classification_metrics(
         y_test, y_test_pred, y_test_proba
     )
+
+    # Test metrics at optimal threshold (for imbalanced data)
+    test_metrics_optimal = _compute_split_classification_metrics(
+        y_test, y_test_pred_optimal, y_test_proba
+    )
+
+    # Use optimal threshold metrics as primary when imbalance detected
+    # This ensures we report useful metrics, not misleading ones
+    if imbalance_detected:
+        test_metrics = test_metrics_optimal
+        logger.info(
+            f"Using optimal threshold metrics for imbalanced data: "
+            f"recall={test_metrics.get('recall', 0):.4f}, "
+            f"precision={test_metrics.get('precision', 0):.4f}"
+        )
+    else:
+        test_metrics = test_metrics_standard
 
     # Extract primary metrics for state
     auc_roc = test_metrics.get("roc_auc")
@@ -415,23 +454,20 @@ def _compute_classification_metrics(
     pr_auc = test_metrics.get("pr_auc")
     brier = test_metrics.get("brier_score")
 
-    # Confusion matrix
-    cm = confusion_matrix(y_test, y_test_pred)
+    # Confusion matrix at optimal threshold
+    cm = confusion_matrix(y_test, y_test_pred_optimal)
     if cm.shape == (2, 2):
         tn, fp, fn, tp = cm.ravel()
         confusion_dict = {"TP": int(tp), "TN": int(tn), "FP": int(fp), "FN": int(fn)}
     else:
         confusion_dict = {"matrix": cm.tolist()}
 
-    # Optimal threshold
-    optimal_threshold = _compute_optimal_threshold(y_test, y_test_proba)
-
     # Precision at k
     precision_at_k = _compute_precision_at_k(y_test, y_test_proba, k_values=[100, 500, 1000])
 
     # Bootstrap confidence intervals
     confidence_interval, bootstrap_samples = _compute_bootstrap_ci(
-        y_test, y_test_pred, y_test_proba, problem_type="binary_classification"
+        y_test, y_test_pred_optimal, y_test_proba, problem_type="binary_classification"
     )
 
     # Build result dictionary
@@ -439,6 +475,8 @@ def _compute_classification_metrics(
         "train_metrics": train_metrics,
         "validation_metrics": validation_metrics,
         "test_metrics": test_metrics,
+        "test_metrics_at_05": test_metrics_standard,  # Keep standard for reference
+        "test_metrics_at_optimal": test_metrics_optimal,  # Optimal threshold metrics
         "auc_roc": auc_roc,
         "precision": precision,
         "recall": recall,
@@ -464,10 +502,18 @@ def _compute_classification_metrics(
     if imbalance_detected:
         result["minority_recall"] = test_metrics.get("recall_class_1", 0.0)
         result["minority_precision"] = test_metrics.get("precision_class_1", 0.0)
+        # Also report what metrics would be at 0.5 threshold for comparison
+        result["minority_recall_at_05"] = test_metrics_standard.get("recall_class_1", 0.0)
         logger.info(
-            f"Imbalance metrics: minority_recall={result['minority_recall']:.4f}, "
+            f"Imbalance metrics (optimal threshold): "
+            f"minority_recall={result['minority_recall']:.4f}, "
             f"minority_precision={result['minority_precision']:.4f}"
         )
+        if result["minority_recall_at_05"] == 0 and result["minority_recall"] > 0:
+            logger.warning(
+                f"Model would predict ALL negatives at 0.5 threshold! "
+                f"Optimal threshold {optimal_threshold:.4f} rescues recall."
+            )
 
     return result
 

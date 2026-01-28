@@ -224,11 +224,20 @@ def print_classification_report(y_true: np.ndarray, y_pred: np.ndarray) -> None:
         print(f"    {line}")
 
 
-def print_threshold_analysis(y_true: np.ndarray, y_proba: np.ndarray) -> None:
+def print_threshold_analysis(y_true: np.ndarray, y_proba: np.ndarray, optimal_threshold: float = 0.5) -> None:
     """Analyze model performance at different probability thresholds."""
     from sklearn.metrics import precision_score, recall_score, f1_score
 
-    thresholds = [0.3, 0.4, 0.5, 0.6, 0.7]
+    # Include lower thresholds for imbalanced data analysis
+    thresholds = [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7]
+
+    # Add probability distribution info
+    print("\n  Probability Distribution (class 1):")
+    print(f"    Min: {y_proba.min():.4f}, Max: {y_proba.max():.4f}")
+    print(f"    Mean: {y_proba.mean():.4f}, Median: {np.median(y_proba):.4f}")
+    percentiles = [10, 25, 50, 75, 90, 95, 99]
+    pct_values = np.percentile(y_proba, percentiles)
+    print(f"    Percentiles: " + ", ".join([f"P{p}={v:.3f}" for p, v in zip(percentiles, pct_values)]))
 
     print("\n  Threshold Analysis:")
     print(f"    {'Threshold':<12} {'Precision':<12} {'Recall':<12} {'F1':<12} {'Pred Pos':<12}")
@@ -241,8 +250,12 @@ def print_threshold_analysis(y_true: np.ndarray, y_proba: np.ndarray) -> None:
         f1 = f1_score(y_true, y_pred_at_thresh, zero_division=0)
         n_pred_pos = y_pred_at_thresh.sum()
 
-        marker = " ◄── default" if thresh == 0.5 else ""
-        print(f"    {thresh:<12.1f} {prec:<12.4f} {rec:<12.4f} {f1:<12.4f} {n_pred_pos:<12}{marker}")
+        marker = ""
+        if thresh == 0.5:
+            marker = " ◄── default"
+        elif abs(thresh - optimal_threshold) < 0.01:
+            marker = " ◄── optimal"
+        print(f"    {thresh:<12.2f} {prec:<12.4f} {rec:<12.4f} {f1:<12.4f} {n_pred_pos:<12}{marker}")
 
 
 def print_model_coefficients(model: Any, feature_names: list[str]) -> None:
@@ -498,7 +511,8 @@ def print_detailed_summary(
 
             # Threshold analysis (if probabilities available)
             if y_proba is not None:
-                print_threshold_analysis(y_true, y_proba)
+                optimal_thresh = state.get("optimal_threshold", 0.5)
+                print_threshold_analysis(y_true, y_proba, optimal_thresh)
 
         # Model coefficients/weights
         trained_model = state.get("trained_model")
@@ -1246,25 +1260,87 @@ async def step_5_model_trainer(
     if trained_model is not None:
         from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
 
-        # Get validation data predictions
-        X_val = validation_data["X"]
+        # Get data - CRITICAL: Use PREPROCESSED data for model predictions
+        # Raw data won't work correctly with models trained on scaled features
+        X_val_preprocessed = result.get("X_validation_preprocessed")
+        X_test_preprocessed = result.get("X_test_preprocessed")
+        fitted_preprocessor = result.get("fitted_preprocessor")
+
+        # Use preprocessed data if available, otherwise preprocess raw data
+        if X_val_preprocessed is not None:
+            X_val = X_val_preprocessed
+            print_info("Using preprocessed validation data for predictions")
+        elif fitted_preprocessor is not None:
+            X_val = fitted_preprocessor.transform(validation_data["X"])
+            print_info("Preprocessed validation data using fitted_preprocessor")
+        else:
+            X_val = validation_data["X"]
+            print_warning("Using RAW validation data - predictions may be incorrect!")
+
         y_val = validation_data["y"]
-        X_train = train_data["X"]
-        y_train = train_data["y"]
-        X_test = test_data["X"]
+
+        if X_test_preprocessed is not None:
+            X_test = X_test_preprocessed
+        elif fitted_preprocessor is not None:
+            X_test = fitted_preprocessor.transform(test_data["X"])
+        else:
+            X_test = test_data["X"]
+
         y_test = test_data["y"]
 
-        # Generate predictions on validation set
-        y_val_pred = trained_model.predict(X_val)
+        # Training data - preprocess if needed
+        if fitted_preprocessor is not None:
+            X_train = fitted_preprocessor.transform(train_data["X"])
+        else:
+            X_train = train_data["X"]
+        y_train = train_data["y"]
+
+        # Get optimal threshold from evaluator (default to 0.5 if not available)
+        optimal_threshold = result.get("optimal_threshold", 0.5)
+        print_info(f"Initial optimal threshold from evaluator: {optimal_threshold:.4f}")
+
+        # Generate probability predictions
         y_val_proba = None
         if hasattr(trained_model, 'predict_proba'):
             y_val_proba = trained_model.predict_proba(X_val)[:, 1]
 
-        # Generate predictions on training set (for overfitting analysis)
-        y_train_pred = trained_model.predict(X_train)
         y_train_proba = None
         if hasattr(trained_model, 'predict_proba'):
             y_train_proba = trained_model.predict_proba(X_train)[:, 1]
+
+        # ADAPTIVE THRESHOLD: If optimal threshold produces 0 positives, find a better one
+        # This handles cases where ROC-based optimal threshold is too high for imbalanced data
+        if y_val_proba is not None:
+            n_pos_at_optimal = ((y_val_proba >= optimal_threshold).astype(int)).sum()
+            if n_pos_at_optimal == 0:
+                print_warning(f"Optimal threshold {optimal_threshold:.4f} produces 0 positive predictions")
+                # Find threshold that produces at least target_minority_ratio positives
+                target_minority_ratio = 0.10  # Target at least 10% positive predictions
+                target_n_pos = max(1, int(len(y_val) * target_minority_ratio))
+                # Sort probabilities descending and find threshold
+                sorted_proba = np.sort(y_val_proba)[::-1]
+                if target_n_pos <= len(sorted_proba):
+                    adaptive_threshold = sorted_proba[target_n_pos - 1] - 0.001  # Just below Nth highest
+                    adaptive_threshold = max(0.01, adaptive_threshold)  # Don't go below 0.01
+                    print_info(f"Using adaptive threshold: {adaptive_threshold:.4f} (targets {target_n_pos} positives)")
+                    optimal_threshold = adaptive_threshold
+                    result["optimal_threshold"] = adaptive_threshold  # Update result for downstream
+
+        print_info(f"Final threshold for predictions: {optimal_threshold:.4f}")
+
+        # CRITICAL: Use optimal threshold for predictions (not default 0.5)
+        # This fixes models that predict all negatives at 0.5 but are useful at optimal threshold
+        if y_val_proba is not None:
+            y_val_pred = (y_val_proba >= optimal_threshold).astype(int)
+            n_pos_pred = y_val_pred.sum()
+            print_info(f"Validation predictions at threshold {optimal_threshold:.4f}: {n_pos_pred} positives")
+        else:
+            y_val_pred = trained_model.predict(X_val)
+
+        if y_train_proba is not None:
+            y_train_pred = (y_train_proba >= optimal_threshold).astype(int)
+        else:
+            y_train_pred = trained_model.predict(X_train)
 
         # Calculate train metrics
         train_metrics = {
