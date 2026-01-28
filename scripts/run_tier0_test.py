@@ -1040,7 +1040,25 @@ async def step_7_model_deployer(
     print(f"    deployment_action: register")
 
     print("\n  Running agent...")
-    result = await agent.run(input_data)
+    try:
+        result = await agent.run(input_data)
+    except Exception as agent_error:
+        # Handle agent errors gracefully so BentoML serving can still run
+        error_type = getattr(agent_error, "error_type", None) or type(agent_error).__name__
+        print_warning(f"Agent error ({error_type}): {agent_error}")
+
+        # Create a minimal result so we can continue
+        result = {
+            "status": "error",
+            "deployment_successful": False,
+            "error": str(agent_error),
+            "error_type": error_type,
+            "deployment_manifest": {
+                "deployment_id": f"deploy_{experiment_id[:12]}",
+                "environment": "staging",
+                "status": "error",
+            },
+        }
 
     print("\n  Output:")
     print_result("status", result.get("status", "N/A"))
@@ -1052,6 +1070,8 @@ async def step_7_model_deployer(
 
     if result.get("deployment_successful", False) or result.get("status") == "completed":
         print_success("Model registered successfully")
+    elif result.get("error"):
+        print_warning(f"Agent had errors but continuing: {result.get('error_type', 'unknown')}")
     else:
         print_warning("Model registration may have issues")
 
