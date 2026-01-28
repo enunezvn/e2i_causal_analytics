@@ -84,6 +84,9 @@ class TestConfig:
     hpo_trials: int = 10
     min_eligible_patients: int = 30
     min_auc_threshold: float = 0.55
+    # Minimum recall for minority class - a model that predicts all 0s is useless
+    min_minority_recall: float = 0.10  # At least 10% of actual positives must be found
+    min_minority_precision: float = 0.05  # At least 5% of predicted positives should be correct
     enable_mlflow: bool = True  # MLflow must be enabled for model_uri to be generated
     enable_opik: bool = False
 
@@ -533,6 +536,49 @@ def print_detailed_summary(
                     else:
                         status = "✅ Good"
                     print(f"    {metric:<15} {train_val:<12.4f} {val_val:<12.4f} {delta:+<12.4f} {status:<15}")
+
+    # =========================================================================
+    # MODEL USEFULNESS VERDICT
+    # =========================================================================
+    model_usefulness = state.get("model_usefulness_verdict", {})
+    if not model_usefulness and accuracy_data:
+        # Compute from accuracy data if not explicitly set
+        y_pred = accuracy_data.get("y_pred", [])
+        n_pos_pred = sum(y_pred) if y_pred else 0
+        val_metrics = accuracy_data.get("val_metrics", {})
+        model_usefulness = {
+            "status": "useless" if n_pos_pred == 0 else "needs_review",
+            "reason": "predicts_all_negative" if n_pos_pred == 0 else "unknown",
+            "minority_recall": val_metrics.get("recall", 0),
+            "minority_precision": val_metrics.get("precision", 0),
+        }
+
+    if model_usefulness or accuracy_data:
+        print(f"\n{'='*70}")
+        print("⚠️  MODEL USEFULNESS VERDICT")
+        print(f"{'='*70}")
+
+        y_pred = accuracy_data.get("y_pred", []) if accuracy_data else []
+        n_pos_pred = sum(y_pred) if y_pred else 0
+        total_pred = len(y_pred) if y_pred else 0
+
+        if n_pos_pred == 0 and total_pred > 0:
+            print(f"\n  🚨 CRITICAL: MODEL IS USELESS FOR ITS INTENDED PURPOSE")
+            print(f"\n  The model predicts EVERY sample as class 0 (no discontinuation).")
+            print(f"  This means:")
+            print(f"    • 0% of actual discontinuation cases will be detected")
+            print(f"    • The model cannot identify any high-risk patients")
+            print(f"    • It will miss 100% of the patients who actually discontinue")
+            print(f"\n  Root Cause Analysis:")
+            print(f"    • Severe class imbalance (minority ~9-14%) in validation data")
+            print(f"    • SMOTE resampling on training data didn't generalize")
+            print(f"    • Model learned majority class bias")
+            print(f"\n  Recommended Actions:")
+            print(f"    1. Lower prediction threshold (try 0.2-0.3 instead of 0.5)")
+            print(f"    2. Use class_weight='balanced' instead of SMOTE")
+            print(f"    3. Collect more minority class samples")
+            print(f"    4. Try ensemble methods (RandomForest, XGBoost)")
+            print(f"\n  ❌ VERDICT: FAIL - Model should NOT be deployed")
 
     # Deployment Info
     deployment_manifest = state.get("deployment_manifest", {})
@@ -1261,6 +1307,32 @@ async def step_5_model_trainer(
 
         print_info(f"Captured accuracy analysis data: {len(y_val)} validation samples")
 
+        # =========================================================================
+        # VALIDATE MODEL USEFULNESS (not just AUC)
+        # =========================================================================
+        # A model that predicts all 0s is useless even if AUC looks good
+        minority_recall = val_metrics.get("recall", 0)
+        minority_precision = val_metrics.get("precision", 0)
+
+        # Check if model is actually making positive predictions
+        n_positive_predictions = sum(y_val_pred)
+        if n_positive_predictions == 0:
+            print_warning(f"MODEL PREDICTS ALL NEGATIVES - No positive predictions made!")
+            print_warning(f"This model will miss 100% of actual discontinuation cases")
+            result["model_usefulness"] = "useless"
+            result["usefulness_reason"] = "predicts_all_negative"
+        elif minority_recall < CONFIG.min_minority_recall:
+            print_warning(f"Minority recall ({minority_recall:.2%}) below threshold ({CONFIG.min_minority_recall:.2%})")
+            result["model_usefulness"] = "poor"
+            result["usefulness_reason"] = f"low_recall_{minority_recall:.2%}"
+        elif minority_precision < CONFIG.min_minority_precision:
+            print_warning(f"Minority precision ({minority_precision:.2%}) below threshold ({CONFIG.min_minority_precision:.2%})")
+            result["model_usefulness"] = "poor"
+            result["usefulness_reason"] = f"low_precision_{minority_precision:.2%}"
+        else:
+            print_success(f"Model usefulness validated: recall={minority_recall:.2%}, precision={minority_precision:.2%}")
+            result["model_usefulness"] = "acceptable"
+
     return result
 
 
@@ -1786,10 +1858,19 @@ async def run_pipeline(
             if result.get("accuracy_analysis"):
                 state["accuracy_analysis"] = result["accuracy_analysis"]
 
+            # Determine step status based on both AUC and model usefulness
+            model_usefulness = result.get("model_usefulness", "unknown")
+            if model_usefulness == "useless":
+                step_5_status = "failed"
+            elif model_usefulness == "poor" or not result.get("success_criteria_met"):
+                step_5_status = "warning"
+            else:
+                step_5_status = "success"
+
             step_results.append(StepResult(
                 step_num=5,
                 step_name="MODEL TRAINER",
-                status="success" if result.get("success_criteria_met") else "warning",
+                status=step_5_status,
                 duration_seconds=time.time() - step_start,
                 key_metrics={
                     "training_run_id": result.get("training_run_id"),
@@ -1800,6 +1881,7 @@ async def run_pipeline(
                     "f1_score": result.get("f1_score"),
                     "success_criteria_met": result.get("success_criteria_met"),
                     "hpo_trials_run": result.get("hpo_trials_run"),
+                    "model_usefulness": model_usefulness,
                 },
                 details={
                     "mlflow_run_id": result.get("mlflow_run_id"),
@@ -1808,6 +1890,7 @@ async def run_pipeline(
                     "imbalance_detected": result.get("imbalance_detected", False),
                     "imbalance_severity": result.get("imbalance_severity"),
                     "remediation_strategy": result.get("recommended_strategy"),
+                    "usefulness_reason": result.get("usefulness_reason"),
                 }
             ))
 
