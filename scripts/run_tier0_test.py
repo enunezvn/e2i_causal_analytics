@@ -414,10 +414,12 @@ class Tier0ModelService:
     print(f"    Generated service file: {service_path}")
 
     # Start bentoml serve in background
+    # Use cwd=/tmp to avoid picking up project-level BentoML configuration
     process = subprocess.Popen(
         ["bentoml", "serve", str(service_path), "--port", str(port)],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        cwd="/tmp",
     )
     print(f"    Starting BentoML service on port {port} (PID: {process.pid})...")
 
