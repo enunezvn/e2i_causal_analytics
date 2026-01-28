@@ -188,8 +188,13 @@ class TestCATEEstimatorNode:
 
     @pytest.mark.asyncio
     async def test_insufficient_data(self):
-        """Test handling of insufficient data."""
-        node = CATEEstimatorNode(data_connector=MockDataConnector())
+        """Test handling of insufficient data.
+
+        The CATE estimator has fallback logic that switches to MockDataConnector
+        when insufficient data is returned. We need to patch the connectors module
+        so the fallback also returns insufficient data.
+        """
+        from unittest.mock import patch
 
         # Create mock connector that returns small dataset
         class SmallDataConnector:
@@ -198,13 +203,18 @@ class TestCATEEstimatorNode:
                 import pandas as pd
 
                 np.random.seed(42)
-                # Only 50 rows
+                # Only 50 rows - insufficient for CATE estimation
                 return pd.DataFrame({col: np.random.randn(50) for col in columns})
 
-        node.data_connector = SmallDataConnector()
+        node = CATEEstimatorNode(data_connector=SmallDataConnector())
         state = self._create_test_state()
 
-        result = await node.execute(state)
+        # Patch MockDataConnector in the connectors module where it's imported from
+        with patch(
+            "src.agents.heterogeneous_optimizer.connectors.MockDataConnector",
+            SmallDataConnector,
+        ):
+            result = await node.execute(state)
 
         assert result["status"] == "failed"
         assert len(result["errors"]) > 0
