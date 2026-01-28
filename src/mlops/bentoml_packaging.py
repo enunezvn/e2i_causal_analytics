@@ -466,29 +466,30 @@ def build_bento(
     stderr = result.stderr
 
     # Pattern 1: "Successfully built Bento(name:version)"
+    import re
     for line in stdout.split("\n"):
         if "Successfully built Bento" in line:
             # Try to extract tag from line
             # Format: "Successfully built Bento(name:version)."
-            import re
             match = re.search(r"Bento\(([^)]+)\)", line)
             if match:
-                tag = match.group(1)
+                tag = match.group(1).strip("'\"")  # Strip any quotes
                 logger.info(f"Built Bento: {tag}")
                 return tag
             # Fallback: split on Bento and take what's after
             parts = line.split("Bento")
             if len(parts) > 1:
-                tag = parts[-1].strip(" (.)").strip()
+                tag = parts[-1].strip(" (.)'\"").strip()  # Strip quotes
                 if ":" in tag:
                     logger.info(f"Built Bento: {tag}")
                     return tag
 
     # Pattern 2: Look for tag in any output containing name:version
+    # Only allow alphanumeric, underscore, hyphen, period in version
     combined_output = stdout + "\n" + stderr
     if bento_name:
         import re
-        pattern = rf"{re.escape(bento_name)}:[^\s\)\]]+"
+        pattern = rf"{re.escape(bento_name)}:[a-zA-Z0-9_.-]+"
         match = re.search(pattern, combined_output)
         if match:
             tag = match.group(0).rstrip(".")
@@ -497,12 +498,17 @@ def build_bento(
 
     # Pattern 3: Construct tag from inputs if build succeeded
     if result.returncode == 0 and bento_name and version:
-        tag = f"{bento_name}:{version}"
+        # Sanitize version to only allowed characters
+        clean_version = re.sub(r"[^a-zA-Z0-9_.-]", "", version)
+        tag = f"{bento_name}:{clean_version}"
         logger.info(f"Built Bento (constructed): {tag}")
         return tag
 
     logger.warning("Could not parse Bento tag from output, build may have succeeded")
-    return f"{bento_name}:{version}" if bento_name and version else "unknown"
+    if bento_name and version:
+        clean_version = re.sub(r"[^a-zA-Z0-9_.-]", "", version)
+        return f"{bento_name}:{clean_version}"
+    return "unknown"
 
 
 def containerize_bento(
