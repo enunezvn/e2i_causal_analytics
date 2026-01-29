@@ -593,10 +593,13 @@ class ToolComposerIntegration:
             "supporting_data": result.response.supporting_data,
             "citations": result.response.citations,
             "caveats": result.response.caveats,
+            "tools_executed": result.execution.tools_executed,
+            "tools_succeeded": result.execution.tools_succeeded,
             "metadata": {
                 "composition_id": result.composition_id,
                 "sub_questions": result.decomposition.question_count,
                 "tools_executed": result.execution.tools_executed,
+                "tools_succeeded": result.execution.tools_succeeded,
                 "total_duration_ms": result.total_duration_ms,
                 "phase_durations": result.phase_durations,
             },
