@@ -335,9 +335,14 @@ AGENT_CONFIGS = {
 class Tier0ModelClient:
     """Wraps a tier0 trained sklearn model as a prediction client."""
 
-    def __init__(self, model, model_id: str = "tier0_model"):
+    def __init__(self, model, model_id: str = "tier0_model", feature_names: list[str] | None = None):
         self.model = model
         self.model_id = model_id
+        # Get feature names from model if available, otherwise use provided names
+        if hasattr(model, "feature_names_in_"):
+            self.feature_names = list(model.feature_names_in_)
+        else:
+            self.feature_names = feature_names or []
 
     async def predict(
         self,
@@ -351,14 +356,18 @@ class Tier0ModelClient:
 
         start = time.time()
 
-        # Convert features dict to array (simple approach)
-        feature_values = list(features.values())
-        X = np.array([feature_values])
-
-        # Handle missing/NaN values
-        X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
-
         try:
+            # Reorder features to match model's expected order
+            if self.feature_names:
+                feature_values = [features.get(name, 0.0) for name in self.feature_names]
+            else:
+                feature_values = list(features.values())
+
+            X = np.array([feature_values], dtype=float)
+
+            # Handle missing/NaN values
+            X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+
             # Get prediction
             if hasattr(self.model, "predict_proba"):
                 proba = self.model.predict_proba(X)[0]
@@ -371,14 +380,18 @@ class Tier0ModelClient:
 
             return {
                 "model_id": self.model_id,
+                "model_type": "logistic_regression",
                 "prediction": prediction,
+                "proba": prediction,  # Add proba for proper handling
                 "confidence": max(0.5, min(1.0, confidence + 0.5)),
                 "latency_ms": int((time.time() - start) * 1000),
+                "features_used": self.feature_names or list(features.keys()),
             }
         except Exception as e:
             # Return a default prediction on error
             return {
                 "model_id": self.model_id,
+                "model_type": "logistic_regression",
                 "prediction": 0.5,
                 "confidence": 0.3,
                 "latency_ms": int((time.time() - start) * 1000),
@@ -433,9 +446,10 @@ def _get_agent_kwargs(
         if tier0_state and tier0_state.get("trained_model"):
             model = tier0_state["trained_model"]
             model_id = tier0_state.get("experiment_id", "tier0_model")
+            feature_names = tier0_state.get("feature_names")  # Get from tier0 state
             return {
                 "model_clients": {
-                    model_id: Tier0ModelClient(model, model_id),
+                    model_id: Tier0ModelClient(model, model_id, feature_names),
                 }
             }
         return {}

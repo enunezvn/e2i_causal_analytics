@@ -2998,6 +2998,8 @@ async def run_pipeline(
             )
             state["trained_model"] = result.get("trained_model")
             state["validation_metrics"] = result.get("validation_metrics", {})
+            # Store feature names for downstream agents (e.g., prediction_synthesizer)
+            state["feature_names"] = feature_cols
             # Try multiple possible keys for model_uri
             state["model_uri"] = (
                 result.get("model_uri")
