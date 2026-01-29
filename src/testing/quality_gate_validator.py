@@ -133,6 +133,9 @@ class QualityGateValidator:
         # Check for status-based failure
         self._check_status_failure(output, gate, result)
 
+        # Run semantic validation (v4.3 - validates MEANING, not just structure)
+        self._run_semantic_validation(output, gate, result)
+
         # Compute summary
         result.total_checks = len(result.passed_checks) + len(result.failed_checks)
         result.checks_passed = len(result.passed_checks)
@@ -493,3 +496,47 @@ class QualityGateValidator:
             passed=True,
             message="No failure status detected",
         ))
+
+    def _run_semantic_validation(
+        self,
+        output: dict[str, Any],
+        gate: AgentQualityGate,
+        result: QualityGateResult,
+    ) -> None:
+        """Run semantic validation if configured.
+
+        Semantic validation checks MEANING, not just structure. This catches:
+        - Recommendations on invalid data
+        - N/A values for calculated fields
+        - Success status with empty/meaningless outputs
+        """
+        validator = gate.get("semantic_validator")
+        if validator is None:
+            return
+
+        try:
+            is_valid, reason = validator(output)
+
+            if is_valid:
+                result.passed_checks.append(QualityCheckResult(
+                    check_name="semantic_validation",
+                    field_name="(output)",
+                    passed=True,
+                    message=reason,
+                ))
+            else:
+                result.failed_checks.append(QualityCheckResult(
+                    check_name="semantic_validation",
+                    field_name="(output)",
+                    passed=False,
+                    message=f"Semantic validation failed: {reason}",
+                    expected="meaningful, actionable output",
+                    actual="invalid or dangerous output",
+                ))
+        except Exception as e:
+            result.failed_checks.append(QualityCheckResult(
+                check_name="semantic_validation",
+                field_name="(output)",
+                passed=False,
+                message=f"Semantic validation error: {e}",
+            ))

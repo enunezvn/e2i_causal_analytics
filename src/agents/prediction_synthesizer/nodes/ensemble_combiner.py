@@ -68,9 +68,20 @@ class EnsembleCombinerNode:
             # Calculate model agreement
             agreement = self._calculate_agreement(pred_values)
 
-            # Overall confidence
+            # Overall confidence with single-model safety cap
             mean_confidence = sum(confidences) / len(confidences)
-            ensemble_confidence = mean_confidence * agreement
+            models_succeeded = len(predictions)
+
+            # CRITICAL SAFETY: Cap confidence for single model - cannot validate
+            if models_succeeded < 2:
+                # Single model: cap at 30% confidence regardless of model's self-report
+                ensemble_confidence = min(0.30, mean_confidence * 0.5)
+                logger.warning(
+                    f"SINGLE MODEL ONLY: Capping confidence at {ensemble_confidence:.0%}. "
+                    f"Cannot validate prediction without model diversity."
+                )
+            else:
+                ensemble_confidence = mean_confidence * agreement
 
             ensemble_pred = EnsemblePrediction(
                 point_estimate=point_estimate,
@@ -190,13 +201,21 @@ class EnsembleCombinerNode:
         return interval_lower, interval_upper
 
     def _calculate_agreement(self, predictions: List[float]) -> float:
-        """Calculate model agreement (1 - normalized std)."""
+        """Calculate model agreement (1 - normalized std).
+
+        CRITICAL: Single model CANNOT have agreement - agreement requires
+        multiple viewpoints to validate. Returns 0.0 for single model.
+        """
         if len(predictions) < 2:
-            return 1.0
+            return 0.0  # NO agreement with single model - can't validate
 
         mean = sum(predictions) / len(predictions)
         if mean == 0:
-            return 1.0
+            # All predictions are zero - perfect agreement on zero
+            variance = sum((p - mean) ** 2 for p in predictions) / len(predictions)
+            if variance == 0:
+                return 1.0  # All models agree on exactly zero
+            return 0.5  # Mixed predictions averaging to zero
 
         variance = sum((p - mean) ** 2 for p in predictions) / len(predictions)
         std = variance**0.5
@@ -264,8 +283,44 @@ class EnsembleCombinerNode:
         }
 
         # ===== Anomaly Detection =====
+
+        # CRITICAL: Detect single-model predictions (agreement=0.0 means single model)
+        models_count = len(individual) if individual else 0
+        if models_count < 2:
+            interpretation["anomaly_flags"].append({
+                "type": "single_model_prediction",
+                "severity": "critical",
+                "message": (
+                    f"Only {models_count} model(s) succeeded. Cannot validate prediction "
+                    f"without model diversity. Ensemble confidence capped at 30%."
+                ),
+            })
+            interpretation["reliability_assessment"] = "UNVALIDATED"
+
+            # Special case: single model with zero prediction
+            if pred == 0.0:
+                interpretation["anomaly_flags"].append({
+                    "type": "single_model_zero_prediction",
+                    "severity": "critical",
+                    "message": (
+                        "Zero prediction from single model - cannot validate. "
+                        "This could indicate model failure, missing features, or data issues."
+                    ),
+                })
+                interpretation["recommendations"] = [
+                    "DO NOT act on this prediction - insufficient model diversity",
+                    "Run additional models before making decisions",
+                    "Investigate why other models failed",
+                ]
+                return interpretation  # STOP - don't generate normal recommendations
+
+            # Single model non-zero: still unreliable
+            interpretation["recommendations"].insert(
+                0, "CAUTION: Single-model prediction requires validation before action"
+            )
+
         # Check for extreme disagreement with extreme values
-        if pred == 0.0 and agreement < 0.3:
+        elif pred == 0.0 and agreement < 0.3:
             interpretation["anomaly_flags"].append({
                 "type": "extreme_disagreement",
                 "severity": "critical",
@@ -328,6 +383,18 @@ class EnsembleCombinerNode:
             })
 
         # ===== Risk Level Assessment =====
+        # GUARD: Don't generate action recommendations if prediction is unreliable
+        if interpretation["reliability_assessment"] in ("UNRELIABLE", "UNVALIDATED"):
+            # Already have critical warnings - don't add misleading action recommendations
+            interpretation["risk_level"] = "CANNOT_ASSESS"
+            interpretation["action_urgency"] = "blocked"
+            # Ensure we have at least one actionable recommendation
+            if not interpretation["recommendations"]:
+                interpretation["recommendations"].append(
+                    "INSUFFICIENT DATA - No recommendation can be made safely"
+                )
+            return interpretation  # Don't proceed to action recommendations
+
         # Determine risk based on prediction value (assuming higher = higher risk for churn-like predictions)
         target_lower = (prediction_target or "").lower()
         is_negative_outcome = any(word in target_lower for word in ["churn", "discontinuation", "attrition", "loss", "risk"])

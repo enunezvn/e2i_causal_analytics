@@ -113,9 +113,10 @@ class HeterogeneousOptimizerState(TypedDict):
     cate_plot_data: Optional[Dict[str, Any]]
     segment_grid_data: Optional[Dict[str, Any]]
 
-    # === SUMMARY (2 fields) ===
+    # === SUMMARY (3 fields) ===
     executive_summary: Optional[str]
     key_insights: Optional[List[str]]
+    strategic_interpretation: Optional[str]  # v4.3: actionable business interpretation of CATE results
 
     # === EXECUTION METADATA (3 fields) ===
     estimation_latency_ms: int
@@ -268,6 +269,7 @@ class HeterogeneousOptimizerOutput(TypedDict):
     # Summary
     executive_summary: Optional[str]
     key_insights: Optional[List[str]]
+    strategic_interpretation: Optional[str]  # v4.3: actionable business interpretation
 
     # Latency
     total_latency_ms: int

@@ -251,6 +251,10 @@ class ExperimentDesignState(TypedDict):
     duration_estimate_days: NotRequired[int]
     interim_analysis_schedule: NotRequired[list[dict[str, Any]]]
 
+    # Top-level exposure for quality gates and easy access (v4.3)
+    required_sample_size: NotRequired[int]  # Exposed from power_analysis
+    statistical_power: NotRequired[float]  # Exposed from power_analysis
+
     # ===== Validity Audit Outputs =====
     # Note: Required outputs from validity audit node
     validity_threats: list[ValidityThreat]

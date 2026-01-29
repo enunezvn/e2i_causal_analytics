@@ -102,6 +102,14 @@ class AlertAggregatorNode:
             state["drift_interpretation"] = interpretation
             state["status"] = "completed"
 
+            # VALIDATION: Ensure high drift always has recommendations
+            if drift_score > 0.7 and not recommended_actions:
+                state["recommended_actions"] = [
+                    f"CRITICAL: Drift score {drift_score:.2f} requires immediate investigation",
+                    "Review feature distributions for data quality issues",
+                    "Consider retraining model with recent data",
+                ]
+
             # Calculate latency
             latency_ms = int((time.time() - start_time) * 1000)
             state["total_latency_ms"] = state.get("total_latency_ms", 0) + latency_ms
