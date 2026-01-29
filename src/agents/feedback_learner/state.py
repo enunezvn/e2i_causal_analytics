@@ -11,7 +11,7 @@ Includes DSPy integration support:
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, NotRequired, TypedDict
+from typing import Any, Dict, List, Literal, NotRequired, Optional, TypedDict
 from uuid import UUID
 
 # Import cognitive context from DSPy integration module

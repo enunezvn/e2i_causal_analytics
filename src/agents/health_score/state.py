@@ -7,7 +7,7 @@ Purpose: LangGraph state definitions for health monitoring
 from __future__ import annotations
 
 import operator
-from typing import Annotated, Any, Dict, List, Literal, NotRequired, TypedDict
+from typing import Annotated, Any, Dict, List, Literal, NotRequired, Optional, TypedDict
 from uuid import UUID
 
 
