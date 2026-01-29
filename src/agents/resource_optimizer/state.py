@@ -7,7 +7,7 @@ Purpose: LangGraph state for resource allocation optimization
 from __future__ import annotations
 
 import operator
-from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
+from typing import Annotated, Any, Dict, List, Literal, NotRequired, TypedDict
 from uuid import UUID
 
 
@@ -72,51 +72,49 @@ class ScenarioResult(TypedDict):
 class ResourceOptimizerState(TypedDict):
     """Complete state for Resource Optimizer agent."""
 
-    # === INPUT ===
-    query: str
-    resource_type: str  # "budget", "rep_time", "samples", "calls"
-    allocation_targets: List[AllocationTarget]
-    constraints: List[Constraint]
-    objective: Literal["maximize_outcome", "maximize_roi", "minimize_cost", "balance"]
+    # === INPUT (NotRequired - provided by caller) ===
+    query: NotRequired[str]
+    resource_type: NotRequired[str]  # "budget", "rep_time", "samples", "calls"
+    allocation_targets: NotRequired[List[AllocationTarget]]
+    constraints: NotRequired[List[Constraint]]
+    objective: NotRequired[Literal["maximize_outcome", "maximize_roi", "minimize_cost", "balance"]]
 
-    # === CONFIGURATION ===
-    solver_type: Literal["linear", "milp", "nonlinear"]
-    time_limit_seconds: int
-    gap_tolerance: float  # For MILP
-    run_scenarios: bool
-    scenario_count: int
+    # === CONFIGURATION (NotRequired - has defaults) ===
+    solver_type: NotRequired[Literal["linear", "milp", "nonlinear"]]
+    time_limit_seconds: NotRequired[int]
+    gap_tolerance: NotRequired[float]  # For MILP
+    run_scenarios: NotRequired[bool]
+    scenario_count: NotRequired[int]
 
     # === INTERNAL (problem formulation) ===
-    _problem: Optional[Dict[str, Any]]
+    _problem: NotRequired[Dict[str, Any]]
 
-    # === OPTIMIZATION OUTPUTS ===
-    # Note: Required outputs from optimization node
+    # === OPTIMIZATION OUTPUTS (Required) ===
     optimal_allocations: List[AllocationResult]
     objective_value: float
     solver_status: str
-    solve_time_ms: int
+    solve_time_ms: NotRequired[int]
 
-    # === SCENARIO OUTPUTS ===
-    scenarios: Optional[List[ScenarioResult]]
-    sensitivity_analysis: Optional[Dict[str, float]]
+    # === SCENARIO OUTPUTS (NotRequired - only if run_scenarios=True) ===
+    scenarios: NotRequired[List[ScenarioResult]]
+    sensitivity_analysis: NotRequired[Dict[str, float]]
 
-    # === IMPACT OUTPUTS ===
-    projected_total_outcome: Optional[float]
-    projected_roi: Optional[float]
-    impact_by_segment: Optional[Dict[str, float]]
+    # === IMPACT OUTPUTS (NotRequired - computed after optimization) ===
+    projected_total_outcome: NotRequired[float]
+    projected_roi: NotRequired[float]
+    impact_by_segment: NotRequired[Dict[str, float]]
 
-    # === SUMMARY ===
-    # Note: Required output from summary generation
+    # === SUMMARY (Required output) ===
     optimization_summary: str
-    recommendations: Optional[List[str]]
+    recommendations: NotRequired[List[str]]
 
-    # === EXECUTION METADATA ===
-    timestamp: str
-    formulation_latency_ms: int
-    optimization_latency_ms: int
-    total_latency_ms: int
+    # === EXECUTION METADATA (NotRequired - populated during execution) ===
+    timestamp: NotRequired[str]
+    formulation_latency_ms: NotRequired[int]
+    optimization_latency_ms: NotRequired[int]
+    total_latency_ms: NotRequired[int]
 
-    # === ERROR HANDLING ===
+    # === ERROR HANDLING (Required outputs) ===
     errors: Annotated[List[Dict[str, Any]], operator.add]
     warnings: Annotated[List[str], operator.add]
     status: Literal[
@@ -130,4 +128,4 @@ class ResourceOptimizerState(TypedDict):
     ]
 
     # === AUDIT CHAIN ===
-    audit_workflow_id: Optional[UUID]
+    audit_workflow_id: NotRequired[UUID]

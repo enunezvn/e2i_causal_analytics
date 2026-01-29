@@ -30,6 +30,7 @@ AgentStatus = Literal[
 FormalityLevel = Literal["light", "medium", "heavy"]
 DesignType = Literal[
     "RCT",
+    "cluster_rct",  # Added: cluster randomized controlled trial
     "quasi_experiment",
     "difference_in_differences",
     "regression_discontinuity",
