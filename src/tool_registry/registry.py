@@ -658,13 +658,33 @@ def asyncio_iscoroutinefunction(func: Callable) -> bool:
 
 
 # ============================================================================
-# CONVENIENCE FUNCTIONS
+# GLOBAL REGISTRY SINGLETON
 # ============================================================================
+
+_global_registry: Optional[ToolRegistry] = None
 
 
 def get_registry() -> ToolRegistry:
-    """Get the global tool registry instance"""
-    return ToolRegistry()
+    """Get the global tool registry singleton.
+
+    Returns the same ToolRegistry instance across all calls, ensuring
+    tools registered via @composable_tool decorator are available.
+    """
+    global _global_registry
+    if _global_registry is None:
+        _global_registry = ToolRegistry()
+    return _global_registry
+
+
+def reset_registry() -> None:
+    """Reset the global registry (for testing)."""
+    global _global_registry
+    _global_registry = None
+
+
+# ============================================================================
+# CONVENIENCE FUNCTIONS
+# ============================================================================
 
 
 def register_tool(
