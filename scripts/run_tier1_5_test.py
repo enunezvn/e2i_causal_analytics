@@ -219,6 +219,7 @@ AGENT_CONFIGS = {
         "agent_class": "ToolComposerAgent",
         "method": "run",
         "is_async": True,
+        "timeout": 90,  # 3 sequential LLM calls + tool execution + memory queries
     },
     # Tier 2: Causal
     "causal_impact": {
