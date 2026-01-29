@@ -95,6 +95,7 @@ class QualityGateValidator:
         agent_name: str,
         output: dict[str, Any],
         contract_required_fields_pct: float | None = None,
+        contract_required_total: int = -1,
     ) -> QualityGateResult:
         """Validate agent output against its quality gate.
 
@@ -103,6 +104,8 @@ class QualityGateValidator:
             output: Agent output dictionary
             contract_required_fields_pct: Percentage of contract required fields present
                                          (from ContractValidator). Used for min_required_fields_pct check.
+            contract_required_total: Total number of required fields in the contract.
+                                    If 0 (e.g., total=False TypedDict), the percentage check is skipped.
 
         Returns:
             QualityGateResult with validation details
@@ -120,7 +123,9 @@ class QualityGateValidator:
 
         # Check min required fields percentage (from contract validation)
         if contract_required_fields_pct is not None:
-            self._check_min_required_fields_pct(contract_required_fields_pct, gate, result)
+            self._check_min_required_fields_pct(
+                contract_required_fields_pct, gate, result, contract_required_total
+            )
 
         # Run data quality checks
         self._run_data_quality_checks(output, gate, result)
@@ -172,9 +177,24 @@ class QualityGateValidator:
         actual_pct: float,
         gate: AgentQualityGate,
         result: QualityGateResult,
+        required_total: int = -1,
     ) -> None:
-        """Check minimum required fields percentage."""
+        """Check minimum required fields percentage.
+
+        If required_total is 0 (e.g., TypedDict with total=False), this check
+        automatically passes since there are no required fields to validate.
+        """
         min_pct = gate.get("min_required_fields_pct", 0.0)
+
+        # If there are no required fields (total=False TypedDict), auto-pass
+        if required_total == 0:
+            result.passed_checks.append(QualityCheckResult(
+                check_name="min_required_fields_pct",
+                field_name="(contract)",
+                passed=True,
+                message="No required fields in contract (total=False) - check skipped",
+            ))
+            return
 
         if actual_pct >= min_pct:
             result.passed_checks.append(QualityCheckResult(

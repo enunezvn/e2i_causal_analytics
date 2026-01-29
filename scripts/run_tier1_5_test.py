@@ -1041,8 +1041,10 @@ async def test_agent(
         try:
             # Calculate contract required fields percentage
             contract_req_pct = 0.0
+            contract_req_total = -1
             if result.contract_validation:
                 cv = result.contract_validation
+                contract_req_total = cv.required_total
                 if cv.required_total > 0:
                     contract_req_pct = len(cv.required_fields_present) / cv.required_total
 
@@ -1050,6 +1052,7 @@ async def test_agent(
                 agent_name=agent_name,
                 output=result.agent_output,
                 contract_required_fields_pct=contract_req_pct,
+                contract_required_total=contract_req_total,
             )
 
             result.quality_gate = QualityGateDetail(
