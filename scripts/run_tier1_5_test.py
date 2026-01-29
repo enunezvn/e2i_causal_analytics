@@ -598,24 +598,24 @@ AGENT_ANALYSIS_CONFIG = {
         ],
     },
     "causal_impact": {
-        "key_fields": ["overall_ate", "causal_effect", "confidence_interval", "p_value"],
+        "key_fields": ["ate_estimate", "confidence_interval", "p_value", "confidence"],
         "insights_template": [
-            "Average Treatment Effect (ATE): {overall_ate}",
+            "Average Treatment Effect (ATE): {ate_estimate}",
             "Statistical significance: p={p_value}",
         ],
     },
     "gap_analyzer": {
-        "key_fields": ["gaps_identified", "total_gap_value", "top_opportunities"],
+        "key_fields": ["prioritized_opportunities", "total_gap_value", "total_addressable_value"],
         "insights_template": [
-            "Identified {gaps_identified} performance gaps",
+            "Identified {prioritized_opportunities} performance gaps",
             "Total opportunity value: {total_gap_value}",
         ],
     },
     "heterogeneous_optimizer": {
-        "key_fields": ["heterogeneity_score", "segments_analyzed", "cate_results"],
+        "key_fields": ["heterogeneity_score", "overall_ate", "cate_by_segment"],
         "insights_template": [
+            "Overall ATE: {overall_ate}",
             "Heterogeneity score: {heterogeneity_score}",
-            "Analyzed {segments_analyzed} patient segments",
         ],
     },
     "drift_monitor": {
