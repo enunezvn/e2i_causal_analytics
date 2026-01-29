@@ -224,7 +224,7 @@ AGENT_CONFIGS = {
     "causal_impact": {
         "tier": 2,
         "state_module": "src.agents.causal_impact.state",
-        "state_class": "CausalImpactState",
+        "state_class": "CausalImpactOutput",  # Use Output contract, not State
         "agent_module": "src.agents.causal_impact",
         "agent_class": "CausalImpactAgent",
         "method": "run",
@@ -233,7 +233,7 @@ AGENT_CONFIGS = {
     "gap_analyzer": {
         "tier": 2,
         "state_module": "src.agents.gap_analyzer.state",
-        "state_class": "GapAnalyzerState",
+        "state_class": "GapAnalyzerOutput",  # Use Output contract, not State
         "agent_module": "src.agents.gap_analyzer",
         "agent_class": "GapAnalyzerAgent",
         "method": "run",
@@ -242,7 +242,7 @@ AGENT_CONFIGS = {
     "heterogeneous_optimizer": {
         "tier": 2,
         "state_module": "src.agents.heterogeneous_optimizer.state",
-        "state_class": "HeterogeneousOptimizerState",
+        "state_class": "HeterogeneousOptimizerOutput",  # Use Output contract, not State
         "agent_module": "src.agents.heterogeneous_optimizer",
         "agent_class": "HeterogeneousOptimizerAgent",
         "method": "run",
@@ -357,9 +357,10 @@ def _get_agent_kwargs(agent_name: str, enforce_real_data: bool = True) -> dict[s
             return {}
 
     elif agent_name == "gap_analyzer":
-        # gap_analyzer: explicitly disable mock usage
-        # The default is now use_mock=False, but we ensure it here
-        return {}  # No special kwargs needed, default is now correct
+        # gap_analyzer: tier0_output_mapper passes tier0_data which contains
+        # the patient-level data. The GapDetectorNode will aggregate it
+        # into performance metrics per segment.
+        return {}
 
     elif agent_name == "heterogeneous_optimizer":
         # heterogeneous_optimizer: require real data

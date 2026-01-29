@@ -109,6 +109,7 @@ class GapAnalyzerState(TypedDict):
     brand: str  # Brand identifier (e.g., "kisqali")
     time_period: str  # Analysis period (e.g., "current_quarter", "2024-Q3")
     filters: Optional[Dict[str, Any]]  # Additional filters
+    tier0_data: Optional[Any]  # DataFrame passthrough from tier0 testing (patient-level data)
 
     # === CONFIGURATION ===
     gap_type: Literal["vs_target", "vs_benchmark", "vs_potential", "temporal", "all"]

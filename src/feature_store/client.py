@@ -166,12 +166,22 @@ class FeatureStoreClient:
         mlflow_experiment_id = None
         if mlflow_experiment_name:
             try:
-                mlflow_experiment_id = mlflow.create_experiment(mlflow_experiment_name)
-                logger.info(
-                    f"Created MLflow experiment: {mlflow_experiment_name} ({mlflow_experiment_id})"
-                )
+                experiment = mlflow.get_experiment_by_name(mlflow_experiment_name)
+                if experiment is None:
+                    mlflow_experiment_id = mlflow.create_experiment(
+                        mlflow_experiment_name,
+                        artifact_location="mlflow-artifacts:/",
+                    )
+                    logger.info(
+                        f"Created MLflow experiment: {mlflow_experiment_name} ({mlflow_experiment_id})"
+                    )
+                else:
+                    mlflow_experiment_id = experiment.experiment_id
+                    logger.info(
+                        f"Using existing MLflow experiment: {mlflow_experiment_name} ({mlflow_experiment_id})"
+                    )
             except Exception as e:
-                logger.warning(f"Failed to create MLflow experiment: {e}")
+                logger.warning(f"Failed to create/get MLflow experiment: {e}")
 
         # Insert into Supabase
         data = {

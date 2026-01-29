@@ -222,47 +222,71 @@ class CATEEstimatorNode:
     async def _fetch_data(self, state: HeterogeneousOptimizerState) -> pd.DataFrame:
         """Fetch data for CATE estimation.
 
-        Attempts to fetch from primary connector first. If that returns insufficient
-        data (e.g., Supabase table missing columns), falls back to MockDataConnector
-        unless require_real_data is True.
+        Data source priority:
+        1. tier0_data passthrough (from tier0 testing framework)
+        2. Primary data connector (Supabase)
+        3. Raises ValueError if insufficient data (NO mock fallback)
+
+        Args:
+            state: HeterogeneousOptimizerState with data configuration
+
+        Returns:
+            DataFrame with required columns for CATE estimation
+
+        Raises:
+            ValueError: If insufficient data available
         """
-        columns = (
+        required_columns = (
             [state["treatment_var"], state["outcome_var"]]
             + state["effect_modifiers"]
             + state["segment_vars"]
         )
 
+        # Priority 1: Use tier0 passthrough data if available
+        tier0_data = state.get("tier0_data")
+        if tier0_data is not None and len(tier0_data) >= 100:
+            # Validate required columns exist in tier0 data
+            missing_cols = [c for c in required_columns if c not in tier0_data.columns]
+            if not missing_cols:
+                logger.info(
+                    f"Using tier0 passthrough data ({len(tier0_data)} rows)",
+                    extra={
+                        "node": "cate_estimator",
+                        "data_source": "tier0_passthrough",
+                        "row_count": len(tier0_data),
+                    },
+                )
+                return tier0_data
+            else:
+                logger.warning(
+                    f"Tier0 data missing columns {missing_cols}, trying primary connector",
+                    extra={"node": "cate_estimator", "missing_columns": missing_cols},
+                )
+
+        # Priority 2: Fetch from primary data connector (Supabase)
         df = await self.data_connector.query(
             source=state["data_source"],
-            columns=list(set(columns)),
+            columns=list(set(required_columns)),
             filters=state.get("filters"),
         )
 
-        # If primary connector returns insufficient data, fallback to mock
-        # (unless require_real_data is True)
+        # Validate we have sufficient data
         if df is None or len(df) < 100:
             row_count = len(df) if df is not None else 0
-
-            if self.require_real_data:
-                raise ValueError(
-                    f"Primary data connector returned insufficient data ({row_count} rows, "
-                    f"need >= 100) and require_real_data=True. "
-                    "Cannot fall back to MockDataConnector."
-                )
-
-            from ..connectors import MockDataConnector
-
-            logger.warning(
-                f"Primary connector returned {row_count} rows. "
-                f"Falling back to MockDataConnector for testing."
-            )
-            mock_connector = MockDataConnector()
-            df = await mock_connector.query(
-                source=state["data_source"],
-                columns=list(set(columns)),
-                filters=state.get("filters"),
+            raise ValueError(
+                f"Insufficient data for CATE estimation ({row_count} rows, need >= 100). "
+                f"Either pass tier0_data with required columns or configure Supabase. "
+                f"Required columns: {required_columns}"
             )
 
+        logger.info(
+            f"Using primary connector data ({len(df)} rows)",
+            extra={
+                "node": "cate_estimator",
+                "data_source": "primary_connector",
+                "row_count": len(df),
+            },
+        )
         return df
 
     def _is_binary(self, T: np.ndarray) -> bool:

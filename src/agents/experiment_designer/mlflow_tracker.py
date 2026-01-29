@@ -156,6 +156,7 @@ class ExperimentDesignerMLflowTracker:
         if experiment is None:
             experiment_id = mlflow.create_experiment(
                 full_name,
+                artifact_location="mlflow-artifacts:/",
                 tags={
                     "agent": "experiment_designer",
                     "tier": "3",

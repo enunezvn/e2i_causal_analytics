@@ -4,8 +4,11 @@ This module defines the LangGraph state structure for segment-level CATE analysi
 """
 
 import operator
-from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
+from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict, TYPE_CHECKING
 from uuid import UUID
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 
 class CATEResult(TypedDict):
@@ -52,7 +55,7 @@ class HeterogeneousOptimizerState(TypedDict):
     4. profile_generator: Create visualization data
     """
 
-    # === INPUT (7 fields) ===
+    # === INPUT (8 fields) ===
     query: str
     treatment_var: str
     outcome_var: str
@@ -60,6 +63,7 @@ class HeterogeneousOptimizerState(TypedDict):
     effect_modifiers: List[str]  # Variables that modify treatment effect
     data_source: str
     filters: Optional[Dict[str, Any]]
+    tier0_data: Optional[Any]  # DataFrame passthrough from tier0 testing (use Any to avoid pd import)
 
     # === CONFIGURATION (4 fields) ===
     n_estimators: int  # Causal Forest trees (default: 100)
