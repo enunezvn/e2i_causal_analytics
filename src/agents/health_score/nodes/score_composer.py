@@ -85,6 +85,9 @@ class ScoreComposerNode:
                 f"grade={grade}, issues={len(critical_issues)}, warnings={len(warnings)}"
             )
 
+            # Ensure errors is always set (required field, v4.3 fix)
+            errors = state.get("errors", [])
+
             return {
                 **state,
                 "overall_health_score": overall_score_100,
@@ -96,6 +99,7 @@ class ScoreComposerNode:
                 "total_latency_ms": check_time,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "status": "completed",
+                "errors": errors,  # Contract-required field
             }
 
         except Exception as e:
