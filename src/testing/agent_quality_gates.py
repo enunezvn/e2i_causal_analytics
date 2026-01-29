@@ -12,6 +12,7 @@ Quality gates enforce:
 
 from __future__ import annotations
 
+import re
 from typing import Any, Callable, Literal, TypedDict
 
 
@@ -123,6 +124,32 @@ def _validate_tool_composer(output: dict[str, Any]) -> tuple[bool, str]:
     if tools_executed > 0 and tools_succeeded == 0:
         return (False, f"All {tools_executed} tools failed - no successful execution")
 
+    # Fail if reporting success but no tools were actually executed
+    success = output.get("success", False)
+    status = output.get("status", "")
+    if success or str(status).lower() in ("success", "completed"):
+        if not tools_executed:
+            return (
+                False,
+                "Reports success but tools_executed is 0 - no tools were actually run",
+            )
+
+    # Detect fabricated sample sizes (tier0 data has ~600 rows)
+    sample_match = re.search(r"sample.size.of.(\d+)", response_text, re.IGNORECASE)
+    if sample_match and int(sample_match.group(1)) > 1000:
+        return (
+            False,
+            f"Fabricated sample size of {sample_match.group(1)} (tier0 data has ~600 rows)",
+        )
+
+    # Detect fabricated entity IDs (E001, E002, etc.)
+    fabricated_ids = re.findall(r"\bE\d{3}\b", response_text)
+    if len(fabricated_ids) >= 2:
+        return (
+            False,
+            f"Fabricated entity IDs detected: {fabricated_ids[:5]} - not real data",
+        )
+
     return (True, "Passed semantic validation")
 
 
@@ -185,6 +212,28 @@ def _validate_prediction_synthesizer(output: dict[str, Any]) -> tuple[bool, str]
                 "Zero prediction from single model must be marked UNVALIDATED/UNRELIABLE",
             )
 
+    # Fail on CANNOT_ASSESS in critical prediction fields
+    prediction_summary = str(_safe_get(output, "prediction_summary", ""))
+    risk_assessment = str(_safe_get(output, "risk_assessment", ""))
+    if "CANNOT_ASSESS" in prediction_summary or "CANNOT_ASSESS" in risk_assessment:
+        return (
+            False,
+            "CANNOT_ASSESS in prediction output - agent unable to produce useful predictions",
+        )
+
+    # Fail on zero prediction with zero context (no real analysis occurred)
+    similar_cases = _safe_get(output, "similar_cases", None)
+    historical_accuracy = _safe_get(output, "historical_accuracy", None)
+    if (
+        point_estimate == 0.0
+        and (not similar_cases or similar_cases == [])
+        and (historical_accuracy == 0.0 or historical_accuracy is None)
+    ):
+        return (
+            False,
+            "Zero prediction with no similar cases and no historical accuracy - no real analysis",
+        )
+
     return (True, "Passed semantic validation")
 
 
@@ -199,6 +248,21 @@ def _validate_drift_monitor(output: dict[str, Any]) -> tuple[bool, str]:
             return (
                 False,
                 f"High drift ({drift_score:.2f}) detected but no recommended_actions provided",
+            )
+
+    # Completed drift monitoring must cover at least 2 of 3 drift types
+    status = output.get("status", "")
+    if status in ("completed", "success"):
+        drift_types_with_results = 0
+        for drift_key in ("data_drift_results", "model_drift_results", "concept_drift_results"):
+            results = output.get(drift_key)
+            if results and results != {} and results != []:
+                drift_types_with_results += 1
+        if drift_types_with_results < 2:
+            return (
+                False,
+                f"Only {drift_types_with_results}/3 drift types have results - "
+                "must analyze at least 2 types (data, model, concept)",
             )
 
     return (True, "Passed semantic validation")
@@ -318,6 +382,15 @@ def _validate_resource_optimizer(output: dict[str, Any]) -> tuple[bool, str]:
                 "projected_savings dict is empty - must contain actual calculations",
             )
 
+    # Completed optimization with negligible ROI indicates no real optimization occurred
+    if status in ("completed", "optimal") and isinstance(projected_roi, (int, float)):
+        if projected_roi < 0.05:
+            return (
+                False,
+                f"Projected ROI of {projected_roi:.2%} is below 5% threshold - "
+                "optimization produced negligible value",
+            )
+
     return (True, "Passed semantic validation")
 
 
@@ -336,6 +409,28 @@ def _validate_explainer(output: dict[str, Any]) -> tuple[bool, str]:
                 False,
                 f"Has {recommendations_count} recommendations but none surfaced in output",
             )
+
+    # Reject meta-descriptions instead of actual explanations
+    exec_summary = output.get("executive_summary", "")
+    if (
+        re.match(r"^Analysis complete with \d+ findings", exec_summary)
+        and len(exec_summary) < 100
+    ):
+        return (
+            False,
+            "Executive summary is a meta-description, not an actual explanation: "
+            f"'{exec_summary[:80]}...'",
+        )
+
+    # Reject output with excessive raw unformatted floats (indicates no real formatting)
+    combined_text = exec_summary + " " + str(output.get("detailed_explanation", ""))
+    raw_float_matches = re.findall(r"\d+\.\d{6,}", combined_text)
+    if len(raw_float_matches) >= 3:
+        return (
+            False,
+            f"Found {len(raw_float_matches)} unformatted raw floats (e.g., {raw_float_matches[0]}) - "
+            "explainer must format numbers for human readability",
+        )
 
     return (True, "Passed semantic validation")
 
@@ -367,6 +462,168 @@ def _validate_heterogeneous_optimizer(output: dict[str, Any]) -> tuple[bool, str
                 f"Has ATE={overall_ate} and heterogeneity={heterogeneity_score} but no strategic interpretation",
             )
 
+    # Completed optimization must identify at least some responder segments
+    het_status = _safe_get(output, "status", "")
+    if het_status in ("completed", "success"):
+        high_responders = _safe_get(output, "high_responders", None)
+        low_responders = _safe_get(output, "low_responders", None)
+        if (
+            (high_responders is not None and not high_responders)
+            and (low_responders is not None and not low_responders)
+        ):
+            return (
+                False,
+                "Both high_responders and low_responders are empty - "
+                "no segment differentiation found",
+            )
+
+    return (True, "Passed semantic validation")
+
+
+def _validate_feedback_learner(output: dict[str, Any]) -> tuple[bool, str]:
+    """Feedback learner must actually learn something when status is completed."""
+    status = output.get("status", "")
+
+    # "partial" status is honest - insufficient data acknowledged
+    if status == "partial":
+        return (True, "Partial status accepted - insufficient data acknowledged")
+
+    # For completed status, at least ONE learning activity must have occurred
+    if status in ("completed", "success"):
+        # Check list-based outputs
+        detected_patterns = output.get("detected_patterns", [])
+        learning_recommendations = output.get("learning_recommendations", [])
+        applied_updates = output.get("applied_updates", [])
+        feedback_items = output.get("feedback_items", [])
+
+        has_list_content = any(
+            bool(lst)
+            for lst in [
+                detected_patterns,
+                learning_recommendations,
+                applied_updates,
+                feedback_items,
+            ]
+        )
+
+        # Check counter-based outputs
+        feedback_count = output.get("feedback_count", 0)
+        pattern_count = output.get("pattern_count", 0)
+        has_counter_content = (
+            isinstance(feedback_count, (int, float)) and feedback_count > 0
+        ) or (isinstance(pattern_count, (int, float)) and pattern_count > 0)
+
+        if not has_list_content and not has_counter_content:
+            return (
+                False,
+                "Completed with 0 items processed, 0 patterns, 0 recommendations - "
+                "no learning occurred",
+            )
+
+    return (True, "Passed semantic validation")
+
+
+def _validate_orchestrator(output: dict[str, Any]) -> tuple[bool, str]:
+    """Orchestrator must dispatch unique agents and produce substantive responses."""
+    status = output.get("status", "")
+
+    if status in ("completed", "success"):
+        # agents_dispatched must be non-empty
+        agents_dispatched = output.get("agents_dispatched", [])
+        if isinstance(agents_dispatched, list) and not agents_dispatched:
+            return (
+                False,
+                "Completed with no agents dispatched - orchestrator did not route to any agent",
+            )
+
+        # No duplicate agent dispatches
+        if isinstance(agents_dispatched, list) and len(agents_dispatched) > 0:
+            if len(set(agents_dispatched)) < len(agents_dispatched):
+                duplicates = [
+                    a for a in set(agents_dispatched) if agents_dispatched.count(a) > 1
+                ]
+                return (
+                    False,
+                    f"Duplicate agents dispatched: {duplicates} - "
+                    "orchestrator should not dispatch the same agent twice",
+                )
+
+    # Response must be substantive (>=50 chars)
+    response_text = output.get("response_text", "")
+    if isinstance(response_text, str) and len(response_text) < 50:
+        return (
+            False,
+            f"Response text is only {len(response_text)} chars - "
+            "must be >=50 chars for substantive content",
+        )
+
+    return (True, "Passed semantic validation")
+
+
+def _validate_causal_impact(output: dict[str, Any]) -> tuple[bool, str]:
+    """Causal impact must produce valid ATE within its own confidence interval."""
+    status = output.get("status", "")
+
+    if status in ("completed", "success"):
+        ate_estimate = _safe_get(output, "ate_estimate")
+
+        # ATE must be numeric
+        if ate_estimate is None or not isinstance(ate_estimate, (int, float)):
+            return (
+                False,
+                f"ate_estimate is {ate_estimate} - must be a numeric value",
+            )
+
+        # Confidence interval must be a 2-element sequence
+        ci = _safe_get(output, "confidence_interval")
+        if ci is None or not isinstance(ci, (list, tuple)) or len(ci) != 2:
+            return (
+                False,
+                f"confidence_interval is {ci} - must be a 2-element list/tuple [lower, upper]",
+            )
+
+        # ATE must fall within its own CI (basic sanity check)
+        ci_lower, ci_upper = ci[0], ci[1]
+        if isinstance(ci_lower, (int, float)) and isinstance(ci_upper, (int, float)):
+            if not (ci_lower <= ate_estimate <= ci_upper):
+                return (
+                    False,
+                    f"ATE {ate_estimate} falls outside its own CI [{ci_lower}, {ci_upper}]",
+                )
+
+    return (True, "Passed semantic validation")
+
+
+def _validate_gap_analyzer(output: dict[str, Any]) -> tuple[bool, str]:
+    """Gap analyzer must find actionable opportunities with real value."""
+    status = output.get("status", "")
+
+    if status in ("completed", "success"):
+        # Must identify at least one opportunity
+        opportunities = output.get("prioritized_opportunities", [])
+        if not opportunities:
+            return (
+                False,
+                "Completed with no prioritized_opportunities - no gaps identified",
+            )
+
+        # Total addressable value must be positive
+        total_value = output.get("total_addressable_value", 0)
+        if isinstance(total_value, (int, float)) and total_value <= 0:
+            return (
+                False,
+                f"total_addressable_value is {total_value} - must be > 0 for completed analysis",
+            )
+
+        # Executive summary must be substantive
+        exec_summary = output.get("executive_summary", "")
+        if isinstance(exec_summary, str) and len(exec_summary) < 50:
+            return (
+                False,
+                f"executive_summary is only {len(exec_summary)} chars - "
+                "must be >=50 chars for actionable insights",
+            )
+
     return (True, "Passed semantic validation")
 
 
@@ -378,9 +635,10 @@ AGENT_QUALITY_GATES: dict[str, AgentQualityGate] = {
         "min_required_fields_pct": 0.5,
         "data_quality_checks": {
             "status": {"type": "str", "not_null": True},
-            "response_text": {"type": "str", "min_length": 1},
+            "response_text": {"type": "str", "min_length": 50},
         },
         "fail_on_status": ["error", "failed"],
+        "semantic_validator": _validate_orchestrator,
     },
     "tool_composer": {
         "description": "Multi-faceted query decomposition and tool orchestration",
@@ -400,6 +658,7 @@ AGENT_QUALITY_GATES: dict[str, AgentQualityGate] = {
             "status": {"type": "str", "not_null": True, "must_not_be": "error"},
         },
         "fail_on_status": ["error", "failed"],
+        "semantic_validator": _validate_causal_impact,
     },
     "gap_analyzer": {
         "description": "Identifies ROI opportunities and performance gaps",
@@ -413,6 +672,7 @@ AGENT_QUALITY_GATES: dict[str, AgentQualityGate] = {
             },
         },
         "fail_on_status": ["error", "failed"],
+        "semantic_validator": _validate_gap_analyzer,
     },
     "heterogeneous_optimizer": {
         "description": "Segment-level CATE analysis for heterogeneous treatment effects",
@@ -506,6 +766,7 @@ AGENT_QUALITY_GATES: dict[str, AgentQualityGate] = {
             "status": {"type": "str", "in_set": ["completed", "partial", "success"]},
         },
         "fail_on_status": ["error", "failed"],
+        "semantic_validator": _validate_feedback_learner,
     },
 }
 
