@@ -119,6 +119,11 @@ class DataDriftNode:
         Returns:
             (baseline_data, current_data) tuple
         """
+        # Check for tier0_data passthrough (testing mode)
+        tier0_data = state.get("tier0_data")
+        if tier0_data is not None:
+            return self._create_drift_splits_from_tier0(tier0_data, state["features_to_monitor"])
+
         # Parse time window
         days = int(state["time_window"].replace("d", ""))
         now = datetime.now(timezone.utc)
@@ -160,6 +165,77 @@ class DataDriftNode:
         # Convert FeatureData to numpy arrays for compatibility
         baseline_data = {name: data.values for name, data in baseline_result.items()}
         current_data = {name: data.values for name, data in current_result.items()}
+
+        return baseline_data, current_data
+
+    def _create_drift_splits_from_tier0(
+        self, tier0_data, features_to_monitor: list[str]
+    ) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
+        """Create baseline/current splits from tier0 DataFrame for drift testing.
+
+        This method splits the tier0 data and applies statistical perturbation
+        to create realistic drift scenarios for testing.
+
+        Args:
+            tier0_data: pandas DataFrame from tier0 pipeline
+            features_to_monitor: List of feature names to analyze
+
+        Returns:
+            (baseline_data, current_data) tuple with drift applied
+        """
+        import pandas as pd
+
+        if not isinstance(tier0_data, pd.DataFrame):
+            # Return empty if not a DataFrame
+            return {f: np.array([]) for f in features_to_monitor}, {
+                f: np.array([]) for f in features_to_monitor
+            }
+
+        rng = np.random.default_rng(42)
+        n_rows = len(tier0_data)
+        mid_point = n_rows // 2
+
+        baseline_data = {}
+        current_data = {}
+
+        for feature in features_to_monitor:
+            if feature not in tier0_data.columns:
+                # Feature not in data - skip with empty arrays
+                baseline_data[feature] = np.array([])
+                current_data[feature] = np.array([])
+                continue
+
+            # Get feature values
+            values = tier0_data[feature].values
+
+            # Handle non-numeric columns
+            if not np.issubdtype(values.dtype, np.number):
+                # For categorical, encode and add noise
+                unique_vals = np.unique(values)
+                val_to_int = {v: i for i, v in enumerate(unique_vals)}
+                encoded = np.array([val_to_int.get(v, 0) for v in values], dtype=float)
+                values = encoded
+
+            # Ensure float type for calculations
+            values = values.astype(float)
+
+            # Split data: first half as baseline, second half as current
+            baseline_vals = values[:mid_point].copy()
+            current_vals = values[mid_point:].copy()
+
+            # Apply drift perturbation to current data (shift mean by 0.2 std)
+            if len(current_vals) > 0:
+                std = np.nanstd(baseline_vals) if len(baseline_vals) > 0 else 1.0
+                drift_shift = 0.3 * std  # 30% of std deviation shift
+                noise = rng.normal(drift_shift, std * 0.1, size=len(current_vals))
+                current_vals = current_vals + noise
+
+            # Handle NaN values
+            baseline_vals = baseline_vals[~np.isnan(baseline_vals)]
+            current_vals = current_vals[~np.isnan(current_vals)]
+
+            baseline_data[feature] = baseline_vals
+            current_data[feature] = current_vals
 
         return baseline_data, current_data
 

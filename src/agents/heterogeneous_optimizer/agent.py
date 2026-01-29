@@ -251,8 +251,9 @@ class HeterogeneousOptimizerAgent:
                 raise ValueError(f"Missing required field: {field}")
 
         # Validate types
-        if not isinstance(input_data["segment_vars"], list) or not input_data["segment_vars"]:
-            raise ValueError("segment_vars must be a non-empty list")
+        # segment_vars can be empty - CATEEstimatorNode handles W=None for overall ATE estimation
+        if not isinstance(input_data["segment_vars"], list):
+            raise ValueError("segment_vars must be a list (can be empty)")
 
         if (
             not isinstance(input_data["effect_modifiers"], list)

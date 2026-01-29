@@ -106,7 +106,26 @@ class CATEEstimatorNode:
 
             # Prepare data
             Y = df[state["outcome_var"]].values
-            T = df[state["treatment_var"]].values
+            T_raw = df[state["treatment_var"]].values
+
+            # Binarize continuous treatment at median (consistent with causal_impact agent)
+            # This ensures comparable results between agents and better CATE estimation
+            if len(np.unique(T_raw)) > 2:
+                median_val = np.median(T_raw)
+                T = (T_raw > median_val).astype(int)
+                logger.info(
+                    f"Binarized continuous treatment at median={median_val:.2f}",
+                    extra={
+                        "node": "cate_estimator",
+                        "treatment_var": state["treatment_var"],
+                        "original_unique_values": int(len(np.unique(T_raw))),
+                        "median_threshold": float(median_val),
+                        "treated_count": int(np.sum(T)),
+                        "control_count": int(np.sum(1 - T)),
+                    },
+                )
+            else:
+                T = T_raw
 
             # Diagnostic logging for debugging ATE=0 issue
             logger.info(
