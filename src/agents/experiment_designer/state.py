@@ -37,7 +37,7 @@ DesignType = Literal[
     "instrumental_variable",
     "synthetic_control",
 ]
-RandomizationUnit = Literal["individual", "cluster", "time_period", "geography"]
+RandomizationUnit = Literal["individual", "cluster", "time_period", "geography", "territory"]
 ValidityThreatSeverity = Literal["low", "medium", "high", "critical"]
 ConfidenceLevel = Literal["low", "medium", "high"]
 
