@@ -114,6 +114,14 @@ class AlertAggregatorNode:
             latency_ms = int((time.time() - start_time) * 1000)
             state["total_latency_ms"] = state.get("total_latency_ms", 0) + latency_ms
 
+            # Contract-required fields (v4.3 fix)
+            state["timestamp"] = datetime.now(timezone.utc).isoformat()
+            # Ensure errors and warnings are always set (required fields)
+            if "errors" not in state:
+                state["errors"] = []
+            if "warnings" not in state:
+                state["warnings"] = []
+
         except Exception as e:
             error: ErrorDetails = {
                 "node": "alert_aggregator",

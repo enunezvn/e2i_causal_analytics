@@ -87,6 +87,12 @@ class TemplateGeneratorNode:
             state["total_latency_ms"] = total_latency
             state["timestamp"] = datetime.now(timezone.utc).isoformat()
 
+            # Ensure errors and warnings are always set (required fields, v4.3 fix)
+            if "errors" not in state:
+                state["errors"] = []
+            if "warnings" not in state:
+                state["warnings"] = []
+
             # Update status to completed
             state["status"] = "completed"
 
