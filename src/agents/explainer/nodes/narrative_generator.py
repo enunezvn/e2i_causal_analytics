@@ -275,14 +275,15 @@ class NarrativeGeneratorNode:
                     )
                 )
 
-        # Count summary
-        finding_count = len([i for i in insights if i.get("category") == "finding"])
-        rec_count = len([i for i in insights if i.get("category") == "recommendation"])
-
         combined = "\n\n".join(f"## {s['title']}\n{s['content']}" for s in sections)
 
+        # Generate a substantive executive summary using the same method as narrative format
+        themes = state.get("key_themes") or []
+        expertise = state.get("user_expertise", "analyst")
+        exec_summary = self._create_executive_summary(insights, themes, expertise)
+
         return {
-            "executive_summary": f"Analysis complete with {finding_count} findings and {rec_count} recommendations.",
+            "executive_summary": exec_summary,
             "detailed_explanation": combined,
             "narrative_sections": sections,
         }

@@ -210,6 +210,14 @@ class DataDriftNode:
 
             # Handle non-numeric columns
             if not np.issubdtype(values.dtype, np.number):
+                # Filter out None/NaT before sorting (np.unique sorts, which
+                # raises TypeError when None and str are compared).
+                valid_mask = np.array([v is not None for v in values])
+                values = values[valid_mask]
+                if len(values) == 0:
+                    baseline_data[feature] = np.array([])
+                    current_data[feature] = np.array([])
+                    continue
                 # For categorical, encode and add noise
                 unique_vals = np.unique(values)
                 val_to_int = {v: i for i, v in enumerate(unique_vals)}

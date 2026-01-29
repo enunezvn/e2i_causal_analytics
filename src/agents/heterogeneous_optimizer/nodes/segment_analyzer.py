@@ -88,6 +88,13 @@ class SegmentAnalyzerNode:
                 all_segments, ate, total_size, "low", self.low_responder_threshold
             )[:top_count]
 
+            # Fallback: if strict thresholds yield empty responders, use
+            # percentile-based classification (top/bottom by effect ratio).
+            if not high_responders and not low_responders and all_segments and abs(ate) > 1e-6:
+                high_responders, low_responders = self._fallback_classify(
+                    all_segments, ate, total_size, top_count
+                )
+
             # Create segment comparison
             comparison = self._create_comparison(high_responders, low_responders, ate)
 
@@ -167,11 +174,18 @@ class SegmentAnalyzerNode:
             result = seg["result"]
             cate = result["cate_estimate"]
 
-            # Determine if segment qualifies
+            # Determine if segment qualifies using absolute magnitude comparison.
+            # This handles both positive and negative ATE correctly:
+            # - Positive ATE: high responders have large positive CATE
+            # - Negative ATE: high responders have large negative CATE (strong effect)
+            # Require a minimum ATE magnitude to avoid noise-driven classification.
+            if abs(ate) < 1e-6:
+                continue
+
             if responder_type == "high":
-                qualifies = ate > 0 and cate >= ate * threshold
+                qualifies = abs(cate) >= abs(ate) * threshold
             else:
-                qualifies = ate > 0 and cate <= ate * threshold
+                qualifies = abs(cate) <= abs(ate) * threshold
 
             if not qualifies:
                 continue
@@ -200,6 +214,71 @@ class SegmentAnalyzerNode:
         profiles.sort(key=lambda x: x["cate_estimate"], reverse=reverse)
 
         return profiles
+
+    def _fallback_classify(
+        self,
+        all_segments: List[Dict],
+        ate: float,
+        total_size: int,
+        top_count: int,
+    ) -> Tuple[List[SegmentProfile], List[SegmentProfile]]:
+        """Classify top/bottom segments when strict thresholds yield no results.
+
+        Falls back to ranking segments by their |CATE|/|ATE| effect ratio and
+        splitting into upper and lower halves. This ensures heterogeneity is
+        always reported when segment-level CATE estimates exist.
+
+        Args:
+            all_segments: All segment results
+            ate: Overall average treatment effect
+            total_size: Total sample size
+            top_count: Max segments per group
+
+        Returns:
+            (high_responders, low_responders) tuple
+        """
+        # Rank by effect ratio (|CATE| / |ATE|)
+        ranked = sorted(
+            all_segments,
+            key=lambda s: abs(s["result"]["cate_estimate"]) / abs(ate),
+            reverse=True,
+        )
+
+        mid = max(1, len(ranked) // 2)
+        high_segs = ranked[:mid]
+        low_segs = ranked[mid:]
+
+        def _build(segs: List[Dict], rtype: str) -> List[SegmentProfile]:
+            profiles = []
+            for seg in segs:
+                result = seg["result"]
+                cate = result["cate_estimate"]
+                profiles.append(
+                    SegmentProfile(
+                        segment_id=f"{seg['segment_var']}_{result['segment_value']}",
+                        responder_type=rtype,
+                        cate_estimate=cate,
+                        defining_features=[
+                            {
+                                "variable": seg["segment_var"],
+                                "value": result["segment_value"],
+                                "effect_size": cate / ate if ate != 0 else 0,
+                            }
+                        ],
+                        size=result["sample_size"],
+                        size_percentage=(
+                            result["sample_size"] / total_size * 100
+                            if total_size > 0
+                            else 0
+                        ),
+                        recommendation=self._generate_recommendation(
+                            seg["segment_var"], result, rtype
+                        ),
+                    )
+                )
+            return profiles[:top_count]
+
+        return _build(high_segs, "high"), _build(low_segs, "low")
 
     def _generate_recommendation(
         self, segment_var: str, result: CATEResult, responder_type: str

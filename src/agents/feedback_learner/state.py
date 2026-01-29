@@ -31,7 +31,7 @@ class FeedbackItem(TypedDict):
 
     feedback_id: str
     timestamp: str
-    feedback_type: Literal["rating", "correction", "outcome", "explicit"]
+    feedback_type: Literal["rating", "correction", "outcome", "explicit", "implicit"]
     source_agent: str
     query: str
     agent_response: str

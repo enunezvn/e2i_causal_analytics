@@ -210,10 +210,12 @@ class OrchestratorAgent:
         successful_results = [r for r in agent_results if r.get("success")]
         failed_results = [r for r in agent_results if not r.get("success")]
 
-        # Collect all agents that were dispatched
-        agents_dispatched = [r["agent_name"] for r in agent_results]
-        successful_agents = [r["agent_name"] for r in successful_results]
-        failed_agents = [r["agent_name"] for r in failed_results]
+        # Collect all agents that were dispatched (deduplicated, preserving order)
+        # LangGraph's Annotated[List, operator.add] accumulates results across steps,
+        # which can produce duplicate entries when agents are retried or re-dispatched.
+        agents_dispatched = list(dict.fromkeys(r["agent_name"] for r in agent_results))
+        successful_agents = list(dict.fromkeys(r["agent_name"] for r in successful_results))
+        failed_agents = list(dict.fromkeys(r["agent_name"] for r in failed_results))
 
         # Determine status based on partial vs complete failure
         status = state.get("status", "failed")
