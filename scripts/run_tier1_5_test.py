@@ -371,9 +371,12 @@ class Tier0ModelClient:
             # Get prediction
             if hasattr(self.model, "predict_proba"):
                 proba = self.model.predict_proba(X)[0]
+                # proba is array of class probabilities, e.g., [0.3, 0.7] for binary
+                proba_list = [float(p) for p in proba]  # Convert to list of floats
                 prediction = float(proba[1]) if len(proba) > 1 else float(proba[0])
             else:
                 prediction = float(self.model.predict(X)[0])
+                proba_list = None  # No probability estimates available
 
             # Confidence based on distance from 0.5
             confidence = abs(prediction - 0.5) * 2
@@ -382,7 +385,7 @@ class Tier0ModelClient:
                 "model_id": self.model_id,
                 "model_type": "logistic_regression",
                 "prediction": prediction,
-                "proba": prediction,  # Add proba for proper handling
+                "proba": proba_list,  # Return full class probabilities as list
                 "confidence": max(0.5, min(1.0, confidence + 0.5)),
                 "latency_ms": int((time.time() - start) * 1000),
                 "features_used": self.feature_names or list(features.keys()),
@@ -393,8 +396,10 @@ class Tier0ModelClient:
                 "model_id": self.model_id,
                 "model_type": "logistic_regression",
                 "prediction": 0.5,
+                "proba": None,  # Explicitly set to None
                 "confidence": 0.3,
                 "latency_ms": int((time.time() - start) * 1000),
+                "features_used": self.feature_names or [],
                 "error": str(e),
             }
 
@@ -443,6 +448,7 @@ def _get_agent_kwargs(
 
     elif agent_name == "prediction_synthesizer":
         # prediction_synthesizer: inject tier0 trained model as a model client
+        # Disable Opik tracing to avoid async generator cancellation issues with timeouts
         if tier0_state and tier0_state.get("trained_model"):
             model = tier0_state["trained_model"]
             model_id = tier0_state.get("experiment_id", "tier0_model")
@@ -450,9 +456,11 @@ def _get_agent_kwargs(
             return {
                 "model_clients": {
                     model_id: Tier0ModelClient(model, model_id, feature_names),
-                }
+                },
+                "enable_opik": False,  # Prevent async generator issues with timeouts
+                "enable_memory": False,  # Simplify test execution
             }
-        return {}
+        return {"enable_opik": False, "enable_memory": False}
 
     return {}
 
@@ -858,9 +866,12 @@ async def run_tier0_and_cache(cache_dir: str = "scripts/tier0_output_cache") -> 
     Returns:
         Tier0 state dictionary
     """
-    from scripts.run_tier0_test import run_pipeline
+    from scripts.run_tier0_test import run_pipeline, CONFIG
 
     print("  Running tier0 pipeline to generate synthetic data...")
+
+    # Disable MLflow for local testing (not required for tier1-5 validation)
+    CONFIG.enable_mlflow = False
 
     # Run tier0 pipeline and capture the returned state
     state = await run_pipeline(step=None, dry_run=False)
