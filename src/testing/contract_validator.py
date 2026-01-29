@@ -114,13 +114,18 @@ class ContractValidator:
                     type_errors.append(type_error)
 
         # Check optional fields (presence is not required, but type should match if present)
+        # For NotRequired fields, treat None as "effectively missing" - skip type check
         optional_present = 0
         for field_name in optional_keys:
             if field_name in state:
+                value = state[field_name]
+                # Treat None as effectively missing for NotRequired fields
+                if value is None:
+                    continue
                 optional_present += 1
                 # Type check
                 type_error = self._check_type(
-                    field_name, state[field_name], hints.get(field_name)
+                    field_name, value, hints.get(field_name)
                 )
                 if type_error:
                     type_errors.append(type_error)
