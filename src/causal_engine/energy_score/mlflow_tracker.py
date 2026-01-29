@@ -142,7 +142,8 @@ class EnergyScoreMLflowTracker:
             if experiment is None:
                 experiment_id = mlflow.create_experiment(
                     full_experiment_name,
-                    tags={"framework": "e2i_causal", "version": "4.2"}
+                    artifact_location="mlflow-artifacts:/",
+                    tags={"framework": "e2i_causal", "version": "4.2"},
                 )
             else:
                 experiment_id = experiment.experiment_id

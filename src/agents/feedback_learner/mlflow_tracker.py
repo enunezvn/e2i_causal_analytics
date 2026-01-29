@@ -235,6 +235,7 @@ class FeedbackLearnerMLflowTracker:
             if experiment is None:
                 experiment_id = mlflow.create_experiment(
                     full_experiment_name,
+                    artifact_location="mlflow-artifacts:/",
                     tags={
                         "framework": "e2i_causal",
                         "agent": "feedback_learner",

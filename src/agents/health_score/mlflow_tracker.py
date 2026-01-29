@@ -159,7 +159,10 @@ class HealthScoreMLflowTracker:
         try:
             experiment = mlflow.get_experiment_by_name(full_experiment_name)
             if experiment is None:
-                experiment_id = mlflow.create_experiment(full_experiment_name)
+                experiment_id = mlflow.create_experiment(
+                    full_experiment_name,
+                    artifact_location="mlflow-artifacts:/",
+                )
             else:
                 experiment_id = experiment.experiment_id
         except Exception as e:

@@ -192,9 +192,9 @@ class HeterogeneousOptimizerAgent:
                     total_duration_ms=output.get("total_latency_ms", 0),
                     overall_ate=output.get("overall_ate", 0.0),
                     heterogeneity_score=output.get("heterogeneity_score", 0.0),
-                    high_responders_count=len(output.get("high_responders", [])),
-                    low_responders_count=len(output.get("low_responders", [])),
-                    recommendations_count=len(output.get("policy_recommendations", [])),
+                    high_responders_count=len(output.get("high_responders") or []),
+                    low_responders_count=len(output.get("low_responders") or []),
+                    recommendations_count=len(output.get("policy_recommendations") or []),
                     expected_total_lift=output.get("expected_total_lift", 0.0),
                     confidence=output.get("confidence", 0.0),
                     errors=output.get("errors"),
@@ -316,6 +316,7 @@ class HeterogeneousOptimizerAgent:
             "effect_modifiers": input_data["effect_modifiers"],
             "data_source": input_data["data_source"],
             "filters": input_data.get("filters"),
+            "tier0_data": input_data.get("tier0_data"),  # Passthrough for tier0 testing
             # Configuration
             "n_estimators": input_data.get("n_estimators", 100),
             "min_samples_leaf": input_data.get("min_samples_leaf", 10),

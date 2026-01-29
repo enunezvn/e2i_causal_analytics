@@ -173,6 +173,11 @@ class Tier0OutputMapper:
         - time_period: str (optional, default "current_quarter")
         - filters: Optional[Dict] (optional)
         - gap_type: Literal (optional, default "vs_potential")
+        - tier0_data: Optional[DataFrame] - Passthrough data from tier0 (NEW)
+        - use_mock: bool - Whether to use mock connectors (NEW)
+
+        When tier0_data is provided, the agent can derive performance metrics
+        from it instead of querying Supabase.
         """
         df = self.state["eligible_df"]
 
@@ -188,7 +193,7 @@ class Tier0OutputMapper:
         if "prior_treatments" in df.columns:
             segments.append("prior_treatments")
         if not segments:
-            segments = ["all"]  # Default segment
+            segments = ["region"]  # Use region as default (mock connector supports it)
 
         return {
             "query": "Identify performance gaps and ROI opportunities",
@@ -197,6 +202,7 @@ class Tier0OutputMapper:
             "brand": self.state.get("scope_spec", {}).get("brand", "Kisqali"),
             "time_period": "current_quarter",
             "gap_type": "vs_potential",
+            "tier0_data": df,  # NEW: Pass actual DataFrame for deriving performance metrics
         }
 
     def map_to_heterogeneous_optimizer(self) -> dict[str, Any]:
@@ -210,42 +216,78 @@ class Tier0OutputMapper:
         - effect_modifiers: List[str] - Variables that modify treatment effect
         - data_source: str
         - filters: Optional[Dict]
+        - tier0_data: Optional[DataFrame] - Passthrough data from tier0 (NEW)
 
-        Note: When Supabase is not configured, the agent falls back to MockDataConnector
-        which has specific column names. We use those as defaults for testing.
-
-        MockDataConnector columns:
-        - Treatment: hcp_engagement_frequency (binary 0/1)
-        - Outcome: trx_total (continuous)
-        - Segments: hcp_specialty, patient_volume_decile, region
-        - Effect modifiers: hcp_tenure, competitive_pressure, formulary_status
+        When tier0_data is provided, the agent uses it directly instead of
+        querying Supabase or falling back to MockDataConnector.
         """
         df = self.state["eligible_df"]
-        features = self._get_top_features(5)
 
-        # ALWAYS use MockDataConnector-compatible column names for testing
-        # The agent falls back to MockDataConnector when Supabase isn't configured,
-        # so we must use column names that MockDataConnector provides.
-        # Do NOT override with tier0 columns as they won't exist in mock data.
-        treatment_var = "hcp_engagement_frequency"  # MockDataConnector treatment (binary 0/1)
-        outcome_var = "trx_total"  # MockDataConnector outcome (continuous)
+        # Use tier0 DataFrame columns directly since we're passing the data
+        # Detect appropriate columns from the DataFrame
+        numeric_cols = df.select_dtypes(include=["int64", "float64"]).columns.tolist()
+        categorical_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
 
-        # Segment variables for CATE analysis
-        # MockDataConnector provides: hcp_specialty, patient_volume_decile, region
-        segment_vars = ["hcp_specialty", "region"]
+        # Outcome variable: prefer 'discontinuation_flag' first (the target we're modeling)
+        if "discontinuation_flag" in df.columns:
+            outcome_var = "discontinuation_flag"
+        elif "trx_total" in df.columns:
+            outcome_var = "trx_total"
+        else:
+            # Use a numeric column
+            outcome_var = numeric_cols[0] if numeric_cols else "outcome"
 
-        # Effect modifiers - variables that can modify treatment effect
-        # MockDataConnector provides: hcp_tenure, competitive_pressure, formulary_status
-        effect_modifiers = ["hcp_tenure", "competitive_pressure", "formulary_status"]
+        # Treatment variable: prefer binary column that's NOT the outcome
+        # For CATE analysis, we need a treatment variable (intervention/exposure)
+        treatment_var = None
+        treatment_candidates = ["hcp_visits", "prior_treatments", "days_on_therapy"]
+        for col in treatment_candidates:
+            if col in df.columns and col != outcome_var:
+                treatment_var = col
+                break
+
+        # Fallback: find any binary column that's not outcome
+        if not treatment_var:
+            for col in numeric_cols:
+                if col == outcome_var:
+                    continue
+                unique_vals = df[col].nunique()
+                if unique_vals == 2:  # Binary treatment
+                    treatment_var = col
+                    break
+
+        # Fallback: first numeric column that's not outcome
+        if not treatment_var:
+            for col in numeric_cols:
+                if col != outcome_var:
+                    treatment_var = col
+                    break
+
+        treatment_var = treatment_var or "treatment"
+
+        # Segment variables: categorical columns
+        exclude_cols = {"patient_journey_id", "patient_id", "brand", treatment_var, outcome_var}
+        segment_vars = [c for c in categorical_cols if c not in exclude_cols][:3]
+        if not segment_vars:
+            segment_vars = ["segment"]  # Fallback
+
+        # Effect modifiers: numeric columns that aren't treatment/outcome
+        effect_modifiers = [
+            c for c in numeric_cols
+            if c not in {treatment_var, outcome_var, "patient_journey_id", "patient_id"}
+        ][:5]
+        if not effect_modifiers:
+            effect_modifiers = ["modifier"]  # Fallback
 
         return {
             "query": f"Analyze heterogeneous treatment effects of {treatment_var}",
             "treatment_var": treatment_var,
             "outcome_var": outcome_var,
-            "segment_vars": segment_vars[:3],
+            "segment_vars": segment_vars,
             "effect_modifiers": effect_modifiers,
-            "data_source": "patient_journeys",  # MockDataConnector ignores this
+            "data_source": "patient_journeys",
             "filters": None,
+            "tier0_data": df,  # NEW: Pass actual DataFrame for direct use
         }
 
     # =========================================================================

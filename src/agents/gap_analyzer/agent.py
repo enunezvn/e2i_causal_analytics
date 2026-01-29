@@ -40,18 +40,26 @@ class GapAnalyzerAgent(SkillsMixin):
         - pharma-commercial/brand-analytics.md: Brand-specific context
     """
 
-    def __init__(self, enable_mlflow: bool = True, enable_opik: bool = True):
+    def __init__(
+        self,
+        enable_mlflow: bool = True,
+        enable_opik: bool = True,
+        use_mock: bool = False,
+    ):
         """Initialize Gap Analyzer Agent.
 
         Args:
             enable_mlflow: Whether to enable MLflow tracking (default: True)
             enable_opik: Whether to enable Opik distributed tracing (default: True)
+            use_mock: Whether to use mock data connectors for testing (default: False).
+                     When True, uses MockDataConnector instead of Supabase.
         """
-        self.graph = create_gap_analyzer_graph()
+        self.graph = create_gap_analyzer_graph(use_mock=use_mock)
         self.agent_name = "gap_analyzer"
         self.agent_tier = 2
         self.enable_mlflow = enable_mlflow
         self.enable_opik = enable_opik
+        self.use_mock = use_mock
 
         # MLflow tracker (lazy initialization)
         self._mlflow_tracker: Optional["GapAnalyzerMLflowTracker"] = None
@@ -290,6 +298,7 @@ class GapAnalyzerAgent(SkillsMixin):
             "brand": input_data["brand"],
             "time_period": input_data.get("time_period", "current_quarter"),
             "filters": input_data.get("filters"),
+            "tier0_data": input_data.get("tier0_data"),  # Passthrough from tier0 testing
             # Configuration
             "gap_type": input_data.get("gap_type", "vs_potential"),  # type: ignore
             "min_gap_threshold": input_data.get("min_gap_threshold", 5.0),

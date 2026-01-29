@@ -182,8 +182,10 @@ class HeterogeneousOptimizerMLflowTracker:
             # Set or create experiment
             experiment = mlflow.get_experiment_by_name(full_experiment_name)
             if experiment is None:
+                # Use mlflow-artifacts: protocol for artifact storage via tracking server
                 experiment_id = mlflow.create_experiment(
                     full_experiment_name,
+                    artifact_location="mlflow-artifacts:/",
                     tags={
                         "framework": "e2i_causal",
                         "agent": "heterogeneous_optimizer",

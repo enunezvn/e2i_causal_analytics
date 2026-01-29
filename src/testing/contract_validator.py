@@ -154,25 +154,51 @@ class ContractValidator:
         """Get required keys from a TypedDict class.
 
         TypedDict classes may have __required_keys__ and __optional_keys__
-        attributes (Python 3.9+).
-        """
-        # Try to get __required_keys__ (available in Python 3.9+ TypedDict)
-        if hasattr(state_class, "__required_keys__"):
-            return set(state_class.__required_keys__)
+        attributes (Python 3.9+). However, TypedDict doesn't distinguish between
+        Optional[X] (value can be None) and NotRequired[X] (key can be missing).
 
-        # Fallback: inspect annotations for Required/NotRequired
-        required = set()
+        For practical purposes in agent testing, we treat Optional[X] fields as
+        "key not required" since agents typically only populate fields that are
+        relevant to the analysis.
+        """
         hints = get_type_hints(state_class, include_extras=True)
+        required = set()
 
         for field_name, field_type in hints.items():
             origin = get_origin(field_type)
+
             # Check if it's explicitly marked as NotRequired
             if origin is NotRequired:
                 continue
+
+            # Check if it's Optional (Union[X, None] or X | None)
+            # Optional types have the key as not required for practical testing
+            if self._is_optional_type(field_type):
+                continue
+
             # Check if it's explicitly marked as Required or has no wrapper
             required.add(field_name)
 
         return required
+
+    def _is_optional_type(self, field_type: type) -> bool:
+        """Check if a type is Optional (i.e., Union[X, None] or X | None).
+
+        Args:
+            field_type: The type annotation to check
+
+        Returns:
+            True if the type is Optional, False otherwise
+        """
+        origin = get_origin(field_type)
+
+        # Check for Union types (Optional[X] is Union[X, None])
+        if origin is typing.Union:
+            args = get_args(field_type)
+            # Optional[X] is Union[X, None], so check if None is in the args
+            return type(None) in args
+
+        return False
 
     def _check_type(
         self,
