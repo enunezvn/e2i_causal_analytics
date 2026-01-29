@@ -221,10 +221,17 @@ class NarrativeGeneratorNode:
         # Combine into detailed explanation
         detailed = self._combine_sections(sections)
 
+        # Extract recommendations as top-level field for quality gates
+        recommendations_list = [
+            i["statement"] for i in insights if i.get("category") == "recommendation"
+        ]
+
         return {
             "executive_summary": exec_summary,
             "detailed_explanation": detailed,
             "narrative_sections": sections,
+            "recommendations": recommendations_list,  # Exposed for quality gates
+            "recommendations_text": "\n".join(f"- {r}" for r in recommendations_list) if recommendations_list else None,
         }
 
     def _generate_brief(self, state: ExplainerState) -> Dict[str, Any]:

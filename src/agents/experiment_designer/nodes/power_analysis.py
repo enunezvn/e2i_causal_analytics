@@ -135,6 +135,10 @@ class PowerAnalysisNode:
             state["duration_estimate_days"] = duration_days
             state["node_latencies_ms"] = node_latencies
 
+            # EXPOSE TOP-LEVEL: Required for quality gates and easy access
+            state["required_sample_size"] = result["sample_size"]
+            state["statistical_power"] = power_target
+
             # Update status for next node
             state["status"] = "auditing"
 
@@ -162,6 +166,10 @@ class PowerAnalysisNode:
             )
             state["duration_estimate_days"] = 70  # ~10 weeks default
             state["status"] = "auditing"
+
+            # EXPOSE TOP-LEVEL (with default fallbacks)
+            state["required_sample_size"] = 500
+            state["statistical_power"] = 0.0  # Indicates calculation failed
 
         return state
 

@@ -49,6 +49,9 @@ class ProfileGeneratorNode:
             # Generate key insights
             key_insights = self._generate_key_insights(state)
 
+            # Generate strategic interpretation (v4.3 - required for quality gates)
+            strategic_interpretation = self._generate_strategic_interpretation(state)
+
             generation_time = int((time.time() - start_time) * 1000)
 
             logger.info(
@@ -75,6 +78,7 @@ class ProfileGeneratorNode:
                 "segment_grid_data": segment_grid_data,
                 "executive_summary": executive_summary,
                 "key_insights": key_insights,
+                "strategic_interpretation": strategic_interpretation,
                 "status": "completed",
             }
 
@@ -278,6 +282,88 @@ class ProfileGeneratorNode:
             )
 
         return insights[:5]  # Limit to top 5 insights
+
+    def _generate_strategic_interpretation(self, state: HeterogeneousOptimizerState) -> str:
+        """Generate strategic interpretation of heterogeneous treatment effects.
+
+        Translates ATE and heterogeneity data into actionable business insights.
+        Required by quality gates (v4.3) - semantic validation checks this field.
+        """
+        overall_ate = state.get("overall_ate", 0)
+        heterogeneity_score = state.get("heterogeneity_score", 0)
+        high_responders = state.get("high_responders", [])
+        low_responders = state.get("low_responders", [])
+        expected_total_lift = state.get("expected_total_lift", 0)
+
+        # Determine treatment effect direction
+        effect_direction = "positive" if overall_ate > 0 else "negative" if overall_ate < 0 else "neutral"
+
+        if heterogeneity_score < 0.3:
+            # Low heterogeneity - uniform approach recommended
+            interpretation = f"""STRATEGIC INSIGHT: UNIFORM TREATMENT EFFECTS
+
+Treatment Uniformity: The treatment effect is highly consistent across all segments (heterogeneity score: {heterogeneity_score:.2f}).
+
+Business Implication:
+A single intervention approach will work equally well across all segments. There is no significant benefit to personalized targeting strategies for this treatment.
+
+Tactical Recommendation:
+- Deploy the treatment uniformly across all territories
+- Allocate budget proportionally to segment size
+- Expected effect: {abs(overall_ate):.1%} {'increase' if overall_ate > 0 else 'decrease'} across all segments
+- Focus operational resources on execution quality, not segment selection"""
+
+        elif heterogeneity_score < 0.6:
+            # Moderate heterogeneity - consider targeted approach
+            high_count = len(high_responders)
+            low_count = len(low_responders)
+
+            interpretation = f"""STRATEGIC INSIGHT: MODERATE TREATMENT HETEROGENEITY
+
+Treatment Variability: Effect varies moderately across segments (heterogeneity score: {heterogeneity_score:.2f}).
+
+Business Implication:
+While the overall treatment effect is {effect_direction} (ATE: {overall_ate:.3f}), certain segments respond significantly better than others. Targeted resource allocation can improve ROI.
+
+Segment Distribution:
+- High responders: {high_count} segments identified
+- Low responders: {low_count} segments identified
+
+Tactical Recommendation:
+- Prioritize {high_count} high-responder segments for resource allocation
+- Consider reducing investment in low-responder segments
+- Expected lift from optimal allocation: {abs(expected_total_lift):.1f} units
+- Run pilot tests before full reallocation to validate segment predictions"""
+
+        else:
+            # High heterogeneity - segment-specific strategies critical
+            top_high = high_responders[0] if high_responders else None
+            top_low = low_responders[0] if low_responders else None
+
+            high_cate = top_high['cate_estimate'] if top_high else 0
+            low_cate = top_low['cate_estimate'] if top_low else 0
+            effect_spread = abs(high_cate - low_cate)
+
+            interpretation = f"""STRATEGIC INSIGHT: HIGH TREATMENT HETEROGENEITY
+
+Treatment Variability: Effect varies dramatically across segments (heterogeneity score: {heterogeneity_score:.2f}).
+
+CRITICAL: One-size-fits-all approaches will waste resources. Segment-specific strategies are essential.
+
+Business Implication:
+The {effect_spread:.3f} effect spread between high and low responders means that treating all segments equally results in significant opportunity cost.
+
+Segment Analysis:
+- Top high-responder: {top_high['segment_id'] if top_high else 'N/A'} (CATE: {high_cate:.3f})
+- Top low-responder: {top_low['segment_id'] if top_low else 'N/A'} (CATE: {low_cate:.3f})
+
+Tactical Recommendation:
+1. IMMEDIATE: Reallocate resources from low-responder to high-responder segments
+2. SHORT-TERM: Develop segment-specific intervention strategies
+3. MEDIUM-TERM: Build targeting infrastructure for continuous optimization
+4. Expected total lift from optimization: {abs(expected_total_lift):.1f} units"""
+
+        return interpretation
 
     async def _collect_dspy_signal(
         self,
