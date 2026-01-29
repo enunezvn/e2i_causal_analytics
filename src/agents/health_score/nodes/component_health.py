@@ -119,7 +119,7 @@ class ComponentHealthNode:
                 **state,
                 "component_statuses": component_statuses,
                 "component_health_score": health_score,
-                "check_latency_ms": check_time,
+                "total_latency_ms": check_time,
                 "status": "checking",
             }
 

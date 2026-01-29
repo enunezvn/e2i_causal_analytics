@@ -108,7 +108,7 @@ class AgentHealthNode:
                 **state,
                 "agent_statuses": statuses,
                 "agent_health_score": health_score,
-                "check_latency_ms": state.get("check_latency_ms", 0) + check_time,
+                "total_latency_ms": state.get("total_latency_ms", 0) + check_time,
             }
 
         except Exception as e:

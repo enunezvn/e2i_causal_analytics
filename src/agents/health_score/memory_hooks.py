@@ -52,7 +52,7 @@ class HealthRecord:
     critical_issues_count: int
     warnings_count: int
     check_scope: str
-    check_latency_ms: int
+    total_latency_ms: int
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: Dict[str, Any] = field(default_factory=dict)
 
@@ -348,7 +348,7 @@ class HealthScoreMemoryHooks:
                     "critical_issues": critical_issues[:5],  # Limit size
                     "warnings_count": len(result.get("warnings", [])),
                     "check_scope": check_scope,
-                    "check_latency_ms": result.get("check_latency_ms", 0),
+                    "total_latency_ms": result.get("total_latency_ms", 0),
                 },
                 entities=None,
                 outcome_type="health_assessment_delivered",

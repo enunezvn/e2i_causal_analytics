@@ -77,7 +77,7 @@ class DataDriftNode:
 
             # Store timestamps
             state["baseline_timestamp"] = self._get_baseline_timestamp(state["time_window"])
-            state["current_timestamp"] = datetime.now(timezone.utc).isoformat()
+            state["timestamp"] = datetime.now(timezone.utc).isoformat()
 
             # Detect drift for all features in parallel
             drift_results = await self._detect_drift_parallel(
@@ -94,7 +94,7 @@ class DataDriftNode:
 
             # Calculate latency
             latency_ms = int((time.time() - start_time) * 1000)
-            state["detection_latency_ms"] = state.get("detection_latency_ms", 0) + latency_ms
+            state["total_latency_ms"] = state.get("total_latency_ms", 0) + latency_ms
 
         except Exception as e:
             error: ErrorDetails = {

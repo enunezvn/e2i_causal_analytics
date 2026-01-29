@@ -13,6 +13,8 @@ from typing import List
 
 from ..state import EnsemblePrediction, ModelPrediction, PredictionSynthesizerState
 
+from typing import Any, Dict, Optional
+
 logger = logging.getLogger(__name__)
 
 
@@ -82,17 +84,39 @@ class EnsembleCombinerNode:
             # Generate summary
             summary = self._generate_summary(ensemble_pred, predictions)
 
+            # P2 Enhancement: Generate interpretation with anomaly detection
+            prediction_target = state.get("prediction_target", "")
+            interpretation = self._interpret_prediction(
+                ensemble_pred, predictions, prediction_target
+            )
+
+            # Add anomaly warnings to state warnings
+            anomaly_warnings = []
+            for anomaly in interpretation.get("anomaly_flags", []):
+                anomaly_warnings.append(f"[{anomaly['severity'].upper()}] {anomaly['message']}")
+
+            # Enhanced summary with interpretation
+            enhanced_summary = summary
+            if interpretation.get("risk_level"):
+                enhanced_summary += f"\n\nRisk Assessment: {interpretation['risk_level']}"
+            if interpretation.get("recommendations"):
+                top_rec = interpretation["recommendations"][0]
+                enhanced_summary += f"\nRecommendation: {top_rec}"
+
             ensemble_time = int((time.time() - start_time) * 1000)
 
             logger.info(
                 f"Ensemble combination complete: estimate={point_estimate:.3f}, "
-                f"agreement={agreement:.2f}, duration={ensemble_time}ms"
+                f"agreement={agreement:.2f}, reliability={interpretation.get('reliability_assessment', 'N/A')}, "
+                f"anomalies={len(interpretation.get('anomaly_flags', []))}, duration={ensemble_time}ms"
             )
 
             return {
                 **state,
                 "ensemble_prediction": ensemble_pred,
-                "prediction_summary": summary,
+                "prediction_summary": enhanced_summary,
+                "prediction_interpretation": interpretation,
+                "warnings": anomaly_warnings,
                 "ensemble_latency_ms": ensemble_time,
                 "status": "enriching" if state.get("include_context") else "completed",
             }
@@ -204,3 +228,190 @@ class EnsembleCombinerNode:
         summary += f"Model agreement: {agreement_desc} across {len(individual)} models."
 
         return summary
+
+    def _interpret_prediction(
+        self,
+        ensemble: EnsemblePrediction,
+        individual: List[ModelPrediction],
+        prediction_target: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Interpret prediction with business context and anomaly detection.
+
+        Provides actionable interpretation of predictions including risk level,
+        anomaly detection, and recommendations.
+
+        Args:
+            ensemble: The ensemble prediction result
+            individual: List of individual model predictions
+            prediction_target: What was being predicted (e.g., "churn", "conversion")
+
+        Returns:
+            Interpretation dictionary with risk, anomalies, recommendations
+        """
+        pred = ensemble["point_estimate"]
+        confidence = ensemble["confidence"]
+        agreement = ensemble["model_agreement"]
+        lower = ensemble["prediction_interval_lower"]
+        upper = ensemble["prediction_interval_upper"]
+
+        interpretation: Dict[str, Any] = {
+            "risk_level": "",
+            "anomaly_flags": [],
+            "recommendations": [],
+            "confidence_explanation": "",
+            "reliability_assessment": "",
+            "action_urgency": "",
+        }
+
+        # ===== Anomaly Detection =====
+        # Check for extreme disagreement with extreme values
+        if pred == 0.0 and agreement < 0.3:
+            interpretation["anomaly_flags"].append({
+                "type": "extreme_disagreement",
+                "severity": "critical",
+                "message": (
+                    f"Prediction of 0.0 with only {agreement:.0%} model agreement is anomalous. "
+                    f"Models radically disagree - prediction is unreliable."
+                ),
+            })
+            interpretation["recommendations"].append(
+                "DO NOT act on this prediction. Investigate model disagreement root cause."
+            )
+            interpretation["reliability_assessment"] = "UNRELIABLE"
+
+        # Check for zero prediction when models disagree significantly
+        elif pred == 0.0 and agreement < 0.5:
+            interpretation["anomaly_flags"].append({
+                "type": "zero_with_disagreement",
+                "severity": "warning",
+                "message": (
+                    f"Zero prediction with moderate disagreement ({agreement:.0%}) suggests "
+                    f"possible data quality issues or model calibration problems."
+                ),
+            })
+            interpretation["recommendations"].append(
+                "Validate input features and check for missing data before acting on this prediction."
+            )
+
+        # Check for extremely wide prediction intervals
+        interval_width = upper - lower
+        if interval_width > 0.5:
+            interpretation["anomaly_flags"].append({
+                "type": "high_uncertainty",
+                "severity": "warning",
+                "message": (
+                    f"Wide prediction interval ({lower:.2f} to {upper:.2f}) indicates "
+                    f"significant uncertainty. Consider gathering more data."
+                ),
+            })
+
+        # Check for prediction near decision boundary with low confidence
+        if 0.45 <= pred <= 0.55 and confidence < 0.5:
+            interpretation["anomaly_flags"].append({
+                "type": "boundary_uncertainty",
+                "severity": "warning",
+                "message": (
+                    f"Prediction {pred:.2f} near 0.5 decision boundary with low confidence "
+                    f"({confidence:.0%}). Classification outcome is uncertain."
+                ),
+            })
+
+        # Check for high prediction with low agreement
+        if pred > 0.7 and agreement < 0.4:
+            interpretation["anomaly_flags"].append({
+                "type": "high_pred_low_agreement",
+                "severity": "warning",
+                "message": (
+                    f"High prediction ({pred:.2f}) but poor model agreement ({agreement:.0%}). "
+                    f"Some models may have significantly different views."
+                ),
+            })
+
+        # ===== Risk Level Assessment =====
+        # Determine risk based on prediction value (assuming higher = higher risk for churn-like predictions)
+        target_lower = (prediction_target or "").lower()
+        is_negative_outcome = any(word in target_lower for word in ["churn", "discontinuation", "attrition", "loss", "risk"])
+
+        if is_negative_outcome:
+            # Higher prediction = higher risk (e.g., churn probability)
+            if pred > 0.7:
+                interpretation["risk_level"] = "HIGH"
+                interpretation["action_urgency"] = "immediate"
+                interpretation["recommendations"].append(
+                    "Immediate intervention recommended - high discontinuation risk detected."
+                )
+            elif pred > 0.4:
+                interpretation["risk_level"] = "MODERATE"
+                interpretation["action_urgency"] = "short_term"
+                interpretation["recommendations"].append(
+                    "Monitor closely and prepare intervention if trend continues."
+                )
+            else:
+                interpretation["risk_level"] = "LOW"
+                interpretation["action_urgency"] = "routine"
+                interpretation["recommendations"].append(
+                    "Continue standard engagement - no immediate action needed."
+                )
+        else:
+            # For positive outcomes (conversion, adoption), lower prediction = concern
+            if pred > 0.7:
+                interpretation["risk_level"] = "FAVORABLE"
+                interpretation["action_urgency"] = "opportunity"
+                interpretation["recommendations"].append(
+                    "High probability of positive outcome - consider resource prioritization."
+                )
+            elif pred > 0.4:
+                interpretation["risk_level"] = "MODERATE"
+                interpretation["action_urgency"] = "standard"
+                interpretation["recommendations"].append(
+                    "Moderate probability - standard engagement approach recommended."
+                )
+            else:
+                interpretation["risk_level"] = "LOW_PROBABILITY"
+                interpretation["action_urgency"] = "evaluate"
+                interpretation["recommendations"].append(
+                    "Low predicted probability - evaluate if additional effort is worthwhile."
+                )
+
+        # ===== Confidence Explanation =====
+        if confidence >= 0.8:
+            interpretation["confidence_explanation"] = (
+                f"High confidence ({confidence:.0%}) - prediction is well-supported by multiple "
+                f"models with strong agreement. Suitable for decision-making."
+            )
+        elif confidence >= 0.5:
+            interpretation["confidence_explanation"] = (
+                f"Moderate confidence ({confidence:.0%}) - prediction has reasonable support "
+                f"but some model disagreement exists. Use as directional guidance."
+            )
+        else:
+            interpretation["confidence_explanation"] = (
+                f"Low confidence ({confidence:.0%}) - prediction should be treated as directional only. "
+                f"Consider gathering additional data or consulting domain experts."
+            )
+
+        # ===== Reliability Assessment =====
+        if interpretation["reliability_assessment"] == "":  # Not already set by anomaly detection
+            if confidence > 0.7 and agreement > 0.8 and not interpretation["anomaly_flags"]:
+                interpretation["reliability_assessment"] = "HIGH"
+            elif confidence > 0.4 and agreement > 0.5 and len(interpretation["anomaly_flags"]) <= 1:
+                interpretation["reliability_assessment"] = "MODERATE"
+            else:
+                interpretation["reliability_assessment"] = "LOW"
+
+        # ===== Additional Recommendations Based on Model Contributions =====
+        if individual:
+            # Check if any single model is an outlier
+            pred_values = [p["prediction"] for p in individual]
+            mean_pred = sum(pred_values) / len(pred_values)
+            outliers = [
+                p for p in individual
+                if abs(p["prediction"] - mean_pred) > 0.3
+            ]
+            if outliers:
+                outlier_ids = [o["model_id"] for o in outliers]
+                interpretation["recommendations"].append(
+                    f"Review outlier models ({', '.join(outlier_ids)}) for potential calibration issues."
+                )
+
+        return interpretation

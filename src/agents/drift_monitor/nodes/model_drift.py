@@ -140,7 +140,7 @@ class ModelDriftNode:
 
             # Calculate latency
             latency_ms = int((time.time() - start_time) * 1000)
-            state["detection_latency_ms"] = state.get("detection_latency_ms", 0) + latency_ms
+            state["total_latency_ms"] = state.get("total_latency_ms", 0) + latency_ms
 
         except Exception as e:
             error: ErrorDetails = {

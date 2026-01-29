@@ -59,7 +59,7 @@ class HealthScoreMetrics:
 
     # Execution metadata
     check_scope: str = "full"
-    check_latency_ms: int = 0
+    total_latency_ms: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert metrics to dictionary for MLflow logging."""
@@ -72,7 +72,7 @@ class HealthScoreMetrics:
             "agent_health_score": self.agent_health_score,
             "critical_issues_count": self.critical_issues_count,
             "warnings_count": self.warnings_count,
-            "check_latency_ms": self.check_latency_ms,
+            "total_latency_ms": self.total_latency_ms,
         }
 
     @staticmethod
@@ -230,7 +230,7 @@ class HealthScoreMLflowTracker:
                 agent_health_score=output.agent_health_score,
                 critical_issues_count=len(output.critical_issues),
                 warnings_count=len(output.warnings),
-                check_latency_ms=output.check_latency_ms,
+                total_latency_ms=output.total_latency_ms,
             )
 
             # Log metrics
@@ -328,7 +328,7 @@ class HealthScoreMLflowTracker:
                         "agent_health_score": row.get("metrics.agent_health_score"),
                         "critical_issues_count": row.get("metrics.critical_issues_count"),
                         "warnings_count": row.get("metrics.warnings_count"),
-                        "check_latency_ms": row.get("metrics.check_latency_ms"),
+                        "total_latency_ms": row.get("metrics.total_latency_ms"),
                         "check_scope": row.get("params.check_scope"),
                     }
                 )

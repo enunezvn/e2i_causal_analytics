@@ -67,6 +67,7 @@ class ToolComposerOutput:
     """Output from Tool Composer Agent execution.
 
     Contract: Standardized output format for agent responses.
+    Aligned with ToolComposerState TypedDict for contract validation.
     """
 
     def __init__(
@@ -83,6 +84,7 @@ class ToolComposerOutput:
         caveats: Optional[List[str]] = None,
         error: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        status: Optional[str] = None,
     ):
         self.success = success
         self.response = response
@@ -97,6 +99,9 @@ class ToolComposerOutput:
         self.error = error
         self.metadata = metadata or {}
         self.timestamp = datetime.now(timezone.utc).isoformat()
+        # Contract-required fields for ToolComposerState
+        self.status = status or ("SUCCESS" if success else "FAILED")
+        self.errors = [{"error": error}] if error else []
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert output to dictionary."""
@@ -114,6 +119,9 @@ class ToolComposerOutput:
             "error": self.error,
             "metadata": self.metadata,
             "timestamp": self.timestamp,
+            # Contract-required fields
+            "status": self.status,
+            "errors": self.errors,
         }
 
 
@@ -276,8 +284,8 @@ class ToolComposerAgent:
                 caveats=result.response.caveats if result.response else [],
                 metadata={
                     "phase_durations": result.phase_durations,
-                    "status": result.status.value if result.status else "unknown",
                 },
+                status=result.status.value.upper() if result.status else ("SUCCESS" if result.success else "FAILED"),
             )
 
         except Exception as e:

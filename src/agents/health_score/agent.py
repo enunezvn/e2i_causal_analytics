@@ -56,7 +56,7 @@ class HealthScoreOutput(BaseModel):
     critical_issues: List[str] = Field(default_factory=list, description="List of critical issues")
     warnings: List[str] = Field(default_factory=list, description="List of warnings")
     health_summary: str = Field(description="Human-readable health summary")
-    check_latency_ms: int = Field(description="Total check latency in ms")
+    total_latency_ms: int = Field(description="Total check latency in ms")
     timestamp: str = Field(description="Timestamp of health check")
 
 
@@ -193,7 +193,7 @@ class HealthScoreAgent:
             "critical_issues": None,
             "warnings": None,
             "health_summary": None,
-            "check_latency_ms": 0,
+            "total_latency_ms": 0,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "errors": [],
             "status": "pending",
@@ -234,7 +234,7 @@ class HealthScoreAgent:
                         critical_issues=result.get("critical_issues", []),
                         warnings=result.get("warnings", []),
                         health_summary=result.get("health_summary", "Health check completed"),
-                        check_latency_ms=result.get("check_latency_ms", 0),
+                        total_latency_ms=result.get("total_latency_ms", 0),
                         timestamp=result.get("timestamp", datetime.now(timezone.utc).isoformat()),
                     )
 
@@ -257,7 +257,7 @@ class HealthScoreAgent:
                     critical_issues=result.get("critical_issues", []),
                     warnings=result.get("warnings", []),
                     health_summary=result.get("health_summary", "Health check completed"),
-                    check_latency_ms=result.get("check_latency_ms", 0),
+                    total_latency_ms=result.get("total_latency_ms", 0),
                     timestamp=result.get("timestamp", datetime.now(timezone.utc).isoformat()),
                 )
 
@@ -278,7 +278,7 @@ class HealthScoreAgent:
                     trace_ctx.log_check_complete(
                         status="success",
                         success=True,
-                        total_duration_ms=output.check_latency_ms,
+                        total_duration_ms=output.total_latency_ms,
                         overall_score=output.overall_health_score,
                         health_grade=output.health_grade,
                         component_score=output.component_health_score,
@@ -320,7 +320,7 @@ class HealthScoreAgent:
                 critical_issues=[f"Health check failed: {e}"],
                 warnings=[],
                 health_summary="Health check failed due to an error.",
-                check_latency_ms=elapsed,
+                total_latency_ms=elapsed,
                 timestamp=datetime.now(timezone.utc).isoformat(),
             )
 

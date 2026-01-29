@@ -71,7 +71,7 @@ class DriftMonitorMetrics:
     alerts_warning: int = 0
 
     # Latency
-    detection_latency_ms: int = 0
+    total_latency_ms: int = 0
 
     # Warnings
     warnings: List[str] = field(default_factory=list)
@@ -275,7 +275,7 @@ class DriftMonitorMLflowTracker:
             "alerts_critical": metrics.alerts_critical,
             "alerts_warning": metrics.alerts_warning,
             # Latency
-            "detection_latency_ms": metrics.detection_latency_ms,
+            "total_latency_ms": metrics.total_latency_ms,
         }
 
         mlflow.log_metrics(metric_dict)
@@ -332,7 +332,7 @@ class DriftMonitorMLflowTracker:
         features_with_drift = output_dict.get("features_with_drift", [])
         metrics.features_with_drift = len(features_with_drift)
         metrics.overall_drift_score = output_dict.get("overall_drift_score", 0.0)
-        metrics.detection_latency_ms = output_dict.get("detection_latency_ms", 0)
+        metrics.total_latency_ms = output_dict.get("total_latency_ms", 0)
 
         # Extract PSI and KS statistics from drift results
         psi_scores = []
@@ -462,7 +462,7 @@ class DriftMonitorMLflowTracker:
                     "drift_summary": output_dict.get("drift_summary", ""),
                     "recommended_actions": output_dict.get("recommended_actions", []),
                     "baseline_timestamp": output_dict.get("baseline_timestamp", ""),
-                    "current_timestamp": output_dict.get("current_timestamp", ""),
+                    "timestamp": output_dict.get("timestamp", ""),
                     "context": {
                         "brand": self._current_context.brand if self._current_context else None,
                         "model_id": self._current_context.model_id if self._current_context else None,
@@ -581,7 +581,7 @@ class DriftMonitorMLflowTracker:
                 "features_with_drift": row.get("metrics.features_with_drift"),
                 "alerts_total": row.get("metrics.alerts_total"),
                 "alerts_critical": row.get("metrics.alerts_critical"),
-                "detection_latency_ms": row.get("metrics.detection_latency_ms"),
+                "total_latency_ms": row.get("metrics.total_latency_ms"),
             }
             result.append(run_data)
 
@@ -665,8 +665,8 @@ class DriftMonitorMLflowTracker:
             if "tags.drift_level" in runs.columns
             else {},
             # Performance stats
-            "avg_latency_ms": runs["metrics.detection_latency_ms"].mean(),
-            "p95_latency_ms": runs["metrics.detection_latency_ms"].quantile(0.95),
+            "avg_latency_ms": runs["metrics.total_latency_ms"].mean(),
+            "p95_latency_ms": runs["metrics.total_latency_ms"].quantile(0.95),
         }
 
 

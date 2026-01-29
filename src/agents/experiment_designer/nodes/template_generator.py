@@ -83,6 +83,10 @@ class TemplateGeneratorNode:
             total_latency = sum(node_latencies.values())
             state["node_latencies_ms"]["total"] = total_latency
 
+            # Contract-required output fields
+            state["total_latency_ms"] = total_latency
+            state["timestamp"] = datetime.now(timezone.utc).isoformat()
+
             # Update status to completed
             state["status"] = "completed"
 
@@ -94,6 +98,12 @@ class TemplateGeneratorNode:
             }
             state["errors"] = state.get("errors", []) + [error]
             state["status"] = "failed"
+            # Ensure contract-required fields are set even on failure
+            latency_ms = int((time.time() - start_time) * 1000)
+            node_latencies = state.get("node_latencies_ms", {})
+            node_latencies["template_generator"] = latency_ms
+            state["total_latency_ms"] = sum(node_latencies.values())
+            state["timestamp"] = datetime.now(timezone.utc).isoformat()
 
         return state
 
