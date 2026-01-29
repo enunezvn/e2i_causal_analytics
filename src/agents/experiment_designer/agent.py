@@ -198,6 +198,15 @@ class ExperimentDesignerOutput(BaseModel):
     redesign_iterations: int = Field(0, description="Number of redesign iterations")
     warnings: list[str] = Field(default_factory=list, description="Warnings")
 
+    # Contract-required fields (v4.3 fix: must be in output model for contract validation)
+    timestamp: str = Field("", description="Completion timestamp")
+    errors: list[dict] = Field(default_factory=list, description="Error details from workflow")
+    status: str = Field("completed", description="Agent execution status")
+
+    # Top-level power analysis fields (v4.3: exposed for quality gates)
+    required_sample_size: Optional[int] = Field(None, description="Required sample size from power analysis")
+    statistical_power: Optional[float] = Field(None, description="Statistical power from power analysis")
+
 
 # ===== MAIN AGENT =====
 
@@ -503,6 +512,10 @@ class ExperimentDesignerAgent(SkillsMixin):
         template = state.get("experiment_template", {})
         prereg = template.get("pre_registration_document", "") if template else ""
 
+        # Extract errors as list of dicts (convert ErrorDetails TypedDicts)
+        raw_errors = state.get("errors", [])
+        errors = [dict(e) if hasattr(e, "keys") else e for e in raw_errors]
+
         return ExperimentDesignerOutput(
             # Design outputs
             design_type=state.get("design_type", "RCT"),
@@ -529,4 +542,11 @@ class ExperimentDesignerAgent(SkillsMixin):
             total_latency_ms=total_latency,
             redesign_iterations=state.get("current_iteration", 0),
             warnings=state.get("warnings", []),
+            # Contract-required fields (v4.3 fix)
+            timestamp=state.get("timestamp", ""),
+            errors=errors,
+            status=state.get("status", "completed"),
+            # Top-level power analysis fields (v4.3)
+            required_sample_size=state.get("required_sample_size"),
+            statistical_power=state.get("statistical_power"),
         )

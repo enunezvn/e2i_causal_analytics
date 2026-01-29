@@ -704,9 +704,9 @@ AGENT_ANALYSIS_CONFIG = {
         ],
     },
     "experiment_designer": {
-        "key_fields": ["experiment_design", "sample_size", "statistical_power", "validity_assessment"],
+        "key_fields": ["experiment_design", "required_sample_size", "statistical_power", "validity_assessment"],
         "insights_template": [
-            "Experiment design created with n={sample_size}",
+            "Experiment design created with n={required_sample_size}",
             "Statistical power: {statistical_power}",
         ],
     },

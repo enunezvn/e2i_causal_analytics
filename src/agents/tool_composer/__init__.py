@@ -77,6 +77,10 @@ from .synthesizer import (
     synthesize_sync,
 )
 
+# Import tool_registrations to trigger @composable_tool decorators
+# This ensures tools are registered when the package is loaded
+from . import tool_registrations as _tool_registrations  # noqa: F401
+
 __all__ = [
     # Agent class (for factory registration)
     "ToolComposerAgent",
