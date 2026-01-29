@@ -76,6 +76,12 @@ class DriftMonitorInput(BaseModel):
     check_model_drift: bool = Field(True, description="Whether to check model drift")
     check_concept_drift: bool = Field(True, description="Whether to check concept drift")
 
+    # Tier0 data passthrough for testing
+    tier0_data: Optional[Any] = Field(
+        None,
+        description="Tier0 DataFrame for testing drift detection with real synthetic data"
+    )
+
     @field_validator("time_window")
     @classmethod
     def validate_time_window(cls, v: str) -> str:
@@ -318,6 +324,8 @@ class DriftMonitorAgent:
             "features_to_monitor": input_data.features_to_monitor,
             "time_window": input_data.time_window,
             "brand": input_data.brand,
+            # Tier0 data passthrough for testing
+            "tier0_data": input_data.tier0_data,
             # Configuration
             "significance_level": input_data.significance_level,
             "psi_threshold": input_data.psi_threshold,

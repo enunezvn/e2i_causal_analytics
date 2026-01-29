@@ -99,12 +99,14 @@ class DriftMonitorState(TypedDict):
                           dag_nodes, discovery_config
     """
 
-    # ===== Input Fields (5) =====
+    # ===== Input Fields (6) =====
     query: str
     model_id: NotRequired[Optional[str]]
     features_to_monitor: list[str]
     time_window: str
     brand: NotRequired[Optional[str]]
+    # Tier0 data passthrough for testing with real synthetic data
+    tier0_data: NotRequired[Any]  # pandas DataFrame
 
     # ===== Configuration (6) =====
     # Note: Config fields are optional - agents provide defaults
