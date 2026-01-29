@@ -108,6 +108,26 @@ class CATEEstimatorNode:
             Y = df[state["outcome_var"]].values
             T = df[state["treatment_var"]].values
 
+            # Diagnostic logging for debugging ATE=0 issue
+            logger.info(
+                "CATE data prepared",
+                extra={
+                    "node": "cate_estimator",
+                    "n_rows": len(df),
+                    "treatment_var": state["treatment_var"],
+                    "outcome_var": state["outcome_var"],
+                    "T_mean": float(np.mean(T)),
+                    "T_std": float(np.std(T)),
+                    "T_min": float(np.min(T)),
+                    "T_max": float(np.max(T)),
+                    "T_unique": int(len(np.unique(T))),
+                    "Y_mean": float(np.mean(Y)),
+                    "Y_std": float(np.std(Y)),
+                    "Y_unique": int(len(np.unique(Y))),
+                    "correlation_T_Y": float(np.corrcoef(T, Y)[0, 1]) if len(np.unique(T)) > 1 else 0.0,
+                },
+            )
+
             # Encode effect modifiers (handle categorical)
             X_df = df[state["effect_modifiers"]].copy()
             X = self._encode_features(X_df)
@@ -145,6 +165,21 @@ class CATEEstimatorNode:
 
             # Get individual treatment effects
             cate_individual = cf.effect(X)
+
+            # Diagnostic logging for debugging ATE=0 issue
+            logger.info(
+                "CausalForestDML results",
+                extra={
+                    "node": "cate_estimator",
+                    "ate_raw": ate,
+                    "ate_type": type(ate).__name__,
+                    "cate_mean": float(np.mean(cate_individual)),
+                    "cate_std": float(np.std(cate_individual)),
+                    "cate_min": float(np.min(cate_individual)),
+                    "cate_max": float(np.max(cate_individual)),
+                    "is_binary_treatment": is_binary_treatment,
+                },
+            )
 
             # Calculate heterogeneity score
             heterogeneity = self._calculate_heterogeneity(cate_individual, ate)
