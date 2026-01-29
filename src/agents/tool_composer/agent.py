@@ -78,6 +78,7 @@ class ToolComposerOutput:
         composition_id: Optional[str] = None,
         sub_questions_count: int = 0,
         tools_executed: int = 0,
+        tools_succeeded: int = 0,
         total_duration_ms: float = 0.0,
         supporting_data: Optional[Dict[str, Any]] = None,
         citations: Optional[List[str]] = None,
@@ -92,6 +93,7 @@ class ToolComposerOutput:
         self.composition_id = composition_id
         self.sub_questions_count = sub_questions_count
         self.tools_executed = tools_executed
+        self.tools_succeeded = tools_succeeded
         self.total_duration_ms = total_duration_ms
         self.supporting_data = supporting_data or {}
         self.citations = citations or []
@@ -112,6 +114,7 @@ class ToolComposerOutput:
             "composition_id": self.composition_id,
             "sub_questions_count": self.sub_questions_count,
             "tools_executed": self.tools_executed,
+            "tools_succeeded": self.tools_succeeded,
             "total_duration_ms": self.total_duration_ms,
             "supporting_data": self.supporting_data,
             "citations": self.citations,
@@ -275,6 +278,9 @@ class ToolComposerAgent:
                 ),
                 tools_executed=(
                     result.execution.tools_executed if result.execution else 0
+                ),
+                tools_succeeded=(
+                    result.execution.tools_succeeded if result.execution else 0
                 ),
                 total_duration_ms=result.total_duration_ms or duration_ms,
                 supporting_data=(
