@@ -21,6 +21,10 @@ from typing import Any, Dict, List, Optional
 
 from src.tool_registry.registry import ToolRegistry
 
+# Import tool_registrations to ensure tools are registered before execution
+# The @composable_tool decorators register tools when the module is imported
+from . import tool_registrations as _tool_registrations  # noqa: F401
+
 from .cache import get_cache_manager
 from .models.composition_models import (
     ExecutionPlan,

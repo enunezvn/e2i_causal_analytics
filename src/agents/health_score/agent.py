@@ -59,6 +59,10 @@ class HealthScoreOutput(BaseModel):
     total_latency_ms: int = Field(description="Total check latency in ms")
     timestamp: str = Field(description="Timestamp of health check")
 
+    # Contract-required fields (v4.3 fix: must be in output model for contract validation)
+    errors: List[dict] = Field(default_factory=list, description="Error details from workflow")
+    status: str = Field(default="completed", description="Agent execution status")
+
 
 # ============================================================================
 # MAIN AGENT CLASS
@@ -224,6 +228,10 @@ class HealthScoreAgent:
                     result = await execute_workflow()
 
                     # Build output
+                    # Extract errors as list of dicts (convert ErrorDetails TypedDicts)
+                    raw_errors = result.get("errors", [])
+                    errors = [dict(e) if hasattr(e, "keys") else e for e in raw_errors]
+
                     output = HealthScoreOutput(
                         overall_health_score=result.get("overall_health_score", 0.0),
                         health_grade=result.get("health_grade", "F"),
@@ -236,6 +244,9 @@ class HealthScoreAgent:
                         health_summary=result.get("health_summary", "Health check completed"),
                         total_latency_ms=result.get("total_latency_ms", 0),
                         timestamp=result.get("timestamp", datetime.now(timezone.utc).isoformat()),
+                        # Contract-required fields (v4.3 fix)
+                        errors=errors,
+                        status=result.get("status", "completed"),
                     )
 
                     # Log to MLflow
@@ -247,6 +258,10 @@ class HealthScoreAgent:
                 result = await execute_workflow()
 
                 # Build output
+                # Extract errors as list of dicts (convert ErrorDetails TypedDicts)
+                raw_errors = result.get("errors", [])
+                errors = [dict(e) if hasattr(e, "keys") else e for e in raw_errors]
+
                 return HealthScoreOutput(
                     overall_health_score=result.get("overall_health_score", 0.0),
                     health_grade=result.get("health_grade", "F"),
@@ -259,6 +274,9 @@ class HealthScoreAgent:
                     health_summary=result.get("health_summary", "Health check completed"),
                     total_latency_ms=result.get("total_latency_ms", 0),
                     timestamp=result.get("timestamp", datetime.now(timezone.utc).isoformat()),
+                    # Contract-required fields (v4.3 fix)
+                    errors=errors,
+                    status=result.get("status", "completed"),
                 )
 
         try:
@@ -322,6 +340,9 @@ class HealthScoreAgent:
                 health_summary="Health check failed due to an error.",
                 total_latency_ms=elapsed,
                 timestamp=datetime.now(timezone.utc).isoformat(),
+                # Contract-required fields (v4.3 fix)
+                errors=[{"node": "health_check", "error": str(e), "timestamp": datetime.now(timezone.utc).isoformat()}],
+                status="failed",
             )
 
     async def quick_check(self) -> HealthScoreOutput:

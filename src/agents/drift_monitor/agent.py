@@ -124,6 +124,10 @@ class DriftMonitorOutput(BaseModel):
     baseline_timestamp: str = Field(..., description="Baseline period timestamp")
     warnings: list[str] = Field(default_factory=list, description="Warnings")
 
+    # Contract-required fields (v4.3 fix: must be in output model for contract validation)
+    errors: list[dict] = Field(default_factory=list, description="Error details from workflow")
+    status: str = Field("completed", description="Agent execution status")
+
 
 # ===== MAIN AGENT =====
 
@@ -349,6 +353,10 @@ class DriftMonitorAgent:
         Returns:
             DriftMonitorOutput
         """
+        # Extract errors as list of dicts (convert ErrorDetails TypedDicts)
+        raw_errors = state.get("errors", [])
+        errors = [dict(e) if hasattr(e, "keys") else e for e in raw_errors]
+
         return DriftMonitorOutput(
             # Detection results
             data_drift_results=state.get("data_drift_results", []),
@@ -367,4 +375,7 @@ class DriftMonitorAgent:
             features_checked=state.get("features_checked", 0),
             baseline_timestamp=state.get("baseline_timestamp", ""),
             warnings=state.get("warnings", []),
+            # Contract-required fields (v4.3 fix)
+            errors=errors,
+            status=state.get("status", "completed"),
         )
