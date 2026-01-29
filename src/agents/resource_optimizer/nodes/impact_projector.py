@@ -45,8 +45,31 @@ class ImpactProjectorNode:
             current_total = sum(a.get("current_allocation", 0) for a in allocations)
             optimized_total = sum(a.get("optimized_allocation", 0) for a in allocations)
 
-            # Calculate ROI
-            roi = total_outcome / optimized_total if optimized_total > 0 else 0
+            # Calculate ROI using original expected_response values when available.
+            # The optimizer's expected_impact uses normalized coefficients (c[i] * x[i])
+            # which for maximize_roi already divides by current_allocation, making
+            # total_outcome / optimized_total produce near-zero values.
+            # Instead, compute ROI from raw response coefficients.
+            allocation_targets = state.get("allocation_targets", [])
+            response_by_entity = {
+                t.get("entity_id"): t.get("expected_response", 0)
+                for t in allocation_targets
+            } if allocation_targets else {}
+
+            if response_by_entity:
+                # Use original expected_response to compute meaningful projected outcome
+                projected_outcome = sum(
+                    response_by_entity.get(a.get("entity_id"), 0) * a.get("optimized_allocation", 0)
+                    for a in allocations
+                )
+                current_outcome = sum(
+                    t.get("expected_response", 0) * t.get("current_allocation", 0)
+                    for t in allocation_targets
+                )
+                roi = (projected_outcome - current_outcome) / optimized_total if optimized_total > 0 else 0
+                total_outcome = projected_outcome
+            else:
+                roi = total_outcome / optimized_total if optimized_total > 0 else 0
 
             # Calculate projected savings (efficiency gains)
             # Savings = outcome improvement per unit of investment compared to baseline
