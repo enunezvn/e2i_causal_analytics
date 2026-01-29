@@ -66,13 +66,15 @@ class ExplainerState(TypedDict):
     working_memory_messages: Optional[List[Dict[str, Any]]]  # Cached conversation
 
     # === REASONING OUTPUTS ===
-    extracted_insights: Optional[List[Insight]]
+    # Note: Required output from reasoning node
+    extracted_insights: List[Insight]
     narrative_structure: Optional[List[str]]
     key_themes: Optional[List[str]]
 
     # === NARRATIVE OUTPUTS ===
-    executive_summary: Optional[str]
-    detailed_explanation: Optional[str]
+    # Note: Required outputs from narrative generation
+    executive_summary: str
+    detailed_explanation: str
     narrative_sections: Optional[List[NarrativeSection]]
 
     # === SUPPLEMENTARY OUTPUTS ===

@@ -85,6 +85,10 @@ class OptimizerNode:
             return {
                 **state,
                 "errors": [{"node": "optimizer", "error": str(e)}],
+                # Set required output defaults on failure
+                "optimal_allocations": state.get("optimal_allocations", []),
+                "objective_value": state.get("objective_value", 0.0),
+                "solver_status": "failed",
                 "status": "failed",
             }
 

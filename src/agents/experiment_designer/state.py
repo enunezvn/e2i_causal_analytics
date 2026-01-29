@@ -200,12 +200,13 @@ class ExperimentDesignState(TypedDict):
     """
 
     # ===== Input Fields =====
-    business_question: str
-    constraints: dict[str, Any]
-    available_data: dict[str, Any]
-    preregistration_formality: FormalityLevel
-    max_redesign_iterations: int
-    enable_validity_audit: bool
+    # Note: Input fields may not be in output state (consumed during processing)
+    business_question: NotRequired[str]
+    constraints: NotRequired[dict[str, Any]]
+    available_data: NotRequired[dict[str, Any]]
+    preregistration_formality: NotRequired[FormalityLevel]
+    max_redesign_iterations: NotRequired[int]
+    enable_validity_audit: NotRequired[bool]
 
     # ===== Digital Twin Pre-Screening =====
     # Added in Phase 15 for twin simulation integration
@@ -232,8 +233,9 @@ class ExperimentDesignState(TypedDict):
     skip_experiment: NotRequired[bool]  # True if twin recommends skip
 
     # ===== Design Reasoning Outputs =====
-    design_type: NotRequired[DesignType]
-    design_rationale: NotRequired[str]
+    # Note: Required outputs from design reasoning node
+    design_type: DesignType
+    design_rationale: str
     treatments: NotRequired[list[TreatmentDefinition]]
     outcomes: NotRequired[list[OutcomeDefinition]]
     randomization_unit: NotRequired[RandomizationUnit]
@@ -249,9 +251,10 @@ class ExperimentDesignState(TypedDict):
     interim_analysis_schedule: NotRequired[list[dict[str, Any]]]
 
     # ===== Validity Audit Outputs =====
-    validity_threats: NotRequired[list[ValidityThreat]]
+    # Note: Required outputs from validity audit node
+    validity_threats: list[ValidityThreat]
     mitigations: NotRequired[list[MitigationRecommendation]]
-    overall_validity_score: NotRequired[float]
+    overall_validity_score: float
     validity_confidence: NotRequired[ConfidenceLevel]
     redesign_needed: NotRequired[bool]
     redesign_recommendations: NotRequired[list[str]]

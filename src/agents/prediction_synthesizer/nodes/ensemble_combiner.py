@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime, timezone
 from typing import List
 
 from ..state import EnsemblePrediction, ModelPrediction, PredictionSynthesizerState
@@ -43,6 +44,7 @@ class EnsembleCombinerNode:
                 return {
                     **state,
                     "errors": [{"node": "ensemble", "error": "No predictions to combine"}],
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                     "status": "failed",
                 }
 
@@ -100,6 +102,7 @@ class EnsembleCombinerNode:
             return {
                 **state,
                 "errors": [{"node": "ensemble", "error": str(e)}],
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "status": "failed",
             }
 

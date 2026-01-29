@@ -68,7 +68,7 @@ class HealthScoreState(TypedDict):
 
     # === COMPONENT HEALTH ===
     component_statuses: Optional[List[ComponentStatus]]
-    component_health_score: Optional[float]
+    component_health_score: float  # Required output
 
     # === MODEL HEALTH ===
     model_metrics: Optional[List[ModelMetrics]]
@@ -83,15 +83,15 @@ class HealthScoreState(TypedDict):
     agent_health_score: Optional[float]
 
     # === COMPOSITE SCORE ===
-    overall_health_score: Optional[float]  # 0-100
-    health_grade: Optional[Literal["A", "B", "C", "D", "F"]]
+    overall_health_score: float  # Required output: 0-100
+    health_grade: Literal["A", "B", "C", "D", "F"]  # Required output
 
     # === ISSUES ===
     critical_issues: Optional[List[str]]
     warnings: Optional[List[str]]
 
     # === SUMMARY ===
-    health_summary: Optional[str]
+    health_summary: str  # Required output
 
     # === EXECUTION METADATA ===
     check_latency_ms: int

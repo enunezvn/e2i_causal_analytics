@@ -386,6 +386,9 @@ class Tier0OutputMapper:
         - include_context: bool
         - query: str
         - session_id: Optional[str]
+
+        Note: deployment_manifest and trained_model are accessed via mapper.state
+        and passed to agent constructor via _get_agent_kwargs().
         """
         df = self.state["eligible_df"]
 
@@ -407,6 +410,8 @@ class Tier0OutputMapper:
             "include_context": True,
             "query": f"Predict discontinuation risk for patient {sample_entity_id}",
             "session_id": self.state["experiment_id"],
+            # Note: deployment_manifest and trained_model are passed to agent constructor
+            # via _get_agent_kwargs(), not to synthesize() method
         }
 
     def map_to_resource_optimizer(self) -> dict[str, Any]:

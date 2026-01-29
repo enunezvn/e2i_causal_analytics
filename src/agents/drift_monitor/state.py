@@ -107,31 +107,36 @@ class DriftMonitorState(TypedDict):
     brand: NotRequired[Optional[str]]
 
     # ===== Configuration (6) =====
-    significance_level: float
-    psi_threshold: float
-    check_data_drift: bool
-    check_model_drift: bool
-    check_concept_drift: bool
+    # Note: Config fields are optional - agents provide defaults
+    significance_level: NotRequired[float]  # Default: 0.05
+    psi_threshold: NotRequired[float]  # Default: 0.1
+    check_data_drift: NotRequired[bool]  # Default: True
+    check_model_drift: NotRequired[bool]  # Default: True
+    check_concept_drift: NotRequired[bool]  # Default: True
     check_structural_drift: NotRequired[bool]  # V4.4: Enable structural drift detection
 
     # ===== Detection Outputs (4) =====
-    data_drift_results: NotRequired[list[DriftResult]]
+    # Note: Detection results are required outputs (populated by detection nodes)
+    data_drift_results: list[DriftResult]
     model_drift_results: NotRequired[list[DriftResult]]
     concept_drift_results: NotRequired[list[DriftResult]]
     structural_drift_results: NotRequired[list[DriftResult]]  # V4.4: DAG structure drift
     structural_drift_details: NotRequired[StructuralDriftResult]  # V4.4: Detailed drift info
 
     # ===== Aggregated Outputs (3) =====
-    overall_drift_score: NotRequired[float]
-    features_with_drift: NotRequired[list[str]]
+    # Note: Required outputs from aggregate node
+    overall_drift_score: float
+    features_with_drift: list[str]
     alerts: NotRequired[list[DriftAlert]]
 
     # ===== Summary (2) =====
-    drift_summary: NotRequired[str]
+    # Note: Required output from summary generation
+    drift_summary: str
     recommended_actions: NotRequired[list[str]]
 
     # ===== Execution Metadata (4) =====
-    detection_latency_ms: NotRequired[int]
+    # Note: Required tracking metadata
+    detection_latency_ms: int
     features_checked: NotRequired[int]
     baseline_timestamp: NotRequired[str]
     current_timestamp: NotRequired[str]
