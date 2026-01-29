@@ -141,6 +141,21 @@ class CATEEstimatorNode:
 
             # Fit Causal Forest
             is_binary_treatment = self._is_binary(T)
+
+            # EconML's CausalForestDML requires n_estimators to be divisible by subforest_size
+            # Default subforest_size is 4, so adjust n_estimators to be divisible by 4
+            subforest_size = 4
+            raw_n_estimators = state.get("n_estimators", 100)
+            # Round up to nearest multiple of subforest_size
+            n_estimators = ((raw_n_estimators + subforest_size - 1) // subforest_size) * subforest_size
+
+            if n_estimators != raw_n_estimators:
+                logger.info(
+                    f"Adjusted n_estimators from {raw_n_estimators} to {n_estimators} "
+                    f"(must be divisible by subforest_size={subforest_size})",
+                    extra={"node": "cate_estimator"},
+                )
+
             cf = CausalForestDML(
                 model_y=RandomForestRegressor(n_estimators=50, random_state=42),
                 model_t=(
@@ -149,7 +164,8 @@ class CATEEstimatorNode:
                     else RandomForestRegressor(n_estimators=50, random_state=42)
                 ),
                 discrete_treatment=is_binary_treatment,
-                n_estimators=state.get("n_estimators", 100),
+                n_estimators=n_estimators,
+                subforest_size=subforest_size,
                 min_samples_leaf=state.get("min_samples_leaf", 10),
                 random_state=42,
             )
