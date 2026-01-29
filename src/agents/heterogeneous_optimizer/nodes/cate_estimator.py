@@ -151,12 +151,12 @@ class CATEEstimatorNode:
             X_df = df[state["effect_modifiers"]].copy()
             X = self._encode_features(X_df)
 
-            # Encode segment variables (handle categorical)
-            if state["segment_vars"]:
-                W_df = df[state["segment_vars"]].copy()
-                W = self._encode_features(W_df)
-            else:
-                W = None
+            # W (confounders for nuisance model) is set to None unconditionally.
+            # segment_vars are for post-hoc CATE-by-segment analysis in
+            # _calculate_cate_by_segment(), NOT for CausalForestDML's W parameter.
+            # Using segment_vars as W conflates segmentation with confounding and
+            # can produce ATE=0 when segment categories absorb treatment variation.
+            W = None
 
             # Fit Causal Forest
             is_binary_treatment = self._is_binary(T)

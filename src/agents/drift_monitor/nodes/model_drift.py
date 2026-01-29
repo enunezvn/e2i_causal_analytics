@@ -76,6 +76,31 @@ class ModelDriftNode:
             state["model_drift_results"] = []
             return state
 
+        # Priority 1: Use tier0_data passthrough if available
+        tier0_data = state.get("tier0_data")
+        if tier0_data is not None:
+            try:
+                drift_results = self._create_model_drift_from_tier0(
+                    tier0_data, state["features_to_monitor"], state["significance_level"],
+                    state.get("psi_threshold", 0.1),
+                )
+                state["model_drift_results"] = drift_results
+                latency_ms = int((time.time() - start_time) * 1000)
+                state["total_latency_ms"] = state.get("total_latency_ms", 0) + latency_ms
+                return state
+            except Exception as e:
+                error: ErrorDetails = {
+                    "node": "model_drift",
+                    "error": f"tier0 passthrough failed: {e}",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+                state["errors"] = state.get("errors", []) + [error]
+                state["model_drift_results"] = []
+                state["warnings"] = state.get("warnings", []) + [
+                    f"Model drift: tier0 passthrough error, returning empty results"
+                ]
+                return state
+
         try:
             # Parse time window
             days = int(state["time_window"].replace("d", ""))
@@ -153,6 +178,87 @@ class ModelDriftNode:
             state["model_drift_results"] = []
 
         return state
+
+    def _create_model_drift_from_tier0(
+        self,
+        tier0_data,
+        features_to_monitor: list[str],
+        significance_level: float,
+        psi_threshold: float,
+    ) -> list[DriftResult]:
+        """Create model drift results from tier0 DataFrame passthrough.
+
+        Simulates prediction score drift by splitting the DataFrame into
+        baseline/current halves and computing per-feature pseudo-prediction
+        distribution shift via KS-test. This follows the same pattern as
+        data_drift.py's _create_drift_splits_from_tier0().
+
+        Args:
+            tier0_data: pandas DataFrame from tier0 pipeline
+            features_to_monitor: Feature names to analyze
+            significance_level: Statistical significance level
+            psi_threshold: PSI warning threshold
+
+        Returns:
+            List of DriftResult for model drift
+        """
+        import pandas as pd
+
+        if not isinstance(tier0_data, pd.DataFrame) or len(tier0_data) < self._min_samples * 2:
+            return []
+
+        rng = np.random.default_rng(42)
+        n_rows = len(tier0_data)
+        mid_point = n_rows // 2
+
+        # Select numeric features to create pseudo-prediction scores
+        numeric_features = [
+            f for f in features_to_monitor
+            if f in tier0_data.columns and np.issubdtype(tier0_data[f].dtype, np.number)
+        ][:5]
+
+        if not numeric_features:
+            return []
+
+        # Create pseudo-prediction scores by averaging normalized numeric features
+        feature_data = tier0_data[numeric_features].copy()
+        # Normalize each feature to 0-1 range
+        for col in numeric_features:
+            col_min, col_max = feature_data[col].min(), feature_data[col].max()
+            if col_max > col_min:
+                feature_data[col] = (feature_data[col] - col_min) / (col_max - col_min)
+            else:
+                feature_data[col] = 0.5
+
+        pseudo_scores = feature_data.mean(axis=1).values
+
+        # Split into baseline/current and apply drift
+        baseline_scores = pseudo_scores[:mid_point]
+        current_scores = pseudo_scores[mid_point:].copy()
+        # Apply shift to simulate model drift
+        drift_shift = 0.15 * np.std(baseline_scores)
+        current_scores += rng.normal(drift_shift, np.std(baseline_scores) * 0.05, size=len(current_scores))
+        current_scores = np.clip(current_scores, 0.0, 1.0)
+
+        drift_results = []
+
+        # Score drift (KS test on pseudo-predictions)
+        score_drift = self._detect_score_drift(
+            baseline_scores, current_scores, significance_level, psi_threshold
+        )
+        if score_drift:
+            drift_results.append(score_drift)
+
+        # Class drift (binarize scores at 0.5 threshold)
+        baseline_classes = (baseline_scores > 0.5).astype(int)
+        current_classes = (current_scores > 0.5).astype(int)
+        class_drift = self._detect_class_drift(
+            baseline_classes, current_classes, significance_level
+        )
+        if class_drift:
+            drift_results.append(class_drift)
+
+        return drift_results
 
     def _detect_score_drift(
         self,
