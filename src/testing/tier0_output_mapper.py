@@ -315,10 +315,14 @@ class Tier0OutputMapper:
         feature_cols = self._get_feature_names()
         eligible_df = self.state.get("eligible_df")
 
+        # Use experiment_id as model_id to enable model/concept drift detection
+        # This allows the drift detector to simulate model predictions based on the data
+        model_id = self.state.get("experiment_id", "tier0_test_model")
+
         return {
             "query": "Detect data and model drift in patient features",
             "features_to_monitor": feature_cols[:10],  # Limit features
-            "model_id": None,
+            "model_id": model_id,  # Enable model/concept drift detection
             "time_window": "30d",
             "brand": self.state.get("scope_spec", {}).get("brand"),
             "significance_level": 0.05,
