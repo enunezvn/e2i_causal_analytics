@@ -144,21 +144,26 @@ class DriftMonitorMLflowTracker:
 
         full_name = f"{EXPERIMENT_PREFIX}/{experiment_name}"
 
-        experiment = mlflow.get_experiment_by_name(full_name)
-        if experiment is None:
-            experiment_id = mlflow.create_experiment(
-                full_name,
-                artifact_location="mlflow-artifacts:/",
-                tags={
-                    "agent": "drift_monitor",
-                    "tier": "3",
-                    "domain": "e2i_causal",
-                },
-            )
-        else:
-            experiment_id = experiment.experiment_id
+        try:
+            experiment = mlflow.get_experiment_by_name(full_name)
+            if experiment is None:
+                experiment_id = mlflow.create_experiment(
+                    full_name,
+                    artifact_location="mlflow-artifacts:/",
+                    tags={
+                        "agent": "drift_monitor",
+                        "tier": "3",
+                        "domain": "e2i_causal",
+                    },
+                )
+            else:
+                experiment_id = experiment.experiment_id
 
-        return experiment_id
+            return experiment_id
+        except Exception as e:
+            logger.warning(f"MLflow connection failed, continuing without tracking: {e}")
+            self._mlflow = None  # Disable MLflow for subsequent calls
+            return ""
 
     @asynccontextmanager
     async def start_monitoring_run(

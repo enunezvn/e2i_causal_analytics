@@ -179,21 +179,29 @@ class HeterogeneousOptimizerMLflowTracker:
         if self._mlflow_available:
             import mlflow
 
-            # Set or create experiment
-            experiment = mlflow.get_experiment_by_name(full_experiment_name)
-            if experiment is None:
-                # Use mlflow-artifacts: protocol for artifact storage via tracking server
-                experiment_id = mlflow.create_experiment(
-                    full_experiment_name,
-                    artifact_location="mlflow-artifacts:/",
-                    tags={
-                        "framework": "e2i_causal",
-                        "agent": "heterogeneous_optimizer",
-                        "tier": "2",
-                    },
-                )
-            else:
-                experiment_id = experiment.experiment_id
+            # Set or create experiment - handle connection failures gracefully
+            try:
+                experiment = mlflow.get_experiment_by_name(full_experiment_name)
+                if experiment is None:
+                    # Use mlflow-artifacts: protocol for artifact storage via tracking server
+                    experiment_id = mlflow.create_experiment(
+                        full_experiment_name,
+                        artifact_location="mlflow-artifacts:/",
+                        tags={
+                            "framework": "e2i_causal",
+                            "agent": "heterogeneous_optimizer",
+                            "tier": "2",
+                        },
+                    )
+                else:
+                    experiment_id = experiment.experiment_id
+            except Exception as e:
+                logger.warning(f"MLflow connection failed, continuing without tracking: {e}")
+                self._mlflow_available = False
+                # Fall through to else block below for dummy context
+
+        if self._mlflow_available:
+            import mlflow
 
             # Generate run name
             run_name = (
