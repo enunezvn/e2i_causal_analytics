@@ -99,17 +99,16 @@ class DriftMonitorState(TypedDict):
                           dag_nodes, discovery_config
     """
 
-    # ===== Input Fields (6) =====
-    query: str
-    model_id: NotRequired[Optional[str]]
-    features_to_monitor: list[str]
-    time_window: str
-    brand: NotRequired[Optional[str]]
+    # ===== Input Fields (NotRequired - provided by caller) =====
+    query: NotRequired[str]
+    model_id: NotRequired[str]
+    features_to_monitor: NotRequired[list[str]]
+    time_window: NotRequired[str]
+    brand: NotRequired[str]
     # Tier0 data passthrough for testing with real synthetic data
     tier0_data: NotRequired[Any]  # pandas DataFrame
 
-    # ===== Configuration (6) =====
-    # Note: Config fields are optional - agents provide defaults
+    # ===== Configuration (NotRequired - has defaults) =====
     significance_level: NotRequired[float]  # Default: 0.05
     psi_threshold: NotRequired[float]  # Default: 0.1
     check_data_drift: NotRequired[bool]  # Default: True
@@ -117,33 +116,29 @@ class DriftMonitorState(TypedDict):
     check_concept_drift: NotRequired[bool]  # Default: True
     check_structural_drift: NotRequired[bool]  # V4.4: Enable structural drift detection
 
-    # ===== Detection Outputs (4) =====
-    # Note: Detection results are required outputs (populated by detection nodes)
+    # ===== Detection Outputs (Required) =====
     data_drift_results: list[DriftResult]
     model_drift_results: NotRequired[list[DriftResult]]
     concept_drift_results: NotRequired[list[DriftResult]]
     structural_drift_results: NotRequired[list[DriftResult]]  # V4.4: DAG structure drift
     structural_drift_details: NotRequired[StructuralDriftResult]  # V4.4: Detailed drift info
 
-    # ===== Aggregated Outputs (3) =====
-    # Note: Required outputs from aggregate node
+    # ===== Aggregated Outputs (Required) =====
     overall_drift_score: float
     features_with_drift: list[str]
     alerts: NotRequired[list[DriftAlert]]
 
-    # ===== Summary (2) =====
-    # Note: Required output from summary generation
+    # ===== Summary (Required output) =====
     drift_summary: str
     recommended_actions: NotRequired[list[str]]
 
-    # ===== Execution Metadata (4) =====
-    # Note: Required tracking metadata
-    detection_latency_ms: int
+    # ===== Execution Metadata (NotRequired - populated during execution) =====
+    detection_latency_ms: NotRequired[int]
     features_checked: NotRequired[int]
     baseline_timestamp: NotRequired[str]
     current_timestamp: NotRequired[str]
 
-    # ===== Error Handling (3) =====
+    # ===== Error Handling (Required outputs) =====
     errors: list[ErrorDetails]
     warnings: list[str]
     status: AgentStatus

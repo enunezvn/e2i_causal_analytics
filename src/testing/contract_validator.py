@@ -160,7 +160,19 @@ class ContractValidator:
         For practical purposes in agent testing, we treat Optional[X] fields as
         "key not required" since agents typically only populate fields that are
         relevant to the analysis.
+
+        TypedDict classes with `total=False` have ALL fields optional by default.
         """
+        # Check if the TypedDict has total=False (all fields optional)
+        # Python 3.9+ TypedDicts have __total__ attribute
+        is_total_false = getattr(state_class, "__total__", True) is False
+
+        # If total=False, no fields are required by default
+        if is_total_false:
+            # Only fields explicitly wrapped in Required[] would be required
+            # For now, treat all fields as optional when total=False
+            return set()
+
         hints = get_type_hints(state_class, include_extras=True)
         required = set()
 

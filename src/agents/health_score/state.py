@@ -7,7 +7,7 @@ Purpose: LangGraph state definitions for health monitoring
 from __future__ import annotations
 
 import operator
-from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
+from typing import Annotated, Any, Dict, List, Literal, NotRequired, TypedDict
 from uuid import UUID
 
 
@@ -62,44 +62,44 @@ class AgentStatus(TypedDict):
 class HealthScoreState(TypedDict):
     """Complete state for Health Score agent"""
 
-    # === INPUT ===
-    query: str
-    check_scope: Literal["full", "quick", "models", "pipelines", "agents"]
+    # === INPUT (NotRequired - provided by caller) ===
+    query: NotRequired[str]
+    check_scope: NotRequired[Literal["full", "quick", "models", "pipelines", "agents"]]
 
     # === COMPONENT HEALTH ===
-    component_statuses: Optional[List[ComponentStatus]]
-    component_health_score: float  # Required output
+    component_statuses: NotRequired[List[ComponentStatus]]
+    component_health_score: NotRequired[float]
 
     # === MODEL HEALTH ===
-    model_metrics: Optional[List[ModelMetrics]]
-    model_health_score: Optional[float]
+    model_metrics: NotRequired[List[ModelMetrics]]
+    model_health_score: NotRequired[float]
 
     # === PIPELINE HEALTH ===
-    pipeline_statuses: Optional[List[PipelineStatus]]
-    pipeline_health_score: Optional[float]
+    pipeline_statuses: NotRequired[List[PipelineStatus]]
+    pipeline_health_score: NotRequired[float]
 
     # === AGENT HEALTH ===
-    agent_statuses: Optional[List[AgentStatus]]
-    agent_health_score: Optional[float]
+    agent_statuses: NotRequired[List[AgentStatus]]
+    agent_health_score: NotRequired[float]
 
-    # === COMPOSITE SCORE ===
-    overall_health_score: float  # Required output: 0-100
-    health_grade: Literal["A", "B", "C", "D", "F"]  # Required output
+    # === COMPOSITE SCORE (Required outputs) ===
+    overall_health_score: float  # 0-100
+    health_grade: Literal["A", "B", "C", "D", "F"]
 
     # === ISSUES ===
-    critical_issues: Optional[List[str]]
-    warnings: Optional[List[str]]
+    critical_issues: NotRequired[List[str]]
+    warnings: NotRequired[List[str]]
 
-    # === SUMMARY ===
-    health_summary: str  # Required output
+    # === SUMMARY (Required output) ===
+    health_summary: str
 
-    # === EXECUTION METADATA ===
-    check_latency_ms: int
-    timestamp: str
+    # === EXECUTION METADATA (NotRequired - populated during execution) ===
+    check_latency_ms: NotRequired[int]
+    timestamp: NotRequired[str]
 
-    # === ERROR HANDLING ===
+    # === ERROR HANDLING (Required outputs) ===
     errors: Annotated[List[Dict[str, Any]], operator.add]
     status: Literal["pending", "checking", "completed", "failed"]
 
     # === AUDIT CHAIN ===
-    audit_workflow_id: Optional[UUID]
+    audit_workflow_id: NotRequired[UUID]

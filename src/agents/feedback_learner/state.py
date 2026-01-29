@@ -11,7 +11,7 @@ Includes DSPy integration support:
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional, TypedDict
+from typing import Any, Dict, List, Literal, NotRequired, TypedDict
 from uuid import UUID
 
 # Import cognitive context from DSPy integration module
@@ -160,67 +160,69 @@ class DiscoveryParameterRecommendation(TypedDict):
 class FeedbackLearnerState(TypedDict):
     """Complete state for Feedback Learner agent."""
 
-    # === INPUT ===
-    batch_id: str
-    time_range_start: str
-    time_range_end: str
-    focus_agents: Optional[List[str]]
+    # === INPUT (NotRequired - provided by caller) ===
+    batch_id: NotRequired[str]
+    time_range_start: NotRequired[str]
+    time_range_end: NotRequired[str]
+    focus_agents: NotRequired[List[str]]
 
     # === COGNITIVE CONTEXT (From CognitiveRAG) ===
-    cognitive_context: Optional[FeedbackLearnerCognitiveContext]
+    cognitive_context: NotRequired[FeedbackLearnerCognitiveContext]
 
     # === DSPY TRAINING SIGNALS (For MIPROv2 Optimization) ===
-    training_signal: Optional[FeedbackLearnerTrainingSignal]
+    training_signal: NotRequired[FeedbackLearnerTrainingSignal]
 
     # === FEEDBACK DATA ===
-    feedback_items: Optional[List[FeedbackItem]]
-    feedback_summary: Optional[FeedbackSummary]
+    feedback_items: NotRequired[List[FeedbackItem]]
+    feedback_summary: NotRequired[FeedbackSummary]
 
     # === DISCOVERY FEEDBACK (V4.4) ===
-    discovery_feedback_items: Optional[List[DiscoveryFeedbackItem]]
-    discovery_accuracy_tracking: Optional[Dict[str, DiscoveryAccuracyTracking]]
-    discovery_parameter_recommendations: Optional[List[DiscoveryParameterRecommendation]]
-    has_discovery_feedback: bool
+    discovery_feedback_items: NotRequired[List[DiscoveryFeedbackItem]]
+    discovery_accuracy_tracking: NotRequired[Dict[str, DiscoveryAccuracyTracking]]
+    discovery_parameter_recommendations: NotRequired[List[DiscoveryParameterRecommendation]]
+    has_discovery_feedback: NotRequired[bool]
 
     # === CAUSAL VALIDATION OUTCOMES (From Causal Impact Agent) ===
-    validation_outcomes: Optional[List[ValidationOutcome]]
+    validation_outcomes: NotRequired[List[ValidationOutcome]]
 
     # === PATTERN ANALYSIS ===
-    detected_patterns: Optional[List[DetectedPattern]]
-    pattern_clusters: Optional[Dict[str, List[str]]]
+    detected_patterns: NotRequired[List[DetectedPattern]]
+    pattern_clusters: NotRequired[Dict[str, List[str]]]
 
     # === LEARNING OUTPUTS ===
-    learning_recommendations: Optional[List[LearningRecommendation]]
-    priority_improvements: Optional[List[str]]
+    learning_recommendations: NotRequired[List[LearningRecommendation]]
+    priority_improvements: NotRequired[List[str]]
 
     # === KNOWLEDGE UPDATES ===
-    proposed_updates: Optional[List[KnowledgeUpdate]]
-    applied_updates: Optional[List[str]]
+    proposed_updates: NotRequired[List[KnowledgeUpdate]]
+    applied_updates: NotRequired[List[str]]
 
     # === RUBRIC EVALUATION ===
-    rubric_evaluation_context: Optional[Dict[str, Any]]
-    rubric_evaluation: Optional[Dict[str, Any]]
-    rubric_weighted_score: Optional[float]
-    rubric_decision: Optional[str]
-    rubric_pattern_flags: Optional[List[Dict[str, Any]]]
-    rubric_improvement_suggestion: Optional[str]
-    rubric_latency_ms: Optional[int]
-    rubric_error: Optional[str]
+    rubric_evaluation_context: NotRequired[Dict[str, Any]]
+    rubric_evaluation: NotRequired[Dict[str, Any]]
+    rubric_weighted_score: NotRequired[float]
+    rubric_decision: NotRequired[str]
+    rubric_pattern_flags: NotRequired[List[Dict[str, Any]]]
+    rubric_improvement_suggestion: NotRequired[str]
+    rubric_latency_ms: NotRequired[int]
+    rubric_error: NotRequired[str]
 
-    # === SUMMARY ===
-    learning_summary: Optional[str]
-    metrics_before: Optional[Dict[str, float]]
-    metrics_after: Optional[Dict[str, float]]
+    # === SUMMARY (Required output) ===
+    learning_summary: str
 
-    # === EXECUTION METADATA ===
-    collection_latency_ms: int
-    analysis_latency_ms: int
-    extraction_latency_ms: int
-    update_latency_ms: int
-    total_latency_ms: int
-    model_used: Optional[str]
+    # === METRICS (NotRequired - may not always be computed) ===
+    metrics_before: NotRequired[Dict[str, float]]
+    metrics_after: NotRequired[Dict[str, float]]
 
-    # === ERROR HANDLING ===
+    # === EXECUTION METADATA (NotRequired - populated during execution) ===
+    collection_latency_ms: NotRequired[int]
+    analysis_latency_ms: NotRequired[int]
+    extraction_latency_ms: NotRequired[int]
+    update_latency_ms: NotRequired[int]
+    total_latency_ms: NotRequired[int]
+    model_used: NotRequired[str]
+
+    # === ERROR HANDLING (Required outputs) ===
     errors: List[Dict[str, Any]]
     warnings: List[str]
     status: Literal[
@@ -234,4 +236,4 @@ class FeedbackLearnerState(TypedDict):
     ]
 
     # === AUDIT CHAIN ===
-    audit_workflow_id: Optional[UUID]
+    audit_workflow_id: NotRequired[UUID]

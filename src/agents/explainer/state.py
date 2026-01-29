@@ -7,7 +7,7 @@ Purpose: LangGraph state for natural language explanations
 from __future__ import annotations
 
 import operator
-from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
+from typing import Annotated, Any, Dict, List, Literal, NotRequired, TypedDict
 from uuid import UUID
 
 
@@ -46,56 +46,54 @@ class NarrativeSection(TypedDict):
 class ExplainerState(TypedDict):
     """Complete state for Explainer agent."""
 
-    # === INPUT ===
-    query: str
-    analysis_results: List[Dict[str, Any]]
-    user_expertise: Literal["executive", "analyst", "data_scientist"]
-    output_format: Literal["narrative", "structured", "presentation", "brief"]
-    focus_areas: Optional[List[str]]
+    # === INPUT (NotRequired - provided by caller) ===
+    query: NotRequired[str]
+    analysis_results: NotRequired[List[Dict[str, Any]]]
+    user_expertise: NotRequired[Literal["executive", "analyst", "data_scientist"]]
+    output_format: NotRequired[Literal["narrative", "structured", "presentation", "brief"]]
+    focus_areas: NotRequired[List[str]]
 
     # === CONTEXT ===
-    analysis_context: Optional[List[AnalysisContext]]
-    user_context: Optional[Dict[str, Any]]
-    conversation_history: Optional[List[Dict[str, Any]]]
+    analysis_context: NotRequired[List[AnalysisContext]]
+    user_context: NotRequired[Dict[str, Any]]
+    conversation_history: NotRequired[List[Dict[str, Any]]]
 
     # === MEMORY INTEGRATION ===
-    session_id: Optional[str]  # For memory correlation
-    memory_config: Optional[Dict[str, Any]]  # Memory configuration
-    episodic_context: Optional[List[Dict[str, Any]]]  # Retrieved past explanations
-    semantic_context: Optional[Dict[str, Any]]  # Knowledge graph entities
-    working_memory_messages: Optional[List[Dict[str, Any]]]  # Cached conversation
+    session_id: NotRequired[str]  # For memory correlation
+    memory_config: NotRequired[Dict[str, Any]]  # Memory configuration
+    episodic_context: NotRequired[List[Dict[str, Any]]]  # Retrieved past explanations
+    semantic_context: NotRequired[Dict[str, Any]]  # Knowledge graph entities
+    working_memory_messages: NotRequired[List[Dict[str, Any]]]  # Cached conversation
 
-    # === REASONING OUTPUTS ===
-    # Note: Required output from reasoning node
+    # === REASONING OUTPUTS (Required) ===
     extracted_insights: List[Insight]
-    narrative_structure: Optional[List[str]]
-    key_themes: Optional[List[str]]
+    narrative_structure: NotRequired[List[str]]
+    key_themes: NotRequired[List[str]]
 
-    # === NARRATIVE OUTPUTS ===
-    # Note: Required outputs from narrative generation
+    # === NARRATIVE OUTPUTS (Required) ===
     executive_summary: str
     detailed_explanation: str
-    narrative_sections: Optional[List[NarrativeSection]]
+    narrative_sections: NotRequired[List[NarrativeSection]]
 
     # === SUPPLEMENTARY OUTPUTS ===
-    visual_suggestions: Optional[List[Dict[str, Any]]]
-    follow_up_questions: Optional[List[str]]
-    related_analyses: Optional[List[str]]
+    visual_suggestions: NotRequired[List[Dict[str, Any]]]
+    follow_up_questions: NotRequired[List[str]]
+    related_analyses: NotRequired[List[str]]
 
-    # === EXECUTION METADATA ===
-    assembly_latency_ms: int
-    reasoning_latency_ms: int
-    generation_latency_ms: int
-    total_latency_ms: int
-    model_used: Optional[str]
+    # === EXECUTION METADATA (NotRequired - populated during execution) ===
+    assembly_latency_ms: NotRequired[int]
+    reasoning_latency_ms: NotRequired[int]
+    generation_latency_ms: NotRequired[int]
+    total_latency_ms: NotRequired[int]
+    model_used: NotRequired[str]
 
-    # === ERROR HANDLING ===
+    # === ERROR HANDLING (Required outputs) ===
     errors: Annotated[List[Dict[str, Any]], operator.add]
     warnings: Annotated[List[str], operator.add]
     status: Literal["pending", "assembling", "reasoning", "generating", "completed", "failed"]
 
     # === AUDIT CHAIN ===
-    audit_workflow_id: Optional[UUID]
+    audit_workflow_id: NotRequired[UUID]
 
     # ========================================================================
     # V4.4: Causal Discovery Integration
