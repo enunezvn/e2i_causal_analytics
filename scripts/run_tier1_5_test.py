@@ -697,10 +697,11 @@ AGENT_ANALYSIS_CONFIG = {
         ],
     },
     "drift_monitor": {
-        "key_fields": ["overall_drift_score", "features_with_drift", "alerts"],
+        "key_fields": ["overall_drift_score", "features_with_drift", "recommended_actions", "drift_interpretation"],
         "insights_template": [
             "Overall drift score: {overall_drift_score}",
             "Features with drift: {features_with_drift}",
+            "Recommended actions: {recommended_actions}",
         ],
     },
     "experiment_designer": {
@@ -725,10 +726,10 @@ AGENT_ANALYSIS_CONFIG = {
         ],
     },
     "resource_optimizer": {
-        "key_fields": ["optimization_result", "cost_savings", "allocation_changes"],
+        "key_fields": ["optimization_summary", "projected_roi", "recommendations", "projected_savings"],
         "insights_template": [
-            "Optimization completed: {optimization_result}",
-            "Projected savings: {cost_savings}",
+            "Optimization completed: {optimization_summary}",
+            "Projected ROI: {projected_roi}",
         ],
     },
     "explainer": {
@@ -739,10 +740,10 @@ AGENT_ANALYSIS_CONFIG = {
         ],
     },
     "feedback_learner": {
-        "key_fields": ["feedback_processed", "learning_summary", "improvements_applied"],
+        "key_fields": ["feedback_summary", "learning_summary", "learning_recommendations", "detected_patterns"],
         "insights_template": [
             "Learning summary: {learning_summary}",
-            "Improvements applied: {improvements_applied}",
+            "Patterns detected: {detected_patterns}",
         ],
     },
 }
