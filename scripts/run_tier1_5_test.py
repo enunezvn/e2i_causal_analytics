@@ -332,7 +332,65 @@ AGENT_CONFIGS = {
 # =============================================================================
 
 
-def _get_agent_kwargs(agent_name: str, enforce_real_data: bool = True) -> dict[str, Any]:
+class Tier0ModelClient:
+    """Wraps a tier0 trained sklearn model as a prediction client."""
+
+    def __init__(self, model, model_id: str = "tier0_model"):
+        self.model = model
+        self.model_id = model_id
+
+    async def predict(
+        self,
+        entity_id: str,
+        features: dict[str, Any],
+        time_horizon: str,
+    ) -> dict[str, Any]:
+        """Make prediction using the wrapped model."""
+        import numpy as np
+        import time
+
+        start = time.time()
+
+        # Convert features dict to array (simple approach)
+        feature_values = list(features.values())
+        X = np.array([feature_values])
+
+        # Handle missing/NaN values
+        X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+
+        try:
+            # Get prediction
+            if hasattr(self.model, "predict_proba"):
+                proba = self.model.predict_proba(X)[0]
+                prediction = float(proba[1]) if len(proba) > 1 else float(proba[0])
+            else:
+                prediction = float(self.model.predict(X)[0])
+
+            # Confidence based on distance from 0.5
+            confidence = abs(prediction - 0.5) * 2
+
+            return {
+                "model_id": self.model_id,
+                "prediction": prediction,
+                "confidence": max(0.5, min(1.0, confidence + 0.5)),
+                "latency_ms": int((time.time() - start) * 1000),
+            }
+        except Exception as e:
+            # Return a default prediction on error
+            return {
+                "model_id": self.model_id,
+                "prediction": 0.5,
+                "confidence": 0.3,
+                "latency_ms": int((time.time() - start) * 1000),
+                "error": str(e),
+            }
+
+
+def _get_agent_kwargs(
+    agent_name: str,
+    enforce_real_data: bool = True,
+    tier0_state: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Get agent-specific constructor kwargs for testing.
 
     This function returns kwargs that should be passed to agent constructors
@@ -341,6 +399,7 @@ def _get_agent_kwargs(agent_name: str, enforce_real_data: bool = True) -> dict[s
     Args:
         agent_name: Name of the agent
         enforce_real_data: If True, configure agents to require real data sources
+        tier0_state: Optional tier0 state dict with trained_model, etc.
 
     Returns:
         Dict of kwargs to pass to agent constructor
@@ -367,6 +426,18 @@ def _get_agent_kwargs(agent_name: str, enforce_real_data: bool = True) -> dict[s
         # Note: This is set at the node level, not agent level
         # The agent will use real data by default, but we can't easily
         # inject require_real_data=True without modifying agent constructor
+        return {}
+
+    elif agent_name == "prediction_synthesizer":
+        # prediction_synthesizer: inject tier0 trained model as a model client
+        if tier0_state and tier0_state.get("trained_model"):
+            model = tier0_state["trained_model"]
+            model_id = tier0_state.get("experiment_id", "tier0_model")
+            return {
+                "model_clients": {
+                    model_id: Tier0ModelClient(model, model_id),
+                }
+            }
         return {}
 
     return {}
@@ -822,7 +893,12 @@ async def test_agent(
 
         # 2. Import and instantiate agent with real-data configuration
         agent_class = import_class(config["agent_module"], config["agent_class"])
-        agent_kwargs = _get_agent_kwargs(agent_name, enforce_real_data=enforce_real_data)
+        # Pass tier0_state so agents can access trained_model, deployment_manifest, etc.
+        agent_kwargs = _get_agent_kwargs(
+            agent_name,
+            enforce_real_data=enforce_real_data,
+            tier0_state=mapper.state,
+        )
         agent = agent_class(**agent_kwargs)
 
         # 3. Get the method to call (default: "run")

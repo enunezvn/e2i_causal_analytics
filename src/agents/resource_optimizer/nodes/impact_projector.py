@@ -80,6 +80,8 @@ class ImpactProjectorNode:
             return {
                 **state,
                 "errors": [{"node": "impact_projector", "error": str(e)}],
+                # Set required output default on failure
+                "optimization_summary": state.get("optimization_summary", "Impact projection failed"),
                 "status": "failed",
             }
 

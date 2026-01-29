@@ -191,12 +191,12 @@ class ToolComposerAgent:
         """
         if self._composer is None:
             if self.llm_client is None:
-                # Try to get default client
+                # Try to get default client from factory
                 try:
-                    import anthropic
+                    from src.utils.llm_factory import get_standard_llm
 
-                    self.llm_client = anthropic.Anthropic()
-                    logger.info("Initialized default Anthropic client")
+                    self.llm_client = get_standard_llm()
+                    logger.info("Initialized default LLM client from factory")
                 except Exception as e:
                     raise RuntimeError(
                         "ToolComposerAgent requires an LLM client. "

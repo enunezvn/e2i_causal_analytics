@@ -90,9 +90,10 @@ class ResourceOptimizerState(TypedDict):
     _problem: Optional[Dict[str, Any]]
 
     # === OPTIMIZATION OUTPUTS ===
-    optimal_allocations: Optional[List[AllocationResult]]
-    objective_value: Optional[float]
-    solver_status: Optional[str]
+    # Note: Required outputs from optimization node
+    optimal_allocations: List[AllocationResult]
+    objective_value: float
+    solver_status: str
     solve_time_ms: int
 
     # === SCENARIO OUTPUTS ===
@@ -105,7 +106,8 @@ class ResourceOptimizerState(TypedDict):
     impact_by_segment: Optional[Dict[str, float]]
 
     # === SUMMARY ===
-    optimization_summary: Optional[str]
+    # Note: Required output from summary generation
+    optimization_summary: str
     recommendations: Optional[List[str]]
 
     # === EXECUTION METADATA ===

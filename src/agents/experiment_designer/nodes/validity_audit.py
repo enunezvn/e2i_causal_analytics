@@ -311,6 +311,9 @@ class ValidityAuditNode:
             }
             state["errors"] = state.get("errors", []) + [error]
             state["warnings"] = state.get("warnings", []) + [f"Validity audit failed: {str(e)}"]
+            # Set required output defaults on failure
+            state["validity_threats"] = state.get("validity_threats", [])
+            state["overall_validity_score"] = state.get("overall_validity_score", 0.0)
             state["validity_confidence"] = "low"
             state["redesign_needed"] = False
             state["status"] = "generating"

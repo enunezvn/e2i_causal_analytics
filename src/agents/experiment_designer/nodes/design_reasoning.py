@@ -209,6 +209,9 @@ class DesignReasoningNode:
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
             state["errors"] = state.get("errors", []) + [error]
+            # Set required output defaults on failure
+            state["design_type"] = state.get("design_type", "RCT")
+            state["design_rationale"] = state.get("design_rationale", "Design reasoning failed")
             state["status"] = "failed"
 
         return state

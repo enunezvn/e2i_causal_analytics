@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Protocol
 
 from ..state import ModelPrediction, PredictionSynthesizerState
@@ -92,6 +93,7 @@ class ModelOrchestratorNode:
                             "error": "No models available for this prediction target",
                         }
                     ],
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                     "status": "failed",
                 }
 
@@ -128,6 +130,7 @@ class ModelOrchestratorNode:
                     "orchestration_latency_ms": orchestration_time,
                     "errors": [{"node": "orchestrator", "error": "All models failed"}],
                     "warnings": new_warnings,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                     "status": "failed",
                 }
 
@@ -151,6 +154,7 @@ class ModelOrchestratorNode:
             return {
                 **state,
                 "errors": [{"node": "orchestrator", "error": str(e)}],
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "status": "failed",
             }
 

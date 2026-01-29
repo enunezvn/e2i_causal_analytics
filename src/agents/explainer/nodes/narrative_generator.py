@@ -128,6 +128,9 @@ class NarrativeGeneratorNode:
             return {
                 **state,
                 "errors": [{"node": "narrative_generator", "error": str(e)}],
+                "executive_summary": "",  # Required output default
+                "detailed_explanation": "",  # Required output default
+                "extracted_insights": state.get("extracted_insights", []),  # Preserve or default
                 "status": "failed",
             }
 

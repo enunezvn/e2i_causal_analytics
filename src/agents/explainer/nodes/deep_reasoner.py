@@ -97,6 +97,7 @@ class DeepReasonerNode:
             return {
                 **state,
                 "errors": [{"node": "deep_reasoner", "error": str(e)}],
+                "extracted_insights": [],  # Required output default
                 "status": "failed",
             }
 

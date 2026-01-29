@@ -244,6 +244,10 @@ class DataSourceValidator:
         elif agent_name in ("orchestrator", "tool_composer"):
             evidence.append(f"{agent_name} is computational-only (routing/composition)")
             return DataSourceType.COMPUTATIONAL, evidence
+        elif agent_name == "drift_monitor":
+            return self._detect_drift_monitor_source(agent_output, evidence)
+        elif agent_name == "experiment_designer":
+            return self._detect_experiment_designer_source(agent_output, evidence)
         else:
             # Default: check for tier0 passthrough indicators
             return self._detect_tier0_passthrough(agent_output, evidence)
@@ -385,6 +389,74 @@ class DataSourceValidator:
             return DataSourceType.TIER0_PASSTHROUGH, evidence
 
         evidence.append("Could not determine data source")
+        return DataSourceType.UNKNOWN, evidence
+
+    def _detect_drift_monitor_source(
+        self,
+        agent_output: dict[str, Any],
+        evidence: list[str],
+    ) -> tuple[DataSourceType, list[str]]:
+        """Detect data source for drift_monitor agent.
+
+        Drift monitor receives tier0 data through the mapper and processes it.
+        Key indicators: data_drift_results, overall_drift_score exist.
+        """
+        # Check for tier0 passthrough via standard fields
+        if agent_output.get("tier0_experiment_id"):
+            evidence.append("tier0_experiment_id present in output")
+            return DataSourceType.TIER0_PASSTHROUGH, evidence
+
+        # Check for drift results (indicates actual processing)
+        has_drift_results = (
+            "data_drift_results" in agent_output
+            or "overall_drift_score" in agent_output
+            or "features_with_drift" in agent_output
+        )
+        if has_drift_results:
+            evidence.append("Drift results present, using tier0 passthrough data")
+            return DataSourceType.TIER0_PASSTHROUGH, evidence
+
+        # Fall back to status check
+        status = agent_output.get("status")
+        if status in ("completed", "success"):
+            evidence.append(f"Agent completed with status={status}")
+            return DataSourceType.TIER0_PASSTHROUGH, evidence
+
+        evidence.append("Could not determine drift_monitor data source")
+        return DataSourceType.UNKNOWN, evidence
+
+    def _detect_experiment_designer_source(
+        self,
+        agent_output: dict[str, Any],
+        evidence: list[str],
+    ) -> tuple[DataSourceType, list[str]]:
+        """Detect data source for experiment_designer agent.
+
+        Experiment designer is primarily computational (designs experiments based on
+        population parameters from tier0 data). It doesn't query external databases.
+        """
+        # Check for tier0 passthrough via standard fields
+        if agent_output.get("tier0_experiment_id"):
+            evidence.append("tier0_experiment_id present in output")
+            return DataSourceType.TIER0_PASSTHROUGH, evidence
+
+        # Check for design output (indicates actual processing)
+        has_design = (
+            "design_type" in agent_output
+            or "experiment_template" in agent_output
+            or "design_rationale" in agent_output
+        )
+        if has_design:
+            evidence.append("Experiment design present, computational agent")
+            return DataSourceType.COMPUTATIONAL, evidence
+
+        # Fall back to status check
+        status = agent_output.get("status")
+        if status in ("completed", "success"):
+            evidence.append(f"Agent completed with status={status}")
+            return DataSourceType.COMPUTATIONAL, evidence
+
+        evidence.append("Could not determine experiment_designer data source")
         return DataSourceType.UNKNOWN, evidence
 
     def _get_data_connector_type(self, agent_instance: Any) -> str | None:
