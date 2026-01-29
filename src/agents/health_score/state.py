@@ -90,12 +90,15 @@ class HealthScoreState(TypedDict):
     critical_issues: NotRequired[List[str]]
     warnings: NotRequired[List[str]]
 
+    # === DIAGNOSTIC REASONING (P2 enhancement) ===
+    health_diagnosis: NotRequired[dict]  # Root causes, cascading effects, priority fixes
+
     # === SUMMARY (Required output) ===
     health_summary: str
 
-    # === EXECUTION METADATA (NotRequired - populated during execution) ===
-    check_latency_ms: NotRequired[int]
-    timestamp: NotRequired[str]
+    # === EXECUTION METADATA (Contract-required output fields) ===
+    total_latency_ms: int  # Contract requires this name (was check_latency_ms)
+    timestamp: str  # Contract requires this field
 
     # === ERROR HANDLING (Required outputs) ===
     errors: Annotated[List[Dict[str, Any]], operator.add]

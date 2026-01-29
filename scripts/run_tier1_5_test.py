@@ -491,7 +491,10 @@ def format_duration(ms: float) -> str:
 
 
 def summarize_input(input_dict: dict[str, Any]) -> dict[str, Any]:
-    """Create a summary of agent input for display."""
+    """Create a summary of agent input for display.
+
+    No truncation - full values shown for debugging and clarity.
+    """
     summary = {}
     for key, value in input_dict.items():
         if hasattr(value, "__len__") and not isinstance(value, str):
@@ -502,9 +505,8 @@ def summarize_input(input_dict: dict[str, Any]) -> dict[str, Any]:
                 summary[f"{key}_count"] = len(value)
             elif isinstance(value, dict):
                 summary[f"{key}_keys"] = list(value.keys())[:5]
-        elif isinstance(value, str) and len(value) > 50:
-            summary[key] = value[:50] + "..."
         else:
+            # No truncation - show full value
             summary[key] = value
     return summary
 
@@ -523,11 +525,15 @@ def import_class(module_path: str, class_name: str) -> type:
 
 
 def print_input_section(inputs: dict[str, Any]) -> None:
-    """Print standardized input summary section."""
+    """Print standardized input summary section.
+
+    No truncation - full values shown for clarity.
+    """
     print("\n  📥 Input Summary:")
     for key, value in inputs.items():
-        if isinstance(value, str) and len(value) > 60:
-            print(f"    • {key}: {value[:60]}...")
+        if isinstance(value, str):
+            # No truncation - show full string
+            print(f"    • {key}: {value}")
         elif isinstance(value, list):
             print(f"    • {key}: [{len(value)} items]")
         elif isinstance(value, dict):
@@ -653,12 +659,13 @@ TIER_DESCRIPTIONS = {
 }
 
 # Agent-specific analysis extractors
+# NOTE: Field names must match actual agent state output fields
 AGENT_ANALYSIS_CONFIG = {
     "orchestrator": {
-        "key_fields": ["routing_decision", "selected_agents", "confidence"],
+        "key_fields": ["agents_dispatched", "response_confidence", "final_response"],
         "insights_template": [
-            "Query routed to {selected_agents} agents",
-            "Routing confidence: {confidence}",
+            "Query routed to {agents_dispatched} agents",
+            "Routing confidence: {response_confidence}",
         ],
     },
     "tool_composer": {
@@ -690,10 +697,10 @@ AGENT_ANALYSIS_CONFIG = {
         ],
     },
     "drift_monitor": {
-        "key_fields": ["drift_detected", "drift_score", "features_drifted"],
+        "key_fields": ["overall_drift_score", "features_with_drift", "alerts"],
         "insights_template": [
-            "Drift detected: {drift_detected}",
-            "Overall drift score: {drift_score}",
+            "Overall drift score: {overall_drift_score}",
+            "Features with drift: {features_with_drift}",
         ],
     },
     "experiment_designer": {
@@ -704,17 +711,17 @@ AGENT_ANALYSIS_CONFIG = {
         ],
     },
     "health_score": {
-        "key_fields": ["health_status", "overall_score", "component_scores"],
+        "key_fields": ["overall_health_score", "health_grade", "critical_issues"],
         "insights_template": [
-            "System health: {health_status}",
-            "Overall health score: {overall_score}",
+            "Health grade: {health_grade}",
+            "Overall health score: {overall_health_score}",
         ],
     },
     "prediction_synthesizer": {
-        "key_fields": ["prediction", "confidence", "model_agreement"],
+        "key_fields": ["ensemble_prediction", "prediction_summary", "models_succeeded"],
         "insights_template": [
-            "Synthesized prediction: {prediction}",
-            "Model agreement: {model_agreement}",
+            "Prediction summary: {prediction_summary}",
+            "Models succeeded: {models_succeeded}",
         ],
     },
     "resource_optimizer": {
@@ -725,24 +732,27 @@ AGENT_ANALYSIS_CONFIG = {
         ],
     },
     "explainer": {
-        "key_fields": ["executive_summary", "explanation_type", "confidence"],
+        "key_fields": ["executive_summary", "extracted_insights", "key_themes"],
         "insights_template": [
-            "Generated {explanation_type} explanation",
-            "Summary: {executive_summary}",
+            "Executive summary: {executive_summary}",
+            "Key themes: {key_themes}",
         ],
     },
     "feedback_learner": {
-        "key_fields": ["learning_summary", "improvements_identified", "patterns_learned"],
+        "key_fields": ["feedback_processed", "learning_summary", "improvements_applied"],
         "insights_template": [
-            "Learning cycle complete: {learning_summary}",
-            "Improvements identified: {improvements_identified}",
+            "Learning summary: {learning_summary}",
+            "Improvements applied: {improvements_applied}",
         ],
     },
 }
 
 
 def extract_agent_insights(agent_name: str, output: dict[str, Any]) -> list[str]:
-    """Extract agent-specific insights from output."""
+    """Extract agent-specific insights from output.
+
+    Supports nested field access via dot notation (e.g., 'ensemble_prediction.point_estimate').
+    """
     config = AGENT_ANALYSIS_CONFIG.get(agent_name, {})
     insights = []
 
@@ -752,14 +762,31 @@ def extract_agent_insights(agent_name: str, output: dict[str, Any]) -> list[str]
             # Extract values from output
             values = {}
             for key in config.get("key_fields", []):
-                val = output.get(key)
+                # Handle nested keys with dot notation
+                if "." in key:
+                    parts = key.split(".")
+                    val = output
+                    for part in parts:
+                        if val is not None and isinstance(val, dict):
+                            val = val.get(part)
+                        else:
+                            val = None
+                            break
+                else:
+                    val = output.get(key)
+
                 if val is not None:
                     if isinstance(val, float):
                         values[key] = f"{val:.4f}"
                     elif isinstance(val, list):
                         values[key] = len(val)
-                    elif isinstance(val, str) and len(val) > 50:
-                        values[key] = val[:50] + "..."
+                    elif isinstance(val, dict):
+                        # For dicts, show key count or first few keys
+                        keys_preview = list(val.keys())[:3]
+                        values[key] = f"{{{', '.join(keys_preview)}...}}" if len(val) > 3 else str(val)
+                    elif isinstance(val, str):
+                        # Show full string value (no truncation)
+                        values[key] = val
                     else:
                         values[key] = val
                 else:
@@ -1272,8 +1299,8 @@ def print_agent_result(result: AgentTestResult, verbose: bool = True) -> None:
         insights = extract_agent_insights(result.agent_name, result.agent_output)
         print_analysis_section(f"{result.agent_name.upper()} Analysis", insights)
 
-    # Show key output fields if verbose
-    if verbose and result.agent_output:
+    # Show key output fields (always shown - essential for debugging)
+    if result.agent_output:
         print("\n  📋 Key Output Fields:")
         output_items = list(result.agent_output.items())
 
@@ -1312,9 +1339,9 @@ def print_agent_result(result: AgentTestResult, verbose: bool = True) -> None:
             print(f"    • ❌ Status failure: {qg.status_value}")
         if qg.failed_check_messages:
             print(f"    • Failed checks:")
-            for msg in qg.failed_check_messages[:3]:
-                msg_display = msg[:70] + "..." if len(msg) > 70 else msg
-                print(f"      - {msg_display}")
+            for msg in qg.failed_check_messages:
+                # No truncation - show full message
+                print(f"      - {msg}")
         if qg.passed:
             print(f"    • QUALITY GATE: ✅ PASS")
         else:
@@ -1329,20 +1356,20 @@ def print_agent_result(result: AgentTestResult, verbose: bool = True) -> None:
                 print(f"    • {te.get('field')}: expected {te.get('expected')}, got {te.get('actual')}")
         if cv.warnings:
             print(f"\n  ⚠️  Warnings ({len(cv.warnings)}):")
-            for w in cv.warnings[:2]:
-                w_display = w[:70] + "..." if len(w) > 70 else w
-                print(f"    • {w_display}")
+            for w in cv.warnings:
+                # No truncation - show full warning
+                print(f"    • {w}")
 
     # Observability details (verbose)
     if verbose and result.trace_verification and result.trace_verification.trace_exists:
         tv = result.trace_verification
         print("\n  🔭 Observability Details:")
         if tv.trace_id:
-            print(f"    • Trace ID: {tv.trace_id[:40]}...")
+            print(f"    • Trace ID: {tv.trace_id}")
         if tv.trace_url:
             print(f"    • URL: {tv.trace_url}")
         if tv.span_names:
-            print(f"    • Spans: {', '.join(tv.span_names[:5])}")
+            print(f"    • Spans: {', '.join(tv.span_names)}")
 
     # Error details if failed
     if result.error:
@@ -1359,12 +1386,16 @@ def print_agent_result(result: AgentTestResult, verbose: bool = True) -> None:
     if result.success:
         print_step_result("success", f"{result.agent_name} completed successfully", duration_s)
     else:
-        error_brief = (result.error or "Unknown error")[:50]
+        # No truncation - show full error
+        error_brief = result.error or "Unknown error"
         print_step_result("failed", f"{result.agent_name}: {error_brief}", duration_s)
 
 
 def _print_output_value(key: str, value: Any, indent: int = 4) -> None:
-    """Print a single output value with appropriate formatting."""
+    """Print a single output value with appropriate formatting.
+
+    No truncation is applied - full values are shown for debugging.
+    """
     prefix = " " * indent
 
     if value is None:
@@ -1372,21 +1403,34 @@ def _print_output_value(key: str, value: Any, indent: int = 4) -> None:
     elif isinstance(value, dict):
         if len(value) == 0:
             print(f"{prefix}{key}: {{}}")
-        elif len(value) <= 3:
-            # Small dict - print inline or expanded
+        elif len(value) <= 5:
+            # Small/medium dict - print expanded (no truncation)
             print(f"{prefix}{key}:")
             for k, v in value.items():
                 if isinstance(v, float):
                     print(f"{prefix}  {k}: {v:.4f}")
                 elif isinstance(v, list):
                     print(f"{prefix}  {k}: [{len(v)} items]")
-                elif isinstance(v, str) and len(v) > 50:
-                    print(f"{prefix}  {k}: {v[:50]}...")
+                elif isinstance(v, dict):
+                    print(f"{prefix}  {k}: {{dict with {len(v)} keys}}")
+                elif isinstance(v, str):
+                    # Show full string value (no truncation)
+                    print(f"{prefix}  {k}: {v}")
                 else:
                     print(f"{prefix}  {k}: {v}")
         else:
-            # Large dict - summarize
+            # Large dict - show keys and first few values
             print(f"{prefix}{key}: {{dict with {len(value)} keys}}")
+            for i, (k, v) in enumerate(value.items()):
+                if i >= 3:
+                    print(f"{prefix}  ... and {len(value) - 3} more keys")
+                    break
+                if isinstance(v, float):
+                    print(f"{prefix}  {k}: {v:.4f}")
+                elif isinstance(v, (list, dict)):
+                    print(f"{prefix}  {k}: [{type(v).__name__} with {len(v)} items]")
+                else:
+                    print(f"{prefix}  {k}: {v}")
     elif isinstance(value, list):
         if len(value) == 0:
             print(f"{prefix}{key}: []")
@@ -1396,31 +1440,34 @@ def _print_output_value(key: str, value: Any, indent: int = 4) -> None:
             # Show first item if it's a dict (common pattern)
             if isinstance(value[0], dict):
                 print(f"{prefix}{key}: [{len(value)} items]")
-                # Show first item as sample
+                # Show first item as sample (no truncation)
                 first = value[0]
                 sample_keys = list(first.keys())[:4]
                 sample = {k: first[k] for k in sample_keys}
-                # Truncate values in sample
+                # Format values in sample (no truncation)
                 for k, v in sample.items():
                     if isinstance(v, float):
                         sample[k] = round(v, 4)
-                    elif isinstance(v, str) and len(v) > 30:
-                        sample[k] = v[:30] + "..."
-                print(f"{prefix}  [0]: {sample}...")
+                    # No string truncation - show full value
+                if len(first) > 4:
+                    print(f"{prefix}  [0]: {sample}... (+{len(first) - 4} more keys)")
+                else:
+                    print(f"{prefix}  [0]: {sample}")
             else:
                 print(f"{prefix}{key}: [{len(value)} items]")
     elif isinstance(value, float):
         print(f"{prefix}{key}: {value:.4f}")
     elif isinstance(value, str):
-        if len(value) > 100:
-            print(f"{prefix}{key}: {value[:100]}...")
-        elif "\n" in value:
-            # Multi-line string - show first line
-            first_line = value.split("\n")[0]
-            if len(first_line) > 80:
-                first_line = first_line[:80] + "..."
-            print(f"{prefix}{key}: {first_line}")
+        if "\n" in value:
+            # Multi-line string - show all lines with proper formatting
+            lines = value.split("\n")
+            print(f"{prefix}{key}:")
+            for line in lines[:10]:  # Limit to first 10 lines for readability
+                print(f"{prefix}  {line}")
+            if len(lines) > 10:
+                print(f"{prefix}  ... ({len(lines) - 10} more lines)")
         else:
+            # Single-line string - show full value (no truncation)
             print(f"{prefix}{key}: {value}")
     else:
         print(f"{prefix}{key}: {value}")
@@ -1517,16 +1564,14 @@ def print_summary(
         print("\nFAILED AGENTS:")
         print("-" * 60)
         for r in failed:
+            # No truncation - show full error
             error_msg = r.error or "Contract validation failed"
-            # Truncate long errors
-            if len(error_msg) > 80:
-                error_msg = error_msg[:80] + "..."
             print(f"  \u274c {r.agent_name} (Tier {r.tier})")
             print(f"     Error: {error_msg}")
             if r.error_traceback and verbose:
-                # Show last line of traceback
+                # Show last line of traceback (full)
                 last_line = r.error_traceback.strip().split("\n")[-1]
-                print(f"     Last line: {last_line[:70]}")
+                print(f"     Last line: {last_line}")
 
     # Quality gate summary
     quality_gates_passed = sum(
@@ -1554,7 +1599,8 @@ def print_summary(
             if qg.status_failure:
                 print(f"    • {r.agent_name}: status={qg.status_value}")
             elif qg.failed_check_messages:
-                msg = qg.failed_check_messages[0][:50]
+                # No truncation - show full message
+                msg = qg.failed_check_messages[0]
                 print(f"    • {r.agent_name}: {msg}")
             else:
                 print(f"    • {r.agent_name}: {qg.checks_failed} checks failed")

@@ -73,6 +73,9 @@ class PredictionSynthesizerState(TypedDict):
     # === CONTEXT OUTPUTS ===
     prediction_context: NotRequired[Optional[PredictionContext]]
 
+    # === INTERPRETATION (P2 enhancement) ===
+    prediction_interpretation: NotRequired[Optional[Dict[str, Any]]]  # Risk assessment, anomalies, recommendations
+
     # === EXECUTION METADATA ===
     orchestration_latency_ms: NotRequired[int]
     ensemble_latency_ms: NotRequired[int]

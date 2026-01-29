@@ -117,11 +117,11 @@ class DriftMonitorOutput(BaseModel):
     drift_summary: str = Field(..., description="Human-readable summary")
     recommended_actions: list[str] = Field(..., description="Recommended actions")
 
-    # Metadata
-    detection_latency_ms: int = Field(..., description="Total detection latency")
+    # Metadata (Contract-required fields)
+    total_latency_ms: int = Field(..., description="Total detection latency")
+    timestamp: str = Field(..., description="Completion timestamp")
     features_checked: int = Field(..., description="Number of features checked")
     baseline_timestamp: str = Field(..., description="Baseline period timestamp")
-    current_timestamp: str = Field(..., description="Current period timestamp")
     warnings: list[str] = Field(default_factory=list, description="Warnings")
 
 
@@ -245,7 +245,7 @@ class DriftMonitorAgent:
                             "overall_drift_score": final_state.get("overall_drift_score", 0.0),
                             "features_with_drift": final_state.get("features_with_drift", []),
                             "alert_count": len(final_state.get("alerts", [])),
-                            "detection_latency_ms": final_state.get("detection_latency_ms", 0),
+                            "total_latency_ms": final_state.get("total_latency_ms", 0),
                         })
                     return final_state
             else:
@@ -361,10 +361,10 @@ class DriftMonitorAgent:
             # Summary
             drift_summary=state.get("drift_summary", "No summary available"),
             recommended_actions=state.get("recommended_actions", []),
-            # Metadata
-            detection_latency_ms=state.get("detection_latency_ms", 0),
+            # Metadata (Contract-required fields)
+            total_latency_ms=state.get("total_latency_ms", 0),
+            timestamp=state.get("timestamp", ""),
             features_checked=state.get("features_checked", 0),
             baseline_timestamp=state.get("baseline_timestamp", ""),
-            current_timestamp=state.get("current_timestamp", ""),
             warnings=state.get("warnings", []),
         )

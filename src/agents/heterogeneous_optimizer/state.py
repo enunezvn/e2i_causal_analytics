@@ -262,7 +262,7 @@ class HeterogeneousOptimizerOutput(TypedDict):
 
     # Policy recommendations
     policy_recommendations: Optional[List[PolicyRecommendation]]
-    expected_total_lift: Optional[float]
+    expected_total_lift: float  # Contract requires non-optional
     optimal_allocation_summary: Optional[str]
 
     # Summary

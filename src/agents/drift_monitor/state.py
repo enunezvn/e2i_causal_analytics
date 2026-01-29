@@ -90,8 +90,8 @@ class DriftMonitorState(TypedDict):
                             structural_drift_results, structural_drift_details
     - Aggregated outputs (3): overall_drift_score, features_with_drift, alerts
     - Summary (2): drift_summary, recommended_actions
-    - Execution metadata (4): detection_latency_ms, features_checked,
-                              baseline_timestamp, current_timestamp
+    - Execution metadata (4): total_latency_ms, timestamp,
+                              features_checked, baseline_timestamp
     - Error handling (3): errors, warnings, status
     - Audit Chain (1): audit_workflow_id
     - V4.4 Discovery (7): baseline_dag_adjacency, baseline_dag_edge_types,
@@ -132,11 +132,14 @@ class DriftMonitorState(TypedDict):
     drift_summary: str
     recommended_actions: NotRequired[list[str]]
 
-    # ===== Execution Metadata (NotRequired - populated during execution) =====
-    detection_latency_ms: NotRequired[int]
+    # ===== Execution Metadata (Contract-required output fields) =====
+    total_latency_ms: int  # Contract requires this name (was detection_latency_ms)
+    timestamp: str  # Contract requires this name (was current_timestamp)
     features_checked: NotRequired[int]
     baseline_timestamp: NotRequired[str]
-    current_timestamp: NotRequired[str]
+
+    # ===== Drift Interpretation (P2 enhancement) =====
+    drift_interpretation: NotRequired[dict]  # Root cause analysis and business impact
 
     # ===== Error Handling (Required outputs) =====
     errors: list[ErrorDetails]

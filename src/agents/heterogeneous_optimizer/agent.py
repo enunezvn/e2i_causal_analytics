@@ -332,7 +332,7 @@ class HeterogeneousOptimizerAgent:
             "low_responders": None,
             "segment_comparison": None,
             "policy_recommendations": None,
-            "expected_total_lift": None,
+            "expected_total_lift": 0.0,  # Contract requires non-optional float
             "optimal_allocation_summary": None,
             "cate_plot_data": None,
             "segment_grid_data": None,

@@ -89,8 +89,8 @@ class DriftDetectionRecord:
     drift_summary: str
     recommended_actions: List[str]
 
-    # Metadata
-    detection_latency_ms: int
+    # Metadata (Contract field names)
+    total_latency_ms: int  # Was detection_latency_ms
     warnings: List[str]
 
     def to_dict(self) -> Dict[str, Any]:
@@ -113,7 +113,7 @@ class DriftDetectionRecord:
             "max_severity": self.max_severity,
             "drift_summary": self.drift_summary,
             "recommended_actions": self.recommended_actions,
-            "detection_latency_ms": self.detection_latency_ms,
+            "total_latency_ms": self.total_latency_ms,
             "warnings": self.warnings,
         }
 
@@ -659,7 +659,7 @@ class DriftMonitorMemoryHooks:
                 max_severity=max_severity,
                 drift_summary=result.get("drift_summary", ""),
                 recommended_actions=result.get("recommended_actions", []),
-                detection_latency_ms=result.get("detection_latency_ms", 0),
+                total_latency_ms=result.get("total_latency_ms", 0),
                 warnings=result.get("warnings", []),
             )
 

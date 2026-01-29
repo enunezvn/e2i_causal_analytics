@@ -342,6 +342,10 @@ class ContractValidator:
             if isinstance(expected_type, str):
                 return True  # Can't validate string annotations
 
+            # Handle int → float coercion (int is acceptable where float is expected)
+            if expected_type is float and isinstance(value, int) and not isinstance(value, bool):
+                return True
+
             # Get origin for generic types
             origin = get_origin(expected_type)
 

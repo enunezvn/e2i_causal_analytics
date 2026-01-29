@@ -91,10 +91,13 @@ Return a JSON object with:
   ]
 }}
 
-## Important:
-- Every sub-question must map to exactly one tool
+## CRITICAL REQUIREMENTS:
+- You MUST provide a tool_mapping for EVERY sub-question - no exceptions
+- You MUST provide an execution_step for EVERY sub-question - no exceptions
+- If no tool fits perfectly, choose the closest match (prefer causal_effect_estimator for analysis, risk_scorer for predictions)
 - Use $step_X.field syntax to reference prior step outputs
-- Parallel groups should be ordered by execution wave"""
+- Parallel groups should be ordered by execution wave
+- Verify your response includes ALL sub-question IDs before returning"""
 
 
 PLANNING_USER_TEMPLATE = """Create an execution plan for these sub-questions:
@@ -467,7 +470,28 @@ class ToolPlanner:
 
         missing = sq_ids - mapped_ids
         if missing:
-            raise PlanningError(f"Sub-questions not mapped to tools: {missing}")
+            # Try to auto-map missing sub-questions to appropriate tools
+            logger.warning(f"Auto-mapping {len(missing)} unmapped sub-questions: {missing}")
+            for sq_id in missing:
+                sq = next((sq for sq in decomposition.sub_questions if sq.id == sq_id), None)
+                if sq:
+                    fallback = self._get_fallback_mapping(sq)
+                    if fallback:
+                        mappings.append(fallback)
+                        # Also add a step for this mapping
+                        step = ExecutionStep(
+                            step_id=f"step_{len(steps)+1}",
+                            sub_question_id=sq_id,
+                            tool_name=fallback.tool_name,
+                            source_agent=fallback.source_agent,
+                            input_mapping={},
+                            dependency_type=DependencyType.PARALLEL,
+                            depends_on_steps=[],
+                        )
+                        steps.append(step)
+                        logger.info(f"Auto-mapped {sq_id} to {fallback.tool_name}")
+                    else:
+                        raise PlanningError(f"Cannot map sub-question {sq_id} to any tool")
 
         # Check all steps reference valid tools
         for step in steps:
@@ -523,6 +547,77 @@ class ToolPlanner:
                 total_ms += 1000  # Default estimate
 
         return total_ms
+
+    def _get_fallback_mapping(self, sq) -> Optional[ToolMapping]:
+        """Get a fallback tool mapping for an unmapped sub-question.
+
+        Uses intent-based heuristics to select appropriate tools when
+        the LLM fails to provide a mapping.
+
+        Args:
+            sq: SubQuestion object with intent and question text
+
+        Returns:
+            ToolMapping if a suitable fallback found, None otherwise
+        """
+        intent = sq.intent.upper() if hasattr(sq, 'intent') and sq.intent else "UNKNOWN"
+        question_lower = sq.question.lower() if hasattr(sq, 'question') else ""
+
+        # Intent-based tool mapping
+        intent_to_tool = {
+            "CAUSAL": ("causal_effect_estimator", "causal_impact"),
+            "COMPARATIVE": ("gap_calculator", "gap_analyzer"),
+            "PREDICTIVE": ("risk_scorer", "prediction_synthesizer"),
+            "EXPERIMENTAL": ("power_calculator", "experiment_designer"),
+            "DESCRIPTIVE": ("cohort_statistics", "cohort_constructor"),
+        }
+
+        # Keyword-based fallbacks (when intent doesn't match well)
+        keyword_mappings = [
+            (["segment", "high-risk", "risk", "score"], ("risk_scorer", "prediction_synthesizer")),
+            (["causal", "effect", "impact", "cause"], ("causal_effect_estimator", "causal_impact")),
+            (["compare", "difference", "gap", "vs"], ("gap_calculator", "gap_analyzer")),
+            (["treatment", "cate", "heterogen"], ("cate_analyzer", "heterogeneous_optimizer")),
+            (["sample", "power", "experiment"], ("power_calculator", "experiment_designer")),
+            (["drift", "distribution", "change"], ("psi_calculator", "drift_monitor")),
+            (["cohort", "patient", "eligible"], ("cohort_builder", "cohort_constructor")),
+        ]
+
+        # Try intent-based mapping first
+        if intent in intent_to_tool:
+            tool_name, source_agent = intent_to_tool[intent]
+            if self.registry.validate_tool_exists(tool_name):
+                return ToolMapping(
+                    sub_question_id=sq.id,
+                    tool_name=tool_name,
+                    source_agent=source_agent,
+                    confidence=0.6,  # Lower confidence for fallback
+                    reasoning=f"Auto-mapped based on {intent} intent",
+                )
+
+        # Try keyword-based mapping
+        for keywords, (tool_name, source_agent) in keyword_mappings:
+            if any(kw in question_lower for kw in keywords):
+                if self.registry.validate_tool_exists(tool_name):
+                    return ToolMapping(
+                        sub_question_id=sq.id,
+                        tool_name=tool_name,
+                        source_agent=source_agent,
+                        confidence=0.5,  # Even lower for keyword match
+                        reasoning=f"Auto-mapped based on keyword match",
+                    )
+
+        # Last resort: use causal_effect_estimator as generic fallback
+        if self.registry.validate_tool_exists("causal_effect_estimator"):
+            return ToolMapping(
+                sub_question_id=sq.id,
+                tool_name="causal_effect_estimator",
+                source_agent="causal_impact",
+                confidence=0.4,
+                reasoning="Fallback mapping - no suitable tool found",
+            )
+
+        return None
 
 
 # ============================================================================

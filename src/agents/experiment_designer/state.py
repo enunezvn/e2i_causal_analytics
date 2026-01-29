@@ -277,6 +277,10 @@ class ExperimentDesignState(TypedDict):
     total_llm_tokens_used: NotRequired[int]
     node_latencies_ms: NotRequired[dict[str, int]]
 
+    # ===== Contract-Required Output Fields =====
+    total_latency_ms: int  # Contract requires this for all Tier 3 agents
+    timestamp: str  # Contract requires this for all Tier 3 agents
+
     # ===== Error Handling =====
     errors: list[ErrorDetails]
     warnings: list[str]
