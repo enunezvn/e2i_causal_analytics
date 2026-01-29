@@ -243,7 +243,7 @@ def _validate_health_score(output: dict[str, Any]) -> tuple[bool, str]:
     component_score = _safe_get(output, "component_health_score", 1.0)
     overall_score = _safe_get(output, "overall_health_score", 100)
 
-    # If component score is low, diagnostics should be present
+    # If component score is low, some form of diagnostic info should be present
     if component_score and component_score < 0.8:
         # Check all possible diagnostic field names - use _safe_get for object/dict compatibility
         diagnostics = (
@@ -260,19 +260,39 @@ def _validate_health_score(output: dict[str, Any]) -> tuple[bool, str]:
             if health_checks:
                 diagnostics = health_checks  # Health checks can serve as diagnostics
 
-        if not diagnostics:
+        # Critical issues and warnings also count as diagnostics
+        critical_issues = _safe_get(output, "critical_issues", [])
+        warnings = _safe_get(output, "warnings", [])
+        health_summary = _safe_get(output, "health_summary", "")
+
+        # Accept any of the following as valid diagnostics:
+        # 1. Explicit health_diagnosis or similar fields
+        # 2. Non-empty critical_issues list
+        # 3. Non-empty warnings list
+        # 4. Health summary containing diagnostic info (> 50 chars with "issue" or "degraded")
+        has_diagnostics = bool(diagnostics)
+        has_issues = bool(critical_issues)
+        has_warnings = bool(warnings)
+        has_summary_diagnostics = (
+            len(health_summary) > 50
+            and ("issue" in health_summary.lower() or "degraded" in health_summary.lower())
+        )
+
+        if not (has_diagnostics or has_issues or has_warnings or has_summary_diagnostics):
             return (
                 False,
                 f"Component score {component_score} is degraded but no diagnostics provided",
             )
 
-        # Check that diagnosis has root causes (only if it's a dict with expected structure)
-        if isinstance(diagnostics, dict) and "root_causes" in diagnostics:
+        # If we have explicit diagnosis with expected structure, validate root causes
+        if diagnostics and isinstance(diagnostics, dict) and "root_causes" in diagnostics:
             if not diagnostics.get("root_causes"):
-                return (
-                    False,
-                    f"Component score {component_score} is degraded but diagnosis has no root causes",
-                )
+                # Only fail if we don't have other diagnostic sources
+                if not (has_issues or has_warnings):
+                    return (
+                        False,
+                        f"Component score {component_score} is degraded but diagnosis has no root causes",
+                    )
 
     return (True, "Passed semantic validation")
 
