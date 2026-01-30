@@ -90,6 +90,9 @@ class HealthScoreState(TypedDict):
     critical_issues: NotRequired[List[str]]
     warnings: NotRequired[List[str]]
 
+    # === RECOMMENDATIONS ===
+    recommendations: NotRequired[List[str]]
+
     # === DIAGNOSTIC REASONING (P2 enhancement) ===
     health_diagnosis: NotRequired[dict]  # Root causes, cascading effects, priority fixes
 

@@ -781,10 +781,11 @@ AGENT_ANALYSIS_CONFIG = {
         ],
     },
     "health_score": {
-        "key_fields": ["overall_health_score", "health_grade", "critical_issues"],
+        "key_fields": ["overall_health_score", "health_grade", "critical_issues", "recommendations"],
         "insights_template": [
             "Health grade: {health_grade}",
             "Overall health score: {overall_health_score}",
+            "Recommendations: {recommendations}",
         ],
     },
     "prediction_synthesizer": {
@@ -826,6 +827,9 @@ def extract_agent_insights(agent_name: str, output: dict[str, Any]) -> list[str]
     config = AGENT_ANALYSIS_CONFIG.get(agent_name, {})
     insights = []
 
+    # Track list fields that need expanded display
+    list_fields_to_expand: dict[str, list[str]] = {}
+
     # Try to fill in template insights
     for template in config.get("insights_template", []):
         try:
@@ -850,6 +854,10 @@ def extract_agent_insights(agent_name: str, output: dict[str, Any]) -> list[str]
                         values[key] = f"{val:.4f}"
                     elif isinstance(val, list):
                         values[key] = len(val)
+                        # Track string lists for expanded display below the template line
+                        if all(isinstance(x, str) for x in val) and len(val) > 0:
+                            if f"{{{key}}}" in template:
+                                list_fields_to_expand[key] = val
                     elif isinstance(val, dict):
                         # For dicts, show key count or first few keys
                         keys_preview = list(val.keys())[:3]
@@ -864,6 +872,13 @@ def extract_agent_insights(agent_name: str, output: dict[str, Any]) -> list[str]
 
             insight = template.format(**values)
             insights.append(insight)
+
+            # Expand string list items as sub-insights after the template line
+            for key, items in list_fields_to_expand.items():
+                if f"{{{key}}}" in template:
+                    for i, item in enumerate(items, 1):
+                        insights.append(f"  {i}. {item}")
+            list_fields_to_expand.clear()
         except (KeyError, ValueError):
             continue
 
@@ -1372,32 +1387,28 @@ def print_agent_result(result: AgentTestResult, verbose: bool = True) -> None:
         insights = extract_agent_insights(result.agent_name, result.agent_output)
         print_analysis_section(f"{result.agent_name.upper()} Analysis", insights)
 
-    # Show key output fields (always shown - essential for debugging)
+    # Show key output fields (full output - no truncation)
     if result.agent_output:
         print("\n  📋 Key Output Fields:")
         output_items = list(result.agent_output.items())
 
-        # Prioritize important fields
-        priority_fields = ["overall_ate", "heterogeneity_score", "causal_effect", "drift_detected",
-                          "experiment_design", "health_status", "prediction", "optimization_result",
-                          "executive_summary", "learning_summary", "analysis_complete", "status"]
+        # Prioritize important fields (shown first for readability)
+        priority_fields = [
+            "status", "executive_summary", "learning_summary",
+            "overall_ate", "heterogeneity_score", "causal_effect",
+            "overall_drift_score", "recommended_actions", "drift_interpretation",
+            "overall_health_score", "health_grade", "health_summary", "recommendations",
+            "prediction", "prediction_summary", "optimization_result", "optimization_summary",
+            "drift_detected", "experiment_design", "analysis_complete",
+        ]
         priority_items = [(k, v) for k, v in output_items if k in priority_fields]
         other_items = [(k, v) for k, v in output_items if k not in priority_fields]
 
-        # Show priority items first
-        for key, value in priority_items[:6]:
+        # Show all priority items first, then all remaining items
+        for key, value in priority_items:
             _print_output_value(key, value, indent=4)
-
-        # Show other items (limit)
-        shown = len(priority_items[:6])
-        for key, value in other_items[:max(0, 6 - shown)]:
+        for key, value in other_items:
             _print_output_value(key, value, indent=4)
-
-        total_fields = len(output_items)
-        shown_total = min(6, len(priority_items)) + min(max(0, 6 - len(priority_items[:6])), len(other_items))
-        remaining = total_fields - shown_total
-        if remaining > 0:
-            print(f"    ... and {remaining} more fields")
 
     # Quality gate details (verbose)
     if verbose and result.quality_gate:
@@ -1509,6 +1520,11 @@ def _print_output_value(key: str, value: Any, indent: int = 4) -> None:
             print(f"{prefix}{key}: []")
         elif len(value) <= 2 and all(isinstance(x, (str, int, float)) for x in value):
             print(f"{prefix}{key}: {value}")
+        elif all(isinstance(x, str) for x in value):
+            # List of strings - show all items for full visibility
+            print(f"{prefix}{key}: [{len(value)} items]")
+            for i, item in enumerate(value):
+                print(f"{prefix}  [{i}]: {item}")
         else:
             # Show first item if it's a dict (common pattern)
             if isinstance(value[0], dict):
