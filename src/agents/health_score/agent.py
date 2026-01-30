@@ -55,6 +55,7 @@ class HealthScoreOutput(BaseModel):
     agent_health_score: float = Field(description="Agent health score (0-1)")
     critical_issues: List[str] = Field(default_factory=list, description="List of critical issues")
     warnings: List[str] = Field(default_factory=list, description="List of warnings")
+    recommendations: List[str] = Field(default_factory=list, description="Actionable recommendations based on health scores")
     health_summary: str = Field(description="Human-readable health summary")
     total_latency_ms: int = Field(description="Total check latency in ms")
     timestamp: str = Field(description="Timestamp of health check")
@@ -241,6 +242,12 @@ class HealthScoreAgent:
                         agent_health_score=result.get("agent_health_score", 1.0),
                         critical_issues=result.get("critical_issues", []),
                         warnings=result.get("warnings", []),
+                        recommendations=HealthScoreAgent._recommendations_from_scores(
+                            component=result.get("component_health_score", 0.0),
+                            model=result.get("model_health_score", 1.0),
+                            pipeline=result.get("pipeline_health_score", 1.0),
+                            agent=result.get("agent_health_score", 1.0),
+                        ),
                         health_summary=result.get("health_summary", "Health check completed"),
                         total_latency_ms=result.get("total_latency_ms", 0),
                         timestamp=result.get("timestamp", datetime.now(timezone.utc).isoformat()),
@@ -271,6 +278,12 @@ class HealthScoreAgent:
                     agent_health_score=result.get("agent_health_score", 1.0),
                     critical_issues=result.get("critical_issues", []),
                     warnings=result.get("warnings", []),
+                    recommendations=HealthScoreAgent._recommendations_from_scores(
+                        component=result.get("component_health_score", 0.0),
+                        model=result.get("model_health_score", 1.0),
+                        pipeline=result.get("pipeline_health_score", 1.0),
+                        agent=result.get("agent_health_score", 1.0),
+                    ),
                     health_summary=result.get("health_summary", "Health check completed"),
                     total_latency_ms=result.get("total_latency_ms", 0),
                     timestamp=result.get("timestamp", datetime.now(timezone.utc).isoformat()),
@@ -337,6 +350,9 @@ class HealthScoreAgent:
                 agent_health_score=0.0,
                 critical_issues=[f"Health check failed: {e}"],
                 warnings=[],
+                recommendations=HealthScoreAgent._recommendations_from_scores(
+                    component=0.0, model=0.0, pipeline=0.0, agent=0.0,
+                ),
                 health_summary="Health check failed due to an error.",
                 total_latency_ms=elapsed,
                 timestamp=datetime.now(timezone.utc).isoformat(),
@@ -394,26 +410,51 @@ class HealthScoreAgent:
             "suggested_next_agent": ("drift_monitor" if output.model_health_score < 0.8 else None),
         }
 
-    def _generate_recommendations(self, output: HealthScoreOutput) -> List[str]:
-        """Generate recommendations based on health status."""
+    @staticmethod
+    def _recommendations_from_scores(
+        component: float = 1.0,
+        model: float = 1.0,
+        pipeline: float = 1.0,
+        agent: float = 1.0,
+    ) -> List[str]:
+        """Generate recommendations from component health scores.
+
+        Args:
+            component: Component health score (0-1)
+            model: Model health score (0-1)
+            pipeline: Pipeline health score (0-1)
+            agent: Agent health score (0-1)
+
+        Returns:
+            List of actionable recommendation strings
+        """
         recommendations = []
 
-        if output.component_health_score < 0.8:
+        if component < 0.8:
             recommendations.append("Investigate unhealthy components and restore services")
 
-        if output.model_health_score < 0.8:
+        if model < 0.8:
             recommendations.append("Review model performance metrics and consider retraining")
 
-        if output.pipeline_health_score < 0.8:
+        if pipeline < 0.8:
             recommendations.append("Check data pipeline freshness and resolve any failures")
 
-        if output.agent_health_score < 0.8:
+        if agent < 0.8:
             recommendations.append("Verify agent availability and address any connectivity issues")
 
         if not recommendations:
             recommendations.append("Continue monitoring - system is healthy")
 
         return recommendations
+
+    def _generate_recommendations(self, output: HealthScoreOutput) -> List[str]:
+        """Generate recommendations based on health status."""
+        return self._recommendations_from_scores(
+            component=output.component_health_score,
+            model=output.model_health_score,
+            pipeline=output.pipeline_health_score,
+            agent=output.agent_health_score,
+        )
 
 
 # ============================================================================
