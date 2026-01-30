@@ -1191,6 +1191,87 @@ async def verify_bentoml_predictions(
     return result
 
 
+async def deploy_to_persistent_service(model_tag: str) -> dict:
+    """Deploy model to the persistent e2i-bentoml systemd service.
+
+    Checks if the systemd service is installed, updates the env file with the
+    model tag, restarts the service, and waits for health. Falls back to
+    returning not-available so the caller can use ephemeral mode.
+
+    Args:
+        model_tag: BentoML model tag to deploy
+
+    Returns:
+        {"available": True, "endpoint": "http://localhost:3000"} or
+        {"available": False, "reason": "..."}
+    """
+    import httpx
+
+    # Check if systemd service exists
+    try:
+        check = subprocess.run(
+            ["systemctl", "is-enabled", "e2i-bentoml"],
+            capture_output=True,
+            text=True,
+        )
+        if check.returncode != 0:
+            return {"available": False, "reason": "e2i-bentoml.service not installed"}
+    except Exception:
+        return {"available": False, "reason": "systemctl not available"}
+
+    # Update env file with the model tag
+    env_path = Path("/opt/e2i_causal_analytics/deploy/e2i-bentoml.env")
+    if not env_path.exists():
+        # Try local path
+        env_path = Path(__file__).parent.parent / "deploy" / "e2i-bentoml.env"
+
+    if env_path.exists():
+        lines = env_path.read_text().splitlines()
+        new_lines = [
+            ln for ln in lines
+            if not ln.startswith("E2I_BENTOML_MODEL_TAG=")
+            and not ln.startswith("E2I_BENTOML_MODEL_NAME=")
+        ]
+        new_lines.append(f"E2I_BENTOML_MODEL_TAG={model_tag}")
+        env_path.write_text("\n".join(new_lines) + "\n")
+
+    # Restart service
+    try:
+        restart = subprocess.run(
+            ["sudo", "systemctl", "restart", "e2i-bentoml"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if restart.returncode != 0:
+            return {
+                "available": False,
+                "reason": f"restart failed: {restart.stderr.strip()}",
+            }
+    except subprocess.TimeoutExpired:
+        return {"available": False, "reason": "restart timed out"}
+    except Exception as e:
+        return {"available": False, "reason": str(e)}
+
+    # Wait for health
+    endpoint = "http://localhost:3000"
+    async with httpx.AsyncClient() as client:
+        for _ in range(30):
+            await asyncio.sleep(1)
+            try:
+                resp = await client.get(f"{endpoint}/healthz", timeout=2.0)
+                if resp.status_code == 200:
+                    return {
+                        "available": True,
+                        "endpoint": endpoint,
+                        "persistent": True,
+                    }
+            except Exception:
+                continue
+
+    return {"available": False, "reason": "health check timeout after 30s"}
+
+
 async def stop_bentoml_service(pid: int) -> dict:
     """Stop BentoML service by PID.
 
@@ -2447,12 +2528,28 @@ async def step_7_model_deployer(
                 model_tag = registration.get("model_tag")
                 print(f"    ✓ Model registered: {model_tag}")
 
-                # Start BentoML service with the registered model
-                bentoml_result = await start_bentoml_service(model_tag, port=3001)
+                # Try persistent service first, fall back to ephemeral
+                persistent = await deploy_to_persistent_service(model_tag)
+                if persistent.get("available"):
+                    endpoint = persistent["endpoint"]
+                    print(f"    ✓ Using persistent service at {endpoint}")
+                    result["bentoml_persistent"] = True
+                else:
+                    reason = persistent.get("reason", "unknown")
+                    print(f"    ℹ Persistent service not available ({reason}), using ephemeral")
+                    # Start BentoML service with the registered model
+                    bentoml_result = await start_bentoml_service(model_tag, port=3001)
 
-                if bentoml_result.get("started"):
-                    endpoint = bentoml_result.get("endpoint")
+                    if bentoml_result.get("started"):
+                        endpoint = bentoml_result.get("endpoint")
+                        result["bentoml_pid"] = bentoml_result.get("pid")
+                    else:
+                        error_msg = bentoml_result.get("error", "Unknown error")
+                        print(f"    ✗ BentoML service failed to start: {error_msg}")
+                        result["bentoml_serving"] = {"error": error_msg}
+                        endpoint = None
 
+                if endpoint:
                     # Verify predictions work with sample data
                     # Use same feature structure as training (3 features)
                     sample_features = [[30.0, 5.0, 1.0]]  # days_on_therapy, hcp_visits, prior_treatments
@@ -2477,25 +2574,22 @@ async def step_7_model_deployer(
                     if verification.get("latency_ms"):
                         print(f"      latency_ms: {verification.get('latency_ms'):.1f}")
 
+                    mode = "persistent" if result.get("bentoml_persistent") else "ephemeral"
                     result["bentoml_serving"] = {
                         "model_tag": model_tag,
                         "endpoint": endpoint,
+                        "mode": mode,
                         "health_check": verification.get("health_check"),
                         "prediction_test": verification.get("prediction_test"),
                         "predictions": verification.get("predictions"),
                         "probabilities": verification.get("probabilities"),
                         "latency_ms": verification.get("latency_ms"),
                     }
-                    result["bentoml_pid"] = bentoml_result.get("pid")
 
                     if verification.get("health_check") and verification.get("prediction_test"):
-                        print_success("Real model deployed and serving verified via BentoML")
+                        print_success(f"Real model deployed and serving verified via BentoML ({mode})")
                     else:
                         print_warning("BentoML serving started but verification incomplete")
-                else:
-                    error_msg = bentoml_result.get("error", "Unknown error")
-                    print(f"    ✗ BentoML service failed to start: {error_msg}")
-                    result["bentoml_serving"] = {"error": error_msg}
             else:
                 error_msg = registration.get("error", "Registration failed")
                 print(f"    ✗ Model registration failed: {error_msg}")
@@ -3197,9 +3291,12 @@ async def run_pipeline(
                 include_bentoml=include_bentoml,
             )
             state["deployment_manifest"] = result.get("deployment_manifest")
-            # Track BentoML PID for cleanup
+            # Track BentoML PID for cleanup (ephemeral mode only)
             if include_bentoml and result.get("bentoml_pid"):
                 state["bentoml_pid"] = result["bentoml_pid"]
+            # Track persistent mode to skip cleanup
+            if include_bentoml and result.get("bentoml_persistent"):
+                state["bentoml_persistent"] = True
 
             manifest = result.get("deployment_manifest", {})
             bentoml_serving = result.get("bentoml_serving", {})
@@ -3352,14 +3449,16 @@ async def run_pipeline(
         raise
 
     finally:
-        # Cleanup BentoML service if started
-        if state.get("bentoml_pid"):
-            print("\n  Cleaning up BentoML service...")
+        # Cleanup BentoML service if started (skip if using persistent systemd service)
+        if state.get("bentoml_pid") and not state.get("bentoml_persistent"):
+            print("\n  Cleaning up ephemeral BentoML service...")
             cleanup_result = await stop_bentoml_service(state["bentoml_pid"])
             if cleanup_result.get("stopped"):
                 print(f"    ✓ BentoML service stopped (PID: {state['bentoml_pid']})")
             else:
                 print(f"    ⚠️  BentoML cleanup issue: {cleanup_result.get('error', 'unknown')}")
+        elif state.get("bentoml_persistent"):
+            print("\n  Persistent BentoML service left running (e2i-bentoml.service)")
 
     return state
 

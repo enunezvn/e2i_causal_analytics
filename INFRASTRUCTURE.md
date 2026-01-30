@@ -25,6 +25,7 @@ ssh e2i-prod
 | Service | URL |
 |---------|-----|
 | API | http://138.197.4.36:8000 |
+| BentoML | http://138.197.4.36:3000 |
 | MLflow | http://138.197.4.36:5000 |
 | Opik | http://138.197.4.36:5173 |
 | FalkorDB Browser | http://138.197.4.36:3030 |
@@ -45,6 +46,18 @@ sudo systemctl restart e2i-api
 
 # View API logs
 sudo journalctl -u e2i-api -f
+
+# Check BentoML model serving
+sudo systemctl status e2i-bentoml
+
+# Restart BentoML (e.g. after training new model)
+sudo systemctl restart e2i-bentoml
+
+# View BentoML logs
+sudo journalctl -u e2i-bentoml -f
+
+# Deploy a specific model to BentoML
+./scripts/bentoml/deploy_model.sh --model-tag tier0_abc123:v5
 
 # Check nginx status
 sudo systemctl status nginx
@@ -232,6 +245,7 @@ E2I application services managed by systemd:
 | Service | Description | Port | Status |
 |---------|-------------|------|--------|
 | `e2i-api.service` | FastAPI backend (uvicorn) | 8000 | ✅ Active |
+| `e2i-bentoml.service` | BentoML model serving | 3000 | ✅ Active |
 | `nginx` | Reverse proxy | 80/443 | ✅ Active |
 | `docker` | Container runtime | - | ✅ Active |
 | `fail2ban` | Intrusion prevention | - | ✅ Active |
@@ -367,6 +381,8 @@ docker ps --filter "name=supabase"
 | `/home/enunez/opik` | Opik installation |
 | `/home/enunez/opik/deployment/docker-compose` | Opik Docker compose |
 | `/etc/systemd/system/e2i-api.service` | API systemd service file |
+| `/etc/systemd/system/e2i-bentoml.service` | BentoML systemd service file |
+| `/opt/e2i_causal_analytics/deploy/e2i-bentoml.env` | BentoML environment config |
 | `/etc/nginx/sites-available/e2i-app` | Nginx config |
 | `/var/log/nginx/e2i-app.access.log` | Nginx access logs |
 | `/var/log/nginx/e2i-app.error.log` | Nginx error logs |
@@ -561,6 +577,24 @@ sudo journalctl -u e2i-api -n 100 --no-pager
 
 # Restart the service
 sudo systemctl restart e2i-api
+```
+
+**BentoML model serving not responding:**
+```bash
+# Check if service is running
+sudo systemctl status e2i-bentoml
+
+# Check if port is listening
+ss -tlnp | grep 3000
+
+# View recent logs
+sudo journalctl -u e2i-bentoml -n 100 --no-pager
+
+# Restart the service
+sudo systemctl restart e2i-bentoml
+
+# Deploy a specific model
+./scripts/bentoml/deploy_model.sh --model-tag tier0_abc123:v5
 ```
 
 **SSH connection refused:**

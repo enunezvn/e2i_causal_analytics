@@ -520,8 +520,8 @@ async def health_check() -> Dict[str, Any]:
     # Add explanatory message when BentoML is not healthy
     if bentoml_status in ("unhealthy", "unavailable", "unknown"):
         bentoml_message = (
-            "Expected: No ML models are currently deployed to BentoML. "
-            "Start BentoML services with trained models to enable model serving."
+            "BentoML model serving is not running. "
+            "Start with: sudo systemctl start e2i-bentoml"
         )
 
     # Build components dict
