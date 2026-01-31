@@ -1,1 +1,1 @@
-"""Unit tests for Digital Twin system."""
+"""Unit tests for digital_twin module."""

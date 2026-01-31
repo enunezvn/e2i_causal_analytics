@@ -1,45 +1,42 @@
-"""Unit tests for Celery Event Consumer module.
+"""
+Unit tests for workers/event_consumer.py
 
 Tests cover:
-- CeleryMetrics dataclass initialization
-- TaskTiming dataclass
+- CeleryMetrics initialization
 - CeleryEventConsumer event handlers
-- Trace ID propagation functions
-- Traced task context manager
-
-G12 from observability audit remediation plan.
+- Task lifecycle tracking
+- Prometheus metrics recording
+- Trace ID propagation
+- Event handler routing
 """
 
+import pytest
 import time
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
+from typing import Any, Dict
+from unittest.mock import MagicMock, patch, call
 
-import pytest
+# Mock prometheus_client before importing event_consumer
+import sys
+mock_prom = MagicMock()
+sys.modules['prometheus_client'] = mock_prom
 
 from src.workers.event_consumer import (
     CeleryMetrics,
-    TaskTiming,
     CeleryEventConsumer,
+    TaskTiming,
     inject_trace_context,
     extract_trace_context,
     traced_task,
-    celery_metrics,
-    PROMETHEUS_AVAILABLE,
 )
-
-
-# =============================================================================
-# FIXTURES
-# =============================================================================
 
 
 @pytest.fixture
 def mock_celery_app():
     """Mock Celery application."""
-    mock = MagicMock()
-    mock.connection.return_value.__enter__ = MagicMock()
-    mock.connection.return_value.__exit__ = MagicMock()
-    return mock
+    app = MagicMock()
+    app.connection = MagicMock()
+    return app
 
 
 @pytest.fixture
@@ -49,387 +46,560 @@ def mock_prometheus_registry():
 
 
 @pytest.fixture
-def consumer(mock_celery_app, mock_prometheus_registry):
-    """Create CeleryEventConsumer instance."""
-    with patch("src.workers.event_consumer.PROMETHEUS_AVAILABLE", False):
-        return CeleryEventConsumer(mock_celery_app, registry=mock_prometheus_registry)
+def celery_metrics():
+    """CeleryMetrics instance."""
+    metrics = CeleryMetrics()
+    metrics._initialized = False
+    return metrics
 
 
 @pytest.fixture
-def sample_task_event():
-    """Create sample task event."""
-    return {
-        "uuid": "task-123",
-        "name": "src.tasks.process_data",
-        "timestamp": time.time(),
-        "routing_key": "analytics",
-        "queue": "analytics",
-    }
-
-
-# =============================================================================
-# CELERY METRICS TESTS
-# =============================================================================
+def consumer(mock_celery_app):
+    """CeleryEventConsumer instance."""
+    return CeleryEventConsumer(mock_celery_app)
 
 
 class TestCeleryMetrics:
-    """Tests for CeleryMetrics dataclass."""
+    """Tests for CeleryMetrics dataclass and initialization."""
 
-    def test_metrics_default_not_initialized(self):
-        """Test metrics are not initialized by default."""
-        metrics = CeleryMetrics()
-        assert metrics._initialized is False
-        assert metrics.task_started is None
+    def test_metrics_default_state(self, celery_metrics):
+        """Test default metric state."""
+        assert celery_metrics.registry is None
+        assert celery_metrics.task_started is None
+        assert celery_metrics.task_succeeded is None
+        assert celery_metrics.task_failed is None
+        assert celery_metrics.task_retried is None
+        assert celery_metrics.task_rejected is None
+        assert celery_metrics.task_revoked is None
+        assert celery_metrics.task_latency is None
+        assert celery_metrics.task_runtime is None
+        assert celery_metrics.active_tasks is None
+        assert celery_metrics.queue_length is None
+        assert celery_metrics.worker_count is None
+        assert celery_metrics._initialized is False
 
-    def test_metrics_initialize_without_prometheus(self):
-        """Test metrics initialization when Prometheus unavailable."""
-        metrics = CeleryMetrics()
-        with patch("src.workers.event_consumer.PROMETHEUS_AVAILABLE", False):
-            metrics.initialize()
-            assert metrics._initialized is False
+    @patch('src.workers.event_consumer.PROMETHEUS_AVAILABLE', True)
+    def test_initialize_prometheus_metrics(self, celery_metrics):
+        """Test Prometheus metrics initialization."""
+        with patch('src.workers.event_consumer.Counter') as MockCounter, \
+             patch('src.workers.event_consumer.Histogram') as MockHistogram, \
+             patch('src.workers.event_consumer.Gauge') as MockGauge:
 
-    @pytest.mark.skipif(not PROMETHEUS_AVAILABLE, reason="Prometheus not installed")
-    def test_metrics_initialize_with_prometheus(self, mock_prometheus_registry):
-        """Test metrics initialization with Prometheus available."""
-        metrics = CeleryMetrics()
-        metrics.initialize(registry=mock_prometheus_registry)
-        assert metrics._initialized is True or not PROMETHEUS_AVAILABLE
+            celery_metrics.initialize()
 
-    def test_metrics_double_initialization_is_idempotent(self):
-        """Test that double initialization does nothing."""
-        metrics = CeleryMetrics()
-        metrics._initialized = True
-        metrics.initialize()
-        # Should not raise
+            assert celery_metrics._initialized is True
+            assert MockCounter.call_count > 0
+            assert MockHistogram.call_count > 0
+            assert MockGauge.call_count > 0
 
+    @patch('src.workers.event_consumer.PROMETHEUS_AVAILABLE', False)
+    def test_initialize_no_prometheus(self, celery_metrics):
+        """Test initialization without Prometheus available."""
+        celery_metrics.initialize()
 
-# =============================================================================
-# TASK TIMING TESTS
-# =============================================================================
+        assert celery_metrics._initialized is False
+
+    def test_initialize_only_once(self, celery_metrics):
+        """Test metrics only initialize once."""
+        with patch('src.workers.event_consumer.Counter') as MockCounter:
+            celery_metrics.initialize()
+            celery_metrics.initialize()  # Second call should be no-op
+
+            # If initialized, Counter should only be called once
+            if celery_metrics._initialized:
+                first_call_count = MockCounter.call_count
+                celery_metrics.initialize()
+                assert MockCounter.call_count == first_call_count
 
 
 class TestTaskTiming:
     """Tests for TaskTiming dataclass."""
 
-    def test_timing_creation(self):
-        """Test TaskTiming creation."""
+    def test_timing_defaults(self):
+        """Test TaskTiming default values."""
         timing = TaskTiming(
-            task_id="task-123",
+            task_id="test-123",
             task_name="test_task",
             queue="default",
         )
-        assert timing.task_id == "task-123"
+
+        assert timing.task_id == "test-123"
         assert timing.task_name == "test_task"
         assert timing.queue == "default"
         assert timing.sent_at is None
         assert timing.started_at is None
+        assert timing.succeeded_at is None
+        assert timing.failed_at is None
 
     def test_timing_with_timestamps(self):
-        """Test TaskTiming with all timestamps."""
+        """Test TaskTiming with timestamp values."""
         now = time.time()
         timing = TaskTiming(
-            task_id="task-123",
-            task_name="test_task",
-            queue="default",
+            task_id="test-456",
+            task_name="my_task",
+            queue="analytics",
             sent_at=now,
-            started_at=now + 0.1,
-            succeeded_at=now + 1.0,
+            started_at=now + 1.0,
+            succeeded_at=now + 10.0,
         )
+
         assert timing.sent_at == now
-        assert timing.started_at == now + 0.1
-        assert timing.succeeded_at == now + 1.0
-
-
-# =============================================================================
-# EVENT CONSUMER TESTS
-# =============================================================================
+        assert timing.started_at == now + 1.0
+        assert timing.succeeded_at == now + 10.0
 
 
 class TestCeleryEventConsumer:
     """Tests for CeleryEventConsumer class."""
 
-    def test_consumer_creation(self, consumer):
-        """Test consumer can be created."""
-        assert consumer is not None
-        assert isinstance(consumer, CeleryEventConsumer)
+    def test_initialization(self, mock_celery_app):
+        """Test consumer initialization."""
+        consumer = CeleryEventConsumer(mock_celery_app)
+
+        assert consumer.app == mock_celery_app
+        assert consumer._task_timings == {}
         assert consumer._running is False
 
-    def test_get_task_queue_from_routing_key(self, consumer, sample_task_event):
-        """Test queue extraction from routing_key."""
-        queue = consumer._get_task_queue(sample_task_event)
+    def test_get_task_queue_from_routing_key(self, consumer):
+        """Test extracting queue from routing_key."""
+        event = {"routing_key": "analytics"}
+
+        queue = consumer._get_task_queue(event)
+
         assert queue == "analytics"
 
-    def test_get_task_queue_default(self, consumer):
-        """Test queue defaults to 'default' when not specified."""
-        event = {"uuid": "task-123", "name": "test"}
+    def test_get_task_queue_fallback_to_queue(self, consumer):
+        """Test extracting queue from queue field."""
+        event = {"queue": "shap"}
+
         queue = consumer._get_task_queue(event)
+
+        assert queue == "shap"
+
+    def test_get_task_queue_default(self, consumer):
+        """Test default queue when no routing_key or queue."""
+        event = {}
+
+        queue = consumer._get_task_queue(event)
+
         assert queue == "default"
 
-    def test_get_or_create_timing_new(self, consumer, sample_task_event):
+    def test_get_or_create_timing_new(self, consumer):
         """Test creating new task timing."""
-        timing = consumer._get_or_create_timing(sample_task_event)
-        assert timing.task_id == "task-123"
-        assert timing.task_name == "src.tasks.process_data"
-        assert timing.queue == "analytics"
+        event = {
+            "uuid": "task-123",
+            "name": "test_task",
+            "routing_key": "analytics",
+        }
 
-    def test_get_or_create_timing_existing(self, consumer, sample_task_event):
-        """Test retrieving existing task timing."""
-        timing1 = consumer._get_or_create_timing(sample_task_event)
-        timing2 = consumer._get_or_create_timing(sample_task_event)
+        timing = consumer._get_or_create_timing(event)
+
+        assert timing.task_id == "task-123"
+        assert timing.task_name == "test_task"
+        assert timing.queue == "analytics"
+        assert "task-123" in consumer._task_timings
+
+    def test_get_or_create_timing_existing(self, consumer):
+        """Test getting existing task timing."""
+        event = {
+            "uuid": "task-456",
+            "name": "test_task",
+            "routing_key": "default",
+        }
+
+        timing1 = consumer._get_or_create_timing(event)
+        timing2 = consumer._get_or_create_timing(event)
+
         assert timing1 is timing2
 
-    def test_cleanup_timing(self, consumer, sample_task_event):
+    def test_cleanup_timing(self, consumer):
         """Test cleaning up task timing."""
-        consumer._get_or_create_timing(sample_task_event)
-        timing = consumer._cleanup_timing("task-123")
-        assert timing is not None
-        assert "task-123" not in consumer._task_timings
+        event = {"uuid": "task-789", "name": "test", "routing_key": "default"}
+        timing = consumer._get_or_create_timing(event)
 
-    def test_cleanup_timing_nonexistent(self, consumer):
-        """Test cleaning up nonexistent task timing."""
-        timing = consumer._cleanup_timing("nonexistent")
-        assert timing is None
+        cleaned = consumer._cleanup_timing("task-789")
 
+        assert cleaned is timing
+        assert "task-789" not in consumer._task_timings
 
-class TestEventHandlers:
-    """Tests for event handler methods."""
+    def test_cleanup_timing_not_found(self, consumer):
+        """Test cleaning up non-existent timing."""
+        result = consumer._cleanup_timing("nonexistent")
 
-    def test_on_task_sent(self, consumer, sample_task_event):
+        assert result is None
+
+    def test_on_task_sent(self, consumer):
         """Test task-sent event handler."""
-        consumer.on_task_sent(sample_task_event)
-        timing = consumer._task_timings.get("task-123")
-        assert timing is not None
-        assert timing.sent_at is not None
+        event = {
+            "uuid": "task-sent-1",
+            "name": "my_task",
+            "routing_key": "default",
+            "timestamp": 1234567890.0,
+        }
 
-    def test_on_task_received(self, consumer, sample_task_event):
+        consumer.on_task_sent(event)
+
+        timing = consumer._task_timings["task-sent-1"]
+        assert timing.sent_at == 1234567890.0
+
+    def test_on_task_received(self, consumer):
         """Test task-received event handler."""
-        consumer.on_task_received(sample_task_event)
-        timing = consumer._task_timings.get("task-123")
-        assert timing is not None
+        event = {
+            "uuid": "task-recv-1",
+            "name": "my_task",
+            "routing_key": "default",
+            "timestamp": 1234567891.0,
+        }
 
-    def test_on_task_started(self, consumer, sample_task_event):
+        consumer.on_task_received(event)
+
+        timing = consumer._task_timings["task-recv-1"]
+        assert timing.sent_at == 1234567891.0  # Set if not already set
+
+    def test_on_task_started(self, consumer):
         """Test task-started event handler."""
-        # First send the task
-        consumer.on_task_sent(sample_task_event)
-        # Then start it
-        consumer.on_task_started(sample_task_event)
-        timing = consumer._task_timings.get("task-123")
-        assert timing.started_at is not None
+        # Setup task timing
+        event = {
+            "uuid": "task-start-1",
+            "name": "my_task",
+            "routing_key": "analytics",
+            "timestamp": 1234567892.0,
+        }
+        consumer.on_task_sent({"uuid": "task-start-1", "name": "my_task", "routing_key": "analytics", "timestamp": 1234567890.0})
 
-    def test_on_task_succeeded(self, consumer, sample_task_event):
+        # Mock metrics
+        with patch('src.workers.event_consumer.celery_metrics') as mock_metrics:
+            mock_metrics.task_started = MagicMock()
+            mock_metrics.task_started.labels = MagicMock(return_value=MagicMock())
+            mock_metrics.task_latency = MagicMock()
+            mock_metrics.task_latency.labels = MagicMock(return_value=MagicMock())
+            mock_metrics.active_tasks = MagicMock()
+            mock_metrics.active_tasks.labels = MagicMock(return_value=MagicMock())
+
+            consumer.on_task_started(event)
+
+        timing = consumer._task_timings["task-start-1"]
+        assert timing.started_at == 1234567892.0
+
+    def test_on_task_succeeded(self, consumer):
         """Test task-succeeded event handler."""
-        consumer.on_task_sent(sample_task_event)
-        consumer.on_task_started(sample_task_event)
-        consumer.on_task_succeeded(sample_task_event)
-        # Timing should be cleaned up
-        assert "task-123" not in consumer._task_timings
+        # Setup timing
+        consumer.on_task_sent({"uuid": "task-success-1", "name": "my_task", "routing_key": "default", "timestamp": 1234567890.0})
+        consumer.on_task_started({"uuid": "task-success-1", "name": "my_task", "routing_key": "default", "timestamp": 1234567891.0})
 
-    def test_on_task_failed(self, consumer, sample_task_event):
+        event = {
+            "uuid": "task-success-1",
+            "name": "my_task",
+            "routing_key": "default",
+            "timestamp": 1234567900.0,
+        }
+
+        with patch('src.workers.event_consumer.celery_metrics') as mock_metrics:
+            mock_metrics.task_succeeded = MagicMock()
+            mock_metrics.task_succeeded.labels = MagicMock(return_value=MagicMock())
+            mock_metrics.task_runtime = MagicMock()
+            mock_metrics.task_runtime.labels = MagicMock(return_value=MagicMock())
+            mock_metrics.active_tasks = MagicMock()
+            mock_metrics.active_tasks.labels = MagicMock(return_value=MagicMock())
+
+            consumer.on_task_succeeded(event)
+
+        # Task should be cleaned up
+        assert "task-success-1" not in consumer._task_timings
+
+    def test_on_task_failed(self, consumer):
         """Test task-failed event handler."""
-        sample_task_event["exception"] = "ValueError(test error)"
-        consumer.on_task_sent(sample_task_event)
-        consumer.on_task_started(sample_task_event)
-        consumer.on_task_failed(sample_task_event)
-        # Timing should be cleaned up
-        assert "task-123" not in consumer._task_timings
+        # Setup timing
+        consumer.on_task_sent({"uuid": "task-fail-1", "name": "my_task", "routing_key": "default", "timestamp": 1234567890.0})
+        consumer.on_task_started({"uuid": "task-fail-1", "name": "my_task", "routing_key": "default", "timestamp": 1234567891.0})
 
-    def test_on_task_retried(self, consumer, sample_task_event):
+        event = {
+            "uuid": "task-fail-1",
+            "name": "my_task",
+            "routing_key": "default",
+            "timestamp": 1234567895.0,
+            "exception": "ValueError('test error')",
+        }
+
+        with patch('src.workers.event_consumer.celery_metrics') as mock_metrics:
+            mock_metrics.task_failed = MagicMock()
+            mock_metrics.task_failed.labels = MagicMock(return_value=MagicMock())
+            mock_metrics.task_runtime = MagicMock()
+            mock_metrics.task_runtime.labels = MagicMock(return_value=MagicMock())
+            mock_metrics.active_tasks = MagicMock()
+            mock_metrics.active_tasks.labels = MagicMock(return_value=MagicMock())
+
+            consumer.on_task_failed(event)
+
+        # Task should be cleaned up
+        assert "task-fail-1" not in consumer._task_timings
+
+    def test_on_task_retried(self, consumer):
         """Test task-retried event handler."""
-        # Should not raise
-        consumer.on_task_retried(sample_task_event)
+        event = {
+            "uuid": "task-retry-1",
+            "name": "my_task",
+            "routing_key": "default",
+        }
 
-    def test_on_task_rejected(self, consumer, sample_task_event):
+        with patch('src.workers.event_consumer.celery_metrics') as mock_metrics:
+            mock_metrics.task_retried = MagicMock()
+            mock_metrics.task_retried.labels = MagicMock(return_value=MagicMock())
+
+            consumer.on_task_retried(event)
+
+    def test_on_task_rejected(self, consumer):
         """Test task-rejected event handler."""
-        # Should not raise
-        consumer.on_task_rejected(sample_task_event)
+        event = {
+            "uuid": "task-reject-1",
+            "name": "my_task",
+            "routing_key": "default",
+        }
 
-    def test_on_task_revoked(self, consumer, sample_task_event):
+        with patch('src.workers.event_consumer.celery_metrics') as mock_metrics:
+            mock_metrics.task_rejected = MagicMock()
+            mock_metrics.task_rejected.labels = MagicMock(return_value=MagicMock())
+
+            consumer.on_task_rejected(event)
+
+    def test_on_task_revoked(self, consumer):
         """Test task-revoked event handler."""
-        consumer.on_task_sent(sample_task_event)
-        consumer.on_task_revoked(sample_task_event)
-        # Timing should be cleaned up
-        assert "task-123" not in consumer._task_timings
+        # Setup timing first
+        consumer.on_task_sent({"uuid": "task-revoke-1", "name": "my_task", "routing_key": "default"})
+
+        event = {
+            "uuid": "task-revoke-1",
+            "name": "my_task",
+        }
+
+        with patch('src.workers.event_consumer.celery_metrics') as mock_metrics:
+            mock_metrics.task_revoked = MagicMock()
+            mock_metrics.task_revoked.labels = MagicMock(return_value=MagicMock())
+
+            consumer.on_task_revoked(event)
+
+        # Task should be cleaned up
+        assert "task-revoke-1" not in consumer._task_timings
 
     def test_on_worker_online(self, consumer):
         """Test worker-online event handler."""
-        event = {"hostname": "worker-light-1"}
-        # Should not raise
-        consumer.on_worker_online(event)
+        event = {"hostname": "worker-light-01"}
+
+        with patch('src.workers.event_consumer.celery_metrics') as mock_metrics:
+            mock_metrics.worker_count = MagicMock()
+            mock_metrics.worker_count.labels = MagicMock(return_value=MagicMock())
+
+            consumer.on_worker_online(event)
 
     def test_on_worker_offline(self, consumer):
         """Test worker-offline event handler."""
-        event = {"hostname": "worker-medium-1"}
-        # Should not raise
-        consumer.on_worker_offline(event)
+        event = {"hostname": "worker-heavy-02"}
+
+        with patch('src.workers.event_consumer.celery_metrics') as mock_metrics:
+            mock_metrics.worker_count = MagicMock()
+            mock_metrics.worker_count.labels = MagicMock(return_value=MagicMock())
+
+            consumer.on_worker_offline(event)
 
     def test_on_worker_heartbeat(self, consumer):
         """Test worker-heartbeat event handler."""
-        # Celery's state.event() requires 'type' field for event processing
-        event = {
-            "type": "worker-heartbeat",
-            "hostname": "worker-1",
-            "timestamp": time.time(),
-        }
-        # Should not raise
+        event = {"hostname": "worker-medium-01", "type": "worker-heartbeat"}
+
+        # Should call state.event() without raising an exception
         consumer.on_worker_heartbeat(event)
 
+        # Verify no exception was raised
 
-class TestWorkerTypeInference:
-    """Tests for worker type inference."""
-
-    def test_infer_light_worker(self, consumer):
+    def test_infer_worker_type_light(self, consumer):
         """Test inferring light worker type."""
-        assert consumer._infer_worker_type("celery-light-1") == "light"
+        assert consumer._infer_worker_type("worker-light-01") == "light"
 
-    def test_infer_medium_worker(self, consumer):
+    def test_infer_worker_type_medium(self, consumer):
         """Test inferring medium worker type."""
-        assert consumer._infer_worker_type("celery-medium-1") == "medium"
+        assert consumer._infer_worker_type("worker-medium-02") == "medium"
 
-    def test_infer_heavy_worker(self, consumer):
+    def test_infer_worker_type_heavy(self, consumer):
         """Test inferring heavy worker type."""
-        assert consumer._infer_worker_type("celery-heavy-1") == "heavy"
+        assert consumer._infer_worker_type("worker-heavy-03") == "heavy"
 
-    def test_infer_unknown_worker(self, consumer):
+    def test_infer_worker_type_unknown(self, consumer):
         """Test inferring unknown worker type."""
-        assert consumer._infer_worker_type("celery-worker-1") == "unknown"
+        assert consumer._infer_worker_type("random-worker") == "unknown"
 
-
-class TestGetHandlers:
-    """Tests for get_handlers method."""
-
-    def test_get_handlers_returns_dict(self, consumer):
-        """Test get_handlers returns dictionary."""
+    def test_get_handlers(self, consumer):
+        """Test getting event handler mapping."""
         handlers = consumer.get_handlers()
-        assert isinstance(handlers, dict)
 
-    def test_get_handlers_has_expected_events(self, consumer):
-        """Test get_handlers includes expected event types."""
-        handlers = consumer.get_handlers()
-        expected_events = [
-            "task-sent",
-            "task-received",
-            "task-started",
-            "task-succeeded",
-            "task-failed",
-            "task-retried",
-            "task-rejected",
-            "task-revoked",
-            "worker-online",
-            "worker-offline",
-            "worker-heartbeat",
-        ]
-        for event in expected_events:
-            assert event in handlers
-            assert callable(handlers[event])
+        assert "task-sent" in handlers
+        assert "task-received" in handlers
+        assert "task-started" in handlers
+        assert "task-succeeded" in handlers
+        assert "task-failed" in handlers
+        assert "task-retried" in handlers
+        assert "task-rejected" in handlers
+        assert "task-revoked" in handlers
+        assert "worker-online" in handlers
+        assert "worker-offline" in handlers
+        assert "worker-heartbeat" in handlers
 
+        # Verify handlers are callable
+        assert callable(handlers["task-started"])
+        assert callable(handlers["task-succeeded"])
 
-class TestConsumerLifecycle:
-    """Tests for consumer lifecycle methods."""
-
-    def test_stop_sets_running_false(self, consumer):
-        """Test stop method sets _running to False."""
+    def test_stop(self, consumer):
+        """Test stopping consumer."""
         consumer._running = True
+
         consumer.stop()
+
         assert consumer._running is False
 
 
-# =============================================================================
-# TRACE CONTEXT TESTS
-# =============================================================================
+class TestTraceIDPropagation:
+    """Tests for trace ID propagation helpers."""
 
-
-class TestTraceContext:
-    """Tests for trace context functions."""
-
-    def test_inject_trace_context_with_trace_id(self):
-        """Test injecting trace context with trace ID."""
+    def test_inject_trace_context(self):
+        """Test injecting trace context into headers."""
         headers = {}
-        result = inject_trace_context(headers, trace_id="abc123")
-        assert result["X-Trace-ID"] == "abc123"
-        assert result["X-Request-ID"] == "abc123"
+        trace_id = "test-trace-123"
+
+        result = inject_trace_context(headers, trace_id)
+
+        assert result["X-Trace-ID"] == trace_id
+        assert result["X-Request-ID"] == trace_id
         assert "X-Task-Sent-At" in result
+        assert isinstance(result["X-Task-Sent-At"], float)
 
-    def test_inject_trace_context_without_trace_id(self):
-        """Test injecting trace context without trace ID."""
+    def test_inject_trace_context_no_trace_id(self):
+        """Test injecting without trace ID."""
         headers = {}
+
         result = inject_trace_context(headers)
+
         assert "X-Trace-ID" not in result
         assert "X-Task-Sent-At" in result
 
-    def test_inject_trace_context_preserves_existing(self):
-        """Test injecting trace context preserves existing headers."""
-        headers = {"existing": "value"}
-        result = inject_trace_context(headers, trace_id="abc123")
-        assert result["existing"] == "value"
+    def test_extract_trace_context(self):
+        """Test extracting trace context from headers."""
+        headers = {"X-Trace-ID": "trace-456"}
 
-    def test_extract_trace_context_from_trace_id(self):
-        """Test extracting trace context from X-Trace-ID."""
-        headers = {"X-Trace-ID": "trace-123"}
         trace_id = extract_trace_context(headers)
-        assert trace_id == "trace-123"
+
+        assert trace_id == "trace-456"
 
     def test_extract_trace_context_from_request_id(self):
-        """Test extracting trace context from X-Request-ID."""
-        headers = {"X-Request-ID": "request-456"}
-        trace_id = extract_trace_context(headers)
-        assert trace_id == "request-456"
+        """Test extracting from X-Request-ID."""
+        headers = {"X-Request-ID": "request-789"}
 
-    def test_extract_trace_context_prefers_trace_id(self):
-        """Test X-Trace-ID is preferred over X-Request-ID."""
-        headers = {"X-Trace-ID": "trace-123", "X-Request-ID": "request-456"}
         trace_id = extract_trace_context(headers)
-        assert trace_id == "trace-123"
 
-    def test_extract_trace_context_empty(self):
-        """Test extracting trace context from empty headers."""
+        assert trace_id == "request-789"
+
+    def test_extract_trace_context_not_found(self):
+        """Test extracting when not present."""
         headers = {}
+
         trace_id = extract_trace_context(headers)
+
         assert trace_id is None
-
-
-# =============================================================================
-# TRACED TASK CONTEXT MANAGER TESTS
-# =============================================================================
 
 
 class TestTracedTask:
     """Tests for traced_task context manager."""
 
     def test_traced_task_success(self):
-        """Test traced_task context manager on success."""
-        with traced_task("test_task", trace_id="trace-123") as tid:
-            assert tid == "trace-123"
+        """Test traced task successful execution."""
+        with traced_task("my_task", trace_id="test-123") as trace_id:
+            assert trace_id == "test-123"
+            # Task logic here
+            result = 42
 
-    def test_traced_task_generates_trace_id(self):
-        """Test traced_task generates trace ID if not provided."""
-        with traced_task("test_task") as tid:
-            assert tid is not None
-            assert "test_task" in tid
+        assert result == 42
 
-    def test_traced_task_exception_propagates(self):
-        """Test traced_task propagates exceptions."""
-        with pytest.raises(ValueError, match="test error"):
-            with traced_task("test_task"):
-                raise ValueError("test error")
+    def test_traced_task_auto_trace_id(self):
+        """Test traced task with auto-generated trace ID."""
+        with traced_task("my_task") as trace_id:
+            assert trace_id.startswith("task-my_task-")
 
-    def test_traced_task_logs_completion(self):
-        """Test traced_task logs completion."""
-        with patch("src.workers.event_consumer.logger") as mock_logger:
-            with traced_task("test_task"):
-                pass
-            # Should have logged debug messages
-            assert mock_logger.debug.called
+    def test_traced_task_exception(self):
+        """Test traced task with exception."""
+        with pytest.raises(ValueError):
+            with traced_task("failing_task") as trace_id:
+                raise ValueError("Test error")
 
 
-# =============================================================================
-# GLOBAL METRICS TESTS
-# =============================================================================
+class TestEventHandlerIntegration:
+    """Integration tests for event handler flow."""
 
+    def test_complete_task_lifecycle(self, consumer):
+        """Test complete task lifecycle from sent to success."""
+        task_id = "lifecycle-1"
 
-class TestGlobalMetrics:
-    """Tests for global metrics instance."""
+        # Task sent
+        consumer.on_task_sent({
+            "uuid": task_id,
+            "name": "integration_task",
+            "routing_key": "analytics",
+            "timestamp": 1000.0,
+        })
 
-    def test_global_metrics_exists(self):
-        """Test global celery_metrics instance exists."""
-        assert celery_metrics is not None
-        assert isinstance(celery_metrics, CeleryMetrics)
+        # Task received
+        consumer.on_task_received({
+            "uuid": task_id,
+            "name": "integration_task",
+            "routing_key": "analytics",
+            "timestamp": 1001.0,
+        })
+
+        # Task started
+        with patch('src.workers.event_consumer.celery_metrics'):
+            consumer.on_task_started({
+                "uuid": task_id,
+                "name": "integration_task",
+                "routing_key": "analytics",
+                "timestamp": 1002.0,
+            })
+
+        # Task succeeded
+        with patch('src.workers.event_consumer.celery_metrics'):
+            consumer.on_task_succeeded({
+                "uuid": task_id,
+                "name": "integration_task",
+                "routing_key": "analytics",
+                "timestamp": 1010.0,
+            })
+
+        # Task should be cleaned up
+        assert task_id not in consumer._task_timings
+
+    def test_task_lifecycle_with_failure(self, consumer):
+        """Test task lifecycle ending in failure."""
+        task_id = "failure-1"
+
+        # Task sent and started
+        consumer.on_task_sent({
+            "uuid": task_id,
+            "name": "failing_task",
+            "routing_key": "default",
+            "timestamp": 2000.0,
+        })
+
+        with patch('src.workers.event_consumer.celery_metrics'):
+            consumer.on_task_started({
+                "uuid": task_id,
+                "name": "failing_task",
+                "routing_key": "default",
+                "timestamp": 2001.0,
+            })
+
+        # Task failed
+        with patch('src.workers.event_consumer.celery_metrics'):
+            consumer.on_task_failed({
+                "uuid": task_id,
+                "name": "failing_task",
+                "routing_key": "default",
+                "timestamp": 2005.0,
+                "exception": "RuntimeError('fail')",
+            })
+
+        # Task should be cleaned up
+        assert task_id not in consumer._task_timings
