@@ -1,1 +1,1 @@
-"""Unit tests for src/workers module."""
+"""Unit tests for workers module."""

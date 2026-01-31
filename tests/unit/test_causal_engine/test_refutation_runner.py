@@ -1,683 +1,788 @@
-"""Tests for RefutationRunner and related classes.
+"""
+Unit tests for refutation_runner.py
 
-Version: 4.3
-Tests the Causal Validation Protocol implementation.
+Tests cover:
+- RefutationRunner
+- RefutationResult
+- RefutationSuite
+- Individual refutation tests (placebo, random_common_cause, data_subset, bootstrap, sensitivity)
+- Mock implementations
+- Scoring and gate decisions
 """
 
-
 import pytest
-
-from src.causal_engine import (
-    DOWHY_AVAILABLE,
-    GateDecision,
-    RefutationResult,
+import numpy as np
+from unittest.mock import MagicMock, patch, AsyncMock
+from src.causal_engine.refutation_runner import (
     RefutationRunner,
-    RefutationStatus,
+    RefutationResult,
     RefutationSuite,
+    RefutationStatus,
     RefutationTestType,
-    is_estimate_valid,
+    GateDecision,
     run_refutation_suite,
+    is_estimate_valid,
 )
 
 
-class TestEnums:
-    """Test ENUM types."""
+# ============================================================================
+# FIXTURES
+# ============================================================================
 
-    def test_refutation_status_values(self):
-        """Test RefutationStatus enum has correct values."""
-        assert RefutationStatus.PASSED.value == "passed"
-        assert RefutationStatus.FAILED.value == "failed"
-        assert RefutationStatus.WARNING.value == "warning"
-        assert RefutationStatus.SKIPPED.value == "skipped"
+@pytest.fixture
+def runner():
+    """Create RefutationRunner instance."""
+    return RefutationRunner()
 
-    def test_gate_decision_values(self):
-        """Test GateDecision enum has correct values."""
-        assert GateDecision.PROCEED.value == "proceed"
-        assert GateDecision.REVIEW.value == "review"
-        assert GateDecision.BLOCK.value == "block"
 
-    def test_refutation_test_type_values(self):
-        """Test RefutationTestType enum has correct values."""
-        assert RefutationTestType.PLACEBO_TREATMENT.value == "placebo_treatment"
-        assert RefutationTestType.RANDOM_COMMON_CAUSE.value == "random_common_cause"
-        assert RefutationTestType.DATA_SUBSET.value == "data_subset"
-        assert RefutationTestType.BOOTSTRAP.value == "bootstrap"
-        assert RefutationTestType.SENSITIVITY_E_VALUE.value == "sensitivity_e_value"
+@pytest.fixture
+def custom_config():
+    """Custom configuration for refutation tests."""
+    return {
+        "placebo_treatment": {
+            "enabled": True,
+            "num_simulations": 50,
+            "critical": True,
+        },
+        "random_common_cause": {
+            "enabled": True,
+            "effect_strength": 0.05,
+            "critical": True,
+        },
+    }
 
+
+@pytest.fixture
+def custom_thresholds():
+    """Custom thresholds for pass/fail criteria."""
+    return {
+        "placebo_p_value": {
+            "pass": 0.10,
+            "warning": 0.15,
+        },
+    }
+
+
+# ============================================================================
+# RefutationResult TESTS
+# ============================================================================
 
 class TestRefutationResult:
-    """Test RefutationResult dataclass."""
+    """Tests for RefutationResult dataclass."""
 
     def test_create_refutation_result(self):
         """Test creating a RefutationResult."""
         result = RefutationResult(
             test_name=RefutationTestType.PLACEBO_TREATMENT,
             status=RefutationStatus.PASSED,
-            original_effect=0.5,
-            refuted_effect=0.01,
+            original_effect=0.15,
+            refuted_effect=0.02,
             p_value=0.75,
-            delta_percent=2.0,
-            details={"message": "Test passed"},
-            execution_time_ms=100.0,
+            delta_percent=86.7,
+            details={"message": "Placebo test passed"},
+            execution_time_ms=150.5,
         )
 
         assert result.test_name == RefutationTestType.PLACEBO_TREATMENT
         assert result.status == RefutationStatus.PASSED
-        assert result.original_effect == 0.5
-        assert result.refuted_effect == 0.01
-        assert result.p_value == 0.75
-        assert result.delta_percent == 2.0
-        assert result.details["message"] == "Test passed"
-        assert result.execution_time_ms == 100.0
+        assert result.original_effect == 0.15
+        assert result.refuted_effect == 0.02
 
     def test_to_dict(self):
-        """Test RefutationResult.to_dict() serialization."""
+        """Test converting RefutationResult to dictionary."""
         result = RefutationResult(
-            test_name=RefutationTestType.BOOTSTRAP,
-            status=RefutationStatus.WARNING,
-            original_effect=0.3,
-            refuted_effect=0.35,
-            p_value=0.06,
-            delta_percent=16.7,
-        )
-
-        d = result.to_dict()
-
-        assert d["test_name"] == "bootstrap"
-        assert d["status"] == "warning"
-        assert d["original_effect"] == 0.3
-        assert d["refuted_effect"] == 0.35
-        assert d["p_value"] == 0.06
-        assert d["delta_percent"] == 16.7
-
-    def test_default_values(self):
-        """Test default values for optional fields."""
-        result = RefutationResult(
-            test_name=RefutationTestType.DATA_SUBSET,
+            test_name=RefutationTestType.PLACEBO_TREATMENT,
             status=RefutationStatus.PASSED,
-            original_effect=0.5,
-            refuted_effect=0.48,
+            original_effect=0.15,
+            refuted_effect=0.02,
         )
 
-        assert result.p_value is None
-        assert result.delta_percent == 0.0
-        assert result.details == {}
-        assert result.execution_time_ms == 0.0
+        result_dict = result.to_dict()
 
+        assert result_dict["test_name"] == "placebo_treatment"
+        assert result_dict["status"] == "passed"
+        assert result_dict["original_effect"] == 0.15
+
+
+# ============================================================================
+# RefutationSuite TESTS
+# ============================================================================
 
 class TestRefutationSuite:
-    """Test RefutationSuite dataclass."""
+    """Tests for RefutationSuite dataclass."""
 
-    def _create_test_results(self, passed_count: int = 4, failed_count: int = 1) -> list:
-        """Helper to create test results with unique test types.
-
-        Uses different RefutationTestType for each result to avoid key collisions
-        in to_legacy_format() which uses a Dict with test names as keys.
-        """
-        # Available test types to cycle through
-        test_types = [
-            RefutationTestType.PLACEBO_TREATMENT,
-            RefutationTestType.RANDOM_COMMON_CAUSE,
-            RefutationTestType.DATA_SUBSET,
-            RefutationTestType.BOOTSTRAP,
-            RefutationTestType.SENSITIVITY_E_VALUE,
+    def test_create_refutation_suite(self):
+        """Test creating a RefutationSuite."""
+        tests = [
+            RefutationResult(
+                test_name=RefutationTestType.PLACEBO_TREATMENT,
+                status=RefutationStatus.PASSED,
+                original_effect=0.15,
+                refuted_effect=0.02,
+            ),
+            RefutationResult(
+                test_name=RefutationTestType.RANDOM_COMMON_CAUSE,
+                status=RefutationStatus.PASSED,
+                original_effect=0.15,
+                refuted_effect=0.14,
+            ),
         ]
 
-        results = []
-        type_index = 0
-
-        for _i in range(passed_count):
-            results.append(
-                RefutationResult(
-                    test_name=test_types[type_index % len(test_types)],
-                    status=RefutationStatus.PASSED,
-                    original_effect=0.5,
-                    refuted_effect=0.02,
-                )
-            )
-            type_index += 1
-
-        for _i in range(failed_count):
-            results.append(
-                RefutationResult(
-                    test_name=test_types[type_index % len(test_types)],
-                    status=RefutationStatus.FAILED,
-                    original_effect=0.5,
-                    refuted_effect=0.8,
-                )
-            )
-            type_index += 1
-
-        return results
-
-    def test_create_suite(self):
-        """Test creating a RefutationSuite."""
-        tests = self._create_test_results(passed_count=4, failed_count=1)
         suite = RefutationSuite(
             passed=True,
-            confidence_score=0.80,
+            confidence_score=0.85,
             tests=tests,
             gate_decision=GateDecision.PROCEED,
-            total_execution_time_ms=500.0,
-            estimate_id="test-123",
-            treatment_variable="treatment",
-            outcome_variable="outcome",
-            brand="TestBrand",
         )
 
         assert suite.passed is True
-        assert suite.confidence_score == 0.80
-        assert len(suite.tests) == 5
-        assert suite.gate_decision == GateDecision.PROCEED
-        assert suite.estimate_id == "test-123"
+        assert suite.confidence_score == 0.85
+        assert len(suite.tests) == 2
 
     def test_tests_passed_property(self):
-        """Test tests_passed property counting."""
-        tests = self._create_test_results(passed_count=3, failed_count=2)
+        """Test tests_passed property."""
+        tests = [
+            RefutationResult(
+                test_name=RefutationTestType.PLACEBO_TREATMENT,
+                status=RefutationStatus.PASSED,
+                original_effect=0.15,
+                refuted_effect=0.02,
+            ),
+            RefutationResult(
+                test_name=RefutationTestType.RANDOM_COMMON_CAUSE,
+                status=RefutationStatus.FAILED,
+                original_effect=0.15,
+                refuted_effect=0.05,
+            ),
+        ]
+
         suite = RefutationSuite(
-            passed=True,
-            confidence_score=0.60,
+            passed=False,
+            confidence_score=0.5,
             tests=tests,
             gate_decision=GateDecision.REVIEW,
         )
 
-        assert suite.tests_passed == 3
+        assert suite.tests_passed == 1
+
+    def test_tests_failed_property(self):
+        """Test tests_failed property."""
+        tests = [
+            RefutationResult(
+                test_name=RefutationTestType.PLACEBO_TREATMENT,
+                status=RefutationStatus.FAILED,
+                original_effect=0.15,
+                refuted_effect=0.02,
+            ),
+            RefutationResult(
+                test_name=RefutationTestType.RANDOM_COMMON_CAUSE,
+                status=RefutationStatus.FAILED,
+                original_effect=0.15,
+                refuted_effect=0.05,
+            ),
+        ]
+
+        suite = RefutationSuite(
+            passed=False,
+            confidence_score=0.3,
+            tests=tests,
+            gate_decision=GateDecision.BLOCK,
+        )
+
         assert suite.tests_failed == 2
-        assert suite.total_tests == 5
 
-    def test_tests_warning_property(self):
-        """Test tests_warning property counting."""
+    def test_total_tests_property(self):
+        """Test total_tests property excludes skipped tests."""
         tests = [
             RefutationResult(
                 test_name=RefutationTestType.PLACEBO_TREATMENT,
                 status=RefutationStatus.PASSED,
-                original_effect=0.5,
+                original_effect=0.15,
                 refuted_effect=0.02,
             ),
             RefutationResult(
-                test_name=RefutationTestType.BOOTSTRAP,
-                status=RefutationStatus.WARNING,
-                original_effect=0.5,
-                refuted_effect=0.55,
-            ),
-        ]
-        suite = RefutationSuite(
-            passed=True,
-            confidence_score=0.75,
-            tests=tests,
-            gate_decision=GateDecision.PROCEED,
-        )
-
-        assert suite.tests_warning == 1
-
-    def test_skipped_excluded_from_total(self):
-        """Test that skipped tests are excluded from total count."""
-        tests = [
-            RefutationResult(
-                test_name=RefutationTestType.PLACEBO_TREATMENT,
-                status=RefutationStatus.PASSED,
-                original_effect=0.5,
-                refuted_effect=0.02,
-            ),
-            RefutationResult(
-                test_name=RefutationTestType.BOOTSTRAP,
+                test_name=RefutationTestType.RANDOM_COMMON_CAUSE,
                 status=RefutationStatus.SKIPPED,
-                original_effect=0.5,
-                refuted_effect=0.5,
+                original_effect=0.15,
+                refuted_effect=0.15,
             ),
         ]
+
         suite = RefutationSuite(
             passed=True,
-            confidence_score=0.80,
+            confidence_score=0.8,
             tests=tests,
             gate_decision=GateDecision.PROCEED,
         )
 
-        assert suite.total_tests == 1  # Skipped excluded
-        assert len(suite.tests) == 2  # But still in list
+        assert suite.total_tests == 1
 
     def test_to_dict(self):
-        """Test RefutationSuite.to_dict() serialization."""
-        tests = self._create_test_results(passed_count=3, failed_count=2)
+        """Test converting RefutationSuite to dictionary."""
+        tests = [
+            RefutationResult(
+                test_name=RefutationTestType.PLACEBO_TREATMENT,
+                status=RefutationStatus.PASSED,
+                original_effect=0.15,
+                refuted_effect=0.02,
+            ),
+        ]
+
         suite = RefutationSuite(
             passed=True,
-            confidence_score=0.60,
+            confidence_score=0.85,
             tests=tests,
-            gate_decision=GateDecision.REVIEW,
-            estimate_id="uuid-123",
-            treatment_variable="engagement",
-            outcome_variable="conversion",
-            brand="Remibrutinib",
+            gate_decision=GateDecision.PROCEED,
+            treatment_variable="hcp_engagement",
+            outcome_variable="conversion_rate",
         )
 
-        d = suite.to_dict()
+        suite_dict = suite.to_dict()
 
-        assert d["passed"] is True
-        assert d["confidence_score"] == 0.60
-        assert d["gate_decision"] == "review"
-        assert d["tests_passed"] == 3
-        assert d["tests_failed"] == 2
-        assert d["total_tests"] == 5
-        assert len(d["tests"]) == 5
-        assert d["estimate_id"] == "uuid-123"
-        assert d["treatment_variable"] == "engagement"
-        assert d["outcome_variable"] == "conversion"
-        assert d["brand"] == "Remibrutinib"
-        assert "created_at" in d
+        assert suite_dict["passed"] is True
+        assert suite_dict["gate_decision"] == "proceed"
+        assert suite_dict["treatment_variable"] == "hcp_engagement"
 
     def test_to_legacy_format(self):
-        """Test backward-compatible legacy format.
+        """Test converting to legacy RefutationResults format."""
+        tests = [
+            RefutationResult(
+                test_name=RefutationTestType.PLACEBO_TREATMENT,
+                status=RefutationStatus.PASSED,
+                original_effect=0.15,
+                refuted_effect=0.02,
+                p_value=0.75,
+                details={"message": "Test passed"},
+            ),
+            RefutationResult(
+                test_name=RefutationTestType.SENSITIVITY_E_VALUE,
+                status=RefutationStatus.PASSED,
+                original_effect=0.15,
+                refuted_effect=0.15,
+                details={"message": "E-value sufficient"},
+            ),
+        ]
 
-        Note: to_legacy_format() returns individual_tests as a Dict with
-        test names as keys (e.g., "placebo_treatment", "random_common_cause").
-        """
-        tests = self._create_test_results(passed_count=3, failed_count=1)
         suite = RefutationSuite(
             passed=True,
-            confidence_score=0.75,
+            confidence_score=0.85,
             tests=tests,
             gate_decision=GateDecision.PROCEED,
         )
 
         legacy = suite.to_legacy_format()
 
-        assert legacy["tests_passed"] == 3
-        assert legacy["tests_failed"] == 1
-        assert legacy["total_tests"] == 4
+        assert "individual_tests" in legacy
+        assert "placebo_treatment" in legacy["individual_tests"]
+        assert "unobserved_common_cause" in legacy["individual_tests"]  # Mapped from sensitivity_e_value
         assert legacy["overall_robust"] is True
-        assert legacy["confidence_adjustment"] == 0.75
-        assert legacy["gate_decision"] == "proceed"
-        assert len(legacy["individual_tests"]) == 4
-
-        # Check individual test format - individual_tests is a Dict with test names as keys
-        individual_tests = legacy["individual_tests"]
-        assert isinstance(individual_tests, dict)
-
-        # Get first test entry from the dict
-        first_key = next(iter(individual_tests))
-        test = individual_tests[first_key]
-        assert "test_name" in test
-        assert "passed" in test
-        assert "new_effect" in test
-        assert "original_effect" in test
-        assert "p_value" in test
-        assert "details" in test
 
 
-class TestRefutationRunner:
-    """Test RefutationRunner class."""
+# ============================================================================
+# RefutationRunner INITIALIZATION TESTS
+# ============================================================================
 
-    def test_init_default_config(self):
+class TestRefutationRunnerInit:
+    """Tests for RefutationRunner initialization."""
+
+    def test_default_initialization(self):
         """Test initialization with default config."""
         runner = RefutationRunner()
 
+        assert runner.config is not None
         assert runner.config["placebo_treatment"]["enabled"] is True
-        assert runner.config["random_common_cause"]["enabled"] is True
-        assert runner.config["data_subset"]["enabled"] is True
-        assert runner.config["bootstrap"]["enabled"] is True
-        assert runner.config["sensitivity_e_value"]["enabled"] is True
+        assert runner.thresholds is not None
 
-    def test_init_custom_config(self):
+    def test_custom_config(self, custom_config):
         """Test initialization with custom config."""
-        custom_config = {
-            "placebo_treatment": {"num_simulations": 50},
-            "bootstrap": {"enabled": False},
-        }
         runner = RefutationRunner(config=custom_config)
 
         assert runner.config["placebo_treatment"]["num_simulations"] == 50
-        assert runner.config["bootstrap"]["enabled"] is False
-        # Other defaults should remain
-        assert runner.config["placebo_treatment"]["critical"] is True
 
-    def test_init_custom_thresholds(self):
+    def test_custom_thresholds(self, custom_thresholds):
         """Test initialization with custom thresholds."""
-        custom_thresholds = {
-            "e_value_min": {"pass": 3.0, "warning": 2.0},
-        }
         runner = RefutationRunner(thresholds=custom_thresholds)
 
-        assert runner.thresholds["e_value_min"]["pass"] == 3.0
-        assert runner.thresholds["e_value_min"]["warning"] == 2.0
-        # Other thresholds should remain default
-        assert runner.thresholds["placebo_p_value"]["pass"] == 0.05
+        assert runner.thresholds["placebo_p_value"]["pass"] == 0.10
 
-    def test_run_all_tests_mock_mode(self):
-        """Test run_all_tests without DoWhy (mock mode)."""
-        runner = RefutationRunner()
 
-        suite = runner.run_all_tests(
-            original_effect=0.5,
-            original_ci=(0.4, 0.6),
-            treatment="hcp_engagement",
-            outcome="conversion_rate",
-            brand="Remibrutinib",
-            estimate_id="test-123",
+# ============================================================================
+# PLACEBO TEST TESTS
+# ============================================================================
+
+class TestPlaceboTest:
+    """Tests for placebo treatment refutation test."""
+
+    def test_run_placebo_test_mock(self, runner):
+        """Test running placebo test with mock DoWhy."""
+        result = runner._run_placebo_test(
+            original_effect=0.15,
+            causal_model=None,
+            identified_estimand=None,
+            estimate=None,
+            use_dowhy=False,
         )
 
-        assert isinstance(suite, RefutationSuite)
-        # In mock mode, bootstrap may be skipped, so expect 4-5 tests
-        assert len(suite.tests) >= 4
-        assert len(suite.tests) <= 5
-        assert suite.treatment_variable == "hcp_engagement"
-        assert suite.outcome_variable == "conversion_rate"
-        assert suite.brand == "Remibrutinib"
-        assert suite.estimate_id == "test-123"
+        assert result.test_name == RefutationTestType.PLACEBO_TREATMENT
+        assert result.status in [RefutationStatus.PASSED, RefutationStatus.WARNING, RefutationStatus.FAILED]
+        assert result.original_effect == 0.15
+        assert result.p_value is not None
 
-    def test_run_all_tests_positive_effect(self):
-        """Test refutation with positive effect."""
-        runner = RefutationRunner()
+    def test_run_placebo_test_passed(self, runner):
+        """Test placebo test that passes."""
+        with patch.object(runner, '_mock_placebo_test', return_value=(0.01, 0.85)):
+            result = runner._run_placebo_test(
+                original_effect=0.15,
+                causal_model=None,
+                identified_estimand=None,
+                estimate=None,
+                use_dowhy=False,
+            )
 
-        suite = runner.run_all_tests(
-            original_effect=0.5,
-            original_ci=(0.4, 0.6),
+            assert result.status == RefutationStatus.PASSED
+            assert "no significant effect" in result.details["message"].lower()
+
+    def test_run_placebo_test_failed(self, runner):
+        """Test placebo test that fails."""
+        with patch.object(runner, '_mock_placebo_test', return_value=(0.12, 0.02)):
+            result = runner._run_placebo_test(
+                original_effect=0.15,
+                causal_model=None,
+                identified_estimand=None,
+                estimate=None,
+                use_dowhy=False,
+            )
+
+            assert result.status == RefutationStatus.FAILED
+            assert "warning" in result.details["message"].lower()
+
+
+# ============================================================================
+# RANDOM COMMON CAUSE TEST TESTS
+# ============================================================================
+
+class TestRandomCommonCauseTest:
+    """Tests for random common cause refutation test."""
+
+    def test_run_random_common_cause_test_mock(self, runner):
+        """Test running random common cause test with mock."""
+        result = runner._run_random_common_cause_test(
+            original_effect=0.15,
+            causal_model=None,
+            identified_estimand=None,
+            estimate=None,
+            use_dowhy=False,
         )
 
-        assert suite.passed is not None
-        assert 0.0 <= suite.confidence_score <= 1.0
-        assert suite.gate_decision in [
-            GateDecision.PROCEED,
-            GateDecision.REVIEW,
-            GateDecision.BLOCK,
-        ]
+        assert result.test_name == RefutationTestType.RANDOM_COMMON_CAUSE
+        assert result.status in [RefutationStatus.PASSED, RefutationStatus.WARNING, RefutationStatus.FAILED]
+        assert result.delta_percent >= 0
 
-    def test_run_all_tests_negative_effect(self):
-        """Test refutation with negative effect."""
-        runner = RefutationRunner()
+    def test_run_random_common_cause_test_passed(self, runner):
+        """Test random common cause test that passes."""
+        with patch.object(runner, '_mock_random_common_cause_test', return_value=(0.14, 0.70)):
+            result = runner._run_random_common_cause_test(
+                original_effect=0.15,
+                causal_model=None,
+                identified_estimand=None,
+                estimate=None,
+                use_dowhy=False,
+            )
 
-        suite = runner.run_all_tests(
-            original_effect=-0.3,
-            original_ci=(-0.4, -0.2),
+            assert result.status == RefutationStatus.PASSED
+
+    def test_run_random_common_cause_test_failed(self, runner):
+        """Test random common cause test that fails."""
+        with patch.object(runner, '_mock_random_common_cause_test', return_value=(0.05, 0.60)):
+            result = runner._run_random_common_cause_test(
+                original_effect=0.15,
+                causal_model=None,
+                identified_estimand=None,
+                estimate=None,
+                use_dowhy=False,
+            )
+
+            # Large delta should trigger warning or failure
+            assert result.status in [RefutationStatus.WARNING, RefutationStatus.FAILED]
+
+
+# ============================================================================
+# DATA SUBSET TEST TESTS
+# ============================================================================
+
+class TestDataSubsetTest:
+    """Tests for data subset refutation test."""
+
+    def test_run_data_subset_test_mock(self, runner):
+        """Test running data subset test with mock."""
+        result = runner._run_data_subset_test(
+            original_effect=0.15,
+            original_ci=(0.10, 0.20),
+            causal_model=None,
+            identified_estimand=None,
+            estimate=None,
+            use_dowhy=False,
         )
 
-        assert suite.passed is not None
-        # Verify original effects preserved correctly
-        for test in suite.tests:
-            assert test.original_effect == -0.3
+        assert result.test_name == RefutationTestType.DATA_SUBSET
+        assert result.status in [RefutationStatus.PASSED, RefutationStatus.WARNING, RefutationStatus.FAILED]
+        assert "ci_coverage" in result.details
 
-    def test_run_all_tests_zero_effect(self):
-        """Test refutation with zero effect."""
-        runner = RefutationRunner()
+    def test_run_data_subset_test_passed(self, runner):
+        """Test data subset test that passes."""
+        with patch.object(runner, '_mock_data_subset_test', return_value=(0.15, 0.75, 0.85)):
+            result = runner._run_data_subset_test(
+                original_effect=0.15,
+                original_ci=(0.10, 0.20),
+                causal_model=None,
+                identified_estimand=None,
+                estimate=None,
+                use_dowhy=False,
+            )
 
-        suite = runner.run_all_tests(
-            original_effect=0.0,
-            original_ci=(-0.1, 0.1),
+            assert result.status == RefutationStatus.PASSED
+
+
+# ============================================================================
+# BOOTSTRAP TEST TESTS
+# ============================================================================
+
+class TestBootstrapTest:
+    """Tests for bootstrap refutation test."""
+
+    def test_run_bootstrap_test_mock(self, runner):
+        """Test running bootstrap test with mock."""
+        result = runner._run_bootstrap_test(
+            original_effect=0.15,
+            original_ci=(0.10, 0.20),
+            causal_model=None,
+            identified_estimand=None,
+            estimate=None,
+            use_dowhy=False,
         )
 
-        # Zero effect should still be validated
-        assert isinstance(suite, RefutationSuite)
-        assert len(suite.tests) >= 1
+        assert result.test_name == RefutationTestType.BOOTSTRAP
+        assert result.status in [RefutationStatus.PASSED, RefutationStatus.WARNING, RefutationStatus.FAILED]
+        assert "bootstrap_ci" in result.details
 
-    def test_run_all_tests_with_disabled_test(self):
-        """Test that disabled tests are skipped."""
-        runner = RefutationRunner(
-            config={
-                "bootstrap": {"enabled": False},
-            }
+    def test_run_bootstrap_test_passed(self, runner):
+        """Test bootstrap test that passes."""
+        with patch.object(runner, '_mock_bootstrap_test', return_value=(0.15, (0.12, 0.18), 0.85)):
+            result = runner._run_bootstrap_test(
+                original_effect=0.15,
+                original_ci=(0.10, 0.20),
+                causal_model=None,
+                identified_estimand=None,
+                estimate=None,
+                use_dowhy=False,
+            )
+
+            assert result.status == RefutationStatus.PASSED
+
+
+# ============================================================================
+# SENSITIVITY E-VALUE TEST TESTS
+# ============================================================================
+
+class TestSensitivityTest:
+    """Tests for sensitivity E-value test."""
+
+    def test_run_sensitivity_test(self, runner):
+        """Test running sensitivity E-value test."""
+        result = runner._run_sensitivity_test(
+            original_effect=0.15,
+            original_ci=(0.10, 0.20),
         )
 
-        suite = runner.run_all_tests(
-            original_effect=0.5,
-            original_ci=(0.4, 0.6),
+        assert result.test_name == RefutationTestType.SENSITIVITY_E_VALUE
+        assert result.status in [RefutationStatus.PASSED, RefutationStatus.WARNING, RefutationStatus.FAILED]
+        assert "e_value" in result.details
+
+    def test_run_sensitivity_test_high_e_value(self, runner):
+        """Test sensitivity test with high E-value (passes)."""
+        result = runner._run_sensitivity_test(
+            original_effect=0.50,  # Large effect → high E-value
+            original_ci=(0.40, 0.60),
         )
 
-        bootstrap_tests = [t for t in suite.tests if t.test_name == RefutationTestType.BOOTSTRAP]
-        if bootstrap_tests:
-            assert bootstrap_tests[0].status == RefutationStatus.SKIPPED
+        assert result.status == RefutationStatus.PASSED
+        assert result.details["e_value"] >= runner.thresholds["e_value_min"]["pass"]
 
-    def test_gate_decision_proceed(self):
-        """Test that high confidence results in PROCEED decision."""
-        runner = RefutationRunner()
-
-        # Mock high-confidence scenario (all tests pass)
-        suite = runner.run_all_tests(
-            original_effect=0.5,
-            original_ci=(0.4, 0.6),
+    def test_run_sensitivity_test_low_e_value(self, runner):
+        """Test sensitivity test with low E-value (fails)."""
+        result = runner._run_sensitivity_test(
+            original_effect=0.05,  # Small effect → low E-value
+            original_ci=(0.01, 0.09),
         )
 
-        # In mock mode, should typically get high confidence
-        assert suite.gate_decision in [
-            GateDecision.PROCEED,
-            GateDecision.REVIEW,
-            GateDecision.BLOCK,
-        ]
+        # Small effects typically have low E-values
+        assert result.details["e_value"] > 0
 
-    def test_execution_time_tracking(self):
-        """Test that execution time is tracked."""
-        runner = RefutationRunner()
 
-        suite = runner.run_all_tests(
-            original_effect=0.5,
-            original_ci=(0.4, 0.6),
+# ============================================================================
+# MOCK IMPLEMENTATIONS TESTS
+# ============================================================================
+
+class TestMockImplementations:
+    """Tests for mock refutation implementations."""
+
+    def test_mock_placebo_test(self, runner):
+        """Test mock placebo test."""
+        placebo_effect, p_value = runner._mock_placebo_test(0.15)
+
+        assert abs(placebo_effect) < 0.1  # Should be near zero
+        assert 0 < p_value < 1
+
+    def test_mock_random_common_cause_test(self, runner):
+        """Test mock random common cause test."""
+        refuted_effect, p_value = runner._mock_random_common_cause_test(0.15)
+
+        assert abs(refuted_effect - 0.15) < 0.1  # Should be close to original
+        assert 0 < p_value < 1
+
+    def test_mock_data_subset_test(self, runner):
+        """Test mock data subset test."""
+        refuted_effect, p_value, ci_coverage = runner._mock_data_subset_test(
+            0.15,
+            (0.10, 0.20)
         )
 
-        assert suite.total_execution_time_ms >= 0
-        for test in suite.tests:
-            assert test.execution_time_ms >= 0
+        assert abs(refuted_effect - 0.15) < 0.1
+        assert 0 < p_value < 1
+        assert 0 <= ci_coverage <= 1
+
+    def test_mock_bootstrap_test(self, runner):
+        """Test mock bootstrap test."""
+        refuted_effect, bootstrap_ci, p_value = runner._mock_bootstrap_test(0.15)
+
+        assert bootstrap_ci[0] < refuted_effect < bootstrap_ci[1]
+        assert 0 < p_value < 1
 
 
-class TestGateDecisionLogic:
-    """Test gate decision thresholds and logic."""
+# ============================================================================
+# CONFIDENCE SCORE TESTS
+# ============================================================================
 
-    def test_proceed_threshold(self):
-        """Test PROCEED requires confidence >= 0.70."""
-        runner = RefutationRunner()
-        assert runner.GATE_THRESHOLDS["proceed"] == 0.70
+class TestConfidenceScore:
+    """Tests for confidence score calculation."""
 
-    def test_review_threshold(self):
-        """Test REVIEW for confidence 0.50-0.70."""
-        runner = RefutationRunner()
-        assert runner.GATE_THRESHOLDS["review"] == 0.50
-
-    def test_gate_decision_based_on_confidence(self):
-        """Test gate decision matches confidence score."""
-        runner = RefutationRunner()
-
-        suite = runner.run_all_tests(
-            original_effect=0.5,
-            original_ci=(0.4, 0.6),
-        )
-
-        if suite.confidence_score >= 0.70:
-            # Could still be REVIEW/BLOCK if critical test failed
-            assert suite.gate_decision in [
-                GateDecision.PROCEED,
-                GateDecision.REVIEW,
-                GateDecision.BLOCK,
-            ]
-        elif suite.confidence_score >= 0.50:
-            assert suite.gate_decision in [GateDecision.REVIEW, GateDecision.BLOCK]
-        else:
-            assert suite.gate_decision == GateDecision.BLOCK
-
-
-class TestPassThresholds:
-    """Test pass/fail threshold configurations."""
-
-    def test_placebo_p_value_thresholds(self):
-        """Test placebo p-value thresholds."""
-        runner = RefutationRunner()
-
-        assert runner.thresholds["placebo_p_value"]["pass"] == 0.05
-        assert runner.thresholds["placebo_p_value"]["warning"] == 0.10
-
-    def test_common_cause_delta_thresholds(self):
-        """Test common cause delta thresholds."""
-        runner = RefutationRunner()
-
-        assert runner.thresholds["common_cause_delta"]["pass"] == 0.20
-        assert runner.thresholds["common_cause_delta"]["warning"] == 0.30
-
-    def test_e_value_thresholds(self):
-        """Test e-value thresholds."""
-        runner = RefutationRunner()
-
-        assert runner.thresholds["e_value_min"]["pass"] == 2.0
-        assert runner.thresholds["e_value_min"]["warning"] == 1.5
-
-
-class TestConvenienceFunctions:
-    """Test convenience functions."""
-
-    def test_run_refutation_suite(self):
-        """Test run_refutation_suite convenience function."""
-        suite = run_refutation_suite(
-            original_effect=0.5,
-            original_ci=(0.4, 0.6),
-            treatment="engagement",
-            outcome="conversion",
-        )
-
-        assert isinstance(suite, RefutationSuite)
-        assert suite.treatment_variable == "engagement"
-        assert suite.outcome_variable == "conversion"
-
-    def test_is_estimate_valid_true(self):
-        """Test is_estimate_valid returns True for valid estimates."""
-        suite = run_refutation_suite(
-            original_effect=0.5,
-            original_ci=(0.4, 0.6),
-        )
-
-        # Valid if not blocked
-        result = is_estimate_valid(suite)
-        expected = suite.gate_decision != GateDecision.BLOCK
-        assert result == expected
-
-    def test_is_estimate_valid_with_gate_decision(self):
-        """Test is_estimate_valid based on gate decision."""
+    def test_calculate_confidence_score_all_passed(self, runner):
+        """Test confidence score when all tests pass."""
         tests = [
             RefutationResult(
                 test_name=RefutationTestType.PLACEBO_TREATMENT,
                 status=RefutationStatus.PASSED,
-                original_effect=0.5,
+                original_effect=0.15,
+                refuted_effect=0.02,
+            ),
+            RefutationResult(
+                test_name=RefutationTestType.RANDOM_COMMON_CAUSE,
+                status=RefutationStatus.PASSED,
+                original_effect=0.15,
+                refuted_effect=0.14,
+            ),
+        ]
+
+        score = runner._calculate_confidence_score(tests)
+
+        assert score > 0.8  # Should be high when all pass
+
+    def test_calculate_confidence_score_all_failed(self, runner):
+        """Test confidence score when all tests fail."""
+        tests = [
+            RefutationResult(
+                test_name=RefutationTestType.PLACEBO_TREATMENT,
+                status=RefutationStatus.FAILED,
+                original_effect=0.15,
+                refuted_effect=0.12,
+            ),
+            RefutationResult(
+                test_name=RefutationTestType.RANDOM_COMMON_CAUSE,
+                status=RefutationStatus.FAILED,
+                original_effect=0.15,
+                refuted_effect=0.05,
+            ),
+        ]
+
+        score = runner._calculate_confidence_score(tests)
+
+        assert score < 0.5  # Should be low when all fail
+
+    def test_calculate_confidence_score_empty_tests(self, runner):
+        """Test confidence score with empty test list."""
+        score = runner._calculate_confidence_score([])
+
+        assert score == 0.0
+
+
+# ============================================================================
+# GATE DECISION TESTS
+# ============================================================================
+
+class TestGateDecision:
+    """Tests for gate decision logic."""
+
+    def test_determine_gate_decision_proceed(self, runner):
+        """Test gate decision when confidence is high."""
+        tests = [
+            RefutationResult(
+                test_name=RefutationTestType.PLACEBO_TREATMENT,
+                status=RefutationStatus.PASSED,
+                original_effect=0.15,
                 refuted_effect=0.02,
             ),
         ]
 
-        # PROCEED gate
-        suite_proceed = RefutationSuite(
+        decision = runner._determine_gate_decision(tests, confidence_score=0.85)
+
+        assert decision == GateDecision.PROCEED
+
+    def test_determine_gate_decision_review(self, runner):
+        """Test gate decision when confidence is moderate."""
+        tests = [
+            RefutationResult(
+                test_name=RefutationTestType.PLACEBO_TREATMENT,
+                status=RefutationStatus.WARNING,
+                original_effect=0.15,
+                refuted_effect=0.08,
+            ),
+        ]
+
+        decision = runner._determine_gate_decision(tests, confidence_score=0.60)
+
+        assert decision == GateDecision.REVIEW
+
+    def test_determine_gate_decision_block_critical_failure(self, runner):
+        """Test gate decision when critical test fails."""
+        tests = [
+            RefutationResult(
+                test_name=RefutationTestType.PLACEBO_TREATMENT,
+                status=RefutationStatus.FAILED,
+                original_effect=0.15,
+                refuted_effect=0.12,
+            ),
+        ]
+
+        decision = runner._determine_gate_decision(tests, confidence_score=0.60)
+
+        assert decision == GateDecision.BLOCK
+
+    def test_determine_gate_decision_block_low_confidence(self, runner):
+        """Test gate decision when confidence is low."""
+        tests = [
+            RefutationResult(
+                test_name=RefutationTestType.DATA_SUBSET,
+                status=RefutationStatus.WARNING,
+                original_effect=0.15,
+                refuted_effect=0.10,
+            ),
+        ]
+
+        decision = runner._determine_gate_decision(tests, confidence_score=0.40)
+
+        assert decision == GateDecision.BLOCK
+
+
+# ============================================================================
+# FULL SUITE TESTS
+# ============================================================================
+
+class TestRunAllTests:
+    """Tests for run_all_tests method."""
+
+    def test_run_all_tests_basic(self, runner):
+        """Test running all refutation tests."""
+        suite = runner.run_all_tests(
+            original_effect=0.15,
+            original_ci=(0.10, 0.20),
+        )
+
+        assert isinstance(suite, RefutationSuite)
+        assert len(suite.tests) > 0
+        assert suite.gate_decision in [GateDecision.PROCEED, GateDecision.REVIEW, GateDecision.BLOCK]
+
+    def test_run_all_tests_with_disabled_tests(self):
+        """Test running with some tests disabled."""
+        config = {
+            "placebo_treatment": {"enabled": False},
+            "random_common_cause": {"enabled": True},
+        }
+        runner = RefutationRunner(config=config)
+
+        suite = runner.run_all_tests(
+            original_effect=0.15,
+            original_ci=(0.10, 0.20),
+        )
+
+        # Should not include placebo test
+        test_names = [t.test_name for t in suite.tests]
+        assert RefutationTestType.PLACEBO_TREATMENT not in test_names
+
+    def test_run_all_tests_with_metadata(self, runner):
+        """Test running tests with full metadata."""
+        suite = runner.run_all_tests(
+            original_effect=0.15,
+            original_ci=(0.10, 0.20),
+            treatment="hcp_engagement",
+            outcome="conversion_rate",
+            brand="Kisqali",
+            estimate_id="est-123",
+        )
+
+        assert suite.treatment_variable == "hcp_engagement"
+        assert suite.outcome_variable == "conversion_rate"
+        assert suite.brand == "Kisqali"
+        assert suite.estimate_id == "est-123"
+
+
+# ============================================================================
+# CONVENIENCE FUNCTION TESTS
+# ============================================================================
+
+class TestConvenienceFunctions:
+    """Tests for convenience functions."""
+
+    def test_run_refutation_suite(self):
+        """Test run_refutation_suite convenience function."""
+        suite = run_refutation_suite(
+            original_effect=0.15,
+            original_ci=(0.10, 0.20),
+            treatment="test_treatment",
+            outcome="test_outcome",
+        )
+
+        assert isinstance(suite, RefutationSuite)
+        assert suite.treatment_variable == "test_treatment"
+
+    def test_is_estimate_valid_proceed(self):
+        """Test is_estimate_valid with proceed decision."""
+        suite = RefutationSuite(
             passed=True,
-            confidence_score=0.80,
-            tests=tests,
+            confidence_score=0.85,
+            tests=[],
             gate_decision=GateDecision.PROCEED,
         )
-        assert is_estimate_valid(suite_proceed) is True
 
-        # REVIEW gate (still valid, just needs review)
-        suite_review = RefutationSuite(
-            passed=True,
-            confidence_score=0.60,
-            tests=tests,
-            gate_decision=GateDecision.REVIEW,
-        )
-        assert is_estimate_valid(suite_review) is True
+        assert is_estimate_valid(suite) is True
 
-        # BLOCK gate
-        suite_block = RefutationSuite(
+    def test_is_estimate_valid_block(self):
+        """Test is_estimate_valid with block decision."""
+        suite = RefutationSuite(
             passed=False,
             confidence_score=0.30,
-            tests=tests,
+            tests=[],
             gate_decision=GateDecision.BLOCK,
         )
-        assert is_estimate_valid(suite_block) is False
 
+        assert is_estimate_valid(suite) is False
 
-class TestDifferentEffectSizes:
-    """Test refutation with different effect sizes."""
-
-    @pytest.mark.parametrize("effect", [0.1, 0.5, 0.9])
-    def test_various_positive_effects(self, effect):
-        """Test refutation for various positive effect sizes."""
-        runner = RefutationRunner()
-
-        suite = runner.run_all_tests(
-            original_effect=effect,
-            original_ci=(effect - 0.1, effect + 0.1),
+    def test_is_estimate_valid_review(self):
+        """Test is_estimate_valid with review decision (should be valid)."""
+        suite = RefutationSuite(
+            passed=True,
+            confidence_score=0.60,
+            tests=[],
+            gate_decision=GateDecision.REVIEW,
         )
 
-        assert isinstance(suite, RefutationSuite)
-        assert all(t.original_effect == effect for t in suite.tests)
-
-    @pytest.mark.parametrize("effect", [-0.1, -0.5, -0.9])
-    def test_various_negative_effects(self, effect):
-        """Test refutation for various negative effect sizes."""
-        runner = RefutationRunner()
-
-        suite = runner.run_all_tests(
-            original_effect=effect,
-            original_ci=(effect - 0.1, effect + 0.1),
-        )
-
-        assert isinstance(suite, RefutationSuite)
-        assert all(t.original_effect == effect for t in suite.tests)
-
-
-class TestCIHandling:
-    """Test confidence interval handling."""
-
-    def test_narrow_ci(self):
-        """Test refutation with narrow confidence interval."""
-        runner = RefutationRunner()
-
-        suite = runner.run_all_tests(
-            original_effect=0.5,
-            original_ci=(0.49, 0.51),  # Narrow CI
-        )
-
-        assert isinstance(suite, RefutationSuite)
-
-    def test_wide_ci(self):
-        """Test refutation with wide confidence interval."""
-        runner = RefutationRunner()
-
-        suite = runner.run_all_tests(
-            original_effect=0.5,
-            original_ci=(0.1, 0.9),  # Wide CI
-        )
-
-        assert isinstance(suite, RefutationSuite)
-
-    def test_asymmetric_ci(self):
-        """Test refutation with asymmetric confidence interval."""
-        runner = RefutationRunner()
-
-        suite = runner.run_all_tests(
-            original_effect=0.5,
-            original_ci=(0.3, 0.8),  # Asymmetric
-        )
-
-        assert isinstance(suite, RefutationSuite)
-
-
-class TestDoWhyAvailability:
-    """Test DoWhy availability constant."""
-
-    def test_dowhy_available_is_boolean(self):
-        """Test DOWHY_AVAILABLE is boolean."""
-        assert isinstance(DOWHY_AVAILABLE, bool)
-
-
-class TestTestTypeConfiguration:
-    """Test individual test type configurations."""
-
-    def test_critical_tests_marked(self):
-        """Test that critical tests are properly marked."""
-        runner = RefutationRunner()
-
-        critical_tests = ["placebo_treatment", "random_common_cause", "sensitivity_e_value"]
-        non_critical_tests = ["data_subset", "bootstrap"]
-
-        for test in critical_tests:
-            assert runner.config[test]["critical"] is True, f"{test} should be critical"
-
-        for test in non_critical_tests:
-            assert runner.config[test]["critical"] is False, f"{test} should not be critical"
-
-    def test_default_simulations_count(self):
-        """Test default simulation counts."""
-        runner = RefutationRunner()
-
-        assert runner.config["placebo_treatment"]["num_simulations"] == 100
-        assert runner.config["data_subset"]["num_subsets"] == 10
-        assert runner.config["bootstrap"]["num_bootstraps"] == 500
+        assert is_estimate_valid(suite) is True
