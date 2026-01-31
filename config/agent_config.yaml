@@ -465,6 +465,30 @@ agents:
       - MONITOR_AGENT
       - SPAN
 
+  cohort_constructor:
+    tier: ml_foundation
+    enabled: true
+    description: "Patient cohort construction with filtering criteria, audit trails, and compliance validation"
+
+    capabilities:
+      - cohort_definition
+      - filter_criteria_parsing
+      - population_sizing
+      - audit_trail_generation
+      - compliance_validation
+
+    data_access:
+      train: true
+      validation: true
+      test: true
+      holdout: false
+
+    routes_from_intents:
+      - COHORT
+      - PATIENT_GROUP
+      - POPULATION
+      - FILTER
+
   # ─────────────────────────────────────────────────────────────────
   # TIER 1: COORDINATION (2 agents)
   # ─────────────────────────────────────────────────────────────────
@@ -971,6 +995,7 @@ routing:
   priority_order:
     # Tier 0: ML Foundation
     - scope_definer
+    - cohort_constructor
     - data_preparer
     - feature_analyzer
     - model_selector

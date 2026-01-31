@@ -6,6 +6,10 @@ Multi-Agent Causal Analytics for Pharmaceutical Drug Adoption Analysis
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![Version 4.2.1](https://img.shields.io/badge/version-4.2.1-green.svg)]()
 [![License: Proprietary](https://img.shields.io/badge/license-Proprietary-red.svg)]()
+[![Backend Tests](https://github.com/enunezvn/e2i_causal_analytics/actions/workflows/backend-tests.yml/badge.svg)](https://github.com/enunezvn/e2i_causal_analytics/actions/workflows/backend-tests.yml)
+[![Frontend Tests](https://github.com/enunezvn/e2i_causal_analytics/actions/workflows/frontend-tests.yml/badge.svg)](https://github.com/enunezvn/e2i_causal_analytics/actions/workflows/frontend-tests.yml)
+[![Security](https://github.com/enunezvn/e2i_causal_analytics/actions/workflows/security.yml/badge.svg)](https://github.com/enunezvn/e2i_causal_analytics/actions/workflows/security.yml)
+[![Deploy](https://github.com/enunezvn/e2i_causal_analytics/actions/workflows/deploy.yml/badge.svg)](https://github.com/enunezvn/e2i_causal_analytics/actions/workflows/deploy.yml)
 
 ## Overview
 
