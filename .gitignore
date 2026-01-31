@@ -37,8 +37,8 @@ ENV/
 
 # Environment Variables
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
 
 # Jupyter Notebook
 .ipynb_checkpoints
