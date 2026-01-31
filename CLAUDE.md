@@ -338,9 +338,15 @@ ssh e2i-prod
 
 | Service | URL | Description |
 |---------|-----|-------------|
-| **Frontend** | http://138.197.4.36/ | React dashboard (nginx proxy to port 5174) |
-| **Backend API** | http://138.197.4.36:8000 | FastAPI backend |
-| **API Docs** | http://138.197.4.36:8000/docs | Swagger/OpenAPI documentation |
+| **Frontend** | https://eznomics.site/ | React dashboard (nginx proxy) |
+| **Backend API** | https://eznomics.site/api/ | FastAPI backend (via nginx) |
+| **API Docs** | https://eznomics.site/api/docs | Swagger/OpenAPI documentation |
+| **Health** | https://eznomics.site/health | Health check endpoint |
+| **MLflow** | https://eznomics.site/mlflow/ | Experiment tracking |
+| **Opik** | https://eznomics.site/opik/ | Agent observability |
+
+> Direct port access (`:8000`, `:5000`, etc.) is blocked by firewall.
+> All traffic goes through nginx on ports 80/443.
 
 ### Virtual Environment (REQUIRED)
 

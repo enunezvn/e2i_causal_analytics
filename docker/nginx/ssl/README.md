@@ -1,72 +1,54 @@
-# SSL Certificates Directory
+# SSL Certificates
 
-This directory should contain SSL certificates for HTTPS in production.
+## Production (Let's Encrypt — Active)
 
-## For Production (Let's Encrypt)
+SSL is managed by **certbot** with automatic nginx integration on the droplet.
 
-Use Certbot to generate free SSL certificates:
+**Domain**: `eznomics.site`
 
 ```bash
-# On your Digital Ocean droplet
-sudo apt-get update
-sudo apt-get install certbot
+# Certificates are at:
+/etc/letsencrypt/live/eznomics.site/fullchain.pem
+/etc/letsencrypt/live/eznomics.site/privkey.pem
 
-# Generate certificate (replace with your domain)
-sudo certbot certonly --standalone -d yourdomain.com -d www.yourdomain.com
+# Certbot auto-modifies /etc/nginx/sites-available/e2i-app
+# Auto-renewal is handled by systemd timer (certbot.timer)
 
-# Certificates will be placed in /etc/letsencrypt/live/yourdomain.com/
-# Create symlinks:
-sudo ln -s /etc/letsencrypt/live/yourdomain.com/fullchain.pem /path/to/project/docker/nginx/ssl/cert.pem
-sudo ln -s /etc/letsencrypt/live/yourdomain.com/privkey.pem /path/to/project/docker/nginx/ssl/key.pem
-
-# Auto-renewal (certbot creates this automatically)
+# Verify auto-renewal works:
 sudo certbot renew --dry-run
+
+# Manual renewal (if needed):
+sudo certbot renew
 ```
+
+> This directory (`docker/nginx/ssl/`) is for the **Docker-based** nginx config
+> (`nginx.secure.conf`). The production droplet uses certbot-managed certs directly
+> in `/etc/letsencrypt/`.
 
 ## For Development (Self-Signed)
 
-Generate self-signed certificates for local testing:
+Generate self-signed certificates for local Docker testing:
 
 ```bash
-# Navigate to this directory
 cd docker/nginx/ssl
 
-# Generate self-signed certificate (valid for 365 days)
 openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
   -keyout key.pem \
   -out cert.pem \
   -subj "/C=US/ST=State/L=City/O=Organization/CN=localhost"
 
-# Set proper permissions
 chmod 600 key.pem
 chmod 644 cert.pem
 ```
 
-## Files Required
+## Files
 
-- `cert.pem` - SSL certificate (or fullchain.pem from Let's Encrypt)
-- `key.pem` - Private key (or privkey.pem from Let's Encrypt)
+- `cert.pem` - SSL certificate (for Docker nginx only)
+- `key.pem` - Private key (for Docker nginx only)
 
 ## Security Notes
 
-⚠️ **IMPORTANT**:
 - Never commit SSL certificates to version control
 - Keep private keys secure (chmod 600)
-- Rotate certificates before expiration
-- Use strong encryption (RSA 2048+ or ECC)
-
-## Nginx Configuration
-
-The nginx.conf file references these certificates:
-
-```nginx
-ssl_certificate /etc/nginx/ssl/cert.pem;
-ssl_certificate_key /etc/nginx/ssl/key.pem;
-```
-
-These paths are inside the Docker container, mapped from this directory via docker-compose.yml:
-
-```yaml
-volumes:
-  - ./docker/nginx/ssl:/etc/nginx/ssl:ro
-```
+- Let's Encrypt certificates auto-renew every 60-90 days
+- Production certs live in `/etc/letsencrypt/`, not in this directory

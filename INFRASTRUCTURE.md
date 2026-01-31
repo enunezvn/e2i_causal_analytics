@@ -6,29 +6,25 @@
 # SSH to droplet
 ssh -i ~/.ssh/replit enunez@138.197.4.36
 
-# Or if you have ~/.ssh/config configured:
+# Or with SSH config alias (if configured):
 ssh e2i-prod
 ```
 
-**All Services (via Nginx on Port 80):**
+**Domain**: `eznomics.site` (Hostinger DNS → DigitalOcean droplet)
+
+**All Services (via Nginx + HTTPS):**
 | Service | URL | Description |
 |---------|-----|-------------|
-| Frontend | http://138.197.4.36/ | React dashboard |
-| API | http://138.197.4.36/api/ | FastAPI endpoints |
-| Health | http://138.197.4.36/health | Health check |
-| Chatbot | http://138.197.4.36/copilotkit | CopilotKit endpoint |
-| MLflow | http://138.197.4.36/mlflow/ | Experiment tracking |
-| Opik | http://138.197.4.36/opik/ | Agent observability |
-| FalkorDB | http://138.197.4.36/falkordb/ | Graph database browser |
+| Frontend | https://eznomics.site/ | React dashboard |
+| API | https://eznomics.site/api/ | FastAPI endpoints |
+| Health | https://eznomics.site/health | Health check |
+| Chatbot | https://eznomics.site/copilotkit | CopilotKit endpoint |
+| MLflow | https://eznomics.site/mlflow/ | Experiment tracking |
+| Opik | https://eznomics.site/opik/ | Agent observability |
+| FalkorDB | https://eznomics.site/falkordb/ | Graph database browser |
 
-**Direct Port Access (if needed):**
-| Service | URL |
-|---------|-----|
-| API | http://138.197.4.36:8000 |
-| BentoML | http://138.197.4.36:3000 |
-| MLflow | http://138.197.4.36:5000 |
-| Opik | http://138.197.4.36:5173 |
-| FalkorDB Browser | http://138.197.4.36:3030 |
+> **Note**: Direct port access (e.g., `:8000`, `:5000`) is blocked by firewall.
+> All services are accessible only via the nginx proxy above or SSH tunnels.
 
 **FalkorDB Browser Connection URL:**
 ```
@@ -91,7 +87,10 @@ sudo systemctl status nginx
 | **Non-root User** | ✅ Enabled | `enunez` with sudo |
 | **Root Login** | ✅ Disabled | `PermitRootLogin no` |
 | **SSH Key Auth** | ✅ ED25519 | Password auth disabled |
-| **UFW Firewall** | ✅ Active | Ports 22, 80, 443, 8000 |
+| **UFW Firewall** | ✅ Active | Ports 22, 80, 443 only |
+| **Docker Firewall** | ✅ Active | DOCKER-USER chain blocks external access |
+| **SSL/TLS** | ✅ Let's Encrypt | Auto-renewing via certbot |
+| **Domain** | ✅ eznomics.site | Hostinger DNS A record |
 | **Fail2ban** | ✅ Active | sshd jail enabled |
 | **Swap** | ✅ Configured | 4GB swapfile |
 
@@ -221,18 +220,35 @@ Current size specs:
 
 ### Firewall & Security
 
-**UFW Firewall Rules (Configured via cloud-init):**
+**UFW Firewall Rules (3 ports only):**
 
 | Port | Protocol | Purpose |
 |------|----------|---------|
 | 22 | TCP | SSH |
-| 80 | TCP | HTTP |
-| 443 | TCP | HTTPS |
-| 8000 | TCP | API |
+| 80 | TCP | HTTP (redirects to HTTPS) |
+| 443 | TCP | HTTPS (all traffic via nginx) |
+
+> All other ports (8000, 5000, 5173, 6381, 6382, 3030, etc.) are blocked.
+> Services are accessible only via nginx proxy paths or SSH tunnels.
+
+**Docker Network Isolation:**
+
+Docker containers publish ports on `0.0.0.0` which bypasses UFW. The `DOCKER-USER`
+iptables chain blocks all external access to Docker-published ports:
+
+```bash
+# Rules in /etc/iptables/rules.v4 (persisted):
+# Chain DOCKER-USER:
+#   RETURN - state RELATED,ESTABLISHED
+#   DROP - eth0 (all new external connections)
+```
 
 ```bash
 # Check firewall status on droplet
 ssh -i ~/.ssh/replit enunez@138.197.4.36 "sudo ufw status verbose"
+
+# Check Docker firewall
+ssh -i ~/.ssh/replit enunez@138.197.4.36 "sudo iptables -L DOCKER-USER -n"
 
 # Check fail2ban status
 ssh -i ~/.ssh/replit enunez@138.197.4.36 "sudo fail2ban-client status sshd"
@@ -252,7 +268,10 @@ E2I application services managed by systemd:
 
 **Nginx Reverse Proxy Configuration:**
 - Config file: `/etc/nginx/sites-available/e2i-app`
-- Security headers enabled
+- SSL: Let's Encrypt via certbot (auto-renewed)
+- Security headers: HSTS, X-Frame-Options, X-Content-Type-Options, CSP, Permissions-Policy
+- Rate limiting: API (10r/s), CopilotKit (30r/s), General (100r/s)
+- Malicious path blocking: `.php`, `.env`, `.git`, `wp-*`, `phpmyadmin`
 - WebSocket support for `/ws`, `/opik/`, `/falkordb/`
 - Logs: `/var/log/nginx/e2i-app.access.log`, `/var/log/nginx/e2i-app.error.log`
 
@@ -310,12 +329,17 @@ cd /home/enunez/opik/deployment/docker-compose && docker compose down
 
 ### Monitoring Stack
 
-**Prometheus & Grafana** for comprehensive system monitoring:
+**Prometheus & Grafana** for comprehensive system monitoring (access via SSH tunnel):
 
-| Service | URL | Description | Credentials |
-|---------|-----|-------------|-------------|
-| **Grafana** | http://138.197.4.36:3100 | Dashboards & visualization | admin / admin |
-| **Prometheus** | http://138.197.4.36:9091 | Metrics collection & queries | - |
+| Service | Local URL (via SSH tunnel) | Description | Credentials |
+|---------|---------------------------|-------------|-------------|
+| **Grafana** | http://localhost:3100 | Dashboards & visualization | admin / admin |
+| **Prometheus** | http://localhost:9091 | Metrics collection & queries | - |
+
+```bash
+# SSH tunnel for monitoring tools
+ssh -i ~/.ssh/replit -L 3100:localhost:3100 -L 9091:localhost:9091 -N -f enunez@138.197.4.36
+```
 
 **Available Dashboards:**
 | Dashboard | Purpose |
@@ -347,17 +371,17 @@ curl -s http://localhost:9091/api/v1/targets | jq '.data.activeTargets[] | {job:
 
 | Service | Port | URL | Description |
 |---------|------|-----|-------------|
-| Supabase API | 54321 | http://138.197.4.36:54321 | Kong API Gateway |
-| Supabase Studio | 3001 | http://138.197.4.36:3001 | Database management UI |
+| Supabase API | 54321 | http://localhost:54321 (via SSH tunnel) | Kong API Gateway |
+| Supabase Studio | 3001 | http://localhost:3001 (via SSH tunnel) | Database management UI |
 | PostgreSQL | 5433 | - | Direct database access |
 
 **Connection Strings:**
 ```bash
 # For application use (via Kong API)
-SUPABASE_URL=http://138.197.4.36:54321
+SUPABASE_URL=http://localhost:54321  # via SSH tunnel or on-droplet
 
 # For direct PostgreSQL (migrations, admin)
-DATABASE_URL=postgresql://postgres:YOUR_PASSWORD@138.197.4.36:5433/postgres
+DATABASE_URL=postgresql://postgres:YOUR_PASSWORD@localhost:5433/postgres  # via SSH tunnel
 ```
 
 **Start/Stop Supabase:**
@@ -465,21 +489,22 @@ export no_proxy="$no_proxy,138.197.4.36"
 curl --noproxy '*' http://138.197.4.36:8000/health
 ```
 
-### SSH Tunneling (Alternative Proxy Bypass)
+### SSH Tunneling (Internal Services)
 
-When behind a corporate proxy (e.g., Novartis Netskope), direct access to web UIs on non-standard ports is blocked. Use SSH tunneling to access services via localhost.
+With firewall hardening, internal services (MLflow, Opik, Redis, etc.) are only
+accessible via nginx proxy paths or SSH tunnels. Use tunnels for direct port access.
 
 #### Quick Start
 
 ```bash
-# Forward E2I services (API)
-ssh -i ~/.ssh/replit -L 8000:localhost:8000 -N -f enunez@138.197.4.36
-
-# Forward all services (when configured)
+# Forward internal services for local development
 ssh -i ~/.ssh/replit \
-    -L 8000:localhost:8000 \
     -L 5000:localhost:5000 \
     -L 5173:localhost:5173 \
+    -L 6382:localhost:6382 \
+    -L 6381:localhost:6381 \
+    -L 3100:localhost:3100 \
+    -L 9091:localhost:9091 \
     -N -f enunez@138.197.4.36
 ```
 
@@ -551,16 +576,43 @@ swap:
   - Contains patched packages (ag-ui-langgraph, copilotkit)
   - Avoid pip install unless strictly necessary
 
+### CI/CD Pipeline
+
+**Backend CI** (`.github/workflows/backend-tests.yml`):
+- Triggers on PRs/pushes touching `src/`, `tests/`, `pyproject.toml`
+- Jobs: lint (Ruff) → unit-tests (pytest + coverage) → integration-tests (with Redis)
+- Max 4 workers, 30s timeout per pyproject.toml
+
+**Docker CD** (`.github/workflows/deploy.yml`):
+- Triggers on merge to `main` touching `src/`, `config/`, `docker/fastapi/`
+- Builds Docker image → pushes to GHCR (`ghcr.io/enunezvn/e2i-api`)
+- Deploys via SSH → health check → auto-rollback on failure
+- Deployment script: `scripts/deploy-docker.sh`
+
+**GHCR Images:**
+```bash
+# Pull latest image
+docker pull ghcr.io/enunezvn/e2i-api:latest
+
+# View available tags
+docker image ls ghcr.io/enunezvn/e2i-api
+```
+
 ### Completed Setup
 
 - [x] Create non-root sudo user (`enunez`)
 - [x] Configure SSH key authentication (ED25519)
 - [x] Disable root SSH login
-- [x] Set up UFW firewall rules
+- [x] Set up UFW firewall rules (ports 22, 80, 443 only)
+- [x] Configure Docker network isolation (DOCKER-USER chain)
 - [x] Configure fail2ban for SSH protection
 - [x] Configure swap (4GB)
 - [x] Install Docker and Docker Compose
-- [x] Install Nginx
+- [x] Install Nginx with security hardening
+- [x] Configure SSL/TLS certificates (Let's Encrypt via certbot)
+- [x] Configure domain/DNS (eznomics.site via Hostinger)
+- [x] Set up Backend CI pipeline (GitHub Actions)
+- [x] Set up Docker CD pipeline (GHCR + auto-deploy)
 
 ### Troubleshooting
 
@@ -680,6 +732,8 @@ On login, you'll see a warning if orphan processes are detected.
 - [x] Install and configure Opik (Agent observability)
 - [x] Install and configure FalkorDB Browser
 - [x] Configure nginx proxies for MLOps tools (/mlflow/, /opik/, /falkordb/)
-- [ ] Configure SSL/TLS certificates (Let's Encrypt)
+- [x] Configure SSL/TLS certificates (Let's Encrypt via certbot)
+- [x] Configure domain/DNS (eznomics.site)
+- [x] Harden firewall (UFW + Docker isolation)
+- [x] Set up CI/CD pipeline (GitHub Actions + GHCR)
 - [ ] Configure automatic backups
-- [ ] Configure domain/DNS (if applicable)
