@@ -589,5 +589,8 @@ def _get_framework(algorithm_name: str) -> str:
         "CausalForest": "econml",
         "LinearDML": "econml",
         "SLearner": "econml",
+        "DRLearner": "econml",
+        "TLearner": "econml",
+        "XLearner": "econml",
     }
     return framework_map.get(algorithm_name, "unknown")

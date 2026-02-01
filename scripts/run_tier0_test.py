@@ -97,7 +97,7 @@ CONFIG = TestConfig()
 @dataclass
 class StepResult:
     """Result from a pipeline step with enhanced format data."""
-    step_num: int
+    step_num: int | str  # int for main steps (1-8), str for sub-steps ("2b", "2c")
     step_name: str
     status: str  # "success", "warning", "failed"
     duration_seconds: float = 0.0
@@ -1625,6 +1625,185 @@ async def step_2_data_preparer(
     return result
 
 
+async def step_2b_feast_registration(
+    experiment_id: str, state: dict[str, Any]
+) -> dict[str, Any]:
+    """Step 2b: Register features with Feast feature store (gracefully degrading)."""
+    import time as time_mod
+    step_start = time_mod.time()
+
+    print_header("2b", "FEAST FEATURE REGISTRATION")
+
+    result = {
+        "status": "skipped",
+        "features_registered": 0,
+        "errors": [],
+    }
+
+    try:
+        from src.feature_store import FeatureStoreClient, get_feature_analyzer_adapter
+
+        processing_steps = []
+
+        # Initialize feature store client
+        fs_client = FeatureStoreClient()
+        processing_steps.append(("FeatureStoreClient initialized", True, None))
+
+        # Get adapter with Feast enabled
+        adapter = get_feature_analyzer_adapter(fs_client, enable_feast=True)
+        processing_steps.append(("FeatureAnalyzerAdapter created", True, "feast enabled"))
+
+        # Build feature state from pipeline state
+        feature_state = {}
+        train_df = state.get("train_df")
+        if train_df is not None:
+            feature_state["X_train"] = train_df
+            feature_state["selected_features"] = list(train_df.columns)
+            feature_state["feature_importance"] = {
+                col: 1.0 / len(train_df.columns) for col in train_df.columns
+            }
+
+        # Register features
+        reg_result = await adapter.register_features_from_state(
+            state=feature_state,
+            experiment_id=experiment_id,
+            entity_key="hcp_id",
+            owner="tier0_pipeline",
+            tags=["tier0", "e2e_test", CONFIG.brand.lower()],
+        )
+
+        features_registered = reg_result.get("features_registered", 0)
+        features_skipped = reg_result.get("features_skipped", 0)
+        reg_errors = reg_result.get("errors", [])
+        processing_steps.append((
+            "Features registered with Feast",
+            features_registered > 0 or features_skipped > 0,
+            f"{features_registered} registered, {features_skipped} skipped",
+        ))
+
+        print_input_section({
+            "experiment_id": experiment_id,
+            "entity_key": "hcp_id",
+            "feature_count": len(feature_state.get("selected_features", [])),
+        })
+        print_processing_steps(processing_steps)
+
+        # Validation
+        checks = [
+            ("Feature group created", reg_result.get("feature_group_created", False), "True", str(reg_result.get("feature_group_created", False))),
+            ("Features registered", features_registered > 0, "> 0", str(features_registered)),
+            ("No registration errors", len(reg_errors) == 0, "0 errors", f"{len(reg_errors)} errors"),
+        ]
+        print_validation_checks(checks)
+
+        result = {
+            "status": "success" if features_registered > 0 else "warning",
+            "features_registered": features_registered,
+            "features_skipped": features_skipped,
+            "feature_group_created": reg_result.get("feature_group_created", False),
+            "errors": reg_errors,
+        }
+
+        duration = time_mod.time() - step_start
+        if features_registered > 0:
+            print_step_result("success", f"Feast registration complete: {features_registered} features ({duration:.1f}s)")
+        else:
+            print_step_result("warning", f"Feast registration: 0 features registered ({duration:.1f}s)")
+
+    except Exception as e:
+        duration = time_mod.time() - step_start
+        result["status"] = "skipped"
+        result["errors"] = [str(e)]
+        print_step_result("warning", f"Feast registration skipped: {e} ({duration:.1f}s)")
+
+    return result
+
+
+async def step_2c_feast_freshness_check(
+    state: dict[str, Any]
+) -> dict[str, Any]:
+    """Step 2c: Check feature freshness in Feast (gracefully degrading)."""
+    import time as time_mod
+    step_start = time_mod.time()
+
+    print_header("2c", "FEAST FRESHNESS CHECK")
+
+    result = {
+        "status": "skipped",
+        "fresh": None,
+        "stale_features": [],
+        "errors": [],
+    }
+
+    try:
+        from src.feature_store import FeatureStoreClient, get_feature_analyzer_adapter
+
+        processing_steps = []
+
+        # Initialize
+        fs_client = FeatureStoreClient()
+        adapter = get_feature_analyzer_adapter(fs_client, enable_feast=True)
+        processing_steps.append(("FeatureAnalyzerAdapter initialized", True, None))
+
+        # Build feature refs from train_df columns
+        train_df = state.get("train_df")
+        if train_df is not None:
+            feature_refs = [f"hcp_features:{col}" for col in train_df.columns[:20]]
+        else:
+            feature_refs = ["hcp_features:default_feature"]
+
+        processing_steps.append(("Feature refs built", True, f"{len(feature_refs)} refs"))
+
+        # Check freshness
+        freshness_result = await adapter.check_feature_freshness(
+            feature_refs=feature_refs,
+            max_staleness_hours=24.0,
+        )
+
+        is_fresh = freshness_result.get("fresh", False)
+        stale_features = freshness_result.get("stale_features", [])
+        processing_steps.append((
+            "Freshness check completed",
+            True,
+            f"{'fresh' if is_fresh else f'{len(stale_features)} stale'}",
+        ))
+
+        print_input_section({
+            "feature_refs_count": len(feature_refs),
+            "max_staleness_hours": 24.0,
+        })
+        print_processing_steps(processing_steps)
+
+        # Validation
+        checks = [
+            ("Freshness check executed", True, "completed", "completed"),
+            ("Features fresh", is_fresh, "all fresh", f"{len(stale_features)} stale" if stale_features else "all fresh"),
+        ]
+        print_validation_checks(checks)
+
+        result = {
+            "status": "success" if is_fresh else "warning",
+            "fresh": is_fresh,
+            "stale_features": stale_features,
+            "checked_at": freshness_result.get("checked_at", ""),
+            "errors": [],
+        }
+
+        duration = time_mod.time() - step_start
+        if is_fresh:
+            print_step_result("success", f"All features fresh ({duration:.1f}s)")
+        else:
+            print_step_result("warning", f"{len(stale_features)} stale features detected ({duration:.1f}s)")
+
+    except Exception as e:
+        duration = time_mod.time() - step_start
+        result["status"] = "skipped"
+        result["errors"] = [str(e)]
+        print_step_result("warning", f"Feast freshness check skipped: {e} ({duration:.1f}s)")
+
+    return result
+
+
 async def step_3_cohort_constructor(patient_df: pd.DataFrame) -> tuple[pd.DataFrame, Any]:
     """Step 3: Build patient cohort."""
     import time as time_mod
@@ -2783,6 +2962,22 @@ async def step_8_observability_connector(experiment_id: str, stages_completed: i
     emission_successful = result.get("emission_successful", False)
     processing_steps.append(("Event emission", emission_successful, f"{result.get('events_logged', 0)} events"))
 
+    # Feast online feature retrieval check (gracefully degrading)
+    feast_online_ok = False
+    feast_online_detail = "skipped"
+    try:
+        from src.agents.prediction_synthesizer.nodes.feast_feature_store import FeastFeatureStore
+
+        feast_store = FeastFeatureStore()
+        sample_entity_id = f"hcp_{experiment_id[:8]}"
+        online_features = await feast_store.get_online_features(entity_id=sample_entity_id)
+        feast_online_ok = isinstance(online_features, dict)
+        feast_online_detail = f"{len(online_features)} features" if online_features else "empty"
+        processing_steps.append(("Feast online retrieval", feast_online_ok, feast_online_detail))
+    except Exception as e:
+        feast_online_detail = str(e)[:80]
+        processing_steps.append(("Feast online retrieval", False, f"skipped: {feast_online_detail}"))
+
     print_processing_steps(processing_steps)
 
     # Validation checks
@@ -2801,6 +2996,12 @@ async def step_8_observability_connector(experiment_id: str, stages_completed: i
             events_logged > 0 if events_logged else False,
             "> 0",
             str(events_logged) if events_logged else "0"
+        ),
+        (
+            "Feast online retrieval",
+            feast_online_ok,
+            "accessible",
+            feast_online_detail,
         ),
     ]
 
@@ -2830,6 +3031,10 @@ async def step_8_observability_connector(experiment_id: str, stages_completed: i
         recommendations.append("Verify event schema compliance")
 
     print_interpretation("Observability Analysis", observations, recommendations if recommendations else None)
+
+    # Attach Feast results for pipeline StepResult access
+    result["feast_online_ok"] = feast_online_ok
+    result["feast_online_detail"] = feast_online_detail
 
     # Final result
     duration = time_mod.time() - step_start
@@ -3031,6 +3236,80 @@ async def run_pipeline(
             if not state["gate_passed"]:
                 print_failure("QC Gate blocked training. Pipeline stopped.")
                 return
+
+        # Step 2b: Feast Feature Registration (gracefully degrading)
+        if 2 in steps_to_run:
+            step_start = time.time()
+            feast_reg_result = await step_2b_feast_registration(experiment_id, state)
+            feast_reg_status = feast_reg_result.get("status", "skipped")
+            features_registered = feast_reg_result.get("features_registered", 0)
+            step_results.append(StepResult(
+                step_num="2b",
+                step_name="FEAST FEATURE REGISTRATION",
+                status=feast_reg_status if feast_reg_status != "skipped" else "warning",
+                duration_seconds=time.time() - step_start,
+                key_metrics={
+                    "features_registered": features_registered,
+                    "features_skipped": feast_reg_result.get("features_skipped", 0),
+                    "feature_group_created": feast_reg_result.get("feature_group_created", False),
+                },
+                details={"errors": feast_reg_result.get("errors", [])},
+                input_summary={
+                    "experiment_id": experiment_id,
+                    "entity_key": "hcp_id",
+                },
+                validation_checks=[
+                    ("Feast registration attempted", feast_reg_status != "skipped", "not skipped", feast_reg_status),
+                    ("Features registered", features_registered > 0, "> 0", str(features_registered)),
+                ],
+                metrics_table=[
+                    ("features_registered", features_registered, "> 0", features_registered > 0),
+                    ("status", feast_reg_status, None, None),
+                ],
+                interpretation=[
+                    f"Feast feature registration: {feast_reg_status}",
+                    f"{features_registered} features registered to feature store",
+                ],
+                result_message=f"Feast registration: {feast_reg_status} ({features_registered} features)"
+                if feast_reg_status != "skipped" else "Feast registration skipped (service unavailable)",
+            ))
+
+        # Step 2c: Feast Freshness Check (gracefully degrading)
+        if 2 in steps_to_run:
+            step_start = time.time()
+            freshness_result = await step_2c_feast_freshness_check(state)
+            freshness_status = freshness_result.get("status", "skipped")
+            is_fresh = freshness_result.get("fresh", None)
+            stale_count = len(freshness_result.get("stale_features", []))
+            step_results.append(StepResult(
+                step_num="2c",
+                step_name="FEAST FRESHNESS CHECK",
+                status=freshness_status if freshness_status != "skipped" else "warning",
+                duration_seconds=time.time() - step_start,
+                key_metrics={
+                    "fresh": is_fresh,
+                    "stale_features_count": stale_count,
+                },
+                details={"errors": freshness_result.get("errors", [])},
+                input_summary={
+                    "max_staleness_hours": 24.0,
+                },
+                validation_checks=[
+                    ("Freshness check attempted", freshness_status != "skipped", "not skipped", freshness_status),
+                    ("Features fresh", is_fresh is True, "all fresh", f"{stale_count} stale" if stale_count else "all fresh"),
+                ],
+                metrics_table=[
+                    ("fresh", str(is_fresh) if is_fresh is not None else "N/A", "True", is_fresh is True),
+                    ("stale_features", stale_count, "0", stale_count == 0),
+                ],
+                interpretation=[
+                    f"Feast freshness check: {freshness_status}",
+                    f"{'All features fresh' if is_fresh else f'{stale_count} stale features detected'}"
+                    if is_fresh is not None else "Freshness check was skipped",
+                ],
+                result_message=f"Freshness: {'all fresh' if is_fresh else f'{stale_count} stale'}"
+                if freshness_status != "skipped" else "Freshness check skipped (service unavailable)",
+            ))
 
         # Step 3: Cohort Constructor
         if 3 in steps_to_run:
@@ -3477,6 +3756,7 @@ async def run_pipeline(
                     ("Metrics emitted", emission_successful, "True", str(emission_successful)),
                     ("Events logged", events_logged > 0, "> 0", events_logged),
                     ("Quality score computed", quality_score is not None, "present", f"{quality_score:.2f}" if quality_score else "N/A"),
+                    ("Feast online retrieval", result.get("feast_online_ok", False), "accessible", result.get("feast_online_detail", "skipped")),
                 ],
                 metrics_table=[
                     ("emission_successful", str(emission_successful), "True", emission_successful),

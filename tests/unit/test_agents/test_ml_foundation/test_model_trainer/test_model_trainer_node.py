@@ -292,6 +292,15 @@ class TestGetFramework:
         """Should identify LightGBM."""
         assert _get_framework("LightGBM") == "lightgbm"
 
+    def test_identifies_econml_algorithms(self):
+        """Should identify econml algorithms."""
+        assert _get_framework("CausalForest") == "econml"
+        assert _get_framework("LinearDML") == "econml"
+        assert _get_framework("SLearner") == "econml"
+        assert _get_framework("DRLearner") == "econml"
+        assert _get_framework("TLearner") == "econml"
+        assert _get_framework("XLearner") == "econml"
+
     def test_returns_unknown_for_unrecognized(self):
         """Should return 'unknown' for unrecognized algorithms."""
         assert _get_framework("UnknownAlgorithm") == "unknown"
