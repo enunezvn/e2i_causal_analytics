@@ -1047,17 +1047,71 @@ def generate_sample_data(
 # =============================================================================
 
 
-async def start_bentoml_service(model_tag: str, port: int = 3001) -> dict:
+async def start_bentoml_service(
+    model_tag: str,
+    port: int = 3001,
+    preprocessor: Any = None,
+    framework: str = "sklearn",
+) -> dict:
     """Start BentoML service serving the real trained model.
 
     Args:
         model_tag: BentoML model tag from registration
         port: Port to serve on
+        preprocessor: Optional fitted preprocessor to apply before prediction
+        framework: ML framework used to save the model ("sklearn", "xgboost", "lightgbm")
 
     Returns:
         {"started": True, "endpoint": "http://localhost:3001", "pid": <pid>}
     """
     import httpx
+
+    # Save preprocessor to temp file if provided
+    preprocessor_path = ""
+    if preprocessor is not None:
+        try:
+            import joblib as _joblib
+            preprocessor_path = "/tmp/tier0_bentoml_preprocessor.pkl"
+            _joblib.dump(preprocessor, preprocessor_path)
+            print(f"    Saved preprocessor to {preprocessor_path}")
+        except Exception as e:
+            print(f"    Warning: could not save preprocessor: {e}")
+            preprocessor_path = ""
+
+    # Map framework to bentoml load function
+    load_fn_map = {
+        "sklearn": "bentoml.sklearn.load_model",
+        "xgboost": "bentoml.xgboost.load_model",
+        "lightgbm": "bentoml.lightgbm.load_model",
+    }
+    load_fn = load_fn_map.get(framework, "bentoml.picklable_model.load_model")
+
+    # Build preprocessor loading code
+    if preprocessor_path:
+        preprocessor_code = f'''
+        try:
+            import joblib
+            self.preprocessor = joblib.load("{preprocessor_path}")
+        except Exception as e:
+            print(f"Warning: could not load preprocessor: {{e}}")
+            self.preprocessor = None'''
+        preprocess_step = '''
+        if self.preprocessor is not None:
+            import pandas as pd
+            if arr.ndim == 1:
+                arr = arr.reshape(1, -1)
+            feature_names = None
+            if hasattr(self.preprocessor, 'numeric_features'):
+                feature_names = list(self.preprocessor.numeric_features) + list(getattr(self.preprocessor, 'categorical_features', []))
+            elif hasattr(self.preprocessor, 'feature_names_in_'):
+                feature_names = list(self.preprocessor.feature_names_in_)
+            if feature_names and len(feature_names) == arr.shape[1]:
+                arr = pd.DataFrame(arr, columns=feature_names)
+            arr = self.preprocessor.transform(arr)'''
+    else:
+        preprocessor_code = '''
+        self.preprocessor = None'''
+        preprocess_step = ''
 
     # Generate a service file dynamically for the model
     service_code = f'''
@@ -1067,14 +1121,16 @@ import numpy as np
 @bentoml.service(name="tier0_model_service")
 class Tier0ModelService:
     def __init__(self):
-        self.model = bentoml.sklearn.load_model("{model_tag}")
+        self.model = {load_fn}("{model_tag}")
         self.model_tag = "{model_tag}"
+{preprocessor_code}
 
     @bentoml.api
     async def predict(self, features: list) -> dict:
         import time
         start = time.time()
         arr = np.array(features)
+{preprocess_step}
         predictions = self.model.predict(arr)
         probas = self.model.predict_proba(arr) if hasattr(self.model, 'predict_proba') else None
         elapsed = (time.time() - start) * 1000
@@ -1141,14 +1197,14 @@ class Tier0ModelService:
 async def verify_bentoml_predictions(
     endpoint: str,
     sample_features: list,
-    use_production_client: bool = True,
+    service_type: str = "ephemeral",
 ) -> dict:
     """Verify that BentoML service returns valid predictions.
 
     Args:
         endpoint: BentoML service endpoint (e.g., http://localhost:3001)
         sample_features: Sample feature data to test
-        use_production_client: If True, use BentoMLClient for full validation
+        service_type: Type of BentoML service ("ephemeral" or "persistent")
 
     Returns:
         {"health_check": True, "prediction_test": True, "predictions": [...], "latency_ms": X}
@@ -1168,14 +1224,24 @@ async def verify_bentoml_predictions(
         except Exception as e:
             result["health_error"] = str(e)
 
-        # Prediction test
+        # Prediction test — try payload formats for compatibility
+        # Ephemeral service uses {"features": ...}
+        # Persistent service uses {"input_data": {"features": ...}}
         try:
+            payloads = [
+                {"features": sample_features},
+                {"input_data": {"features": sample_features}},
+            ]
             start = time_module.time()
-            pred_resp = await client.post(
-                f"{endpoint}/predict",
-                json={"features": sample_features},
-                timeout=10.0,
-            )
+            pred_resp = None
+            for payload in payloads:
+                pred_resp = await client.post(
+                    f"{endpoint}/predict",
+                    json=payload,
+                    timeout=10.0,
+                )
+                if pred_resp.status_code != 400:
+                    break
             elapsed = (time_module.time() - start) * 1000
 
             if pred_resp.status_code == 200:
@@ -1185,6 +1251,12 @@ async def verify_bentoml_predictions(
                 result["probabilities"] = pred_data.get("probabilities")
                 result["latency_ms"] = elapsed
                 result["service_latency_ms"] = pred_data.get("latency_ms")
+            else:
+                result["prediction_error"] = f"HTTP {pred_resp.status_code}"
+                try:
+                    result["prediction_error_body"] = pred_resp.text[:500]
+                except Exception:
+                    pass
         except Exception as e:
             result["prediction_error"] = str(e)
 
@@ -2396,6 +2468,7 @@ async def step_7_model_deployer(
     success_criteria_met: bool,
     trained_model: Any = None,
     include_bentoml: bool = False,
+    fitted_preprocessor: Any = None,
 ) -> dict[str, Any]:
     """Step 7: Deploy model."""
     import time as time_mod
@@ -2521,6 +2594,7 @@ async def step_7_model_deployer(
                     "tier0_test": True,
                     "algorithm": model_class_name,
                 },
+                preprocessor=fitted_preprocessor,
                 framework=framework,
             )
 
@@ -2538,7 +2612,12 @@ async def step_7_model_deployer(
                     reason = persistent.get("reason", "unknown")
                     print(f"    ℹ Persistent service not available ({reason}), using ephemeral")
                     # Start BentoML service with the registered model
-                    bentoml_result = await start_bentoml_service(model_tag, port=3001)
+                    bentoml_result = await start_bentoml_service(
+                        model_tag,
+                        port=3001,
+                        preprocessor=fitted_preprocessor,
+                        framework=framework,
+                    )
 
                     if bentoml_result.get("started"):
                         endpoint = bentoml_result.get("endpoint")
@@ -2550,8 +2629,8 @@ async def step_7_model_deployer(
                         endpoint = None
 
                 if endpoint:
-                    # Verify predictions work with sample data
-                    # Use same feature structure as training (3 features)
+                    # Verify predictions work with sample data.
+                    # Send RAW features — the service applies preprocessing internally.
                     sample_features = [[30.0, 5.0, 1.0]]  # days_on_therapy, hcp_visits, prior_treatments
 
                     verification = await verify_bentoml_predictions(
@@ -2566,6 +2645,11 @@ async def step_7_model_deployer(
 
                     pred_icon = "✓" if verification.get("prediction_test") else "✗"
                     print(f"      prediction_test: {pred_icon} {'passed' if verification.get('prediction_test') else 'failed'}")
+                    if not verification.get("prediction_test"):
+                        if verification.get("prediction_error"):
+                            print(f"      error: {verification['prediction_error']}")
+                        if verification.get("prediction_error_body"):
+                            print(f"      response_body: {verification['prediction_error_body']}")
 
                     if verification.get("predictions"):
                         print(f"      predictions: {verification.get('predictions')}")
@@ -3094,6 +3178,8 @@ async def run_pipeline(
             state["validation_metrics"] = result.get("validation_metrics", {})
             # Store feature names for downstream agents (e.g., prediction_synthesizer)
             state["feature_names"] = feature_cols
+            # Store preprocessor for BentoML serving (service handles preprocessing)
+            state["fitted_preprocessor"] = result.get("fitted_preprocessor")
             # Try multiple possible keys for model_uri
             state["model_uri"] = (
                 result.get("model_uri")
@@ -3289,6 +3375,7 @@ async def run_pipeline(
                 state.get("success_criteria_met", True),
                 trained_model=state.get("trained_model"),
                 include_bentoml=include_bentoml,
+                fitted_preprocessor=state.get("fitted_preprocessor"),
             )
             state["deployment_manifest"] = result.get("deployment_manifest")
             # Track BentoML PID for cleanup (ephemeral mode only)

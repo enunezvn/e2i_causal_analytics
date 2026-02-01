@@ -278,7 +278,7 @@ class ModelTrainerAgent:
 
         # Preprocessing and HPO info
         preprocessing_statistics = final_state.get("preprocessing_statistics", {})
-        fitted_preprocessor = final_state.get("fitted_preprocessor")  # For inference
+        fitted_preprocessor = final_state.get("preprocessor")  # For inference
         X_validation_preprocessed = final_state.get("X_validation_preprocessed")  # For analysis
         X_test_preprocessed = final_state.get("X_test_preprocessed")  # For analysis
         best_hyperparameters = final_state.get("best_hyperparameters", {})
