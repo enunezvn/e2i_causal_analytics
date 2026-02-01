@@ -281,19 +281,19 @@ pytest tests/unit/ --cov=src --cov-report=term -n 4 | grep TOTAL
 
 ## Phase Summary
 
-| # | Phase | Priority | Context | Droplet Changes |
-|---|-------|----------|---------|-----------------|
-| 1 | DNS + Let's Encrypt SSL | P0 | Medium | nginx + certbot |
-| 2 | Firewall Hardening | P0 | Low | UFW rules |
-| 3 | Health Check + cohort_constructor | P1 | Low | Code deploy |
-| 4 | Backend CI Workflow | P1 | Medium | None |
-| 5 | Docker CD Pipeline (GHCR) | P2 | Medium | Docker + secrets |
-| 6 | Test Coverage to 70% | P2 | High (2-3 sessions) | Run tests |
-| 7 | Documentation Update | — | Low | None |
+| # | Phase | Priority | Status | Notes |
+|---|-------|----------|--------|-------|
+| 1 | DNS + Let's Encrypt SSL | P0 | ✅ Done | Droplet: nginx + certbot |
+| 2 | Firewall Hardening | P0 | ✅ Done | Droplet: UFW 22/80/443 only |
+| 3 | Health Check + cohort_constructor | P1 | ✅ Done | Commit 26855c9 |
+| 4 | Backend CI Workflow | P1 | ✅ Done | Commit 26855c9 |
+| 5 | Docker CD Pipeline (GHCR) | P2 | ✅ Done | Commit 26855c9 |
+| 6 | Test Coverage to 70% | P2 | ✅ Done | 70.59% — batch 1 (aa5cf9d), batch 2 (8e99ecf), batch 3 (memory_hooks + fixes) |
+| 7 | Documentation Update | — | ✅ Done | Commit 26855c9 |
 
 ## Prerequisites Checklist
 
-- [ ] DNS: Point `eznomics.site` A record → `138.197.4.36` in Hostinger DNS panel
-- [ ] DNS: Point `www.eznomics.site` A record → `138.197.4.36`
+- [x] DNS: Point `eznomics.site` A record → `138.197.4.36` in Hostinger DNS panel
+- [x] DNS: Point `www.eznomics.site` A record → `138.197.4.36`
 - [ ] GitHub: Add repository secrets (`DEPLOY_SSH_KEY`, `DEPLOY_HOST`, `DEPLOY_USER`)
 - [ ] GitHub: Ensure GHCR is enabled for the repository (Settings → Packages)
