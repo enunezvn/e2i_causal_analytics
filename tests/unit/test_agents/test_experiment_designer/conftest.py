@@ -1,12 +1,14 @@
 """Fixtures for experiment_designer agent tests.
 
 Provides:
+- Mock LLM factory to prevent real API calls in unit tests
 - MLflow cleanup to prevent "run already active" errors between tests
 - Environment variable setup for dspy imports
-- Skip marker for tests requiring real LLM API key
 """
 
+import json
 import os
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -16,11 +18,62 @@ if not os.environ.get("OPENAI_API_KEY"):
     os.environ["OPENAI_API_KEY"] = "test-key-for-import-only"
 
 
-def _has_real_api_key() -> bool:
-    """Check if a real (non-test) API key is available."""
-    key = os.environ.get("OPENAI_API_KEY", "")
-    # Test keys are placeholders
-    return bool(key) and not key.startswith("test-key") and not key.startswith("sk-test")
+# ---------------------------------------------------------------------------
+# Mock LLM response used by all experiment_designer tests
+# ---------------------------------------------------------------------------
+
+MOCK_DESIGN_JSON = json.dumps(
+    {
+        "refined_hypothesis": "Increasing visit frequency causes higher engagement",
+        "treatment_definition": {
+            "name": "increased_visits",
+            "description": "Increased visit frequency",
+            "implementation_details": "Weekly visits instead of bi-weekly",
+            "target_population": "All HCPs",
+            "dosage_or_intensity": "2x frequency",
+            "duration": "12 weeks",
+            "delivery_mechanism": "In-person rep visits",
+        },
+        "outcome_definition": {
+            "name": "engagement_score",
+            "metric_type": "continuous",
+            "measurement_method": "CRM engagement index",
+            "measurement_frequency": "weekly",
+            "baseline_value": 50.0,
+            "expected_effect_size": 0.25,
+            "minimum_detectable_effect": 0.15,
+            "is_primary": True,
+        },
+        "design_type": "RCT",
+        "design_rationale": "RCT is appropriate for this intervention study with randomization at the individual HCP level",
+        "randomization_unit": "individual",
+        "randomization_method": "stratified",
+        "stratification_vars": ["territory", "specialty"],
+        "blocking_variables": ["region"],
+        "causal_assumptions": ["No unmeasured confounding", "SUTVA holds"],
+        "anticipated_confounders": [
+            {"name": "territory_size", "how_addressed": "Stratified randomization"},
+            {"name": "baseline_engagement", "how_addressed": "Covariate adjustment"},
+        ],
+    }
+)
+
+
+class MockLLMResponse:
+    """Mock LLM response with .content and .response_metadata."""
+
+    def __init__(self, content: str = MOCK_DESIGN_JSON):
+        self.content = content
+        self.response_metadata = {
+            "usage": {"input_tokens": 500, "output_tokens": 300}
+        }
+
+
+def make_mock_llm(content: str = MOCK_DESIGN_JSON) -> AsyncMock:
+    """Create a mock LLM with ainvoke returning a proper response object."""
+    mock = AsyncMock()
+    mock.ainvoke.return_value = MockLLMResponse(content)
+    return mock
 
 
 # Register custom marker
@@ -30,35 +83,45 @@ def pytest_configure(config):
     )
 
 
-def pytest_collection_modifyitems(config, items):
-    """Skip tests marked with requires_llm_api if no real API key is available."""
-    if _has_real_api_key():
-        return  # Real key available, run all tests
+@pytest.fixture(autouse=True)
+def mock_llm_factory():
+    """Patch LLM factory functions so no real API calls are made.
 
-    skip_marker = pytest.mark.skip(
-        reason="Requires real OPENAI_API_KEY (test key provided for import only)"
+    This applies to ALL tests in the experiment_designer directory.
+    Patches:
+      - design_reasoning: get_chat_llm, get_fast_llm, get_llm_provider
+      - validity_audit: _get_validity_llm (force MockValidityLLM fallback)
+
+    Tests that need real API access should be run manually with
+    @pytest.mark.requires_llm_api.
+    """
+    from src.agents.experiment_designer.nodes.validity_audit import (
+        MockValidityLLM,
     )
 
-    # Test classes that call real LLM APIs (integration tests)
-    llm_test_classes = {
-        "TestExperimentDesignerAgent",
-        "TestExperimentDesignerOutput",
-        "TestAsyncExecution",
-        "TestEdgeCases",
-        "TestEndToEndWorkflows",
-    }
-
-    for item in items:
-        # Check for explicit marker
-        if "requires_llm_api" in [m.name for m in item.iter_markers()]:
-            item.add_marker(skip_marker)
-            continue
-
-        # Skip tests in classes that call real LLM
-        for cls_name in llm_test_classes:
-            if cls_name in item.nodeid:
-                item.add_marker(skip_marker)
-                break
+    with (
+        patch(
+            "src.agents.experiment_designer.nodes.design_reasoning.get_chat_llm",
+            return_value=make_mock_llm(),
+        ),
+        patch(
+            "src.agents.experiment_designer.nodes.design_reasoning.get_fast_llm",
+            return_value=make_mock_llm(),
+        ),
+        patch(
+            "src.agents.experiment_designer.nodes.design_reasoning.get_llm_provider",
+            return_value="openai",
+        ),
+        patch(
+            "src.agents.experiment_designer.nodes.validity_audit._get_validity_llm",
+            return_value=(MockValidityLLM(), "mock-validity-llm", False),
+        ),
+        patch(
+            "src.agents.experiment_designer.agent.ExperimentDesignerAgent._get_mlflow_tracker",
+            return_value=None,
+        ),
+    ):
+        yield
 
 
 @pytest.fixture(autouse=True)

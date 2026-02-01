@@ -51,7 +51,9 @@ def mock_supabase():
     client.eq = MagicMock(return_value=client)
     client.order = MagicMock(return_value=client)
     client.limit = MagicMock(return_value=client)
-    client.not_ = MagicMock(return_value=client)
+    not_mock = MagicMock()
+    not_mock.is_ = MagicMock(return_value=client)
+    client.not_ = not_mock
     client.is_ = MagicMock(return_value=client)
     client.execute = AsyncMock()
     return client
@@ -89,7 +91,7 @@ def twin_model_config():
         cv_folds=5,
         feature_columns=["decile", "specialty", "region"],
         target_column="prescribing_change",
-        geographic_scope=["US"],
+        geographic_scope="US",
     )
 
 

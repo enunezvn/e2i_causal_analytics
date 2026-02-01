@@ -169,15 +169,24 @@ class TestRegisterSelectionInMlflow:
 
     async def test_handles_import_error(self, base_state):
         """Should handle missing MLflow gracefully."""
-        # Without patching, if mlflow_connector doesn't exist or fails to import
-        # the function should handle it gracefully
-        result = await register_selection_in_mlflow(base_state)
+        import sys
 
-        # Should indicate not registered
-        assert result["registered_in_mlflow"] is False
-        # May have error message
-        if "mlflow_registration_error" in result:
-            assert len(result["mlflow_registration_error"]) > 0
+        # Temporarily make mlflow_connector unimportable
+        original = sys.modules.get("src.mlops.mlflow_connector")
+        sys.modules["src.mlops.mlflow_connector"] = None  # Force ImportError
+        try:
+            result = await register_selection_in_mlflow(base_state)
+
+            # Should indicate not registered
+            assert result["registered_in_mlflow"] is False
+            if "mlflow_registration_error" in result:
+                assert len(result["mlflow_registration_error"]) > 0
+        finally:
+            # Restore original module
+            if original is not None:
+                sys.modules["src.mlops.mlflow_connector"] = original
+            else:
+                sys.modules.pop("src.mlops.mlflow_connector", None)
 
 
 @pytest.mark.asyncio

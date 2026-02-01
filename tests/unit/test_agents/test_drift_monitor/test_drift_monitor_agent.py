@@ -181,10 +181,10 @@ class TestDriftMonitorOutput:
         assert hasattr(result, "alerts")
         assert hasattr(result, "drift_summary")
         assert hasattr(result, "recommended_actions")
-        assert hasattr(result, "detection_latency_ms")
+        assert hasattr(result, "total_latency_ms")
         assert hasattr(result, "features_checked")
         assert hasattr(result, "baseline_timestamp")
-        assert hasattr(result, "current_timestamp")
+        assert hasattr(result, "timestamp")
         assert hasattr(result, "warnings")
 
     @pytest.mark.asyncio
@@ -339,4 +339,4 @@ class TestEndToEndWorkflows:
         result = await agent.run(input_data)
 
         # Should be under 30,000ms (30s) for 50 features (lenient for CI environments)
-        assert result.detection_latency_ms < 30_000
+        assert result.total_latency_ms < 30_000

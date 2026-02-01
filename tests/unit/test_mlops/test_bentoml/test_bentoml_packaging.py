@@ -173,7 +173,8 @@ class TestGenerateServiceFile:
 
         assert result.exists()
         content = result.read_text()
-        assert "ClassificationServiceTemplate" in content
+        assert "Classification Service" in content
+        assert "ClassificationInput" in content
         assert "churn_model:latest" in content
         assert "churn_service" in content
 
@@ -189,7 +190,8 @@ class TestGenerateServiceFile:
 
         assert result.exists()
         content = result.read_text()
-        assert "RegressionServiceTemplate" in content
+        assert "Regression Service" in content
+        assert "RegressionInput" in content
         assert "sales_model:latest" in content
 
     def test_generate_causal_service(self, tmp_path):
@@ -204,7 +206,8 @@ class TestGenerateServiceFile:
 
         assert result.exists()
         content = result.read_text()
-        assert "CausalInferenceServiceTemplate" in content
+        assert "Causal Inference Service" in content
+        assert "CausalInput" in content
         assert "cate_model:latest" in content
 
     def test_invalid_service_type(self, tmp_path):

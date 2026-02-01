@@ -308,7 +308,7 @@ class TestTwinRetrainingService:
         """Test triggering retraining creates job."""
         model_id = uuid4()
 
-        with patch("src.digital_twin.retraining_service.uuid.uuid4") as mock_uuid:
+        with patch("uuid.uuid4") as mock_uuid:
             mock_uuid.return_value = UUID("12345678-1234-5678-1234-567812345678")
 
             job = await service.trigger_retraining(

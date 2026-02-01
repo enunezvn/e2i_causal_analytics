@@ -42,13 +42,18 @@ async def init_falkordb() -> Any:
     if _falkordb_client is not None:
         return _falkordb_client
 
-    logger.info(f"Initializing FalkorDB connection to {FALKORDB_HOST}:{FALKORDB_PORT}")
+    # Read env vars at call time to support runtime configuration
+    host = os.environ.get("FALKORDB_HOST", "localhost")
+    port = int(os.environ.get("FALKORDB_PORT", "6381"))
+    graph_name = os.environ.get("FALKORDB_GRAPH_NAME", "e2i_causal")
+
+    logger.info(f"Initializing FalkorDB connection to {host}:{port}")
 
     try:
         from falkordb import FalkorDB
 
-        _falkordb_client = FalkorDB(host=FALKORDB_HOST, port=FALKORDB_PORT)
-        _graph = _falkordb_client.select_graph(FALKORDB_GRAPH_NAME)
+        _falkordb_client = FalkorDB(host=host, port=port)
+        _graph = _falkordb_client.select_graph(graph_name)
 
         # Verify connection by listing graphs
         graphs = _falkordb_client.list_graphs()

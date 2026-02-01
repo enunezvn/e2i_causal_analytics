@@ -91,8 +91,8 @@ class TestDataDriftNode:
 
         result = await node.execute(state)
 
-        assert "detection_latency_ms" in result
-        assert result["detection_latency_ms"] >= 0
+        assert "total_latency_ms" in result
+        assert result["total_latency_ms"] >= 0
 
     @pytest.mark.asyncio
     async def test_timestamps_set(self):
@@ -103,9 +103,9 @@ class TestDataDriftNode:
         result = await node.execute(state)
 
         assert "baseline_timestamp" in result
-        assert "current_timestamp" in result
+        assert "timestamp" in result
         assert len(result["baseline_timestamp"]) > 0
-        assert len(result["current_timestamp"]) > 0
+        assert len(result["timestamp"]) > 0
 
     @pytest.mark.asyncio
     async def test_check_data_drift_disabled(self):

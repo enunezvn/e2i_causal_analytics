@@ -75,20 +75,21 @@ def mock_state_target_leakage():
 @pytest.fixture
 def mock_state_train_test_contamination():
     """Create mock state with train-test contamination."""
-    # Create overlapping indices
+    # Create data where validation rows are exact copies of training rows
+    # (row-hash based detection requires identical data, not just index overlap)
     train_df = pd.DataFrame(
         {
             "feature1": [1, 2, 3, 4, 5],
             "target": [0, 1, 0, 1, 0],
         }
     )
-    # Validation has overlapping indices 3 and 4!
+    # Validation contains exact duplicates of train rows 3 and 4
     validation_df = pd.DataFrame(
         {
-            "feature1": [33, 44],
+            "feature1": [4, 5],
             "target": [1, 0],
         },
-        index=[3, 4],  # CONTAMINATION!
+        index=[3, 4],
     )
 
     return {
@@ -194,8 +195,9 @@ def test_check_target_leakage_direct():
 
 def test_check_train_test_contamination_direct():
     """Test check_train_test_contamination function directly."""
+    # Exact duplicate rows (hash-based detection requires identical data)
     train_df = pd.DataFrame({"col": [1, 2, 3]}, index=[0, 1, 2])
-    test_df = pd.DataFrame({"col": [4, 5]}, index=[1, 2])  # Overlap!
+    test_df = pd.DataFrame({"col": [2, 3]}, index=[1, 2])  # Same data as train rows 1,2
 
     issues = check_train_test_contamination(train_df, test_df=test_df)
 

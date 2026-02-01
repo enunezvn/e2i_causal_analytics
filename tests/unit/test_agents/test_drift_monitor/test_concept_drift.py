@@ -74,8 +74,8 @@ class TestConceptDriftNode:
 
         result = await node.execute(state)
 
-        assert "detection_latency_ms" in result
-        assert result["detection_latency_ms"] >= 0
+        assert "total_latency_ms" in result
+        assert result["total_latency_ms"] >= 0
 
     @pytest.mark.asyncio
     async def test_check_concept_drift_disabled(self):

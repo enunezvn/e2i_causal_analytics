@@ -377,13 +377,13 @@ class TestStateUpdates:
             "baseline_dag_adjacency": adjacency,
             "current_dag_adjacency": adjacency,
             "dag_nodes": nodes,
-            "detection_latency_ms": 100,  # Existing latency
+            "total_latency_ms": 100,  # Existing latency
         }
 
         result = await structural_drift_node.execute(state)
 
         # Latency should be added to existing
-        assert result["detection_latency_ms"] >= 100
+        assert result["total_latency_ms"] >= 100
 
     @pytest.mark.asyncio
     async def test_recommendations_generated(

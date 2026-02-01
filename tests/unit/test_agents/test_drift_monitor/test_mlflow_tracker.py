@@ -56,7 +56,7 @@ def sample_result():
         "features_checked": 10,
         "features_with_drift": ["feature_1", "feature_2"],
         "overall_drift_score": 0.45,
-        "detection_latency_ms": 250,
+        "total_latency_ms": 250,
         "data_drift_results": [
             {"drift_detected": True, "severity": "high", "test_statistic": 0.15, "drift_type": "psi"},
             {"drift_detected": False, "severity": "none", "test_statistic": 0.05, "drift_type": "psi"},
@@ -289,7 +289,7 @@ class TestMetricExtraction:
         metrics = tracker._extract_metrics(sample_result)
         assert metrics.features_checked == 10
         assert metrics.overall_drift_score == 0.45
-        assert metrics.detection_latency_ms == 250
+        assert metrics.total_latency_ms == 250
 
     def test_extract_drift_counts(self, tracker, sample_result):
         """Test drift count extraction."""

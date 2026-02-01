@@ -327,8 +327,8 @@ class TestAuthenticationFunctions:
 
         user_data = {"id": "user-123", "email": "test@example.com"}
 
-        # Patch TESTING_MODE to False so it uses actual auth verification
-        with patch("src.api.dependencies.auth.TESTING_MODE", False):
+        # Disable testing mode so it uses actual auth verification
+        with patch.dict("os.environ", {"E2I_TESTING_MODE": ""}):
             with patch("src.api.dependencies.auth.verify_supabase_token") as mock_verify:
                 mock_verify.return_value = user_data
 
