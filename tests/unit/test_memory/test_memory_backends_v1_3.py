@@ -27,8 +27,50 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import pytest
 import yaml
 
+# Mock config BEFORE importing the module (config file may not exist locally)
+MOCK_CONFIG = {
+    "environment": "local_pilot",
+    "embeddings": {
+        "local_pilot": {"model": "text-embedding-3-small"},
+        "aws_production": {"model": "amazon.titan-embed-text-v1"},
+    },
+    "llm": {
+        "local_pilot": {
+            "model": "claude-3-5-sonnet-20241022",
+            "max_tokens": 4096,
+            "temperature": 0.7,
+        },
+        "aws_production": {
+            "model": "anthropic.claude-3-sonnet-20240229-v1:0",
+            "max_tokens": 4096,
+        },
+    },
+    "memory_backends": {
+        "working": {
+            "local_pilot": {
+                "session_prefix": "e2i:session:",
+                "evidence_prefix": "e2i:evidence:",
+                "ttl_seconds": 3600,
+                "context_window_messages": 20,
+            }
+        },
+        "semantic": {
+            "local_pilot": {
+                "graph_name": "e2i_causal_memory",
+                "graphity": {
+                    "entity_types": ["Patient", "HCP", "Trigger", "CausalPath"],
+                    "relationship_types": ["TREATED_BY", "PRESCRIBES", "CAUSES", "IMPACTS"],
+                },
+            }
+        },
+    },
+}
+
 # Import the module with numeric prefix using importlib
-memory_backends = importlib.import_module("src.memory.006_memory_backends_v1_3")
+# Patch file loading before import since config yaml may not exist locally
+with patch("builtins.open", MagicMock()):
+    with patch("yaml.safe_load", return_value=MOCK_CONFIG):
+        memory_backends = importlib.import_module("src.memory.006_memory_backends_v1_3")
 
 # Create convenient aliases for classes and functions from the module
 E2IEntityType = memory_backends.E2IEntityType
@@ -68,46 +110,6 @@ record_learning_signal = memory_backends.record_learning_signal
 get_training_examples_for_agent = memory_backends.get_training_examples_for_agent
 get_memory_statistics = memory_backends.get_memory_statistics
 
-# Mock the config loading at module level
-MOCK_CONFIG = {
-    "environment": "local_pilot",
-    "embeddings": {
-        "local_pilot": {"model": "text-embedding-3-small"},
-        "aws_production": {"model": "amazon.titan-embed-text-v1"},
-    },
-    "llm": {
-        "local_pilot": {
-            "model": "claude-3-5-sonnet-20241022",
-            "max_tokens": 4096,
-            "temperature": 0.7,
-        },
-        "aws_production": {
-            "model": "anthropic.claude-3-sonnet-20240229-v1:0",
-            "max_tokens": 4096,
-        },
-    },
-    "memory_backends": {
-        "working": {
-            "local_pilot": {
-                "session_prefix": "e2i:session:",
-                "evidence_prefix": "e2i:evidence:",
-                "ttl_seconds": 3600,
-                "context_window_messages": 20,
-            }
-        },
-        "semantic": {
-            "local_pilot": {
-                "graph_name": "e2i_causal_memory",
-                "graphity": {
-                    "entity_types": ["Patient", "HCP", "Trigger", "CausalPath"],
-                    "relationship_types": ["TREATED_BY", "PRESCRIBES", "CAUSES", "IMPACTS"],
-                },
-            }
-        },
-    },
-}
-
-
 @pytest.fixture(autouse=True)
 def mock_config():
     """Mock configuration loading for all tests."""
@@ -117,11 +119,9 @@ def mock_config():
             with patch.object(memory_backends, "ENVIRONMENT", "local_pilot"):
                 yield MOCK_CONFIG
 
-
 # =============================================================================
 # Configuration Loading Tests
 # =============================================================================
-
 
 def test_config_structure():
     """Test that config has expected structure."""
@@ -130,18 +130,15 @@ def test_config_structure():
     assert "llm" in MOCK_CONFIG
     assert "memory_backends" in MOCK_CONFIG
 
-
 def test_environment_config():
     """Test environment-specific config."""
     assert MOCK_CONFIG["environment"] == "local_pilot"
     assert "local_pilot" in MOCK_CONFIG["embeddings"]
     assert "aws_production" in MOCK_CONFIG["embeddings"]
 
-
 # =============================================================================
 # Entity Type Enum Tests
 # =============================================================================
-
 
 def test_e2i_entity_type_enum():
     """Test E2IEntityType enum values."""
@@ -154,20 +151,16 @@ def test_e2i_entity_type_enum():
     assert E2IEntityType.EXPERIMENT.value == "experiment"
     assert E2IEntityType.AGENT_ACTIVITY.value == "agent_activity"
 
-
 def test_e2i_brand_enum():
     """Test E2IBrand enum values."""
-    from src.memory.006_memory_backends_v1_3 import E2IBrand
 
     assert E2IBrand.REMIBRUTINIB.value == "Remibrutinib"
     assert E2IBrand.FABHALTA.value == "Fabhalta"
     assert E2IBrand.KISQALI.value == "Kisqali"
     assert E2IBrand.ALL.value == "all"
 
-
 def test_e2i_region_enum():
     """Test E2IRegion enum values."""
-    from src.memory.006_memory_backends_v1_3 import E2IRegion
 
     assert E2IRegion.NORTHEAST.value == "northeast"
     assert E2IRegion.SOUTH.value == "south"
@@ -175,10 +168,8 @@ def test_e2i_region_enum():
     assert E2IRegion.WEST.value == "west"
     assert E2IRegion.ALL.value == "all"
 
-
 def test_e2i_agent_name_enum():
     """Test E2IAgentName enum includes all agents."""
-    from src.memory.006_memory_backends_v1_3 import E2IAgentName
 
     # Tier 0
     assert E2IAgentName.SCOPE_DEFINER.value == "scope_definer"
@@ -192,15 +183,12 @@ def test_e2i_agent_name_enum():
     assert E2IAgentName.FEEDBACK_LEARNER.value == "feedback_learner"
     assert E2IAgentName.EXPLAINER.value == "explainer"
 
-
 # =============================================================================
 # Data Class Tests
 # =============================================================================
 
-
 def test_e2i_entity_context_creation():
     """Test E2IEntityContext dataclass."""
-    from src.memory.006_memory_backends_v1_3 import E2IEntityContext
 
     context = E2IEntityContext(
         patient={"id": "PAT123", "name": "Patient A"},
@@ -212,10 +200,8 @@ def test_e2i_entity_context_creation():
     assert context.trigger is None
     assert context.causal_path is None
 
-
 def test_e2i_entity_references_creation():
     """Test E2IEntityReferences dataclass."""
-    from src.memory.006_memory_backends_v1_3 import E2IEntityReferences
 
     refs = E2IEntityReferences(
         patient_journey_id="PJ123",
@@ -231,13 +217,8 @@ def test_e2i_entity_references_creation():
     assert refs.brand == "Kisqali"
     assert refs.region == "northeast"
 
-
 def test_episodic_memory_input_creation():
     """Test EpisodicMemoryInput dataclass."""
-    from src.memory.006_memory_backends_v1_3 import (
-        E2IEntityReferences,
-        EpisodicMemoryInput,
-    )
 
     refs = E2IEntityReferences(patient_id="PAT123", brand="Fabhalta")
 
@@ -255,16 +236,13 @@ def test_episodic_memory_input_creation():
     assert memory_input.importance_score == 0.8
     assert memory_input.e2i_refs.patient_id == "PAT123"
 
-
 # =============================================================================
 # Service Factory Tests
 # =============================================================================
 
-
 @patch("src.memory.006_memory_backends_v1_3.OpenAIEmbeddingService")
 def test_get_embedding_service_local_pilot(mock_openai_service):
     """Test get_embedding_service for local_pilot environment."""
-    from src.memory.006_memory_backends_v1_3 import get_embedding_service
 
     mock_instance = MagicMock()
     mock_openai_service.return_value = mock_instance
@@ -274,12 +252,10 @@ def test_get_embedding_service_local_pilot(mock_openai_service):
     mock_openai_service.assert_called_once()
     assert service == mock_instance
 
-
 @patch("src.memory.006_memory_backends_v1_3.ENVIRONMENT", "aws_production")
 @patch("src.memory.006_memory_backends_v1_3.BedrockEmbeddingService")
 def test_get_embedding_service_aws_production(mock_bedrock_service):
     """Test get_embedding_service for aws_production environment."""
-    from src.memory.006_memory_backends_v1_3 import get_embedding_service
 
     mock_instance = MagicMock()
     mock_bedrock_service.return_value = mock_instance
@@ -289,11 +265,9 @@ def test_get_embedding_service_aws_production(mock_bedrock_service):
     mock_bedrock_service.assert_called_once()
     assert service == mock_instance
 
-
 @patch("src.memory.006_memory_backends_v1_3.AnthropicLLMService")
 def test_get_llm_service_local_pilot(mock_anthropic_service):
     """Test get_llm_service for local_pilot environment."""
-    from src.memory.006_memory_backends_v1_3 import get_llm_service
 
     mock_instance = MagicMock()
     mock_anthropic_service.return_value = mock_instance
@@ -303,12 +277,10 @@ def test_get_llm_service_local_pilot(mock_anthropic_service):
     mock_anthropic_service.assert_called_once()
     assert service == mock_instance
 
-
 @patch.dict("os.environ", {"REDIS_URL": "redis://test:6382"})
 @patch("src.memory.006_memory_backends_v1_3.redis.asyncio")
 def test_get_redis_client(mock_redis):
     """Test get_redis_client."""
-    from src.memory.006_memory_backends_v1_3 import get_redis_client
 
     mock_client = MagicMock()
     mock_redis.from_url.return_value = mock_client
@@ -320,12 +292,10 @@ def test_get_redis_client(mock_redis):
     )
     assert client == mock_client
 
-
 @patch.dict("os.environ", {"SUPABASE_URL": "http://test", "SUPABASE_ANON_KEY": "test-key"})
 @patch("src.memory.006_memory_backends_v1_3.create_client")
 def test_get_supabase_client(mock_create_client):
     """Test get_supabase_client."""
-    from src.memory.006_memory_backends_v1_3 import get_supabase_client
 
     mock_client = MagicMock()
     mock_create_client.return_value = mock_client
@@ -335,21 +305,17 @@ def test_get_supabase_client(mock_create_client):
     mock_create_client.assert_called_once_with("http://test", "test-key")
     assert client == mock_client
 
-
 def test_get_supabase_client_missing_env_vars():
     """Test get_supabase_client raises when env vars missing."""
-    from src.memory.006_memory_backends_v1_3 import get_supabase_client
 
     with patch.dict("os.environ", {}, clear=True):
         with pytest.raises(ValueError, match="SUPABASE_URL and SUPABASE_ANON_KEY must be set"):
             get_supabase_client()
 
-
 @patch.dict("os.environ", {"FALKORDB_HOST": "test-host", "FALKORDB_PORT": "6381"})
 @patch("src.memory.006_memory_backends_v1_3.FalkorDB")
 def test_get_falkordb_client(mock_falkordb):
     """Test get_falkordb_client."""
-    from src.memory.006_memory_backends_v1_3 import get_falkordb_client
 
     mock_client = MagicMock()
     mock_falkordb.return_value = mock_client
@@ -359,16 +325,13 @@ def test_get_falkordb_client(mock_falkordb):
     mock_falkordb.assert_called_once_with(host="test-host", port=6381)
     assert client == mock_client
 
-
 # =============================================================================
 # OpenAIEmbeddingService Tests
 # =============================================================================
 
-
 @patch("src.memory.006_memory_backends_v1_3.openai.OpenAI")
 def test_openai_embedding_service_init(mock_openai):
     """Test OpenAIEmbeddingService initialization."""
-    from src.memory.006_memory_backends_v1_3 import OpenAIEmbeddingService
 
     mock_client = MagicMock()
     mock_openai.return_value = mock_client
@@ -379,12 +342,10 @@ def test_openai_embedding_service_init(mock_openai):
     assert service.model == "text-embedding-3-small"
     assert service._cache == {}
 
-
 @patch("src.memory.006_memory_backends_v1_3.openai.OpenAI")
 @pytest.mark.asyncio
 async def test_openai_embedding_service_embed(mock_openai):
     """Test OpenAIEmbeddingService.embed()."""
-    from src.memory.006_memory_backends_v1_3 import OpenAIEmbeddingService
 
     mock_client = MagicMock()
     mock_response = MagicMock()
@@ -400,12 +361,10 @@ async def test_openai_embedding_service_embed(mock_openai):
         model="text-embedding-3-small", input="test text"
     )
 
-
 @patch("src.memory.006_memory_backends_v1_3.openai.OpenAI")
 @pytest.mark.asyncio
 async def test_openai_embedding_service_embed_caching(mock_openai):
     """Test OpenAIEmbeddingService caching."""
-    from src.memory.006_memory_backends_v1_3 import OpenAIEmbeddingService
 
     mock_client = MagicMock()
     mock_response = MagicMock()
@@ -424,12 +383,10 @@ async def test_openai_embedding_service_embed_caching(mock_openai):
     # Should only call API once due to caching
     assert mock_client.embeddings.create.call_count == 1
 
-
 @patch("src.memory.006_memory_backends_v1_3.openai.OpenAI")
 @pytest.mark.asyncio
 async def test_openai_embedding_service_embed_batch(mock_openai):
     """Test OpenAIEmbeddingService.embed_batch()."""
-    from src.memory.006_memory_backends_v1_3 import OpenAIEmbeddingService
 
     mock_client = MagicMock()
     mock_response = MagicMock()
@@ -445,11 +402,9 @@ async def test_openai_embedding_service_embed_batch(mock_openai):
 
     assert embeddings == [[0.1, 0.2], [0.3, 0.4]]
 
-
 # =============================================================================
 # RedisWorkingMemory Tests
 # =============================================================================
-
 
 @pytest.fixture
 def mock_redis_client():
@@ -465,12 +420,10 @@ def mock_redis_client():
     mock.delete = AsyncMock()
     return mock
 
-
 @patch("src.memory.006_memory_backends_v1_3.get_redis_client")
 @pytest.mark.asyncio
 async def test_redis_working_memory_create_session(mock_get_redis, mock_redis_client):
     """Test RedisWorkingMemory.create_session()."""
-    from src.memory.006_memory_backends_v1_3 import RedisWorkingMemory
 
     mock_get_redis.return_value = mock_redis_client
 
@@ -484,12 +437,10 @@ async def test_redis_working_memory_create_session(mock_get_redis, mock_redis_cl
     mock_redis_client.hset.assert_called_once()
     mock_redis_client.expire.assert_called_once()
 
-
 @patch("src.memory.006_memory_backends_v1_3.get_redis_client")
 @pytest.mark.asyncio
 async def test_redis_working_memory_create_session_with_id(mock_get_redis, mock_redis_client):
     """Test RedisWorkingMemory.create_session() with provided session_id."""
-    from src.memory.006_memory_backends_v1_3 import RedisWorkingMemory
 
     mock_get_redis.return_value = mock_redis_client
 
@@ -499,12 +450,10 @@ async def test_redis_working_memory_create_session_with_id(mock_get_redis, mock_
 
     assert session_id == custom_id
 
-
 @patch("src.memory.006_memory_backends_v1_3.get_redis_client")
 @pytest.mark.asyncio
 async def test_redis_working_memory_get_session(mock_get_redis, mock_redis_client):
     """Test RedisWorkingMemory.get_session()."""
-    from src.memory.006_memory_backends_v1_3 import RedisWorkingMemory
 
     mock_redis_client.hgetall = AsyncMock(
         return_value={
@@ -526,12 +475,10 @@ async def test_redis_working_memory_get_session(mock_get_redis, mock_redis_clien
     assert session["user_preferences"] == {"theme": "dark"}
     assert session["active_filters"] == {"region": "northeast"}
 
-
 @patch("src.memory.006_memory_backends_v1_3.get_redis_client")
 @pytest.mark.asyncio
 async def test_redis_working_memory_get_session_not_found(mock_get_redis, mock_redis_client):
     """Test RedisWorkingMemory.get_session() when session not found."""
-    from src.memory.006_memory_backends_v1_3 import RedisWorkingMemory
 
     mock_redis_client.hgetall = AsyncMock(return_value={})
     mock_get_redis.return_value = mock_redis_client
@@ -541,12 +488,10 @@ async def test_redis_working_memory_get_session_not_found(mock_get_redis, mock_r
 
     assert session is None
 
-
 @patch("src.memory.006_memory_backends_v1_3.get_redis_client")
 @pytest.mark.asyncio
 async def test_redis_working_memory_update_session(mock_get_redis, mock_redis_client):
     """Test RedisWorkingMemory.update_session()."""
-    from src.memory.006_memory_backends_v1_3 import RedisWorkingMemory
 
     mock_get_redis.return_value = mock_redis_client
 
@@ -556,12 +501,10 @@ async def test_redis_working_memory_update_session(mock_get_redis, mock_redis_cl
     mock_redis_client.hset.assert_called_once()
     mock_redis_client.expire.assert_called_once()
 
-
 @patch("src.memory.006_memory_backends_v1_3.get_redis_client")
 @pytest.mark.asyncio
 async def test_redis_working_memory_set_e2i_context(mock_get_redis, mock_redis_client):
     """Test RedisWorkingMemory.set_e2i_context()."""
-    from src.memory.006_memory_backends_v1_3 import RedisWorkingMemory
 
     mock_get_redis.return_value = mock_redis_client
 
@@ -579,12 +522,10 @@ async def test_redis_working_memory_set_e2i_context(mock_get_redis, mock_redis_c
     assert call_args["active_brand"] == "Fabhalta"
     assert call_args["active_region"] == "south"
 
-
 @patch("src.memory.006_memory_backends_v1_3.get_redis_client")
 @pytest.mark.asyncio
 async def test_redis_working_memory_get_e2i_context(mock_get_redis, mock_redis_client):
     """Test RedisWorkingMemory.get_e2i_context()."""
-    from src.memory.006_memory_backends_v1_3 import RedisWorkingMemory
 
     mock_redis_client.hgetall = AsyncMock(
         return_value={
@@ -604,12 +545,10 @@ async def test_redis_working_memory_get_e2i_context(mock_get_redis, mock_redis_c
     assert context["patient_ids"] == ["PAT1", "PAT2"]
     assert context["hcp_ids"] == ["HCP1"]
 
-
 @patch("src.memory.006_memory_backends_v1_3.get_redis_client")
 @pytest.mark.asyncio
 async def test_redis_working_memory_add_message(mock_get_redis, mock_redis_client):
     """Test RedisWorkingMemory.add_message()."""
-    from src.memory.006_memory_backends_v1_3 import RedisWorkingMemory
 
     mock_get_redis.return_value = mock_redis_client
 
@@ -622,12 +561,10 @@ async def test_redis_working_memory_add_message(mock_get_redis, mock_redis_clien
     mock_redis_client.ltrim.assert_called_once()
     mock_redis_client.hincrby.assert_called_once()
 
-
 @patch("src.memory.006_memory_backends_v1_3.get_redis_client")
 @pytest.mark.asyncio
 async def test_redis_working_memory_get_messages(mock_get_redis, mock_redis_client):
     """Test RedisWorkingMemory.get_messages()."""
-    from src.memory.006_memory_backends_v1_3 import RedisWorkingMemory
 
     mock_messages = [
         json.dumps({"role": "user", "content": "Hello", "timestamp": datetime.now(timezone.utc).isoformat(), "metadata": "{}"}),
@@ -643,12 +580,10 @@ async def test_redis_working_memory_get_messages(mock_get_redis, mock_redis_clie
     assert messages[0]["role"] == "user"
     assert messages[1]["role"] == "assistant"
 
-
 @patch("src.memory.006_memory_backends_v1_3.get_redis_client")
 @pytest.mark.asyncio
 async def test_redis_working_memory_evidence_trail(mock_get_redis, mock_redis_client):
     """Test RedisWorkingMemory evidence trail operations."""
-    from src.memory.006_memory_backends_v1_3 import RedisWorkingMemory
 
     mock_get_redis.return_value = mock_redis_client
 
@@ -670,20 +605,14 @@ async def test_redis_working_memory_evidence_trail(mock_get_redis, mock_redis_cl
     await memory.clear_evidence("sess123")
     mock_redis_client.delete.assert_called_once()
 
-
 # =============================================================================
 # Episodic Memory Tests
 # =============================================================================
-
 
 @patch("src.memory.006_memory_backends_v1_3.get_supabase_client")
 @pytest.mark.asyncio
 async def test_search_episodic_memory(mock_get_supabase):
     """Test search_episodic_memory function."""
-    from src.memory.006_memory_backends_v1_3 import (
-        EpisodicSearchFilters,
-        search_episodic_memory,
-    )
 
     mock_client = MagicMock()
     mock_result = MagicMock()
@@ -706,15 +635,10 @@ async def test_search_episodic_memory(mock_get_supabase):
     assert memories[0]["memory_id"] == "mem123"
     mock_client.rpc.assert_called_once()
 
-
 @patch("src.memory.006_memory_backends_v1_3.get_supabase_client")
 @pytest.mark.asyncio
 async def test_search_episodic_by_e2i_entity(mock_get_supabase):
     """Test search_episodic_by_e2i_entity function."""
-    from src.memory.006_memory_backends_v1_3 import (
-        E2IEntityType,
-        search_episodic_by_e2i_entity,
-    )
 
     mock_client = MagicMock()
     mock_table = MagicMock()
@@ -736,17 +660,11 @@ async def test_search_episodic_by_e2i_entity(mock_get_supabase):
     assert len(memories) == 1
     assert memories[0]["memory_id"] == "mem123"
 
-
 @patch("src.memory.006_memory_backends_v1_3.get_supabase_client")
 @patch("src.memory.006_memory_backends_v1_3._increment_memory_stats")
 @pytest.mark.asyncio
 async def test_insert_episodic_memory(mock_stats, mock_get_supabase):
     """Test insert_episodic_memory function."""
-    from src.memory.006_memory_backends_v1_3 import (
-        E2IEntityReferences,
-        EpisodicMemoryInput,
-        insert_episodic_memory,
-    )
 
     mock_client = MagicMock()
     mock_table = MagicMock()
@@ -770,12 +688,10 @@ async def test_insert_episodic_memory(mock_stats, mock_get_supabase):
     mock_table.insert.assert_called_once()
     mock_stats.assert_called_once_with("episodic", "user_query")
 
-
 @patch("src.memory.006_memory_backends_v1_3.get_supabase_client")
 @pytest.mark.asyncio
 async def test_get_memory_entity_context(mock_get_supabase):
     """Test get_memory_entity_context function."""
-    from src.memory.006_memory_backends_v1_3 import get_memory_entity_context
 
     mock_client = MagicMock()
     mock_result = MagicMock()
@@ -803,16 +719,11 @@ async def test_get_memory_entity_context(mock_get_supabase):
     assert context.hcp is not None
     assert context.hcp["id"] == "HCP456"
 
-
 @patch("src.memory.006_memory_backends_v1_3.get_supabase_client")
 @patch("src.memory.006_memory_backends_v1_3.get_memory_entity_context")
 @pytest.mark.asyncio
 async def test_get_enriched_episodic_memory(mock_context, mock_get_supabase):
     """Test get_enriched_episodic_memory function."""
-    from src.memory.006_memory_backends_v1_3 import (
-        E2IEntityContext,
-        get_enriched_episodic_memory,
-    )
 
     mock_client = MagicMock()
     mock_result = MagicMock()
@@ -842,15 +753,10 @@ async def test_get_enriched_episodic_memory(mock_context, mock_get_supabase):
     assert enriched.event_type == "user_query"
     assert enriched.patient_context is not None
 
-
 @patch("src.memory.006_memory_backends_v1_3.get_supabase_client")
 @pytest.mark.asyncio
 async def test_bulk_insert_episodic_memories(mock_get_supabase):
     """Test bulk_insert_episodic_memories function."""
-    from src.memory.006_memory_backends_v1_3 import (
-        EpisodicMemoryInput,
-        bulk_insert_episodic_memories,
-    )
 
     mock_client = MagicMock()
     mock_table = MagicMock()
@@ -868,16 +774,13 @@ async def test_bulk_insert_episodic_memories(mock_get_supabase):
     assert len(memory_ids) == 2
     mock_table.insert.assert_called_once()
 
-
 # =============================================================================
 # FalkorDBSemanticMemory Tests
 # =============================================================================
 
-
 @patch("src.memory.006_memory_backends_v1_3.get_falkordb_client")
 def test_falkordb_semantic_memory_init(mock_get_client):
     """Test FalkorDBSemanticMemory initialization."""
-    from src.memory.006_memory_backends_v1_3 import FalkorDBSemanticMemory
 
     mock_client = MagicMock()
     mock_get_client.return_value = mock_client
@@ -887,14 +790,9 @@ def test_falkordb_semantic_memory_init(mock_get_client):
     assert memory._client is None
     assert memory._graph is None
 
-
 @patch("src.memory.006_memory_backends_v1_3.get_falkordb_client")
 def test_falkordb_add_e2i_entity(mock_get_client):
     """Test FalkorDBSemanticMemory.add_e2i_entity()."""
-    from src.memory.006_memory_backends_v1_3 import (
-        E2IEntityType,
-        FalkorDBSemanticMemory,
-    )
 
     mock_client = MagicMock()
     mock_graph = MagicMock()
@@ -912,14 +810,9 @@ def test_falkordb_add_e2i_entity(mock_get_client):
     assert result is True
     mock_graph.query.assert_called_once()
 
-
 @patch("src.memory.006_memory_backends_v1_3.get_falkordb_client")
 def test_falkordb_add_e2i_relationship(mock_get_client):
     """Test FalkorDBSemanticMemory.add_e2i_relationship()."""
-    from src.memory.006_memory_backends_v1_3 import (
-        E2IEntityType,
-        FalkorDBSemanticMemory,
-    )
 
     mock_client = MagicMock()
     mock_graph = MagicMock()
@@ -941,11 +834,9 @@ def test_falkordb_add_e2i_relationship(mock_get_client):
     # Should call query twice (once for each entity, once for relationship)
     assert mock_graph.query.call_count >= 1
 
-
 @patch("src.memory.006_memory_backends_v1_3.get_falkordb_client")
 def test_falkordb_get_patient_network(mock_get_client):
     """Test FalkorDBSemanticMemory.get_patient_network()."""
-    from src.memory.006_memory_backends_v1_3 import FalkorDBSemanticMemory
 
     mock_client = MagicMock()
     mock_graph = MagicMock()
@@ -963,11 +854,9 @@ def test_falkordb_get_patient_network(mock_get_client):
     assert "hcps" in network
     assert "treatments" in network
 
-
 @patch("src.memory.006_memory_backends_v1_3.get_falkordb_client")
 def test_falkordb_traverse_causal_chain(mock_get_client):
     """Test FalkorDBSemanticMemory.traverse_causal_chain()."""
-    from src.memory.006_memory_backends_v1_3 import FalkorDBSemanticMemory
 
     mock_client = MagicMock()
     mock_graph = MagicMock()
@@ -982,11 +871,9 @@ def test_falkordb_traverse_causal_chain(mock_get_client):
 
     assert isinstance(chains, list)
 
-
 # =============================================================================
 # GraphityExtractor Tests
 # =============================================================================
-
 
 @patch("src.memory.006_memory_backends_v1_3.get_llm_service")
 @patch("src.memory.006_memory_backends_v1_3.get_semantic_memory")
@@ -995,7 +882,6 @@ async def test_graphity_extractor_extract_and_store(
     mock_get_semantic, mock_get_llm
 ):
     """Test GraphityExtractor.extract_and_store()."""
-    from src.memory.006_memory_backends_v1_3 import GraphityExtractor
 
     mock_llm = AsyncMock()
     mock_llm.complete = AsyncMock(
@@ -1017,17 +903,14 @@ async def test_graphity_extractor_extract_and_store(
     assert result["entities_extracted"] >= 0
     assert result["relationships_extracted"] >= 0
 
-
 # =============================================================================
 # Procedural Memory Tests
 # =============================================================================
-
 
 @patch("src.memory.006_memory_backends_v1_3.get_supabase_client")
 @pytest.mark.asyncio
 async def test_find_relevant_procedures(mock_get_supabase):
     """Test find_relevant_procedures function."""
-    from src.memory.006_memory_backends_v1_3 import find_relevant_procedures
 
     mock_client = MagicMock()
     mock_result = MagicMock()
@@ -1051,7 +934,6 @@ async def test_find_relevant_procedures(mock_get_supabase):
     assert len(procedures) == 1
     assert procedures[0]["procedure_id"] == "proc123"
 
-
 @patch("src.memory.006_memory_backends_v1_3.get_supabase_client")
 @patch("src.memory.006_memory_backends_v1_3.find_relevant_procedures")
 @patch("src.memory.006_memory_backends_v1_3._increment_memory_stats")
@@ -1060,10 +942,6 @@ async def test_insert_procedural_memory(
     mock_stats, mock_find, mock_get_supabase
 ):
     """Test insert_procedural_memory function."""
-    from src.memory.006_memory_backends_v1_3 import (
-        ProceduralMemoryInput,
-        insert_procedural_memory,
-    )
 
     mock_client = MagicMock()
     mock_table = MagicMock()
@@ -1086,20 +964,14 @@ async def test_insert_procedural_memory(
     assert isinstance(procedure_id, str)
     mock_table.insert.assert_called_once()
 
-
 # =============================================================================
 # Learning Signals Tests
 # =============================================================================
-
 
 @patch("src.memory.006_memory_backends_v1_3.get_supabase_client")
 @pytest.mark.asyncio
 async def test_record_learning_signal(mock_get_supabase):
     """Test record_learning_signal function."""
-    from src.memory.006_memory_backends_v1_3 import (
-        LearningSignalInput,
-        record_learning_signal,
-    )
 
     mock_client = MagicMock()
     mock_table = MagicMock()
@@ -1118,14 +990,10 @@ async def test_record_learning_signal(mock_get_supabase):
 
     mock_table.insert.assert_called_once()
 
-
 @patch("src.memory.006_memory_backends_v1_3.get_supabase_client")
 @pytest.mark.asyncio
 async def test_get_training_examples_for_agent(mock_get_supabase):
     """Test get_training_examples_for_agent function."""
-    from src.memory.006_memory_backends_v1_3 import (
-        get_training_examples_for_agent,
-    )
 
     mock_client = MagicMock()
     mock_result = MagicMock()
@@ -1148,17 +1016,14 @@ async def test_get_training_examples_for_agent(mock_get_supabase):
     assert len(examples) == 1
     assert examples[0]["rated_agent"] == "causal_impact"
 
-
 # =============================================================================
 # Memory Statistics Tests
 # =============================================================================
-
 
 @patch("src.memory.006_memory_backends_v1_3.get_supabase_client")
 @pytest.mark.asyncio
 async def test_get_memory_statistics(mock_get_supabase):
     """Test get_memory_statistics function."""
-    from src.memory.006_memory_backends_v1_3 import get_memory_statistics
 
     mock_client = MagicMock()
     mock_result = MagicMock()
@@ -1187,16 +1052,13 @@ async def test_get_memory_statistics(mock_get_supabase):
     assert "episodic" in stats["totals_by_type"]
     assert stats["totals_by_type"]["episodic"] == 10
 
-
 # =============================================================================
 # Integration Tests
 # =============================================================================
 
-
 @patch("src.memory.006_memory_backends_v1_3.get_redis_client")
 def test_get_working_memory_singleton(mock_get_redis):
     """Test get_working_memory singleton pattern."""
-    from src.memory.006_memory_backends_v1_3 import get_working_memory
 
     mock_redis_client = AsyncMock()
     mock_get_redis.return_value = mock_redis_client
@@ -1207,11 +1069,9 @@ def test_get_working_memory_singleton(mock_get_redis):
     # Should return the same instance
     assert memory1 is memory2
 
-
 @patch("src.memory.006_memory_backends_v1_3.get_falkordb_client")
 def test_get_semantic_memory_singleton(mock_get_client):
     """Test get_semantic_memory singleton pattern."""
-    from src.memory.006_memory_backends_v1_3 import get_semantic_memory
 
     mock_client = MagicMock()
     mock_get_client.return_value = mock_client

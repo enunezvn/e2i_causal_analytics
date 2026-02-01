@@ -211,9 +211,8 @@ omit = [
 
 [tool.coverage.report]
 # Minimum coverage threshold (fail if below)
-# Target: 70% once all testing gaps are addressed
-# Current: 50% due to documented gaps in CODEBASE_REVIEW_PLAN.md
-fail_under = 50
+# Achieved 70%+ via production hardening Phase 6 (batches 1-3)
+fail_under = 70
 # Show missing line numbers in report
 show_missing = true
 # Skip files with 100% coverage in report (reduces noise)
