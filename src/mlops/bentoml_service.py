@@ -457,8 +457,15 @@ def create_prediction_service(
                     self._model = bentoml.picklable_model.load_model(self.model_tag)
 
                 # Try to load preprocessor from custom objects
-                if enable_preprocessing and hasattr(model_ref.info, 'custom_objects'):
-                    self._preprocessor = model_ref.info.custom_objects.get('preprocessor')
+                # BentoML 1.4+: custom_objects is on the model ref, not model_ref.info
+                if enable_preprocessing:
+                    try:
+                        if hasattr(model_ref, 'custom_objects'):
+                            self._preprocessor = model_ref.custom_objects.get('preprocessor')
+                        elif hasattr(model_ref.info, 'custom_objects'):
+                            self._preprocessor = model_ref.info.custom_objects.get('preprocessor')
+                    except Exception as e:
+                        logger.warning(f"Could not load preprocessor: {e}")
 
                 logger.info(f"Loaded model: {self.model_tag}")
 
@@ -488,6 +495,16 @@ def create_prediction_service(
 
             # Apply preprocessing if available
             if self._preprocessor is not None:
+                import pandas as pd
+                if input_data.ndim == 1:
+                    input_data = input_data.reshape(1, -1)
+                feature_names = None
+                if hasattr(self._preprocessor, 'numeric_features'):
+                    feature_names = list(self._preprocessor.numeric_features) + list(getattr(self._preprocessor, 'categorical_features', []))
+                elif hasattr(self._preprocessor, 'feature_names_in_'):
+                    feature_names = list(self._preprocessor.feature_names_in_)
+                if feature_names and len(feature_names) == input_data.shape[1]:
+                    input_data = pd.DataFrame(input_data, columns=feature_names)
                 input_data = self._preprocessor.transform(input_data)
 
             # Run prediction
@@ -538,6 +555,16 @@ def create_prediction_service(
 
             # Apply preprocessing if available
             if self._preprocessor is not None:
+                import pandas as pd
+                if input_data.ndim == 1:
+                    input_data = input_data.reshape(1, -1)
+                feature_names = None
+                if hasattr(self._preprocessor, 'numeric_features'):
+                    feature_names = list(self._preprocessor.numeric_features) + list(getattr(self._preprocessor, 'categorical_features', []))
+                elif hasattr(self._preprocessor, 'feature_names_in_'):
+                    feature_names = list(self._preprocessor.feature_names_in_)
+                if feature_names and len(feature_names) == input_data.shape[1]:
+                    input_data = pd.DataFrame(input_data, columns=feature_names)
                 input_data = self._preprocessor.transform(input_data)
 
             # Check if model supports predict_proba
