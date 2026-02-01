@@ -19,7 +19,7 @@ Version: 4.1.0
 
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
@@ -482,7 +482,7 @@ async def create_session(request: CreateSessionRequest) -> CreateSessionResponse
         )
 
         # Session expires in 1 hour
-        expires_at = datetime.now(timezone.utc).replace(hour=datetime.now(timezone.utc).hour + 1)
+        expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
 
         return CreateSessionResponse(
             session_id=session_id, state=SessionState.ACTIVE, expires_at=expires_at

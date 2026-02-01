@@ -249,8 +249,9 @@ async def require_auth(
     Raises:
         AuthError: If not authenticated
     """
-    # In testing mode, return mock user
-    if TESTING_MODE:
+    # In testing mode, return mock user (check env at runtime to avoid
+    # import-order issues with xdist workers and conftest.py)
+    if os.environ.get("E2I_TESTING_MODE", "").lower() in ("true", "1", "yes"):
         request.state.user = TEST_USER
         return TEST_USER
 
@@ -371,11 +372,11 @@ async def require_admin(
 # Convenience function to check if auth is configured
 def is_auth_enabled() -> bool:
     """Check if Supabase auth is configured and not in testing mode."""
-    if TESTING_MODE:
+    if is_testing_mode():
         return False
     return bool(SUPABASE_URL and SUPABASE_ANON_KEY)
 
 
 def is_testing_mode() -> bool:
     """Check if running in testing mode."""
-    return TESTING_MODE
+    return os.environ.get("E2I_TESTING_MODE", "").lower() in ("true", "1", "yes")

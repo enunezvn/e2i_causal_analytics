@@ -94,10 +94,13 @@ class TestFeatureAnalyzerAgent:
         with pytest.raises(ValueError, match="Missing required field"):
             await agent.run({})
 
-    async def test_validates_model_uri(self, agent):
-        """Should validate model_uri is provided."""
-        with pytest.raises(ValueError, match="model_uri"):
-            await agent.run({"experiment_id": "exp_002"})
+    async def test_runs_without_model_uri(self, agent):
+        """model_uri is optional — SHAP analysis is skipped when not provided."""
+        result = await agent.run({"experiment_id": "exp_002"})
+
+        # Agent should succeed but skip SHAP
+        assert result is not None
+        assert result.get("experiment_id") == "exp_002"
 
     async def test_validates_experiment_id(self, agent):
         """Should validate experiment_id is provided."""

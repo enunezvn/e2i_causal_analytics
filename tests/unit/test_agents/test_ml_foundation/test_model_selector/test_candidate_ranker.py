@@ -47,10 +47,14 @@ class TestComputeSelectionScore:
         }
         success_rates = {"CausalForest": 0.5, "XGBoost": 0.5}
 
-        score_causal = _compute_selection_score(candidate_causal, success_rates, [], 1000)
-        score_non_causal = _compute_selection_score(candidate_non_causal, success_rates, [], 1000)
+        score_causal = _compute_selection_score(
+            candidate_causal, success_rates, [], 1000, requires_causal=True
+        )
+        score_non_causal = _compute_selection_score(
+            candidate_non_causal, success_rates, [], 1000, requires_causal=True
+        )
 
-        # Causal should have ~0.10 higher score
+        # Causal should have ~0.10 higher score when problem requires causal inference
         assert score_causal > score_non_causal
         assert abs(score_causal - score_non_causal - 0.10) < 0.05
 
@@ -121,20 +125,20 @@ class TestComputeSelectionScore:
     def test_high_interpretability_scores_higher(self):
         """Higher interpretability should score higher."""
         candidate_interpretable = {
-            "name": "LinearDML",
+            "name": "InterpretableModel",
             "inference_latency_ms": 10,
             "memory_gb": 1.0,
             "interpretability_score": 0.9,
-            "family": "causal_ml",
+            "family": "gradient_boosting",
         }
         candidate_black_box = {
-            "name": "XGBoost",
+            "name": "BlackBoxModel",
             "inference_latency_ms": 10,
             "memory_gb": 1.0,
             "interpretability_score": 0.3,
             "family": "gradient_boosting",
         }
-        success_rates = {"LinearDML": 0.5, "XGBoost": 0.5}
+        success_rates = {"InterpretableModel": 0.5, "BlackBoxModel": 0.5}
 
         score_interpretable = _compute_selection_score(
             candidate_interpretable, success_rates, [], 1000
@@ -212,14 +216,14 @@ class TestRankCandidates:
                     "inference_latency_ms": 100,
                     "memory_gb": 8.0,
                     "interpretability_score": 0.3,
-                    "family": "test",
+                    "family": "gradient_boosting",
                 },
                 {
                     "name": "Fast",
                     "inference_latency_ms": 10,
                     "memory_gb": 1.0,
                     "interpretability_score": 0.9,
-                    "family": "causal_ml",
+                    "family": "gradient_boosting",
                 },
                 {
                     "name": "Medium",
@@ -240,7 +244,7 @@ class TestRankCandidates:
         assert "ranked_candidates" in result
         assert "selection_scores" in result
 
-        # Verify sorting (Fast should be first due to causal ML bonus + better specs)
+        # Verify sorting (Fast should be first due to better specs)
         ranked = result["ranked_candidates"]
         assert ranked[0]["name"] == "Fast"
         assert ranked[2]["name"] == "Slow"

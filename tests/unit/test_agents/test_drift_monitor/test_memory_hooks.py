@@ -85,7 +85,7 @@ class TestDriftDetectionRecord:
             max_severity="medium",
             drift_summary="Moderate drift detected in 2 features",
             recommended_actions=["Retrain model", "Investigate f1"],
-            detection_latency_ms=250,
+            total_latency_ms=250,
             warnings=[],
         )
 
@@ -114,7 +114,7 @@ class TestDriftDetectionRecord:
             max_severity="none",
             drift_summary="No drift detected",
             recommended_actions=[],
-            detection_latency_ms=100,
+            total_latency_ms=100,
             warnings=[],
         )
 
@@ -357,7 +357,7 @@ class TestDriftMonitorMemoryHooksWithMocks:
                 "concept_drift_results": [],
                 "drift_summary": "High drift detected",
                 "recommended_actions": ["Retrain"],
-                "detection_latency_ms": 150,
+                "total_latency_ms": 150,
                 "warnings": [],
             },
             state={
@@ -507,7 +507,7 @@ class TestContributeToMemory:
             "concept_drift_results": [],
             "drift_summary": "No drift",
             "recommended_actions": [],
-            "detection_latency_ms": 100,
+            "total_latency_ms": 100,
             "warnings": [],
         }
         state = {
@@ -564,7 +564,7 @@ class TestContributeToMemory:
             "concept_drift_results": [],
             "drift_summary": "High drift detected",
             "recommended_actions": ["Retrain"],
-            "detection_latency_ms": 150,
+            "total_latency_ms": 150,
             "warnings": [],
         }
         state = {

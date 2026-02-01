@@ -24,8 +24,12 @@ class TestPackageModel:
     """Test package_model node."""
 
     @pytest.mark.asyncio
+    @patch(
+        "src.agents.ml_foundation.model_deployer.nodes.deployment_orchestrator.BENTOML_AVAILABLE",
+        False,
+    )
     async def test_package_model_success(self):
-        """Test successful BentoML packaging."""
+        """Test successful BentoML packaging (simulated)."""
         state = {
             "model_uri": "mlflow://models/test_model/1",
             "experiment_id": "exp_123",
@@ -53,8 +57,12 @@ class TestPackageModel:
         assert result["error_type"] == "missing_model_uri"
 
     @pytest.mark.asyncio
+    @patch(
+        "src.agents.ml_foundation.model_deployer.nodes.deployment_orchestrator.BENTOML_AVAILABLE",
+        False,
+    )
     async def test_package_model_with_version_2(self):
-        """Test packaging with version 2."""
+        """Test packaging with version 2 (simulated)."""
         state = {
             "model_uri": "mlflow://models/test_model/2",
             "experiment_id": "exp_456",
