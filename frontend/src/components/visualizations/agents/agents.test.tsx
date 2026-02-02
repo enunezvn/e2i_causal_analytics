@@ -95,7 +95,7 @@ describe('TierOverview', () => {
 
   it('shows agent counts for each tier', () => {
     render(<TierOverview />);
-    expect(screen.getByText('7 agents')).toBeInTheDocument(); // Tier 0
+    expect(screen.getByText('8 agents')).toBeInTheDocument(); // Tier 0
     // Multiple tiers have 2 agents (Tier 1, 4, 5)
     const twoAgentsTexts = screen.getAllByText('2 agents');
     expect(twoAgentsTexts.length).toBe(3);

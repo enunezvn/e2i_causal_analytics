@@ -656,7 +656,7 @@ const CopilotHooksInner: React.FC = () => {
 
   // 3. Agent tier hierarchy
   useCopilotReadable({
-    description: 'E2I agent tier hierarchy with 19 agents across 6 tiers',
+    description: 'E2I agent tier hierarchy with 20 agents across 6 tiers',
     value: context?.agents || [],
   });
 
