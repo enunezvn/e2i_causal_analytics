@@ -1,0 +1,15 @@
+1|vitest|config/env|PASS|35|0|0|2s|8007MB>8025MB
+2|vitest|lib/api|PASS|67|0|0|2s|8025MB>7828MB
+3|vitest|api|PASS|44|0|0|6s|7836MB>7815MB
+4|vitest|hooks/e2i-utilities|PASS|33|0|0|4s|7822MB>7779MB
+5|vitest|hooks/integration|PASS|242|0|0|4s|7779MB>7815MB
+6|vitest|hooks/api-1|PASS|102|0|0|5s|7815MB>7898MB
+7|vitest|hooks/api-2|PASS|139|0|0|6s|7898MB>7980MB
+8|vitest|components/ui|PASS|79|0|0|3s|7980MB>7659MB
+9|vitest|components/digital-twin|PASS|93|0|0|8s|7659MB>7880MB
+10|vitest|visualizations/agents-dashboard-charts|PASS|191|0|0|5s|7887MB>7812MB
+11|vitest|visualizations/graph-experiments-drift|PASS|241|0|0|12s|7812MB>7989MB
+12|vitest|visualizations/causal-shap|PASS|149|0|0|4s|7987MB>7797MB
+13|vitest|providers|PASS|44|0|0|2s|7797MB>7812MB
+14|vitest|pages/core|PASS|129|0|0|19s|7812MB>7840MB
+15|vitest|pages/analytics|PASS|240|0|0|19s|7840MB>7927MB
