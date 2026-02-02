@@ -14,6 +14,7 @@ Tests cover:
 Note: Mock fasttext to avoid dependency on actual model training.
 """
 
+import hashlib
 import os
 import sys
 import tempfile
@@ -148,9 +149,11 @@ class TestFindBestMatch:
 
         # Mock get_word_vector to return deterministic vectors
         def get_vector(word):
-            # Simple hash-based vector generation for testing
-            np.random.seed(hash(word.lower()) % 2**32)
-            return np.random.randn(100)
+            # Deterministic vector generation (hashlib is stable across processes,
+            # unlike hash() which is randomized per PYTHONHASHSEED)
+            seed = int(hashlib.md5(word.lower().encode()).hexdigest(), 16) % 2**32
+            np.random.seed(seed)
+            return np.abs(np.random.randn(100))
 
         model.get_word_vector.side_effect = get_vector
         return model
