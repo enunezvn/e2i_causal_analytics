@@ -46,7 +46,8 @@
       "Bash(chmod:*)",
       "mcp__sequential-thinking__sequentialthinking",
       "mcp__github__search_code",
-      "Read(//.claude/**)"
+      "Read(//.claude/**)",
+      "mcp__chrome-devtools__*"
     ],
     "deny": [
       "Read(./.env*)",
