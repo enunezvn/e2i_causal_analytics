@@ -147,42 +147,52 @@ class TestGetContext:
     @pytest.mark.asyncio
     async def test_get_context_returns_context_object(self, memory_hooks):
         """Test that get_context returns a PredictionMemoryContext."""
-        context = await memory_hooks.get_context(
-            session_id="test-session",
-            entity_id="hcp_123",
-            entity_type="hcp",
-            prediction_target="churn",
-        )
+        # Mock episodic memory to avoid hitting real database
+        with patch("src.memory.episodic_memory.search_episodic_by_text", new_callable=AsyncMock) as mock_search:
+            mock_search.return_value = []
 
-        assert isinstance(context, PredictionMemoryContext)
-        assert context.session_id == "test-session"
-        assert isinstance(context.retrieval_timestamp, datetime)
+            context = await memory_hooks.get_context(
+                session_id="test-session",
+                entity_id="hcp_123",
+                entity_type="hcp",
+                prediction_target="churn",
+            )
+
+            assert isinstance(context, PredictionMemoryContext)
+            assert context.session_id == "test-session"
+            assert isinstance(context.retrieval_timestamp, datetime)
 
     @pytest.mark.asyncio
     async def test_get_context_with_time_horizon(self, memory_hooks):
         """Test context retrieval with time horizon."""
-        context = await memory_hooks.get_context(
-            session_id="test-session",
-            entity_id="hcp_123",
-            entity_type="hcp",
-            prediction_target="conversion",
-            time_horizon="90d",
-        )
+        # Mock episodic memory to avoid hitting real database
+        with patch("src.memory.episodic_memory.search_episodic_by_text", new_callable=AsyncMock) as mock_search:
+            mock_search.return_value = []
 
-        assert context.session_id == "test-session"
-        assert isinstance(context.working_memory, list)
-        assert isinstance(context.episodic_context, list)
-        assert isinstance(context.cached_predictions, list)
-        assert isinstance(context.model_performance, dict)
+            context = await memory_hooks.get_context(
+                session_id="test-session",
+                entity_id="hcp_123",
+                entity_type="hcp",
+                prediction_target="conversion",
+                time_horizon="90d",
+            )
+
+            assert context.session_id == "test-session"
+            assert isinstance(context.working_memory, list)
+            assert isinstance(context.episodic_context, list)
+            assert isinstance(context.cached_predictions, list)
+            assert isinstance(context.model_performance, dict)
 
     @pytest.mark.asyncio
     async def test_get_context_graceful_degradation(self, memory_hooks):
         """Test that context retrieval handles missing memory gracefully."""
-        # Patch the lazy-loading import to fail, simulating unavailable memory
+        # Patch both working memory and episodic memory to simulate unavailability
         with patch(
             "src.agents.prediction_synthesizer.memory_hooks.PredictionSynthesizerMemoryHooks.working_memory",
             new_callable=lambda: property(lambda self: None),
-        ):
+        ), patch("src.memory.episodic_memory.search_episodic_by_text", new_callable=AsyncMock) as mock_search:
+            mock_search.return_value = []
+
             context = await memory_hooks.get_context(
                 session_id="test-session",
                 entity_id="hcp_123",
@@ -445,12 +455,16 @@ class TestGetCalibrationData:
     @pytest.mark.asyncio
     async def test_get_calibration_data_graceful_failure(self, memory_hooks):
         """Test that calibration data retrieval handles errors gracefully."""
-        results = await memory_hooks.get_calibration_data(
-            prediction_target="churn",
-            entity_type="hcp",
-        )
+        # Mock episodic memory to raise exception, testing graceful failure
+        with patch("src.memory.episodic_memory.search_episodic_by_text", new_callable=AsyncMock) as mock_search:
+            mock_search.side_effect = Exception("Database unavailable")
 
-        assert results == []
+            results = await memory_hooks.get_calibration_data(
+                prediction_target="churn",
+                entity_type="hcp",
+            )
+
+            assert results == []
 
 
 class TestGetSimilarPredictions:
@@ -459,13 +473,17 @@ class TestGetSimilarPredictions:
     @pytest.mark.asyncio
     async def test_get_similar_predictions_graceful_failure(self, memory_hooks):
         """Test that similar prediction retrieval handles errors gracefully."""
-        results = await memory_hooks.get_similar_predictions(
-            entity_type="hcp",
-            prediction_target="churn",
-            features={"engagement_score": 0.7},
-        )
+        # Mock episodic memory to raise exception, testing graceful failure
+        with patch("src.memory.episodic_memory.search_episodic_by_text", new_callable=AsyncMock) as mock_search:
+            mock_search.side_effect = Exception("Database unavailable")
 
-        assert results == []
+            results = await memory_hooks.get_similar_predictions(
+                entity_type="hcp",
+                prediction_target="churn",
+                features={"engagement_score": 0.7},
+            )
+
+            assert results == []
 
 
 # ============================================================================

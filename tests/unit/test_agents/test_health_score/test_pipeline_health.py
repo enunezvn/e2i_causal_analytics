@@ -67,11 +67,11 @@ class TestPipelineHealthNode:
     @pytest.mark.asyncio
     async def test_accumulates_latency(self, mock_pipeline_store, initial_state):
         """Test that latency is accumulated"""
-        initial_state["check_latency_ms"] = 100
+        initial_state["total_latency_ms"] = 100
         node = PipelineHealthNode(pipeline_store=mock_pipeline_store)
         result = await node.execute(initial_state)
 
-        assert result["check_latency_ms"] >= 100
+        assert result["total_latency_ms"] >= 100
 
 
 class TestPipelineFreshness:

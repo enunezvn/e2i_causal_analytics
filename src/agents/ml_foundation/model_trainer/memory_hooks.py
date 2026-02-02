@@ -333,7 +333,7 @@ class ModelTrainerMemoryHooks:
 
         try:
             # Create model node
-            self.semantic_memory.add_entity(
+            self.semantic_memory.add_e2i_entity(
                 entity_type="Model",
                 entity_id=f"model:{training_run_id}",
                 properties={
@@ -370,7 +370,7 @@ class ModelTrainerMemoryHooks:
 
             # Store hyperparameters if successful
             if success_criteria_met and best_hyperparameters:
-                self.semantic_memory.add_entity(
+                self.semantic_memory.add_e2i_entity(
                     entity_type="Hyperparameters",
                     entity_id=f"hp:{training_run_id}",
                     properties={

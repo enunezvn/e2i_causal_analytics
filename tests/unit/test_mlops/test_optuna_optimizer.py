@@ -1101,11 +1101,13 @@ class TestGetModelClass:
 
         assert model_class is None
 
-    def test_causal_forest_returns_none(self):
-        """Test CausalForest returns None (needs special handling)."""
+    def test_causal_forest_returns_class(self):
+        """Test CausalForest returns CausalForestDML class."""
+        from econml.dml import CausalForestDML
+
         model_class = get_model_class("CausalForest", "binary_classification")
 
-        assert model_class is None
+        assert model_class == CausalForestDML
 
 
 # ============================================================================

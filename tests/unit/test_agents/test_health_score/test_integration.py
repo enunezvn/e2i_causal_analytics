@@ -61,7 +61,7 @@ class TestHealthScoreAgentCheckHealth:
         assert isinstance(result, HealthScoreOutput)
         assert 0 <= result.overall_health_score <= 100
         assert result.health_grade in ["A", "B", "C", "D", "F"]
-        assert result.check_latency_ms >= 0
+        assert result.total_latency_ms >= 0
         assert result.timestamp is not None
 
     @pytest.mark.asyncio
@@ -161,7 +161,7 @@ class TestHealthScoreAgentHandoff:
             critical_issues=[],
             warnings=[],
             health_summary="System healthy",
-            check_latency_ms=100,
+            total_latency_ms=100,
             timestamp=datetime.now(timezone.utc).isoformat(),
         )
         handoff = agent.get_handoff(output)
@@ -183,7 +183,7 @@ class TestHealthScoreAgentHandoff:
             critical_issues=["Component down"],
             warnings=[],
             health_summary="System critical",
-            check_latency_ms=100,
+            total_latency_ms=100,
             timestamp=datetime.now(timezone.utc).isoformat(),
         )
         handoff = agent.get_handoff(output)
@@ -226,7 +226,7 @@ class TestGraphBuilding:
             "critical_issues": None,
             "warnings": None,
             "health_summary": None,
-            "check_latency_ms": 0,
+            "total_latency_ms": 0,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "errors": [],
             "status": "pending",
@@ -280,7 +280,7 @@ class TestInputOutputContracts:
             critical_issues=[],
             warnings=["Warning 1"],
             health_summary="System healthy",
-            check_latency_ms=100,
+            total_latency_ms=100,
             timestamp=datetime.now(timezone.utc).isoformat(),
         )
         assert output.overall_health_score == 85.0
@@ -336,7 +336,7 @@ class TestPerformance:
         result = await agent.quick_check()
 
         # Quick check should be under 1000ms with no external calls
-        assert result.check_latency_ms < 1000
+        assert result.total_latency_ms < 1000
 
     @pytest.mark.asyncio
     async def test_full_check_latency(self):
@@ -345,4 +345,4 @@ class TestPerformance:
         result = await agent.full_check()
 
         # Full check should be under 5000ms with no external calls
-        assert result.check_latency_ms < 5000
+        assert result.total_latency_ms < 5000

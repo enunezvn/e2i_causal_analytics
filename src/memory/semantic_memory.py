@@ -35,7 +35,7 @@ Usage:
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from src.memory.episodic_memory import E2IEntityType
 from src.memory.services.config import get_config
@@ -108,7 +108,7 @@ class FalkorDBSemanticMemory:
 
     def add_e2i_entity(
         self,
-        entity_type: E2IEntityType,
+        entity_type: Union[E2IEntityType, str],
         entity_id: str,
         properties: Optional[Dict[str, Any]] = None,
     ) -> bool:
@@ -118,16 +118,21 @@ class FalkorDBSemanticMemory:
         Uses MERGE to create or update the entity.
 
         Args:
-            entity_type: E2I entity type
+            entity_type: E2I entity type (enum or string label)
             entity_id: Unique entity identifier
             properties: Additional properties to store
 
         Returns:
             True if successful
         """
-        label = E2I_TO_LABEL.get(entity_type, "Entity")
+        if isinstance(entity_type, E2IEntityType):
+            label = E2I_TO_LABEL.get(entity_type, "Entity")
+            type_value = entity_type.value
+        else:
+            label = entity_type
+            type_value = entity_type
         props = properties.copy() if properties else {}
-        props["e2i_entity_type"] = entity_type.value
+        props["e2i_entity_type"] = type_value
         props["updated_at"] = datetime.now(timezone.utc).isoformat()
 
         # Build property string for Cypher

@@ -220,6 +220,9 @@ class BaseUpliftModel(ABC):
             self._feature_names = list(X.columns)
             X = X.values
 
+        # Convert treatment to string labels (CausalML requirement)
+        treatment_str = np.array([str(t) for t in treatment])
+
         # Identify treatment groups
         self._treatment_groups = [
             str(g) for g in sorted(np.unique(treatment)) if str(g) != self.config.control_name
@@ -227,7 +230,7 @@ class BaseUpliftModel(ABC):
 
         # Create and fit model
         self.model = self._create_model()
-        self.model.fit(X=X, treatment=treatment, y=y, **kwargs)
+        self.model.fit(X=X, treatment=treatment_str, y=y, **kwargs)
         self.is_fitted = True
 
         elapsed_ms = (time.time() - start_time) * 1000

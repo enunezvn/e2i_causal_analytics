@@ -164,8 +164,8 @@ class TestSemanticMemoryBackend:
     @pytest.fixture
     def mock_connector(self):
         connector = Mock()
-        connector.graph_traverse = AsyncMock(return_value=[])
-        connector.graph_traverse_kpi = AsyncMock(return_value=[])
+        connector.graph_traverse = Mock(return_value=[])
+        connector.graph_traverse_kpi = Mock(return_value=[])
         return connector
 
     @pytest.fixture
@@ -177,8 +177,17 @@ class TestSemanticMemoryBackend:
         backend = SemanticMemoryBackend()
         assert backend._connector is None
 
-    def test_connector_lazy_load(self, backend, mock_connector):
-        assert backend.connector is mock_connector
+    def test_connector_lazy_load(self):
+        with patch("src.rag.cognitive_backends.get_memory_connector") as mock_get:
+            mock_connector = Mock()
+            mock_get.return_value = mock_connector
+
+            backend = SemanticMemoryBackend()
+            # Access connector to trigger lazy load
+            connector = backend.connector
+
+            assert connector is mock_connector
+            mock_get.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_graph_query_with_entity(self):
@@ -190,7 +199,7 @@ class TestSemanticMemoryBackend:
             mock_result.metadata = {}
 
             mock_connector = Mock()
-            mock_connector.graph_traverse = AsyncMock(return_value=[mock_result])
+            mock_connector.graph_traverse = Mock(return_value=[mock_result])
             mock_get.return_value = mock_connector
 
             backend = SemanticMemoryBackend()
@@ -207,8 +216,8 @@ class TestSemanticMemoryBackend:
         mock_result.metadata = {}
 
         # No entity found, but KPI found
-        mock_connector.graph_traverse_kpi = AsyncMock(return_value=[mock_result])
-        mock_connector.graph_traverse = AsyncMock(return_value=[])  # Entity search returns empty
+        mock_connector.graph_traverse_kpi = Mock(return_value=[mock_result])
+        mock_connector.graph_traverse = Mock(return_value=[])  # Entity search returns empty
 
         results = await backend.graph_query("TRx trends analysis", max_depth=1)
 
@@ -224,7 +233,7 @@ class TestSemanticMemoryBackend:
 
     @pytest.mark.asyncio
     async def test_graph_query_exception(self, backend, mock_connector):
-        mock_connector.graph_traverse = AsyncMock(side_effect=Exception("Graph error"))
+        mock_connector.graph_traverse = Mock(side_effect=Exception("Graph error"))
 
         results = await backend.graph_query("kisqali", max_depth=2)
 
@@ -331,7 +340,8 @@ class TestProceduralMemoryBackend:
     @pytest.mark.asyncio
     async def test_procedure_search_success(self, backend):
         with patch(
-            "src.rag.cognitive_backends.find_relevant_procedures_by_text"
+            "src.rag.cognitive_backends.find_relevant_procedures_by_text",
+            new_callable=AsyncMock,
         ) as mock_find:
             mock_find.return_value = [
                 {
@@ -625,7 +635,7 @@ class TestIntegrationAndEdgeCases:
     async def test_semantic_backend_multiple_entity_types(self):
         with patch("src.rag.cognitive_backends.get_memory_connector") as mock_get:
             mock_connector = Mock()
-            mock_connector.graph_traverse = AsyncMock(return_value=[])
+            mock_connector.graph_traverse = Mock(return_value=[])
             mock_get.return_value = mock_connector
 
             backend = SemanticMemoryBackend()

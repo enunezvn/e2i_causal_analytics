@@ -467,7 +467,11 @@ class TestBootstrapTest:
 
     def test_run_bootstrap_test_passed(self, runner):
         """Test bootstrap test that passes."""
-        with patch.object(runner, '_mock_bootstrap_test', return_value=(0.15, (0.12, 0.18), 0.85)):
+        # Bootstrap CI must be <= 50% wider than original to pass
+        # original_ci width = 0.20 - 0.10 = 0.10
+        # bootstrap_ci width must be <= 0.05 (50% of 0.10)
+        # So bootstrap_ci = (0.125, 0.175) gives width = 0.05, ci_ratio = 0.5
+        with patch.object(runner, '_mock_bootstrap_test', return_value=(0.15, (0.125, 0.175), 0.85)):
             result = runner._run_bootstrap_test(
                 original_effect=0.15,
                 original_ci=(0.10, 0.20),

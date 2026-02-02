@@ -60,7 +60,7 @@ def sample_metrics():
         critical_issues_count=0,
         warnings_count=1,
         check_scope="full",
-        check_latency_ms=1250,
+        total_latency_ms=1250,
     )
 
 
@@ -76,7 +76,7 @@ def mock_health_output():
     output.agent_health_score = 0.90
     output.critical_issues = []
     output.warnings = ["Model 'churn_predictor' has degraded accuracy (0.72)"]
-    output.check_latency_ms = 1250
+    output.total_latency_ms = 1250
     output.health_summary = "System health is good (Grade: B, Score: 85.5/100). All systems operational."
     output.timestamp = datetime.now(timezone.utc).isoformat()
     return output
@@ -151,7 +151,7 @@ class TestHealthScoreMetrics:
         assert sample_metrics.critical_issues_count == 0
         assert sample_metrics.warnings_count == 1
         assert sample_metrics.check_scope == "full"
-        assert sample_metrics.check_latency_ms == 1250
+        assert sample_metrics.total_latency_ms == 1250
 
     def test_metrics_default_values(self):
         """Test metrics with default values."""
@@ -165,7 +165,7 @@ class TestHealthScoreMetrics:
         assert metrics.critical_issues_count == 0
         assert metrics.warnings_count == 0
         assert metrics.check_scope == "full"
-        assert metrics.check_latency_ms == 0
+        assert metrics.total_latency_ms == 0
 
     def test_metrics_to_dict(self, sample_metrics):
         """Test metrics to_dict conversion."""
@@ -178,7 +178,7 @@ class TestHealthScoreMetrics:
         assert result["agent_health_score"] == 0.90
         assert result["critical_issues_count"] == 0
         assert result["warnings_count"] == 1
-        assert result["check_latency_ms"] == 1250
+        assert result["total_latency_ms"] == 1250
 
     def test_metrics_to_dict_includes_numeric_grade(self, sample_metrics):
         """Test to_dict includes numeric grade conversion."""
@@ -475,7 +475,7 @@ class TestErrorHandling:
         mock_output.agent_health_score = 0.60
         mock_output.critical_issues = ["Database unreachable", "API timeout"]
         mock_output.warnings = []
-        mock_output.check_latency_ms = 5000
+        mock_output.total_latency_ms = 5000
 
         with patch.object(tracker, "_get_mlflow", return_value=None):
             await tracker.log_health_result(mock_output)
@@ -492,7 +492,7 @@ class TestErrorHandling:
         mock_output.agent_health_score = 1.0
         mock_output.critical_issues = []
         mock_output.warnings = []
-        mock_output.check_latency_ms = 500
+        mock_output.total_latency_ms = 500
 
         with patch.object(tracker, "_get_mlflow", return_value=None):
             await tracker.log_health_result(mock_output)

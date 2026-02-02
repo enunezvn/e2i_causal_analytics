@@ -196,8 +196,10 @@ class TestEnsembleCombinerNode:
 
         # Single prediction should be the estimate
         assert ensemble["point_estimate"] == 0.72
-        assert ensemble["confidence"] == 0.88
-        assert ensemble["model_agreement"] == 1.0  # Perfect agreement with self
+        # CRITICAL SAFETY: Single model confidence capped at 30%
+        assert ensemble["confidence"] <= 0.30
+        # CRITICAL: Single model has NO agreement (cannot validate without diversity)
+        assert ensemble["model_agreement"] == 0.0
 
     @pytest.mark.asyncio
     async def test_ensemble_latency_tracked(self, state_with_predictions):

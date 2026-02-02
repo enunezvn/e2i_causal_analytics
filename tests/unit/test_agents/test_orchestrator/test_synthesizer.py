@@ -284,7 +284,12 @@ class TestExtractResponse:
         assert extracted["response"] == "Analysis shows significant effect."
         assert extracted["confidence"] == 0.87
         assert extracted["recommendations"] == ["Rec 1", "Rec 2"]
-        assert extracted["follow_ups"] == ["Follow up 1"]
+        # The synthesizer now generates context-specific follow-ups for causal_impact agent
+        assert extracted["follow_ups"] == [
+            "Analyze heterogeneous effects across patient segments",
+            "Validate findings with a prospective experiment",
+            "Explore time-varying treatment effects",
+        ]
 
     def test_extract_with_response_field(self):
         """Test extraction when result has response instead of narrative."""
@@ -316,7 +321,11 @@ class TestExtractResponse:
         assert extracted["response"] == "{}"  # Fallback to str(agent_output)
         assert extracted["confidence"] == 0.5  # Default
         assert extracted["recommendations"] == []
-        assert extracted["follow_ups"] == []
+        # The synthesizer now generates default follow-ups for unknown agents
+        assert extracted["follow_ups"] == [
+            "Explore related analyses for deeper insights",
+            "Validate findings with additional data sources",
+        ]
 
 
 class TestSynthesizeMultiple:

@@ -206,9 +206,9 @@ class TestPlanValidation:
 
     @pytest.mark.asyncio
     async def test_missing_sub_question_mapping_raises_error(
-        self, mock_llm_client, mock_tool_registry
+        self, mock_llm_client, empty_registry
     ):
-        """Test that missing sub-question mapping raises error"""
+        """Test that missing sub-question mapping with empty registry raises error"""
         # Configure response that misses mapping for sq_2
         mock_llm_client.set_planning_response(
             json.dumps(
@@ -236,6 +236,7 @@ class TestPlanValidation:
             )
         )
 
+        # Use empty registry so fallback mapping cannot find any tools
         decomposition = DecompositionResult(
             original_query="Test",
             sub_questions=[
@@ -245,12 +246,13 @@ class TestPlanValidation:
             decomposition_reasoning="Test",
         )
 
-        planner = ToolPlanner(llm_client=mock_llm_client, tool_registry=mock_tool_registry)
+        planner = ToolPlanner(llm_client=mock_llm_client, tool_registry=empty_registry)
 
         with pytest.raises(PlanningError) as exc_info:
             await planner.plan(decomposition)
 
-        assert "not mapped" in str(exc_info.value).lower()
+        # With empty registry, the error is about no tools available
+        assert "no tools" in str(exc_info.value).lower()
 
     @pytest.mark.asyncio
     async def test_step_dependency_cycle_detected(self, mock_llm_client, mock_tool_registry):

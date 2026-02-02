@@ -25,7 +25,7 @@ import logging
 from typing import Any, Dict, Optional, Type
 
 import pandas as pd
-import pandera as pa
+import pandera.pandas as pa
 from pandera import Column, DataFrameModel, Field, Index
 from pandera.typing import DataFrame, Series
 

@@ -328,7 +328,7 @@ class ObservabilityConnectorMemoryHooks:
             snapshot_id = f"health:{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
 
             # Create health snapshot node
-            self.semantic_memory.add_entity(
+            self.semantic_memory.add_e2i_entity(
                 entity_type="HealthSnapshot",
                 entity_id=snapshot_id,
                 properties={
@@ -344,7 +344,7 @@ class ObservabilityConnectorMemoryHooks:
             # Store anomalies if detected
             for anomaly in anomalies_detected[:10]:
                 anomaly_id = f"anomaly:{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}:{anomaly[:20]}"
-                self.semantic_memory.add_entity(
+                self.semantic_memory.add_e2i_entity(
                     entity_type="Anomaly",
                     entity_id=anomaly_id,
                     properties={
@@ -364,7 +364,7 @@ class ObservabilityConnectorMemoryHooks:
             for agent_name, error_rate in error_rate_by_agent.items():
                 if error_rate > 0.1:  # Store patterns for agents with >10% error rate
                     pattern_id = f"pattern:{agent_name}:{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
-                    self.semantic_memory.add_entity(
+                    self.semantic_memory.add_e2i_entity(
                         entity_type="AgentPattern",
                         entity_id=pattern_id,
                         properties={

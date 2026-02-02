@@ -43,7 +43,7 @@ def _create_mock_state(scope: str = "full") -> Dict[str, Any]:
         "warnings": [],
         "health_summary": None,
         "errors": [],
-        "check_latency_ms": None,
+        "total_latency_ms": None,
     }
 
 

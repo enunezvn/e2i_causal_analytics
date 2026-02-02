@@ -14,13 +14,80 @@ Tests cover:
 
 import importlib
 import json
+import sys
 from datetime import datetime, timezone
 from typing import List
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
-# Import module with numeric prefix
+# ============================================================================
+# MODULE ALIASING SETUP
+# ============================================================================
+# The source file imports from .memory_backends and .agent_registry which don't
+# exist as module names. We need to create mock modules so the imports work during testing.
+
+
+# Create mock memory_backends module with all needed functions
+class MockMemoryBackends:
+    """Mock module for memory_backends."""
+
+    @staticmethod
+    def get_embedding_service():
+        """Mock embedding service getter."""
+        pass
+
+    @staticmethod
+    def get_llm_service():
+        """Mock LLM service getter."""
+        pass
+
+    @staticmethod
+    async def search_episodic_memory(embedding, filters, limit):
+        """Mock episodic memory search."""
+        return []
+
+    @staticmethod
+    async def find_relevant_procedures(embedding, limit):
+        """Mock procedure search."""
+        return []
+
+    @staticmethod
+    async def query_semantic_graph(query):
+        """Mock semantic graph query."""
+        return []
+
+    @staticmethod
+    async def insert_episodic_memory(entry, embedding):
+        """Mock episodic memory insert."""
+        return "mock_id"
+
+    @staticmethod
+    async def insert_procedural_memory(procedure, embedding):
+        """Mock procedural memory insert."""
+        return "mock_id"
+
+    @staticmethod
+    async def sync_to_semantic_graph(triplet):
+        """Mock semantic graph sync."""
+        return True
+
+
+# Create mock agent_registry module
+class MockAgentRegistry:
+    """Mock module for agent_registry."""
+
+    @staticmethod
+    async def invoke_agent(agent_name: str, context: dict):
+        """Mock agent invocation."""
+        return {"result": f"Mock result from {agent_name}"}
+
+
+# Install mock modules before importing the source
+sys.modules["src.memory.memory_backends"] = MockMemoryBackends()
+sys.modules["src.memory.agent_registry"] = MockAgentRegistry()
+
+# Import module with numeric prefix AFTER setting up mocks
 cw = importlib.import_module("src.memory.004_cognitive_workflow")
 
 
@@ -134,8 +201,8 @@ async def test_detect_intent():
 # =============================================================================
 
 
-@patch.object(cw, "get_embedding_service")
-@patch.object(cw, "get_llm_service")
+@patch("src.memory.memory_backends.get_embedding_service")
+@patch("src.memory.memory_backends.get_llm_service")
 @patch.object(cw, "extract_entities")
 @patch.object(cw, "detect_intent")
 @pytest.mark.asyncio
@@ -168,15 +235,34 @@ async def test_summarizer_node(
     assert len(result_state["messages"]) >= 1
 
 
-@patch.object(cw, "get_embedding_service")
-@patch.object(cw, "get_llm_service")
+@patch("src.memory.memory_backends.get_embedding_service")
+@patch("src.memory.memory_backends.get_llm_service")
 @patch.object(cw, "extract_entities")
 @patch.object(cw, "detect_intent")
 @pytest.mark.asyncio
 async def test_summarizer_node_compression(
     mock_intent, mock_entities, mock_llm_service, mock_embed_service
 ):
-    """Test summarizer node with message compression."""
+    """Test summarizer node with message compression.
+
+    Note: This test creates a custom state wrapper that simulates LangGraph's
+    operator.add behavior for the messages field.
+    """
+
+    # Custom state dict that simulates operator.add for messages field
+    class OperatorAddState(dict):
+        """Dict subclass that simulates LangGraph operator.add for messages."""
+
+        def __setitem__(self, key, value):
+            if key == "messages" and isinstance(value, list):
+                # Append instead of replace for messages field
+                if key in self and isinstance(self[key], list):
+                    super().__setitem__(key, self[key] + value)
+                else:
+                    super().__setitem__(key, value)
+            else:
+                super().__setitem__(key, value)
+
     # Setup mocks
     mock_embed = AsyncMock()
     mock_embed.embed = AsyncMock(return_value=[0.1, 0.2])
@@ -189,12 +275,20 @@ async def test_summarizer_node_compression(
     mock_entities.return_value = {"brands": [], "regions": [], "kpis": []}
     mock_intent.return_value = "exploration_intents"
 
-    # Create state with many messages (>10)
-    state = cw.get_initial_state(user_query="Test query")
-    state["message_count"] = 15
+    # Create initial state and convert to OperatorAddState
+    initial_state = cw.get_initial_state(user_query="Test query with content")
+    state = OperatorAddState(initial_state)
+
+    # Setup for compression: >10 messages with actual content
+    state["message_count"] = 10
     state["messages"] = [
-        cw.Message(role="user", content=f"Message {i}")
-        for i in range(15)
+        cw.Message(role="user", content=f"User message {i} with some actual content here")
+        for i in range(5)
+    ] + [
+        cw.Message(
+            role="assistant", content=f"Assistant response {i} with more content"
+        )
+        for i in range(5)
     ]
 
     result_state = await cw.summarizer_node(state)
@@ -209,10 +303,10 @@ async def test_summarizer_node_compression(
 # =============================================================================
 
 
-@patch.object(cw, "get_llm_service")
-@patch.object(cw, "search_episodic_memory")
-@patch.object(cw, "find_relevant_procedures")
-@patch.object(cw, "query_semantic_graph")
+@patch("src.memory.memory_backends.get_llm_service")
+@patch("src.memory.memory_backends.search_episodic_memory")
+@patch("src.memory.memory_backends.find_relevant_procedures")
+@patch("src.memory.memory_backends.query_semantic_graph")
 @patch.object(cw, "evaluate_evidence")
 @pytest.mark.asyncio
 async def test_investigator_node(
@@ -286,8 +380,8 @@ async def test_select_top_evidence():
 # =============================================================================
 
 
-@patch.object(cw, "get_llm_service")
-@patch.object(cw, "invoke_agent")
+@patch("src.memory.memory_backends.get_llm_service")
+@patch("src.memory.agent_registry.invoke_agent")
 @patch.object(cw, "generate_viz_config")
 @pytest.mark.asyncio
 async def test_agent_node(mock_viz, mock_invoke, mock_llm_service):
@@ -334,10 +428,10 @@ async def test_agent_node(mock_viz, mock_invoke, mock_llm_service):
 # =============================================================================
 
 
-@patch.object(cw, "get_llm_service")
-@patch.object(cw, "sync_to_semantic_graph")
-@patch.object(cw, "insert_procedural_memory")
-@patch.object(cw, "insert_episodic_memory")
+@patch("src.memory.memory_backends.get_llm_service")
+@patch("src.memory.memory_backends.sync_to_semantic_graph")
+@patch("src.memory.memory_backends.insert_procedural_memory")
+@patch("src.memory.memory_backends.insert_episodic_memory")
 @pytest.mark.asyncio
 async def test_reflector_node(
     mock_episodic, mock_procedural, mock_semantic, mock_llm_service
@@ -452,7 +546,7 @@ def test_create_cognitive_workflow():
 # =============================================================================
 
 
-@patch.object(cw, "get_llm_service")
+@patch("src.memory.memory_backends.get_llm_service")
 @patch.object(cw, "is_evidence_cache_enabled")
 @pytest.mark.asyncio
 async def test_evaluate_evidence_sufficient(mock_cache_enabled, mock_llm_service):

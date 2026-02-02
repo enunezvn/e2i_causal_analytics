@@ -181,9 +181,13 @@ class TestGetContext:
     async def test_get_context_graceful_degradation(self, memory_hooks):
         """Test that context retrieval handles missing memory gracefully."""
         # Patch the working_memory property to return None (prevents lazy loading)
+        # Also patch episodic memory search to simulate unavailable memory
         with patch(
             "src.agents.resource_optimizer.memory_hooks.ResourceOptimizerMemoryHooks.working_memory",
             new_callable=lambda: property(lambda self: None),
+        ), patch(
+            "src.memory.episodic_memory.search_episodic_by_text",
+            side_effect=Exception("Memory unavailable"),
         ):
             context = await memory_hooks.get_context(
                 session_id="test-session",
@@ -447,15 +451,19 @@ class TestStoreOptimization:
         self, memory_hooks, sample_optimization_result, sample_state
     ):
         """Test that storage handles missing episodic memory gracefully."""
-        # Without mocking, episodic memory is unavailable
-        memory_id = await memory_hooks.store_optimization(
-            session_id="test-session",
-            result=sample_optimization_result,
-            state=sample_state,
-        )
+        # Mock episodic memory insert to simulate failure
+        with patch(
+            "src.memory.episodic_memory.insert_episodic_memory_with_text",
+            side_effect=Exception("Database unavailable"),
+        ):
+            memory_id = await memory_hooks.store_optimization(
+                session_id="test-session",
+                result=sample_optimization_result,
+                state=sample_state,
+            )
 
-        # Should return None, not raise
-        assert memory_id is None
+            # Should return None, not raise
+            assert memory_id is None
 
 
 # ============================================================================

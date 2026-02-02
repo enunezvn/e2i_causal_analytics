@@ -230,6 +230,7 @@ AGENT_CONFIGS = {
         "agent_class": "CausalImpactAgent",
         "method": "run",
         "is_async": True,
+        "timeout": 120,  # Matches agent SLA (estimation + refutation + sensitivity)
     },
     "gap_analyzer": {
         "tier": 2,

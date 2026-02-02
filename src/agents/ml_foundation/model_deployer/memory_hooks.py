@@ -318,7 +318,7 @@ class ModelDeployerMemoryHooks:
 
         try:
             # Create deployment node
-            self.semantic_memory.add_entity(
+            self.semantic_memory.add_e2i_entity(
                 entity_type="Deployment",
                 entity_id=f"deploy:{deployment_id}",
                 properties={
@@ -343,7 +343,7 @@ class ModelDeployerMemoryHooks:
 
             # Store rollback incident if occurred
             if rollback_occurred:
-                self.semantic_memory.add_entity(
+                self.semantic_memory.add_e2i_entity(
                     entity_type="Rollback",
                     entity_id=f"rollback:{deployment_id}",
                     properties={

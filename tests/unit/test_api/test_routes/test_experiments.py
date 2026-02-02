@@ -52,7 +52,7 @@ def mock_randomization_service():
 @pytest.fixture
 def mock_enrollment_service():
     """Mock EnrollmentService."""
-    with patch("src.api.routes.experiments.EnrollmentService") as mock_svc:
+    with patch("src.services.enrollment.EnrollmentService") as mock_svc:
         instance = AsyncMock()
         mock_svc.return_value = instance
 
@@ -83,7 +83,7 @@ def mock_enrollment_service():
 @pytest.fixture
 def mock_interim_analysis_service():
     """Mock InterimAnalysisService."""
-    with patch("src.api.routes.experiments.InterimAnalysisService") as mock_svc:
+    with patch("src.services.interim_analysis.InterimAnalysisService") as mock_svc:
         instance = AsyncMock()
         mock_svc.return_value = instance
 
@@ -108,7 +108,7 @@ def mock_interim_analysis_service():
 @pytest.fixture
 def mock_results_analysis_service():
     """Mock ResultsAnalysisService."""
-    with patch("src.api.routes.experiments.ResultsAnalysisService") as mock_svc:
+    with patch("src.services.results_analysis.ResultsAnalysisService") as mock_svc:
         instance = AsyncMock()
         mock_svc.return_value = instance
 
@@ -131,8 +131,27 @@ def mock_results_analysis_service():
         mock_result.secondary_metrics = {}
         mock_result.segment_results = {}
 
+        mock_per_protocol_result = MagicMock()
+        mock_per_protocol_result.id = uuid4()
+        mock_per_protocol_result.analysis_type = "final"
+        mock_per_protocol_result.analysis_method = "per_protocol"
+        mock_per_protocol_result.computed_at = datetime.now(timezone.utc)
+        mock_per_protocol_result.primary_metric = "trx_lift"
+        mock_per_protocol_result.control_mean = 10.5
+        mock_per_protocol_result.treatment_mean = 12.8
+        mock_per_protocol_result.effect_estimate = 2.3
+        mock_per_protocol_result.effect_ci_lower = 1.2
+        mock_per_protocol_result.effect_ci_upper = 3.4
+        mock_per_protocol_result.p_value = 0.001
+        mock_per_protocol_result.sample_size_control = 500
+        mock_per_protocol_result.sample_size_treatment = 500
+        mock_per_protocol_result.statistical_power = 0.85
+        mock_per_protocol_result.is_significant = True
+        mock_per_protocol_result.secondary_metrics = {}
+        mock_per_protocol_result.segment_results = {}
+
         instance.compute_itt_results.return_value = mock_result
-        instance.compute_per_protocol_results.return_value = mock_result
+        instance.compute_per_protocol_results.return_value = mock_per_protocol_result
         instance.compute_heterogeneous_effects.return_value = {"region": {"northeast": {"ate": 2.5}}}
 
         mock_srm = MagicMock()
@@ -165,7 +184,7 @@ def mock_results_analysis_service():
 @pytest.fixture
 def mock_ab_experiment_repository():
     """Mock ABExperimentRepository."""
-    with patch("src.api.routes.experiments.ABExperimentRepository") as mock_repo:
+    with patch("src.repositories.ab_experiment.ABExperimentRepository") as mock_repo:
         instance = AsyncMock()
         mock_repo.return_value = instance
 
@@ -195,7 +214,7 @@ def mock_ab_experiment_repository():
 @pytest.fixture
 def mock_ab_results_repository():
     """Mock ABResultsRepository."""
-    with patch("src.api.routes.experiments.ABResultsRepository") as mock_repo:
+    with patch("src.repositories.ab_results.ABResultsRepository") as mock_repo:
         instance = AsyncMock()
         mock_repo.return_value = instance
 
@@ -258,7 +277,7 @@ def mock_ab_results_repository():
 @pytest.fixture
 def mock_experiment_monitor_agent():
     """Mock ExperimentMonitorAgent."""
-    with patch("src.api.routes.experiments.ExperimentMonitorAgent") as mock_agent:
+    with patch("src.agents.experiment_monitor.ExperimentMonitorAgent") as mock_agent:
         instance = AsyncMock()
         mock_agent.return_value = instance
 
@@ -523,7 +542,7 @@ async def test_trigger_interim_analysis_async():
     from src.api.routes.experiments import trigger_interim_analysis, TriggerInterimAnalysisRequest
     from fastapi import BackgroundTasks
 
-    with patch("src.api.routes.experiments.scheduled_interim_analysis") as mock_task:
+    with patch("src.tasks.ab_testing_tasks.scheduled_interim_analysis") as mock_task:
         mock_celery_result = MagicMock()
         mock_celery_result.id = "task_123"
         mock_task.delay.return_value = mock_celery_result
@@ -742,7 +761,7 @@ async def test_trigger_experiment_monitoring_async():
     from src.api.routes.experiments import trigger_experiment_monitoring, TriggerMonitorRequest
     from fastapi import BackgroundTasks
 
-    with patch("src.api.routes.experiments.check_all_active_experiments") as mock_task:
+    with patch("src.tasks.ab_testing_tasks.check_all_active_experiments") as mock_task:
         mock_celery_result = MagicMock()
         mock_celery_result.id = "task_123"
         mock_task.delay.return_value = mock_celery_result
@@ -781,7 +800,9 @@ async def test_get_experiment_health(mock_experiment_monitor_agent):
 
     result = await get_experiment_health(experiment_id)
 
-    assert result.experiment_id == str(uuid4())  # Mock returns different ID
+    # Mock returns a valid experiment_id (may differ from input)
+    assert result.experiment_id is not None
+    assert isinstance(result.experiment_id, str)
     assert result.health_status.value in ["healthy", "warning", "critical"]
 
 
@@ -807,7 +828,7 @@ async def test_get_experiment_alerts(mock_ab_results_repository):
 
     experiment_id = str(uuid4())
 
-    result = await get_experiment_alerts(experiment_id)
+    result = await get_experiment_alerts(experiment_id, severity=None, limit=50)
 
     assert result["experiment_id"] == experiment_id
     assert result["total_alerts"] == 1

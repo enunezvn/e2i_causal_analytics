@@ -511,7 +511,7 @@ class CausalImpactMemoryHooks:
 
         try:
             # Create or update treatment variable node
-            self.semantic_memory.add_entity(
+            self.semantic_memory.add_e2i_entity(
                 entity_type="Variable",
                 entity_id=f"var:{treatment_var}",
                 properties={
@@ -523,7 +523,7 @@ class CausalImpactMemoryHooks:
             )
 
             # Create or update outcome variable node
-            self.semantic_memory.add_entity(
+            self.semantic_memory.add_e2i_entity(
                 entity_type="Variable",
                 entity_id=f"var:{outcome_var}",
                 properties={

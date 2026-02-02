@@ -469,20 +469,8 @@ class TestEnergyScoreCalculator:
 
         assert result.details["variant"] == "weighted"
 
-    @pytest.mark.skip(
-        reason="Implementation bug: _bootstrap_ci calls compute() which triggers "
-               "another bootstrap, causing infinite recursion. See score_calculator.py:454"
-    )
     def test_compute_with_bootstrap(self, sample_data):
-        """Test compute with bootstrap enabled.
-
-        NOTE: This test is skipped because the implementation has a bug where
-        _bootstrap_ci() calls compute() with self.config which still has
-        enable_bootstrap=True, causing infinite recursion.
-
-        To fix: _bootstrap_ci should call compute with enable_bootstrap=False
-        or use a recursion guard flag.
-        """
+        """Test compute with bootstrap enabled."""
         config = EnergyScoreConfig(
             enable_bootstrap=True,
             n_bootstrap=10,  # Small for testing

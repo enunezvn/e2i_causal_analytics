@@ -25,7 +25,7 @@ from fastapi import HTTPException
 @pytest.fixture
 def mock_twin_generator():
     """Mock TwinGenerator."""
-    with patch("src.api.routes.digital_twin.TwinGenerator") as mock_gen:
+    with patch("src.digital_twin.twin_generator.TwinGenerator") as mock_gen:
         instance = MagicMock()
         mock_gen.return_value = instance
 
@@ -42,7 +42,7 @@ def mock_twin_generator():
 @pytest.fixture
 def mock_simulation_engine():
     """Mock SimulationEngine."""
-    with patch("src.api.routes.digital_twin.SimulationEngine") as mock_engine:
+    with patch("src.digital_twin.simulation_engine.SimulationEngine") as mock_engine:
         instance = MagicMock()
         mock_engine.return_value = instance
 
@@ -92,7 +92,7 @@ def mock_simulation_engine():
 @pytest.fixture
 def mock_twin_repository():
     """Mock TwinRepository."""
-    with patch("src.api.routes.digital_twin.TwinRepository") as mock_repo:
+    with patch("src.digital_twin.twin_repository.TwinRepository") as mock_repo:
         instance = AsyncMock()
         mock_repo.return_value = instance
 
@@ -213,7 +213,7 @@ def mock_twin_repository():
 @pytest.fixture
 def mock_fidelity_tracker():
     """Mock FidelityTracker."""
-    with patch("src.api.routes.digital_twin.FidelityTracker") as mock_tracker:
+    with patch("src.digital_twin.fidelity_tracker.FidelityTracker") as mock_tracker:
         instance = MagicMock()
         mock_tracker.return_value = instance
 
@@ -410,7 +410,7 @@ async def test_list_simulations_all(mock_twin_repository):
     """Test listing all simulations."""
     from src.api.routes.digital_twin import list_simulations
 
-    result = await list_simulations()
+    result = await list_simulations(brand=None, model_id=None, status=None, page=1, page_size=20)
 
     assert result.total_count == 1
     assert len(result.simulations) == 1
@@ -423,7 +423,7 @@ async def test_list_simulations_filtered_by_brand(mock_twin_repository):
     """Test listing simulations filtered by brand."""
     from src.api.routes.digital_twin import list_simulations, BrandEnum
 
-    result = await list_simulations(brand=BrandEnum.REMIBRUTINIB)
+    result = await list_simulations(brand=BrandEnum.REMIBRUTINIB, model_id=None, status=None, page=1, page_size=20)
 
     assert result.total_count >= 0
 
@@ -434,7 +434,7 @@ async def test_list_simulations_filtered_by_model(mock_twin_repository):
     from src.api.routes.digital_twin import list_simulations
 
     model_id = str(uuid4())
-    result = await list_simulations(model_id=model_id)
+    result = await list_simulations(brand=None, model_id=model_id, status=None, page=1, page_size=20)
 
     assert result.total_count >= 0
 
@@ -444,7 +444,7 @@ async def test_list_simulations_filtered_by_status(mock_twin_repository):
     """Test listing simulations filtered by status."""
     from src.api.routes.digital_twin import list_simulations, SimulationStatusEnum
 
-    result = await list_simulations(status=SimulationStatusEnum.COMPLETED)
+    result = await list_simulations(brand=None, model_id=None, status=SimulationStatusEnum.COMPLETED, page=1, page_size=20)
 
     assert result.total_count >= 0
 
@@ -470,7 +470,7 @@ async def test_list_simulations_pagination(mock_twin_repository):
         })
     mock_twin_repository.list_simulations.return_value = sims
 
-    result = await list_simulations(page=2, page_size=2)
+    result = await list_simulations(brand=None, model_id=None, status=None, page=2, page_size=2)
 
     assert result.page == 2
     assert result.page_size == 2
@@ -634,7 +634,7 @@ async def test_list_models_all(mock_twin_repository):
     """Test listing all active models."""
     from src.api.routes.digital_twin import list_models
 
-    result = await list_models()
+    result = await list_models(brand=None, twin_type=None)
 
     assert result.total_count == 1
     assert len(result.models) == 1
@@ -645,7 +645,7 @@ async def test_list_models_filtered_by_brand(mock_twin_repository):
     """Test listing models filtered by brand."""
     from src.api.routes.digital_twin import list_models, BrandEnum
 
-    result = await list_models(brand=BrandEnum.REMIBRUTINIB)
+    result = await list_models(brand=BrandEnum.REMIBRUTINIB, twin_type=None)
 
     assert result.total_count >= 0
 
@@ -655,7 +655,7 @@ async def test_list_models_filtered_by_type(mock_twin_repository):
     """Test listing models filtered by twin type."""
     from src.api.routes.digital_twin import list_models, TwinTypeEnum
 
-    result = await list_models(twin_type=TwinTypeEnum.HCP)
+    result = await list_models(brand=None, twin_type=TwinTypeEnum.HCP)
 
     assert result.total_count >= 0
 
@@ -871,7 +871,7 @@ async def test_list_simulations_empty(mock_twin_repository):
 
     mock_twin_repository.list_simulations.return_value = []
 
-    result = await list_simulations()
+    result = await list_simulations(brand=None, model_id=None, status=None, page=1, page_size=20)
 
     assert result.total_count == 0
     assert len(result.simulations) == 0
@@ -884,7 +884,7 @@ async def test_list_models_empty(mock_twin_repository):
 
     mock_twin_repository.list_active_models.return_value = []
 
-    result = await list_models()
+    result = await list_models(brand=None, twin_type=None)
 
     assert result.total_count == 0
     assert len(result.models) == 0

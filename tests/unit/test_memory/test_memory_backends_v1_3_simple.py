@@ -106,19 +106,20 @@ def test_get_embedding_service(mock_service):
 
 
 @patch.dict("os.environ", {"REDIS_URL": "redis://test:6382"})
-@patch.object(mb, "redis")
-def test_get_redis_client(mock_redis):
+@patch("redis.asyncio.from_url")
+def test_get_redis_client(mock_from_url):
     """Test Redis client factory."""
     mock_client = MagicMock()
-    mock_redis.asyncio.from_url.return_value = mock_client
+    mock_from_url.return_value = mock_client
 
     client = mb.get_redis_client()
 
+    mock_from_url.assert_called_once_with("redis://test:6382", decode_responses=True)
     assert client == mock_client
 
 
 @patch.dict("os.environ", {"SUPABASE_URL": "http://test", "SUPABASE_ANON_KEY": "key"})
-@patch.object(mb, "create_client")
+@patch("supabase.create_client")
 def test_get_supabase_client(mock_create):
     """Test Supabase client factory."""
     mock_client = MagicMock()
@@ -127,6 +128,7 @@ def test_get_supabase_client(mock_create):
     client = mb.get_supabase_client()
 
     mock_create.assert_called_once_with("http://test", "key")
+    assert client == mock_client
 
 
 def test_get_supabase_client_no_env():
@@ -137,32 +139,37 @@ def test_get_supabase_client_no_env():
 
 
 # Test OpenAIEmbeddingService
-@patch.object(mb, "openai")
-def test_openai_service_init(mock_openai):
+@patch("openai.OpenAI")
+def test_openai_service_init(mock_openai_class):
     """Test OpenAI service initialization."""
     mock_client = MagicMock()
-    mock_openai.OpenAI.return_value = mock_client
+    mock_openai_class.return_value = mock_client
 
     service = mb.OpenAIEmbeddingService()
 
+    mock_openai_class.assert_called_once()
     assert service.client == mock_client
     assert service.model == "text-embedding-3-small"
 
 
-@patch.object(mb, "openai")
+@patch("openai.OpenAI")
 @pytest.mark.asyncio
-async def test_openai_embed(mock_openai):
+async def test_openai_embed(mock_openai_class):
     """Test OpenAI embedding generation."""
     mock_client = MagicMock()
     mock_response = MagicMock()
     mock_response.data = [MagicMock(embedding=[0.1, 0.2, 0.3])]
     mock_client.embeddings.create.return_value = mock_response
-    mock_openai.OpenAI.return_value = mock_client
+    mock_openai_class.return_value = mock_client
 
     service = mb.OpenAIEmbeddingService()
     embedding = await service.embed("test")
 
     assert embedding == [0.1, 0.2, 0.3]
+    mock_client.embeddings.create.assert_called_once_with(
+        model="text-embedding-3-small",
+        input="test",
+    )
 
 
 # Test RedisWorkingMemory

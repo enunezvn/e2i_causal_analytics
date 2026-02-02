@@ -199,9 +199,11 @@ class CausalImpactMLflowTracker:
             try:
                 experiment = mlflow.get_experiment_by_name(full_experiment_name)
                 if experiment is None:
+                    # Fix 5C: Configurable MLflow artifact path via environment variable
+                    artifact_location = os.getenv("MLFLOW_ARTIFACT_ROOT", "mlflow-artifacts:/")
                     experiment_id = mlflow.create_experiment(
                         full_experiment_name,
-                        artifact_location="mlflow-artifacts:/",
+                        artifact_location=artifact_location,
                         tags={
                             "framework": "e2i_causal",
                             "agent": "causal_impact",
