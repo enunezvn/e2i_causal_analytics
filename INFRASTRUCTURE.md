@@ -1,9 +1,34 @@
 # Infrastructure Reference
 
-## Quick Connect
+## Development Environment
+
+**Development happens directly on the droplet.** Due to local computing constraints,
+Claude Code and all development tools run on the droplet itself at `/opt/e2i_causal_analytics/`.
+No SSH is needed for day-to-day development — commands execute locally on the droplet.
+
+**Working directories:**
+- `/opt/e2i_causal_analytics/` — Canonical project root (code execution, venv, services)
+- `~/Projects/e2i_causal_analytics/` — Git sync directory (used by Claude Code for file operations)
+
+**Service access from the droplet (localhost):**
+```bash
+# API health check
+curl -s localhost:8000/health | python3 -m json.tool
+
+# Check running containers
+docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+
+# Run tests
+/opt/e2i_causal_analytics/.venv/bin/pytest tests/unit/ -v -n 4
+
+# Restart API
+sudo systemctl restart e2i-api
+```
+
+## Quick Connect (External/Remote Access)
 
 ```bash
-# SSH to droplet
+# SSH to droplet (only needed when connecting from a remote machine)
 ssh -i ~/.ssh/replit enunez@138.197.4.36
 
 # Or with SSH config alias (if configured):
@@ -13,18 +38,18 @@ ssh e2i-prod
 **Domain**: `eznomics.site` (Hostinger DNS → DigitalOcean droplet)
 
 **All Services (via Nginx + HTTPS):**
-| Service | URL | Description |
-|---------|-----|-------------|
-| Frontend | https://eznomics.site/ | React dashboard |
-| API | https://eznomics.site/api/ | FastAPI endpoints |
-| Health | https://eznomics.site/health | Health check |
-| Chatbot | https://eznomics.site/copilotkit | CopilotKit endpoint |
-| MLflow | https://eznomics.site/mlflow/ | Experiment tracking |
-| Opik | https://eznomics.site/opik/ | Agent observability |
-| FalkorDB | https://eznomics.site/falkordb/ | Graph database browser |
+| Service | URL | Local (on-droplet) | Description |
+|---------|-----|--------------------|-------------|
+| Frontend | https://eznomics.site/ | — | React dashboard |
+| API | https://eznomics.site/api/ | http://localhost:8000 | FastAPI endpoints |
+| Health | https://eznomics.site/health | http://localhost:8000/health | Health check |
+| Chatbot | https://eznomics.site/copilotkit | http://localhost:8000/api/copilotkit | CopilotKit endpoint |
+| MLflow | https://eznomics.site/mlflow/ | http://localhost:5000 | Experiment tracking |
+| Opik | https://eznomics.site/opik/ | http://localhost:5173 | Agent observability |
+| FalkorDB | https://eznomics.site/falkordb/ | http://localhost:3030 | Graph database browser |
 
-> **Note**: Direct port access (e.g., `:8000`, `:5000`) is blocked by firewall.
-> All services are accessible only via the nginx proxy above or SSH tunnels.
+> **Note**: Direct port access (e.g., `:8000`, `:5000`) is blocked by the firewall for external traffic.
+> From the droplet itself, services are accessible via localhost. Externally, use nginx proxy URLs or SSH tunnels.
 
 **FalkorDB Browser Connection URL:**
 ```
@@ -329,15 +354,15 @@ cd /home/enunez/opik/deployment/docker-compose && docker compose down
 
 ### Monitoring Stack
 
-**Prometheus & Grafana** for comprehensive system monitoring (access via SSH tunnel):
+**Prometheus & Grafana** for comprehensive system monitoring:
 
-| Service | Local URL (via SSH tunnel) | Description | Credentials |
-|---------|---------------------------|-------------|-------------|
-| **Grafana** | http://localhost:3100 | Dashboards & visualization | admin / admin |
-| **Prometheus** | http://localhost:9091 | Metrics collection & queries | - |
+| Service | URL (on droplet) | URL (remote via SSH tunnel) | Description | Credentials |
+|---------|-------------------|---------------------------|-------------|-------------|
+| **Grafana** | http://localhost:3100 | http://localhost:3100 | Dashboards & visualization | admin / admin |
+| **Prometheus** | http://localhost:9091 | http://localhost:9091 | Metrics collection & queries | - |
 
 ```bash
-# SSH tunnel for monitoring tools
+# If accessing from a remote machine, open SSH tunnel first:
 ssh -i ~/.ssh/replit -L 3100:localhost:3100 -L 9091:localhost:9091 -N -f enunez@138.197.4.36
 ```
 
@@ -415,10 +440,9 @@ docker ps --filter "name=supabase"
 
 ### Updating the Application
 
-```bash
-# SSH to droplet
-ssh -i ~/.ssh/replit enunez@138.197.4.36
+Since development happens directly on the droplet, no SSH is needed:
 
+```bash
 # Navigate to canonical app directory
 cd /opt/e2i_causal_analytics
 
@@ -439,9 +463,6 @@ curl localhost:8000/health
 **Service Management:**
 
 ```bash
-# SSH to droplet first
-ssh -i ~/.ssh/replit enunez@138.197.4.36
-
 # Check status
 sudo systemctl status e2i-api
 sudo systemctl status nginx
@@ -489,15 +510,19 @@ export no_proxy="$no_proxy,138.197.4.36"
 curl --noproxy '*' http://138.197.4.36:8000/health
 ```
 
-### SSH Tunneling (Internal Services)
+### SSH Tunneling (Remote Access Only)
 
-With firewall hardening, internal services (MLflow, Opik, Redis, etc.) are only
-accessible via nginx proxy paths or SSH tunnels. Use tunnels for direct port access.
+> **Note**: SSH tunnels are only needed when accessing internal services from a
+> **remote machine** (e.g., a laptop). When developing directly on the droplet,
+> all services are accessible via localhost — no tunnels needed.
 
-#### Quick Start
+With firewall hardening, internal services (MLflow, Opik, Redis, etc.) are blocked
+from external access. From a remote machine, use SSH tunnels for direct port access:
+
+#### Quick Start (from remote machine)
 
 ```bash
-# Forward internal services for local development
+# Forward internal services to your local machine
 ssh -i ~/.ssh/replit \
     -L 5000:localhost:5000 \
     -L 5173:localhost:5173 \

@@ -323,30 +323,26 @@ This project is deployed on a DigitalOcean droplet. Key details:
 | **Public IPv4** | 138.197.4.36 |
 | **Region** | NYC3 (New York) |
 | **OS** | Ubuntu 24.04 LTS x64 |
-| **Specs** | 4 vCPU, 8 GB RAM, 160 GB SSD |
+| **Specs** | 4 vCPU, 16 GB RAM, 200 GB SSD |
 
-### SSH Access
-```bash
-# Using configured SSH key (as non-root user)
-ssh -i ~/.ssh/replit enunez@138.197.4.36
+### Development Environment
 
-# Or with SSH config alias
-ssh e2i-prod
-```
+**Development happens directly on the droplet** (no SSH needed for day-to-day work).
+Claude Code runs on the droplet itself. All services are accessible via localhost.
 
-### Public Access Points
+### Access Points
 
-| Service | URL | Description |
-|---------|-----|-------------|
-| **Frontend** | https://eznomics.site/ | React dashboard (nginx proxy) |
-| **Backend API** | https://eznomics.site/api/ | FastAPI backend (via nginx) |
-| **API Docs** | https://eznomics.site/api/docs | Swagger/OpenAPI documentation |
-| **Health** | https://eznomics.site/health | Health check endpoint |
-| **MLflow** | https://eznomics.site/mlflow/ | Experiment tracking |
-| **Opik** | https://eznomics.site/opik/ | Agent observability |
+| Service | On-Droplet (localhost) | External (HTTPS) |
+|---------|----------------------|-------------------|
+| **Backend API** | http://localhost:8000 | https://eznomics.site/api/ |
+| **Frontend** | — | https://eznomics.site/ |
+| **API Docs** | http://localhost:8000/docs | https://eznomics.site/api/docs |
+| **Health** | http://localhost:8000/health | https://eznomics.site/health |
+| **MLflow** | http://localhost:5000 | https://eznomics.site/mlflow/ |
+| **Opik** | http://localhost:5173 | https://eznomics.site/opik/ |
 
-> Direct port access (`:8000`, `:5000`, etc.) is blocked by firewall.
-> All traffic goes through nginx on ports 80/443.
+> External port access (`:8000`, `:5000`, etc.) is blocked by firewall.
+> From the droplet, use localhost. Externally, use nginx proxy URLs.
 
 ### Virtual Environment (REQUIRED)
 
@@ -383,33 +379,35 @@ doctl compute droplet-action snapshot 544907207 --snapshot-name "backup-$(date +
 
 **Full documentation**: See `INFRASTRUCTURE.md` for complete reference including firewall setup, SSH key management, and cost information.
 
-### Remote Command Execution (via SSH)
+### Command Execution
 
-Run commands on the droplet from your local machine using the production venv:
+Since development happens directly on the droplet, run commands without SSH wrappers:
 
 ```bash
-# Run tests on droplet
-ssh -i ~/.ssh/replit enunez@138.197.4.36 "cd /opt/e2i_causal_analytics && /opt/e2i_causal_analytics/.venv/bin/pytest tests/unit/test_utils/ -v -n 4"
+# Run tests
+/opt/e2i_causal_analytics/.venv/bin/pytest tests/unit/test_utils/ -v -n 4
 
 # Run Python commands
-ssh -i ~/.ssh/replit enunez@138.197.4.36 "/opt/e2i_causal_analytics/.venv/bin/python -c 'import src; print(src)'"
+/opt/e2i_causal_analytics/.venv/bin/python -c 'import src; print(src)'
 ```
 
-**Note**: `~/Projects/e2i_causal_analytics/` is for code syncing only. Always use `/opt/e2i_causal_analytics/` for execution.
+**Working directories:**
+- `/opt/e2i_causal_analytics/` — Canonical project root (execution, venv, services)
+- `~/Projects/e2i_causal_analytics/` — Git sync directory (Claude Code file operations)
 
 ### Droplet Service Discovery (IMPORTANT)
 
-**ALWAYS check for running services before rebuilding or installing dependencies locally.** The production droplet typically has all services running via Docker.
+**ALWAYS check for running services before rebuilding or installing dependencies.** The droplet has all services running via Docker and systemd.
 
 ```bash
 # Check running containers and services
-ssh -i ~/.ssh/replit enunez@138.197.4.36 "docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'"
+docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
 
 # Check API health (primary backend on port 8000)
-ssh -i ~/.ssh/replit enunez@138.197.4.36 "curl -s localhost:8000/health | python3 -m json.tool"
+curl -s localhost:8000/health | python3 -m json.tool
 
 # Test agent endpoints via API (not direct imports)
-ssh -i ~/.ssh/replit enunez@138.197.4.36 "curl -s -X POST localhost:8000/api/experiments/monitor -H 'Content-Type: application/json' -d '{\"check_all_active\": true}'"
+curl -s -X POST localhost:8000/api/experiments/monitor -H 'Content-Type: application/json' -d '{"check_all_active": true}'
 ```
 
 **Key Services**:
@@ -426,8 +424,6 @@ ssh -i ~/.ssh/replit enunez@138.197.4.36 "curl -s -X POST localhost:8000/api/exp
 - ⚠️ **Install dependencies** (`pip install`) - See "CRITICAL DROPLET RULES" section above. Avoid unless necessary.
 - ❌ Import agents directly in Python when testing - use the API endpoints
 - ❌ Rebuild Docker containers unless specifically requested
-
-**Project Location on Droplet**: `~/Projects/e2i_causal_analytics/`
 
 ---
 
