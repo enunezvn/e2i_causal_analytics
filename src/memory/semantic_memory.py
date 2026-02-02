@@ -838,7 +838,7 @@ class FalkorDBSemanticMemory:
         query = f"""
         MATCH (s){rel_match}(t)
         {where_clause}
-        RETURN r, s.name as source_name, t.name as target_name, type(r) as rel_type
+        RETURN r, coalesce(s.name, s.id, toString(id(s))) as source_name, coalesce(t.name, t.id, toString(id(t))) as target_name, type(r) as rel_type
         SKIP {offset}
         LIMIT {limit}
         """
@@ -851,8 +851,8 @@ class FalkorDBSemanticMemory:
             rel_dict = dict(rel.properties) if rel.properties else {}
             rel_dict["id"] = str(rel.id)
             # Use node's name property as the identifier
-            rel_dict["source_id"] = record[1] if record[1] is not None else None
-            rel_dict["target_id"] = record[2] if record[2] is not None else None
+            rel_dict["source_id"] = str(record[1]) if record[1] is not None else str(rel.id) + "_src"
+            rel_dict["target_id"] = str(record[2]) if record[2] is not None else str(rel.id) + "_tgt"
             rel_dict["type"] = record[3]
             relationships.append(rel_dict)
 
